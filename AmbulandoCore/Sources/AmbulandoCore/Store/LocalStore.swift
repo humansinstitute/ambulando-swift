@@ -155,6 +155,7 @@ public actor StoreWriter {
         try db.transaction {
             let ids = try workspaceIds(connectionId: id)
             try db.prepare("DELETE FROM connections WHERE id = ?").run([.text(id)])
+            try db.prepare("DELETE FROM app_state WHERE key = ?").run([.text(WorkspaceSelection.listedKey(id))])
             for workspace in ids { if try !workspaceStillReferenced(workspace) { try deleteWorkspaceRows(workspace) } }
         }
         await emit(Set(StoreTable.allCases.map { ChangeKey($0) }))
@@ -194,6 +195,9 @@ public actor StoreWriter {
                 try upsert.run([.text(connectionId), .text(r.id), .text(r.appNpub), .text(r.label), r.slug.sql, r.towerBaseURL.sql,
                                 r.role.sql, r.ownerNpub.sql, .blob(r.raw), .text(stamp)])
             }
+            // Tower's answer is authoritative even when empty: an empty list after this is "no memberships", not "not loaded".
+            try db.prepare("INSERT INTO app_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+                .run([.text(WorkspaceSelection.listedKey(connectionId)), .text(stamp)])
             let keep = Set(records.map(\.id))
             let gone = try workspaceIds(connectionId: connectionId).filter { !keep.contains($0) }
             for id in gone {

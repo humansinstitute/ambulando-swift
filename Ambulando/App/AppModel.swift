@@ -61,7 +61,19 @@ final class AppModel {
     private(set) var selectedWorkspaceId: String?
     private(set) var syncStatus = SyncSnapshot()
     /// Navigation inside the Chat tab for the selected workspace; persisted per connection and workspace.
-    var chatPath: [ChatRoute] = [] { didSet { if chatPath != oldValue { persistChatPath() } } }
+    var chatPath: [ChatRoute] = [] {
+        didSet {
+            guard chatPath != oldValue else { return }
+            if !restoringPath { pathEdits &+= 1 }
+            persistChatPath()
+        }
+    }
+    /// Bumped by every context or Chat path change that is not a restore, so a restore that started earlier (a slow
+    /// read, a workspace list stored late) never overwrites what the user opened in the meantime.
+    @ObservationIgnored private var contextEdits: UInt64 = 0
+    @ObservationIgnored private var pathEdits: UInt64 = 0
+    /// Context restores applied since launch. Sample-data mode shows it so UI tests can check launch restores once.
+    private(set) var contextRestores = 0
     /// The shared Workspace → Scope → Channel context chosen in the sidebar. Chat, tasks, documents and files read and
     /// write inside it; persisted per connection and workspace (see `WorkContext`).
     private(set) var context: WorkContext = .home
@@ -238,10 +250,17 @@ final class AppModel {
             let selected = try await store.reader.state("selected.connection")
             connection = connections.first { $0.id == selected } ?? connections.first
             if let connection {
-                selectedWorkspaceId = try await store.reader.state("selected.workspace:\(connection.id)")
-                observeWorkspaces(connection)
+                // The stored choice exists only if the switcher was used; otherwise (or if Tower no longer lists it) the
+                // first saved workspace is shown, so the sidebar reads its scopes straight away.
+                selectedWorkspaceId = WorkspaceSelection.effective(
+                    persisted: try await store.reader.state("selected.workspace:\(connection.id)"),
+                    listed: try await store.reader.workspaces(connectionId: connection.id),
+                    listComplete: try await store.reader.state(WorkspaceSelection.listedKey(connection.id)) != nil)
                 await restoreContext()
                 await restoreChatPath()
+                // Observed only after the restore has started the sidebar, so the first list (usually the same one)
+                // is a no-op instead of a second, unawaited restore that could land after the user opened a channel.
+                observeWorkspaces(connection)
             }
             statusTask = Task { [weak self] in
                 // Sync status changes on every job start/finish; screens get at most 4 updates a second, and only
@@ -275,7 +294,60 @@ final class AppModel {
     private func observeWorkspaces(_ connection: ConnectionRecord) {
         guard let store else { return }
         let id = connection.id
+        workspaceListGeneration &+= 1
+        let generation = workspaceListGeneration
+        workspaces.onLoad = { [weak self] listed in self?.workspacesDidLoad(listed, connectionId: id, generation: generation) }
         workspaces.start(store: store, matches: { $0.table == .workspaces }) { try await store.reader.workspaces(connectionId: id) }
+    }
+
+    /// Bumped when the observed workspace list is replaced or stopped, so a late list for an earlier connection is ignored.
+    @ObservationIgnored private var workspaceListGeneration: UInt64 = 0
+
+    /// The workspace list was stored (first discovery after connecting, every refresh, a workspace removed or access
+    /// lost). Keeps a listed workspace shown and its sidebar reading; the same list stored again changes nothing.
+    private func workspacesDidLoad(_ listed: [WorkspaceRecord], connectionId: String, generation: UInt64) {
+        guard let store, connection?.id == connectionId, generation == workspaceListGeneration else { return }
+        guard listed.isEmpty else {
+            applyWorkspaceChange(listed: listed, listComplete: true)
+            return
+        }
+        // Empty: "not loaded yet" (keep showing saved data) unless Tower's answer was stored and really was empty.
+        Task {
+            let complete = ((try? await store.reader.state(WorkspaceSelection.listedKey(connectionId))) ?? nil) != nil
+            guard connection?.id == connectionId, generation == workspaceListGeneration, workspaces.value.isEmpty else { return }
+            applyWorkspaceChange(listed: [], listComplete: complete)
+        }
+    }
+
+    private func applyWorkspaceChange(listed: [WorkspaceRecord], listComplete: Bool) {
+        guard let connection else { return }
+        switch WorkspaceSelection.change(selected: selectedWorkspaceId, navigationFor: navigationWorkspaceId, listed: listed, listComplete: listComplete) {
+        case .none:
+            return
+        case .show(let id):
+            showWorkspace(id, persist: false)
+        case .startNavigation(let id):
+            navigationWorkspaceId = id
+            Task {
+                await restoreContext()
+                await restoreChatPath()
+            }
+            if let sync, canRead, let workspace = listed.first(where: { $0.id == id }) {
+                Task { await sync.refreshWorkspace(connection, workspace, priority: .visible) }
+            }
+            startLive()
+        case .clear:
+            // Tower lists no workspace for this identity any more; nothing read for the old one stays on screen.
+            selectedWorkspaceId = nil
+            navigationWorkspaceId = nil
+            navigation.stop()
+            pins.stop()
+            context = .home
+            restoringPath = true; chatPath = []; restoringPath = false
+            surface = nil
+            canvasViewports = [:]
+            Task { await liveStream?.stop() }
+        }
     }
 
     var selectedWorkspace: WorkspaceRecord? {
@@ -360,30 +432,45 @@ final class AppModel {
             try await store.writer.removeConnection(id: connection.id)
             try await store.writer.setState("selected.connection", nil)
             workspaces.stop()
+            workspaceListGeneration &+= 1
             self.connection = nil
             selectedWorkspaceId = nil
             context = .home
             navigation.stop()
+            navigationWorkspaceId = nil
             pins.stop()
             surface = nil
             restoringPath = true; chatPath = []; restoringPath = false
         } catch { notice = error.localizedDescription }
     }
 
+    /// The user chose a workspace in the switcher; the choice is remembered for this connection.
     func selectWorkspace(_ id: String) {
-        guard let store, let connection, id != selectedWorkspaceId else { return }
+        guard let store, let connection else { return }
+        guard id != selectedWorkspaceId else {
+            // Already shown (perhaps as the default): choosing it makes it the remembered choice.
+            Task { try? await store.writer.setState("selected.workspace:\(connection.id)", id) }
+            return
+        }
+        showWorkspace(id, persist: true)
+    }
+
+    /// Switches every mode to `id`, starting at Home. `persist` is false for a default the user did not choose.
+    private func showWorkspace(_ id: String, persist: Bool) {
+        guard let store, let connection else { return }
         selectedWorkspaceId = id
         restoringPath = true; chatPath = []; restoringPath = false
         context = .home
         navigation.stop()
         pins.stop()
+        navigationWorkspaceId = id
         canvasViewports = [:]
         Task {
-            try? await store.writer.setState("selected.workspace:\(connection.id)", id)
+            if persist { try? await store.writer.setState("selected.workspace:\(connection.id)", id) }
             await restoreContext()
             await restoreChatPath()
         }
-        if let workspace = workspaces.value.first(where: { $0.id == id }), let sync {
+        if let workspace = workspaces.value.first(where: { $0.id == id }), let sync, canRead {
             Task { await sync.refreshWorkspace(connection, workspace, priority: .visible) }
         }
         startLive()
@@ -657,17 +744,23 @@ final class AppModel {
 
     private func restoreChatPath() async {
         guard let store, let key = chatPathKey else { return }
+        let edits = (contextEdits, pathEdits)
         let stored = (try? await store.reader.state(key)).flatMap { $0 }
         let routes = stored.flatMap { try? JSONDecoder().decode([ChatRoute].self, from: Data($0.utf8)) } ?? []
         guard key == chatPathKey else { return }   // the workspace changed while reading
+        guard edits == (contextEdits, pathEdits) else { return }   // the user navigated while reading
         let workspace = selectedWorkspaceId ?? selectedWorkspace?.id
         let mine = routes.filter { $0.workspaceId == workspace }
         // Builds before the shared context pushed the channel itself; it is now the context (the Chat root), so an
         // upgraded path keeps the same open channel and thread.
+        var expected = edits
         if context.channelId == nil, case .channel(_, let channelId)? = mine.first,
-           let channel = try? await store.reader.channel(workspaceId: workspace ?? "", id: channelId) {
+           let channel = try? await store.reader.channel(workspaceId: workspace ?? "", id: channelId),
+           key == chatPathKey, edits == (contextEdits, pathEdits) {
             setContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id), resetChat: false)
+            expected.0 = contextEdits
         }
+        guard key == chatPathKey, expected == (contextEdits, pathEdits) else { return }
         restoringPath = true
         chatPath = mine.filter { if case .thread(_, let channelId, _) = $0 { channelId == context.channelId } else { false } }
         restoringPath = false
@@ -677,6 +770,36 @@ final class AppModel {
 
     /// Scopes, channels, collapse state and unread channels of the selected workspace for the sidebar and context bar.
     let navigation = LiveQuery<NavigationSnapshot>(initial: NavigationSnapshot())
+    /// The workspace `navigation` was started for (nil until it is). Without it the sidebar has nothing to read.
+    @ObservationIgnored private var navigationWorkspaceId: String?
+
+    /// What the sidebar and the Chat channel list say about scopes and channels: never an unexplained empty list.
+    var navigationState: NavigationLoadState {
+        let workspace = selectedWorkspace?.id ?? selectedWorkspaceId
+        let nav = navigation.value
+        let connectionId = connection?.id ?? ""
+        return .resolve(.init(
+            hasWorkspace: workspace != nil,
+            workspacesLoaded: workspaces.loaded,
+            navigationLoaded: navigation.loaded && (nav.workspaceId == workspace || navigation.error != nil),
+            hasScopes: !nav.groups.isEmpty && nav.workspaceId == workspace,
+            canRead: canRead,
+            refreshing: WorkspaceSync.navigationRefreshing(syncStatus, connectionId: connectionId, workspaceId: workspace),
+            error: navigation.error ?? workspaces.error
+                ?? WorkspaceSync.navigationError(syncStatus, connectionId: connectionId, workspaceId: workspace)))
+    }
+
+    /// Sample-data mode only: Tower's workspace list is fetched and stored again, as any later refresh does.
+    func fixtureStoreWorkspacesAgain() async {
+        guard fixture != nil, let sync, let connection else { return }
+        await sync.discover(connection, priority: .visible, force: true)
+    }
+
+    /// Retry from the sidebar: refresh past any failure backoff, and read the saved navigation again if that failed.
+    func retryNavigation() {
+        if navigation.error != nil || navigationWorkspaceId == nil { Task { await restoreContext() } }
+        refresh(force: true)
+    }
 
     private var contextKey: String? {
         guard let connection, let workspace = selectedWorkspaceId ?? selectedWorkspace?.id else { return nil }
@@ -729,6 +852,7 @@ final class AppModel {
     }
 
     private func setContext(_ next: WorkContext, resetChat: Bool) {
+        contextEdits &+= 1
         context = next
         if resetChat { chatPath = [] }
         guard let store, let key = contextKey else { return }
@@ -738,9 +862,14 @@ final class AppModel {
 
     private func restoreContext() async {
         guard let store, let connection, let key = contextKey, let workspace = selectedWorkspaceId ?? selectedWorkspace?.id else { return }
+        let edits = contextEdits
+        if let fixture, fixture.slowContextRestore { try? await Task.sleep(for: .seconds(1)) }
         let stored = WorkContext.decode((try? await store.reader.state(key)) ?? nil) ?? .home
         guard key == contextKey else { return }   // the workspace changed while reading
-        context = stored
+        // A context chosen while reading (or by a newer restore's legacy-path upgrade) wins over the stored one.
+        if edits == contextEdits { context = stored }
+        contextRestores += 1
+        navigationWorkspaceId = workspace
         observeNavigation(connection: connection, workspaceId: workspace)
         observePins(connection: connection, workspaceId: workspace)
     }

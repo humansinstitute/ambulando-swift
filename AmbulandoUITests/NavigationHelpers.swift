@@ -16,6 +16,22 @@ extension XCUIApplication {
         XCTAssertTrue(buttons["sidebar.home"].waitForExistence(timeout: 5), "sidebar opened")
     }
 
+    /// Sets a sample-data switch in Settings by its identifier: brings that row into view, taps the row's own switch
+    /// control (resolved after scrolling settles, not a screen position a moving list can shift onto a neighbour) and
+    /// checks the value.
+    @MainActor func setFixtureSwitch(_ id: String, on: Bool, file: StaticString = #filePath, line: UInt = #line) {
+        let row = switches[id]
+        // Settings is a lazy list: rows near the bottom exist only once scrolled to.
+        for _ in 0..<6 where !(row.exists && row.isHittable) { swipeUp() }
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "\(id) shown", file: file, line: line)
+        let want = on ? "1" : "0"
+        if row.value as? String != want {
+            let control = row.switches.firstMatch
+            (control.exists ? control : row).tap()
+        }
+        XCTAssertEqual(row.value as? String, want, "\(id) set", file: file, line: line)
+    }
+
     /// Chooses a channel in the sidebar; Chat shows its conversation and the other modes filter to it.
     @MainActor func selectSidebarChannel(_ name: String) {
         openSidebar()

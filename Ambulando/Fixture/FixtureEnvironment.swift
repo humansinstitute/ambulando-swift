@@ -35,10 +35,17 @@ final class FixtureEnvironment {
     /// Control run for the storm check: same typing and probe window, no database writes.
     private let stormControl: Bool
     private(set) var stormStatus: String?
+    /// `-AmbulandoFixtureSlowContextRestore`: reading the saved context takes a second, so a workspace list stored
+    /// meanwhile is seen before the launch restore finishes (makes the launch-order check deterministic).
+    let slowContextRestore = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureSlowContextRestore")
 
     var offline: Bool {
         get { access(keyPath: \.offline); return tower.offline }
         set { withMutation(keyPath: \.offline) { tower.offline = newValue } }
+    }
+    var failScopes: Bool {
+        get { access(keyPath: \.failScopes); return tower.failScopes }
+        set { withMutation(keyPath: \.failScopes) { tower.failScopes = newValue } }
     }
     var rejectNextSend: Bool {
         get { access(keyPath: \.rejectNextSend); return tower.rejectNext }
@@ -54,6 +61,7 @@ final class FixtureEnvironment {
         self.stormControl = stormControl
         tower = FixtureTower(file: directory.appendingPathComponent("fixture-tower.json"))
         tower.offline = offline
+        tower.failScopes = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureScopesFail")
         secrets = KeychainVaultSecretStore(service: "studio.otherstuff.ambulando.native.fixture-vault.v1")
         backgroundCredentials = KeychainBackgroundCredentialStore(service: Self.backgroundService)
         sessionKeys = KeychainSessionKeyStore(service: Self.sessionService)
@@ -135,7 +143,14 @@ final class FixtureEnvironment {
         if try await store.reader.connections().isEmpty, case .unlocked = await identity.state {
             let connection = try await sync.connect(origin: try TowerOrigin(Self.origin))
             try await store.writer.setState("selected.connection", connection.id)
-            try await store.writer.setState("selected.workspace:\(connection.id)", FixtureTower.studio)
+            // Production stores a workspace choice only when the switcher is used, so most phones have none
+            // (`-AmbulandoFixtureNoWorkspaceChoice`), or one Tower no longer lists (`-AmbulandoFixtureStaleWorkspaceChoice`).
+            let args = ProcessInfo.processInfo.arguments
+            if args.contains("-AmbulandoFixtureStaleWorkspaceChoice") {
+                try await store.writer.setState("selected.workspace:\(connection.id)", FixtureTower.removedWorkspace)
+            } else if !args.contains("-AmbulandoFixtureNoWorkspaceChoice") {
+                try await store.writer.setState("selected.workspace:\(connection.id)", FixtureTower.studio)
+            }
             await sync.discover(connection, priority: .visible, force: true)
             await sync.engine.waitUntilIdle()
         }
@@ -218,6 +233,8 @@ actor StormFlag {
 final class FixtureTower: HTTPTransport, @unchecked Sendable {
     static let studio = "f1c70000-0000-4000-8000-000000000001"
     static let lab = "f1c70000-0000-4000-8000-000000000002"
+    /// A workspace this identity no longer belongs to (never listed).
+    static let removedWorkspace = "f1c70000-0000-4000-8000-0000000000ff"
     static let scopeAmbulando = "f1c70000-0000-4000-8000-0000000000a1"
     static let scopeOps = "f1c70000-0000-4000-8000-0000000000a2"
     static let scopeResearch = "f1c70000-0000-4000-8000-0000000000a3"
@@ -248,6 +265,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     private var _actor = ""
 
     var offline: Bool { get { lock.withLock { _offline } } set { lock.withLock { _offline = newValue } } }
+    /// Scope lists answer HTTP 500 as Tower does for an internal error (`-AmbulandoFixtureScopesFail`).
+    var failScopes: Bool { get { lock.withLock { _failScopes } } set { lock.withLock { _failScopes = newValue } } }
+    private var _failScopes = false
     var rejectNext: Bool { get { lock.withLock { _rejectNext } } set { lock.withLock { _rejectNext = newValue } } }
     var actorNpub: String { get { lock.withLock { _actor } } set { lock.withLock { _actor = newValue } } }
 
@@ -352,6 +372,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
         func q(_ name: String) -> String? { query.first { $0.name == name }?.value }
         switch (request.httpMethod ?? "GET", rest.count, rest.first) {
+        case ("GET", 1, "scopes") where failScopes:
+            return (500, ["error": "Internal error", "code": "internal_error", "status": 500])
         case ("GET", 1, "scopes"):
             let scopes = w == Self.studio ? [scope(Self.scopeAmbulando, w, "Ambulando"), scope(Self.scopeOps, w, "Operations")]
                                           : [scope(Self.scopeResearch, w, "Research")]

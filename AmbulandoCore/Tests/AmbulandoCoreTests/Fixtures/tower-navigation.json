@@ -1,0 +1,352 @@
+{
+  "generated_from": "tower/src/services/flightdeck-pg-api.ts serializers; envelopes per tower/src/routes/flightdeck-pg.ts",
+  "workspaces": {
+    "identity": {
+      "tower_service_npub": null,
+      "workspace_service_npub": null,
+      "workspace_owner_npub": null,
+      "workspace_id": null,
+      "app_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+    },
+    "workspaces": [
+      {
+        "identity": {
+          "tower_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+          "workspace_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+          "workspace_owner_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+          "workspace_id": "2e5caefd-0000-4000-8000-0000000000a1",
+          "app_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+        },
+        "label": "Wingman",
+        "slug": "wingman",
+        "description": null,
+        "avatar_url": null,
+        "metadata": {},
+        "tower_base_url": "https://tower.example",
+        "v4_workspace_id": null,
+        "capabilities": [
+          "pg_scopes",
+          "pg_context_tree",
+          "pg_channels",
+          "pg_channel_grants",
+          "pg_tasks",
+          "pg_chat",
+          "pg_files",
+          "pg_audio_notes",
+          "pg_reactions",
+          "pg_resource_view_states",
+          "pg_daily_notes",
+          "pg_personal_wapps",
+          "pg_wapp_activity",
+          "pg_invocations",
+          "pg_workrooms",
+          "pg_workspace_sync",
+          "realtime_events"
+        ],
+        "links": {
+          "descriptor": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a1/descriptor",
+          "me": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a1/me",
+          "invites": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a1/invites",
+          "scopes": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a1/scopes",
+          "personal_wapps": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a1/personal-wapps",
+          "autopilot_connections": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a1/autopilot-connections",
+          "workspace_agents": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a1/workspace-agents",
+          "events": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a1/events"
+        },
+        "membership": {
+          "role": "member",
+          "joined_at": "2026-09-05T10:00:00.000Z"
+        },
+        "created_at": "2026-09-01T10:00:00.000Z"
+      },
+      {
+        "identity": {
+          "tower_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+          "workspace_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+          "workspace_owner_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+          "workspace_id": "2e5caefd-0000-4000-8000-0000000000a2",
+          "app_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+        },
+        "label": "Other Stuff",
+        "slug": "other-stuff",
+        "description": null,
+        "avatar_url": null,
+        "metadata": {},
+        "tower_base_url": "https://tower.example",
+        "v4_workspace_id": null,
+        "capabilities": [
+          "pg_scopes",
+          "pg_context_tree",
+          "pg_channels",
+          "pg_channel_grants",
+          "pg_tasks",
+          "pg_chat",
+          "pg_files",
+          "pg_audio_notes",
+          "pg_reactions",
+          "pg_resource_view_states",
+          "pg_daily_notes",
+          "pg_personal_wapps",
+          "pg_wapp_activity",
+          "pg_invocations",
+          "pg_workrooms",
+          "pg_workspace_sync",
+          "realtime_events"
+        ],
+        "links": {
+          "descriptor": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a2/descriptor",
+          "me": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a2/me",
+          "invites": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a2/invites",
+          "scopes": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a2/scopes",
+          "personal_wapps": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a2/personal-wapps",
+          "autopilot_connections": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a2/autopilot-connections",
+          "workspace_agents": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a2/workspace-agents",
+          "events": "/api/v4/flightdeck-pg/workspaces/2e5caefd-0000-4000-8000-0000000000a2/events"
+        },
+        "membership": {
+          "role": "member",
+          "joined_at": "2026-09-05T10:00:00.000Z"
+        },
+        "created_at": "2026-09-01T10:00:00.000Z"
+      }
+    ],
+    "next_cursor": null
+  },
+  "scopes": {
+    "2e5caefd-0000-4000-8000-0000000000a1": {
+      "identity": {
+        "tower_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_owner_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_id": "2e5caefd-0000-4000-8000-0000000000a1",
+        "app_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+      },
+      "scopes": [
+        {
+          "id": "76d518f7-0000-4000-8000-0000000000b1",
+          "workspace_id": "2e5caefd-0000-4000-8000-0000000000a1",
+          "name": "Ambulando",
+          "description": null,
+          "kind": "project",
+          "owner_actor_id": null,
+          "owner_group_id": null,
+          "default_channel_id": "0617d526-0000-4000-8000-0000000000c1",
+          "row_version": 1,
+          "created_at": "2026-09-02T10:00:00.000Z",
+          "updated_at": "2026-10-21T10:00:00.000Z",
+          "can_manage": false
+        },
+        {
+          "id": "76d518f7-0000-4000-8000-0000000000b2",
+          "workspace_id": "2e5caefd-0000-4000-8000-0000000000a1",
+          "name": "Operations",
+          "description": null,
+          "kind": "team",
+          "owner_actor_id": null,
+          "owner_group_id": null,
+          "default_channel_id": null,
+          "row_version": 1,
+          "created_at": "2026-09-02T10:00:00.000Z",
+          "updated_at": "2026-10-21T10:00:00.000Z",
+          "can_manage": false
+        },
+        {
+          "id": "76d518f7-0000-4000-8000-0000000000b3",
+          "workspace_id": "2e5caefd-0000-4000-8000-0000000000a1",
+          "name": "DMs",
+          "description": null,
+          "kind": "dm",
+          "owner_actor_id": null,
+          "owner_group_id": null,
+          "default_channel_id": null,
+          "row_version": 1,
+          "created_at": "2026-09-02T10:00:00.000Z",
+          "updated_at": "2026-10-21T10:00:00.000Z",
+          "can_manage": false
+        }
+      ],
+      "next_cursor": null
+    },
+    "2e5caefd-0000-4000-8000-0000000000a2": {
+      "identity": {
+        "tower_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_owner_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_id": "2e5caefd-0000-4000-8000-0000000000a2",
+        "app_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+      },
+      "scopes": [
+        {
+          "id": "76d518f7-0000-4000-8000-0000000000b4",
+          "workspace_id": "2e5caefd-0000-4000-8000-0000000000a2",
+          "name": "Studio",
+          "description": null,
+          "kind": "project",
+          "owner_actor_id": null,
+          "owner_group_id": null,
+          "default_channel_id": null,
+          "row_version": 1,
+          "created_at": "2026-09-02T10:00:00.000Z",
+          "updated_at": "2026-10-21T10:00:00.000Z",
+          "can_manage": false
+        }
+      ],
+      "next_cursor": null
+    }
+  },
+  "channels": {
+    "76d518f7-0000-4000-8000-0000000000b1": {
+      "identity": {
+        "tower_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_owner_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_id": "2e5caefd-0000-4000-8000-0000000000a1",
+        "app_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+      },
+      "scope_id": "76d518f7-0000-4000-8000-0000000000b1",
+      "channels": [
+        {
+          "id": "0617d526-0000-4000-8000-0000000000c1",
+          "workspace_id": "2e5caefd-0000-4000-8000-0000000000a1",
+          "scope_id": "76d518f7-0000-4000-8000-0000000000b1",
+          "name": "general",
+          "description": null,
+          "metadata": {
+            "agent_chat": {
+              "enabled": true,
+              "context_prompt": "",
+              "activation": "mention_then_continue"
+            }
+          },
+          "kind": "channel",
+          "position": 1,
+          "participant_npubs": null,
+          "row_version": 1,
+          "created_at": "2026-09-03T10:00:00.000Z",
+          "updated_at": "2026-10-22T10:00:00.000Z"
+        },
+        {
+          "id": "0617d526-0000-4000-8000-0000000000c2",
+          "workspace_id": "2e5caefd-0000-4000-8000-0000000000a1",
+          "scope_id": "76d518f7-0000-4000-8000-0000000000b1",
+          "name": "native app",
+          "description": null,
+          "metadata": {
+            "agent_chat": {
+              "enabled": true,
+              "context_prompt": "",
+              "activation": "mention_then_continue"
+            }
+          },
+          "kind": "channel",
+          "position": null,
+          "participant_npubs": null,
+          "row_version": 1,
+          "created_at": "2026-09-03T10:00:00.000Z",
+          "updated_at": "2026-10-22T10:00:00.000Z"
+        }
+      ],
+      "next_cursor": null
+    },
+    "76d518f7-0000-4000-8000-0000000000b2": {
+      "identity": {
+        "tower_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_owner_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_id": "2e5caefd-0000-4000-8000-0000000000a1",
+        "app_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+      },
+      "scope_id": "76d518f7-0000-4000-8000-0000000000b2",
+      "channels": [],
+      "next_cursor": null
+    },
+    "76d518f7-0000-4000-8000-0000000000b3": {
+      "identity": {
+        "tower_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_owner_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_id": "2e5caefd-0000-4000-8000-0000000000a1",
+        "app_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+      },
+      "scope_id": "76d518f7-0000-4000-8000-0000000000b3",
+      "channels": [
+        {
+          "id": "0617d526-0000-4000-8000-0000000000c3",
+          "workspace_id": "2e5caefd-0000-4000-8000-0000000000a1",
+          "scope_id": "76d518f7-0000-4000-8000-0000000000b3",
+          "name": "DM: pair",
+          "description": null,
+          "metadata": {
+            "agent_chat": {
+              "enabled": true,
+              "context_prompt": "",
+              "activation": "mention_then_continue"
+            }
+          },
+          "kind": "dm",
+          "position": null,
+          "participant_npubs": [
+            "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+          ],
+          "row_version": 1,
+          "created_at": "2026-09-03T10:00:00.000Z",
+          "updated_at": "2026-10-22T10:00:00.000Z"
+        }
+      ],
+      "next_cursor": null
+    },
+    "76d518f7-0000-4000-8000-0000000000b4": {
+      "identity": {
+        "tower_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_service_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_owner_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg",
+        "workspace_id": "2e5caefd-0000-4000-8000-0000000000a2",
+        "app_npub": "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+      },
+      "scope_id": "76d518f7-0000-4000-8000-0000000000b4",
+      "channels": [
+        {
+          "id": "0617d526-0000-4000-8000-0000000000c4",
+          "workspace_id": "2e5caefd-0000-4000-8000-0000000000a2",
+          "scope_id": "76d518f7-0000-4000-8000-0000000000b4",
+          "name": "studio",
+          "description": null,
+          "metadata": {
+            "agent_chat": {
+              "enabled": true,
+              "context_prompt": "",
+              "activation": "mention_then_continue"
+            }
+          },
+          "kind": "channel",
+          "position": 2,
+          "participant_npubs": null,
+          "row_version": 1,
+          "created_at": "2026-09-03T10:00:00.000Z",
+          "updated_at": "2026-10-22T10:00:00.000Z"
+        },
+        {
+          "id": "0617d526-0000-4000-8000-0000000000c5",
+          "workspace_id": "2e5caefd-0000-4000-8000-0000000000a2",
+          "scope_id": "76d518f7-0000-4000-8000-0000000000b4",
+          "name": "ideas",
+          "description": null,
+          "metadata": {
+            "agent_chat": {
+              "enabled": true,
+              "context_prompt": "",
+              "activation": "mention_then_continue"
+            }
+          },
+          "kind": "channel",
+          "position": 1,
+          "participant_npubs": null,
+          "row_version": 1,
+          "created_at": "2026-09-03T10:00:00.000Z",
+          "updated_at": "2026-10-22T10:00:00.000Z"
+        }
+      ],
+      "next_cursor": null
+    }
+  }
+}

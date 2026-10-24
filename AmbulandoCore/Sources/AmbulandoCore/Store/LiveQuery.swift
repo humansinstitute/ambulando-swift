@@ -19,6 +19,8 @@ public final class LiveQuery<Value: Sendable & Equatable> {
     @ObservationIgnored private let handle = TaskHandle()
     @ObservationIgnored private var generation: UInt64 = 0
     @ObservationIgnored private let initial: Value
+    /// Called on the main actor after every successful load of the current query, including an unchanged first one.
+    @ObservationIgnored public var onLoad: (@MainActor (Value) -> Void)?
 
     public init(initial: Value) { value = initial; self.initial = initial }
 
@@ -43,9 +45,13 @@ public final class LiveQuery<Value: Sendable & Equatable> {
         })
     }
 
+    /// Stops reloading and returns to the initial value, so rows of a workspace that is no longer shown never render.
     public func stop() {
         generation &+= 1
         handle.replace(nil)
+        if value != initial { value = initial }
+        if loaded { loaded = false }
+        if error != nil { error = nil }
     }
 
     private func reload(_ load: @escaping @Sendable () async throws -> Value, generation started: UInt64) async {
@@ -58,6 +64,9 @@ public final class LiveQuery<Value: Sendable & Equatable> {
         case .success(let next):
             if let next { value = next }   // unchanged results never invalidate the view
             if error != nil { error = nil }
+            if !loaded { loaded = true }
+            onLoad?(value)
+            return
         case .failure(let failure):
             let message = failure.localizedDescription
             if error != message { error = message }

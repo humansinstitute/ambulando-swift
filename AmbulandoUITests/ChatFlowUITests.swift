@@ -145,11 +145,8 @@ final class ChatFlowUITests: XCTestCase {
     func testRejectedSendCanBeEditedAndResent() {
         let app = launch(reset: true)
         app.buttons["settings"].tap()
-        let reject = app.switches["fixture.reject"]
-        for _ in 0..<4 where !reject.isHittable { app.swipeUp() }
-        XCTAssertTrue(reject.waitForExistence(timeout: 5))
-        reject.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-        XCTAssertEqual(reject.value as? String, "1", "sample rejection armed")
+        app.setFixtureSwitch("fixture.reject", on: true)   // sample rejection armed
+        XCTAssertEqual(app.switches["fixture.failScopes"].value as? String, "0", "only the intended switch changed")
         app.buttons["Done"].tap()
         openGeneral(app)
         let composer = field(app)

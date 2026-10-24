@@ -145,12 +145,7 @@ private struct SidebarContent: View {
                     .accessibilityIdentifier("sidebar.home")
                     .padding(.bottom, 8)
 
-                    if !nav.loaded {
-                        Text("Loading navigation…").font(.footnote).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 10)
-                    } else if nav.groups.isEmpty {
-                        Text(model.lastSyncError ?? (model.isUnlocked ? "No scopes yet. Pull to refresh in Chat." : "No scopes saved on this iPhone yet. Unlock to sync."))
-                            .font(.footnote).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 10)
-                    }
+                    NavigationStatus(state: model.navigationState, compact: true)
 
                     SidebarPinnedSection()
                     SidebarWorkspaceSection()
@@ -325,12 +320,18 @@ struct ChannelDirectoryView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .onChange(of: nav.groups.isEmpty, initial: true) { _, empty in if !empty { model.markCachedListShown() } }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if case .ready(let error?) = model.navigationState {
+                NavigationStatus(state: .ready(refreshError: error), compact: true).padding(.horizontal, 16).padding(.top, 6)
+            }
+        }
         .overlay {
-            if !nav.loaded {
-                ProgressView()
-            } else if groups.isEmpty {
-                ContentUnavailableView("No scopes yet", systemImage: "square.grid.2x2",
-                                       description: Text(model.lastSyncError ?? "Pull to refresh once your identity is unlocked."))
+            if case .ready = model.navigationState {
+                if groups.isEmpty {
+                    ContentUnavailableView("No channels here", systemImage: "number", description: Text("This scope has no channels you can see."))
+                }
+            } else {
+                NavigationStatus(state: model.navigationState, compact: false).padding(24)
             }
         }
         .refreshable { model.refresh(force: true) }
@@ -339,4 +340,62 @@ struct ChannelDirectoryView: View {
 
 private extension ChannelRecord {
     var unreadRowId: String { "unread:" + id }
+}
+
+/// The sidebar's (and the Chat channel list's) account of scopes and channels when they are not simply listed: loading,
+/// a failure with Retry, a locked identity, or a list that may be out of date. An empty list is never shown without one.
+struct NavigationStatus: View {
+    @Environment(AppModel.self) private var model
+    let state: NavigationLoadState
+    /// Sidebar row style; otherwise a centred placeholder for the Chat channel list.
+    let compact: Bool
+
+    var body: some View {
+        switch state {
+        case .ready(nil):
+            EmptyView()
+        case .loading, .findingWorkspaces:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(state == .loading ? "Loading scopes and channels…" : "Finding your workspaces…")
+                    .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                    .accessibilityIdentifier("sidebar.state.loading")
+            }
+            .frame(maxWidth: .infinity, alignment: compact ? .leading : .center)
+            .padding(.horizontal, compact ? 10 : 0)
+        case .failed(let error), .workspacesFailed(let error):
+            message(tone: .error, text: (state == .failed(error) ? "Couldn't load scopes and channels. " : "Couldn't load your workspaces. ") + error,
+                    identifier: "sidebar.state.error", retry: true)
+        case .ready(let error?):
+            message(tone: .warning, text: "Couldn't refresh; showing scopes saved on this iPhone. " + error,
+                    identifier: "sidebar.state.stale", retry: true)
+        case .locked:
+            message(tone: .info, text: model.identity == .unavailable
+                    ? "Scopes and channels load once this iPhone is unlocked."
+                    : "Unlock your identity to load scopes and channels.", identifier: "sidebar.state.locked", retry: false)
+        case .empty:
+            message(tone: .info, text: "No scopes are shared with you in this workspace yet.", identifier: "sidebar.state.empty", retry: true)
+        case .noWorkspaces:
+            message(tone: .info, text: "This identity isn't a member of any workspace on this Tower yet.", identifier: "sidebar.state.empty", retry: true)
+        }
+    }
+
+    private func message(tone: Notice.Tone, text: String, identifier: String, retry: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(text).font(.footnote)
+                .foregroundStyle(tone == .error ? Amb.destructive : tone == .warning ? Amb.warning : Amb.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(identifier)
+            if retry {
+                Button { model.retryNavigation() } label: { Label("Retry", systemImage: "arrow.clockwise").font(.footnote.weight(.semibold)) }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .accessibilityIdentifier("sidebar.retry")
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: compact ? .infinity : 360, alignment: .leading)
+        .background(tone == .error ? Amb.destructiveBackground : tone == .warning ? Amb.warningBackground : Amb.muted,
+                    in: RoundedRectangle(cornerRadius: Amb.radiusControl, style: .continuous))
+        .padding(.bottom, compact ? 6 : 0)
+    }
 }

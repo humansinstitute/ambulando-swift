@@ -50,7 +50,7 @@ struct SettingsView: View {
                     }
                 }
                 BackgroundSection(live: live)
-                if let fixture = model.fixture { FixtureControls(fixture: fixture) }
+                if let fixture = model.fixture { FixtureControls(fixture: fixture, model: model) }
                 Section("Appearance") {
                     Picker("Theme", selection: $appearance) {
                         ForEach(AppearancePreference.allCases) { Text($0.label).tag($0.rawValue) }
@@ -92,10 +92,15 @@ struct SettingsView: View {
 /// Controls for the local sample data used by UI automation. Only present when the app runs on sample data.
 private struct FixtureControls: View {
     @Bindable var fixture: FixtureEnvironment
+    let model: AppModel
     var body: some View {
         Section {
             Toggle("Simulate offline", isOn: $fixture.offline).accessibilityIdentifier("fixture.offline")
             Toggle("Reject next send", isOn: $fixture.rejectNextSend).accessibilityIdentifier("fixture.reject")
+            Toggle("Fail scope lists", isOn: $fixture.failScopes).accessibilityIdentifier("fixture.failScopes")
+            Button("Store workspace list again") { Task { await model.fixtureStoreWorkspacesAgain() } }
+                .accessibilityIdentifier("fixture.storeWorkspaces")
+            LabeledContent("Context restores", value: "\(model.contextRestores)").accessibilityIdentifier("fixture.restores")
         } header: { Text("Sample data") } footer: {
             Text("This build is running on sample data stored on this iPhone. Nothing is sent to a Tower.")
         }
