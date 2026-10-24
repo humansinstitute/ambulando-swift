@@ -26,7 +26,9 @@ struct FilesView: View {
     @Environment(AppModel.self) private var model
     let workspace: WorkspaceRecord
     let store: LocalStore
-    @State private var scopeId: String?
+    /// The shared sidebar context (scope, channel or Home); the list reads and new records are written inside it.
+    private var context: WorkContext { model.context }
+    private var scopeId: String? { model.context.scopeId }
     @State private var snapshot = LiveQuery<FilesSnapshot>(initial: FilesSnapshot())
     @State private var uploading = false
 
@@ -68,15 +70,14 @@ struct FilesView: View {
         .navigationTitle("Files")
         .safeAreaInset(edge: .top, spacing: 0) {
             ListHeaderBar {
-                ScopeMenu(choice: snapshot.value.choice, selection: $scopeId)
                 Spacer()
                 Button { uploading = true } label: { Image(systemName: "plus.circle.fill").font(.title2) }
                     .accessibilityLabel("Upload").accessibilityIdentifier("files.upload")
             }
         }
-        .sheet(isPresented: $uploading) { UploadSheet(workspace: workspace, choice: snapshot.value.choice, scopeId: scopeId) }
+        .sheet(isPresented: $uploading) { UploadSheet(workspace: workspace, choice: snapshot.value.choice, context: context) }
         .refreshable { model.openFiles(workspace, scopeId: scopeId, force: true) }
-        .task(id: scopeId) { start(); model.openFiles(workspace, scopeId: scopeId) }
+        .task(id: model.context) { start(); model.openFiles(workspace, scopeId: scopeId) }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openFiles(workspace, scopeId: scopeId) } }
     }
 
@@ -95,13 +96,13 @@ struct FilesView: View {
     }
 
     private func start() {
-        let w = workspace.id, scope = scopeId, store = store, connection = model.connection?.id ?? ""
+        let w = workspace.id, context = context, store = store, connection = model.connection?.id ?? ""
         snapshot.start(store: store, matches: { $0.workspaceId == w && [.files, .folders, .writes, .channels, .scopes].contains($0.table) }) {
             let choice = try await scopeChoice(store, w)
-            let files = try await store.reader.files(workspaceId: w)
+            let files = try await store.reader.files(workspaceId: w, context: context)
             let byChannel = Dictionary(grouping: files, by: \.channelId)
             var groups: [FileGroup] = []
-            for channel in choice.channels where scope == nil || channel.scopeId == scope {
+            for channel in choice.channels(in: context) {
                 let folders = try await store.reader.folders(workspaceId: w, channelId: channel.id)
                 let all = byChannel[channel.id] ?? []
                 let folderIds = Set(folders.map(\.id))
@@ -205,7 +206,7 @@ struct UploadSheet: View {
     @Environment(\.dismiss) private var dismiss
     let workspace: WorkspaceRecord
     let choice: ScopeChoice
-    let scopeId: String?
+    let context: WorkContext
     @State private var channelId: String?
     @State private var photo: PhotosPickerItem?
     @State private var importing = false
@@ -216,7 +217,7 @@ struct UploadSheet: View {
         NavigationStack {
             Form {
                 Picker("Channel", selection: $channelId) {
-                    ForEach(choice.channels.filter { scopeId == nil || $0.scopeId == scopeId }) { Text("#\($0.name)").tag(Optional($0.id)) }
+                    ForEach(choice.channels(in: context)) { Text("#\($0.name)").tag(Optional($0.id)) }
                 }
                 .accessibilityIdentifier("upload.channel")
                 Section {
@@ -232,7 +233,7 @@ struct UploadSheet: View {
             .navigationTitle("Upload")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
-            .onAppear { channelId = channelId ?? choice.channels.first { scopeId == nil || $0.scopeId == scopeId }?.id }
+            .onAppear { channelId = channelId ?? context.channelId ?? choice.channels(in: context).first?.id }
             .onChange(of: photo) { _, item in if let item { Task { await stagePhoto(item) } } }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
                 if case .success(let url) = result { Task { await stageFile(url) } }

@@ -4,7 +4,7 @@ import SwiftUI
 /// Main native navigation: workspace switcher + tab bar. Every list renders from the local store.
 struct WorkspaceShell: View {
     @Environment(AppModel.self) private var model
-    @SceneStorage("shell.tab") private var tab = Tab.chat
+    @SceneStorage("shell.tab") private var storedMode = AppMode.chat
     @State private var showSettings = false
     @State private var showUnlock = false
     @State private var inboxPath: [WorkRoute] = []
@@ -12,31 +12,42 @@ struct WorkspaceShell: View {
     @State private var docsPath: [WorkRoute] = []
     @State private var filesPath: [WorkRoute] = []
 
-    enum Tab: String { case inbox, chat, tasks, docs, files }
-
     var body: some View {
-        TabView(selection: $tab) {
-            WorkStack(showSettings: $showSettings, path: $inboxPath, banner: { banners }) {
+        @Bindable var model = model
+        TabView(selection: $model.mode) {
+            // Inbox spans the workspace on purpose; each item says where it is and opening it follows its context.
+            WorkStack(showSettings: $showSettings, path: $inboxPath, contextBar: false, banner: { banners }) {
                 workspaceSurface { InboxView(workspace: $0, store: $1) }
             }
-            .tabItem { Label("Inbox", systemImage: "tray") }.tag(Tab.inbox)
+            .tabItem { Label("Inbox", systemImage: "tray") }.tag(AppMode.inbox)
             ChatStack(showSettings: $showSettings) { banners }
-                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }.tag(Tab.chat)
+                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }.tag(AppMode.chat)
             WorkStack(showSettings: $showSettings, path: $tasksPath, banner: { banners }) {
                 workspaceSurface { TasksView(workspace: $0, store: $1) }
             }
-            .tabItem { Label("Tasks", systemImage: "checklist") }.tag(Tab.tasks)
+            .tabItem { Label("Tasks", systemImage: "checklist") }.tag(AppMode.tasks)
             WorkStack(showSettings: $showSettings, path: $docsPath, banner: { banners }) {
                 workspaceSurface { DocumentsView(workspace: $0, store: $1) }
             }
-            .tabItem { Label("Docs", systemImage: "doc.text") }.tag(Tab.docs)
+            .tabItem { Label("Docs", systemImage: "doc.text") }.tag(AppMode.docs)
             WorkStack(showSettings: $showSettings, path: $filesPath, banner: { banners }) {
                 workspaceSurface { FilesView(workspace: $0, store: $1) }
             }
-            .tabItem { Label("Files", systemImage: "folder") }.tag(Tab.files)
+            .tabItem { Label("Files", systemImage: "folder") }.tag(AppMode.files)
         }
+        .overlay {
+            if model.sidebarOpen { SidebarDrawer().zIndex(1) }
+        }
+        // Record mentions in messages and documents open the record in its mode and follow its context.
+        .environment(\.openMention, OpenMentionAction { kind, id in openRecord(kind: kind, id: id) })
+        .onAppear { if model.mode != storedMode { model.mode = storedMode } }
+        .onChange(of: model.mode) { _, mode in storedMode = mode }
         // A workspace switch starts every work tab at its root (routes carry their workspace anyway).
         .onChange(of: model.selectedWorkspace?.id) { _, _ in inboxPath = []; tasksPath = []; docsPath = []; filesPath = [] }
+        // A new context starts the context-bound modes at their root (an open record would belong to the old one).
+        .onChange(of: model.contextSelections) { _, _ in tasksPath = []; docsPath = []; filesPath = [] }
+        // Scopes or channels changed (sync, deletion, lost access): keep the context to what is still visible.
+        .onChange(of: model.navigation.value) { _, _ in model.validateContext() }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showUnlock) {
             NavigationStack {
@@ -48,6 +59,30 @@ struct WorkspaceShell: View {
             }
         }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { showUnlock = false } }
+    }
+
+    /// Opens a mentioned record. People and agents have no native profile screen yet, so their mentions stay styled text.
+    private func openRecord(kind: String, id: String) {
+        guard let workspace = model.selectedWorkspace?.id else { return }
+        let record = id.lowercased()
+        switch kind.lowercased() {
+        case "task":
+            model.mode = .tasks; tasksPath.append(.task(workspaceId: workspace, taskId: record))
+        case "doc", "document":
+            model.mode = .docs; docsPath.append(.doc(workspaceId: workspace, docId: record))
+        case "file":
+            model.mode = .files; filesPath.append(.file(workspaceId: workspace, fileId: record))
+        case "channel":
+            model.adoptContext(for: .channel(workspaceId: workspace, channelId: record)); model.mode = .chat
+        case "thread":
+            model.openThreadMention(record)
+        default:
+            return
+        }
+        if ["task", "doc", "document", "file"].contains(kind.lowercased()) {
+            model.adoptContext(for: kind.lowercased() == "task" ? .task(workspaceId: workspace, taskId: record)
+                               : kind.lowercased() == "file" ? .file(workspaceId: workspace, fileId: record) : .doc(workspaceId: workspace, docId: record))
+        }
     }
 
     @ViewBuilder private var banners: some View {
@@ -76,7 +111,7 @@ private struct ShellToolbar: ViewModifier {
                 if let workspace = model.selectedWorkspace, let store = model.store { SearchView(workspace: workspace, store: store) }
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { WorkspaceMenu() }
+                ToolbarItem(placement: .topBarLeading) { SidebarButton() }
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 12) {
                         SyncIndicator()
@@ -160,6 +195,9 @@ struct IdentityBanner: View {
         case .locked:
             Button(action: action) { Notice(tone: .info, text: "Locked — showing saved data. Tap to unlock and sync.") }
                 .buttonStyle(.plain).padding(.horizontal, 16).padding(.vertical, 8)
+        case .unavailable:
+            Notice(tone: .info, text: "Your identity can't be opened until this iPhone is unlocked. Saved data is shown.")
+                .padding(.horizontal, 16).padding(.vertical, 8)
         case .none:
             Button(action: action) { Notice(tone: .warning, text: "No identity on this iPhone. Tap to import one and sync.") }
                 .buttonStyle(.plain).padding(.horizontal, 16).padding(.vertical, 8)

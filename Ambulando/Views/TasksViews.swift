@@ -46,7 +46,9 @@ struct TasksView: View {
     let workspace: WorkspaceRecord
     let store: LocalStore
     @SceneStorage("tasks.board") private var board = false
-    @State private var scopeId: String?
+    /// The shared sidebar context (scope, channel or Home); the list reads and new records are written inside it.
+    private var context: WorkContext { model.context }
+    private var scopeId: String? { model.context.scopeId }
     @State private var snapshot = LiveQuery<TasksSnapshot>(initial: TasksSnapshot())
     @State private var creating = false
 
@@ -57,7 +59,6 @@ struct TasksView: View {
         .navigationTitle("Tasks")
         .safeAreaInset(edge: .top, spacing: 0) {
             ListHeaderBar {
-                ScopeMenu(choice: snapshot.value.choice, selection: $scopeId)
                 Spacer()
                 Picker("Layout", selection: $board) {
                     Image(systemName: "list.bullet").tag(false).accessibilityLabel("List")
@@ -70,10 +71,10 @@ struct TasksView: View {
             }
         }
         .sheet(isPresented: $creating) {
-            TaskCreateSheet(workspace: workspace, store: store, choice: snapshot.value.choice, scopeId: scopeId)
+            TaskCreateSheet(workspace: workspace, store: store, choice: snapshot.value.choice, context: context)
         }
         .refreshable { model.openTasks(workspace, scopeId: scopeId, force: true) }
-        .task(id: scopeId) { start(); model.openTasks(workspace, scopeId: scopeId) }
+        .task(id: model.context) { start(); model.openTasks(workspace, scopeId: scopeId) }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openTasks(workspace, scopeId: scopeId) } }
     }
 
@@ -170,9 +171,9 @@ struct TasksView: View {
     }
 
     private func start() {
-        let w = workspace.id, scope = scopeId, store = store, connection = model.connection?.id ?? ""
+        let w = workspace.id, context = context, store = store, connection = model.connection?.id ?? ""
         snapshot.start(store: store, matches: { $0.workspaceId == w && [.tasks, .writes, .members, .channels, .scopes].contains($0.table) }) {
-            async let tasks = store.reader.tasks(workspaceId: w, scopeId: scope, limit: 500)
+            async let tasks = store.reader.tasks(workspaceId: w, context: context, limit: 500)
             async let writes = store.reader.writes(connectionId: connection, workspaceId: w)
             async let choice = scopeChoice(store, w)
             async let names = directoryNames(store, w)
@@ -416,7 +417,7 @@ struct TaskCreateSheet: View {
     let workspace: WorkspaceRecord
     let store: LocalStore
     let choice: ScopeChoice
-    let scopeId: String?
+    let context: WorkContext
     @State private var title = ""
     @State private var detail = ""
     @State private var channelId: String?
@@ -425,7 +426,7 @@ struct TaskCreateSheet: View {
     @State private var assignee: String?
     @State private var members: [MemberRecord] = []
 
-    private var channels: [ChannelRecord] { choice.channels.filter { scopeId == nil || $0.scopeId == scopeId } }
+    private var channels: [ChannelRecord] { choice.channels(in: context) }
 
     var body: some View {
         NavigationStack {
@@ -453,7 +454,7 @@ struct TaskCreateSheet: View {
                 }
             }
             .task {
-                channelId = channelId ?? channels.first?.id
+                channelId = channelId ?? context.channelId ?? channels.first?.id
                 members = (try? await store.reader.members(workspaceId: workspace.id)) ?? []
             }
         }

@@ -11,6 +11,8 @@ struct ChannelSnapshot: Sendable, Equatable {
     var names: [String: String] = [:]
     var historyComplete = false
     var extras = MessageExtras()
+    /// Tower thread titles by thread id, shown on thread roots whose title differs from their text.
+    var threadTitles: [String: String] = [:]
 }
 
 struct ThreadSnapshot: Sendable, Equatable {
@@ -140,11 +142,47 @@ struct ChannelView: View {
     let target: ChatTarget
     let workspace: WorkspaceRecord
     let store: LocalStore
+    /// The sample-data label of a pushed screen; the Chat root shows the shell's banner instead.
+    var pushed = true
     @State private var snapshot = LiveQuery<ChannelSnapshot>(initial: ChannelSnapshot())
     @State private var limit = 150
     @State private var atNewest = true
+    /// Messages (the channel's conversation) or Threads (its conversations with replies, by latest activity).
+    @SceneStorage("channel.pane") private var pane = ChannelPane.messages
 
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("Show", selection: $pane) {
+                Text("Messages").tag(ChannelPane.messages)
+                Text("Threads").tag(ChannelPane.threads)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16).padding(.vertical, 6)
+            .accessibilityIdentifier("channel.pane")
+            if pane == .threads {
+                ChannelThreadsView(target: target, workspace: workspace, store: store)
+            } else {
+                messages
+            }
+        }
+        .background(Amb.background)
+        .modifier(PushedFixtureLabel(enabled: pushed))
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.openChannel(target.channelId, in: workspace) }
+        .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openChannel(target.channelId, in: workspace) } }
+    }
+
+    /// The channel label from the sidebar (direct messages are named after their participants).
+    private var title: String {
+        if let channel = model.navigation.value.channel(target.channelId) {
+            let label = model.navigation.value.label(channel)
+            return SidebarNavigation.isDirectMessageChannel(channel) ? label : "#\(label)"
+        }
+        return snapshot.value.title.isEmpty ? " " : "#\(snapshot.value.title)"
+    }
+
+    private var messages: some View {
         VStack(spacing: 0) {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -156,7 +194,8 @@ struct ChannelView: View {
                     ChannelSyncNote(key: WorkspaceSync.messagesKey(workspace.id, target.channelId), historyComplete: snapshot.value.historyComplete)
                 }
                 ForEach(snapshot.value.posts) { post in
-                    PostRow(post: post, names: snapshot.value.names, workspace: workspace, extras: snapshot.value.extras)
+                    PostRow(post: post, names: snapshot.value.names, workspace: workspace, extras: snapshot.value.extras,
+                            threadTitle: post.message.threadId.flatMap { snapshot.value.threadTitles[$0] })
                 }
                 ForEach(snapshot.value.pending) { item in
                     OutboxRow(item: item, names: snapshot.value.names)
@@ -178,16 +217,10 @@ struct ChannelView: View {
             // A stacked composer (not an inset) so keyboard avoidance shrinks the list itself and the newest
             // message stays visible above the composer.
             Composer(target: target, workspace: workspace, store: store,
-                     placeholder: "Message #\(snapshot.value.title.isEmpty ? "channel" : snapshot.value.title)")
+                     placeholder: "Message \(title.trimmingCharacters(in: .whitespaces).isEmpty ? "#channel" : title)")
         }
-        .background(Amb.background)
-        .fixtureLabel()
-        .navigationTitle(snapshot.value.title.isEmpty ? " " : "#\(snapshot.value.title)")
-        .navigationBarTitleDisplayMode(.inline)
         .task(id: limit) { start() }
-        .onAppear { model.openChannel(target.channelId, in: workspace) }
         .onChange(of: snapshot.value.posts.map(\.id)) { _, ids in model.refreshReactions(workspace, scope: target.channelId, messageIds: ids) }
-        .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openChannel(target.channelId, in: workspace) } }
     }
 
     private var isUnlocked: Bool { if case .unlocked = model.identity { true } else { false } }
@@ -200,11 +233,13 @@ struct ChannelView: View {
             async let pending = store.reader.outbox(target: target)
             async let sync = store.reader.channelSync(workspaceId: target.workspaceId, channelId: target.channelId)
             async let directory = names(store, target.workspaceId)
+            async let titles = store.reader.threadTitles(workspaceId: target.workspaceId, channelId: target.channelId)
             let rows = try await posts
             MessageDisplayCache.shared.prepare(rows.map(\.message))
             let extras = try await messageExtras(store, target.workspaceId, connectionId: target.connectionId, ids: rows.map(\.id))
             return ChannelSnapshot(title: try await channel?.name ?? "", posts: rows, pending: try await pending,
-                                   names: try await directory, historyComplete: try await sync?.complete ?? false, extras: extras)
+                                   names: try await directory, historyComplete: try await sync?.complete ?? false, extras: extras,
+                                   threadTitles: try await titles)
         }
     }
 }
@@ -295,13 +330,14 @@ struct PostRow: View {
     let names: [String: String]
     let workspace: WorkspaceRecord
     let extras: MessageExtras
+    var threadTitle: String? = nil
 
     var body: some View {
         if let thread = post.message.threadId {
             // Only the message opens the thread; reactions and status lines below it stay separately tappable.
             MessageCell(message: post.message, names: names, workspace: workspace, extras: extras,
                         route: ChatRoute.thread(workspaceId: workspace.id, channelId: post.message.channelId, threadId: thread),
-                        replyCount: post.replyCount)
+                        replyCount: post.replyCount, lastReplyAt: post.lastReplyAt, threadTitle: threadTitle)
         } else {
             MessageCell(message: post.message, names: names, workspace: workspace, extras: extras)
         }
@@ -698,5 +734,99 @@ struct MentionPicker: View {
         }
         .padding(.vertical, 4)
         .background(Amb.card)
+    }
+}
+
+// MARK: Threads of a channel
+
+enum ChannelPane: String { case messages, threads }
+
+/// A channel's conversations with replies, newest activity first: title (or the root's text), who started it, the
+/// latest reply and how many replies. Opening one pushes the thread on the Chat stack with the channel behind it.
+struct ChannelThreadsView: View {
+    @Environment(AppModel.self) private var model
+    let target: ChatTarget
+    let workspace: WorkspaceRecord
+    let store: LocalStore
+    @State private var snapshot = LiveQuery<ChannelThreadsSnapshot>(initial: ChannelThreadsSnapshot())
+
+    var body: some View {
+        List {
+            ForEach(snapshot.value.threads) { thread in
+                NavigationLink(value: ChatRoute.thread(workspaceId: workspace.id, channelId: target.channelId, threadId: thread.id)) {
+                    ThreadSummaryRow(thread: thread, names: snapshot.value.names, unread: snapshot.value.unread.contains(thread.id))
+                }
+                .accessibilityIdentifier("threadlist.item")
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .overlay {
+            if snapshot.loaded && snapshot.value.threads.isEmpty {
+                EmptyNote(title: "No threads yet", systemImage: "bubble.left.and.text.bubble.right",
+                          detail: "Replies to a message in this channel start a thread. Threads appear here by latest activity.")
+                    .accessibilityIdentifier("threadlist.empty")
+            }
+        }
+        .refreshable { model.openChannel(target.channelId, in: workspace, force: true) }
+        .task {
+            let w = workspace.id, c = target.channelId, store = store
+            snapshot.start(store: store, matches: { $0.workspaceId == w && [.messages, .threads, .members, .viewStates].contains($0.table) }) {
+                async let threads = store.reader.channelThreads(workspaceId: w, channelId: c)
+                async let directory = names(store, w)
+                async let states = store.reader.viewStates(workspaceId: w)
+                let unread = Set(try await states.filter { $0.resourceType == .thread && ($0.unread || $0.needsAttention) }.map(\.resourceId))
+                return ChannelThreadsSnapshot(threads: try await threads, names: try await directory, unread: unread)
+            }
+        }
+    }
+}
+
+struct ChannelThreadsSnapshot: Sendable, Equatable {
+    var threads: [ThreadSummary] = []
+    var names: [String: String] = [:]
+    var unread: Set<String> = []
+}
+
+struct ThreadSummaryRow: View {
+    let thread: ThreadSummary
+    let names: [String: String]
+    let unread: Bool
+
+    private func person(_ npub: String?) -> String { npub.flatMap { names[$0] } ?? npub.map(shortNpub) ?? "Someone" }
+
+    var body: some View {
+        let root = MentionCodec.plain(thread.rootBody).trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = thread.title.map(MentionCodec.plain)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if unread { Circle().fill(Amb.brandOrange).frame(width: 7, height: 7).accessibilityLabel("Unread") }
+                Text(title?.isEmpty == false ? title! : String(root.prefix(120)))
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(2)
+                Spacer(minLength: 4)
+                Text(ChatTime.label(thread.lastActivityAt)).font(.caption).foregroundStyle(Amb.mutedForeground)
+            }
+            if let title, !title.isEmpty, !root.hasPrefix(title) {
+                Text(root).font(.footnote).foregroundStyle(Amb.mutedForeground).lineLimit(2)
+            }
+            HStack(spacing: 6) {
+                Label("\(thread.replyCount) \(thread.replyCount == 1 ? "reply" : "replies")", systemImage: "bubble.left.and.text.bubble.right")
+                    .font(.caption.weight(.semibold)).foregroundStyle(Amb.primary)
+                Text("·").font(.caption).foregroundStyle(Amb.mutedForeground)
+                Text("\(person(thread.latestSender)): \(MentionCodec.plain(thread.latestBody))")
+                    .font(.caption).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+            }
+            if thread.archived { Text("Archived").font(.caption2.weight(.semibold)).foregroundStyle(Amb.mutedForeground) }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The sample-data label under the navigation bar of a pushed screen only (a root already shows the shell banner).
+struct PushedFixtureLabel: ViewModifier {
+    let enabled: Bool
+    func body(content: Content) -> some View {
+        if enabled { content.fixtureLabel() } else { content }
     }
 }

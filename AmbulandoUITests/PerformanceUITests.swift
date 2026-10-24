@@ -47,11 +47,11 @@ final class PerformanceUITests: XCTestCase {
         XCTAssertTrue(general.waitForExistence(timeout: 20))
         general.tap()   // first open loads history; measured opens use the stored rows
         XCTAssertTrue(a.navigationBars["#general"].waitForExistence(timeout: 10))
-        a.navigationBars.buttons.element(boundBy: 0).tap()
+        a.showChannels()
         measure(metrics: [XCTOSSignpostMetric.navigationTransitionMetric], options: Self.options) {
             general.tap()
             XCTAssertTrue(a.navigationBars["#general"].waitForExistence(timeout: 10))
-            a.navigationBars.buttons.element(boundBy: 0).tap()
+            a.showChannels()
             XCTAssertTrue(general.waitForExistence(timeout: 10))
         }
     }

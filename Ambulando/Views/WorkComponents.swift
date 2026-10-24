@@ -9,6 +9,14 @@ struct ScopeChoice: Sendable, Equatable {
     func channelName(_ id: String?) -> String? { channels.first { $0.id == id }?.name }
     func scopeName(_ id: String?) -> String? { scopes.first { $0.id == id }?.name }
     func scope(ofChannel id: String) -> String? { channels.first { $0.id == id }?.scopeId }
+
+    /// Channels a new record can be written to in `context`: the context's channel, its scope's channels, or (Home) all.
+    /// Tower lists only channels this member can read; it still decides write access and rejects a write without it.
+    func channels(in context: WorkContext) -> [ChannelRecord] {
+        guard let scopeId = context.scopeId else { return channels }
+        if let channelId = context.channelId { return channels.filter { $0.id == channelId } }
+        return channels.filter { $0.scopeId == scopeId }
+    }
 }
 
 func scopeChoice(_ store: LocalStore, _ workspaceId: String) async throws -> ScopeChoice {
@@ -117,8 +125,15 @@ struct WriteStatusLine: View {
 struct WorkDestination: View {
     @Environment(AppModel.self) private var model
     let route: WorkRoute
+    /// Opened from a workspace-wide list (Inbox, Search): the shared context follows the record.
+    var adoptsContext = false
 
     var body: some View {
+        Group { destination }
+            .task(id: route) { if adoptsContext { model.adoptContext(for: route) } }
+    }
+
+    @ViewBuilder private var destination: some View {
         if let workspace = model.selectedWorkspace, route.workspaceId == workspace.id, let store = model.store, let connection = model.connection {
             switch route {
             case .task(_, let id): TaskDetailView(taskId: id, workspace: workspace, store: store)
@@ -139,6 +154,8 @@ struct WorkDestination: View {
 struct WorkStack<Root: View, Banner: View>: View {
     @Binding var showSettings: Bool
     @Binding var path: [WorkRoute]
+    /// Context-bound modes show the shared Scope | Channel strip; the global Inbox does not.
+    var contextBar = true
     @ViewBuilder let banner: () -> Banner
     @ViewBuilder let root: () -> Root
 
@@ -146,11 +163,12 @@ struct WorkStack<Root: View, Banner: View>: View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
                 banner()
+                if contextBar { ContextBar() }
                 root()
             }
             .background(Amb.background)
             .toolbarItems(showSettings: $showSettings)
-            .navigationDestination(for: WorkRoute.self) { WorkDestination(route: $0) }
+            .navigationDestination(for: WorkRoute.self) { WorkDestination(route: $0, adoptsContext: !contextBar) }
         }
     }
 }

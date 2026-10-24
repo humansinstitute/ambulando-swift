@@ -13,10 +13,20 @@ struct MessageCell: View {
     let extras: MessageExtras
     var route: ChatRoute? = nil
     var replyCount = 0
+    var lastReplyAt: String? = nil
+    /// Tower's thread title, shown above the root when it says something the root's first words do not.
+    var threadTitle: String? = nil
     @State private var editing = false
     @State private var confirmDelete = false
 
     private var writes: [WriteItem] { extras.writes[message.id] ?? [] }
+    private var distinctTitle: String? {
+        guard let threadTitle else { return nil }
+        let title = MentionCodec.plain(threadTitle).trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = MentionCodec.plain(message.body).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, !body.hasPrefix(title.trimmingCharacters(in: CharacterSet(charactersIn: ".…"))) else { return nil }
+        return title
+    }
     private var pendingEdit: WriteItem? { writes.last { $0.kind == .messageEdit } }
     private var pendingDelete: WriteItem? { writes.last { $0.kind == .messageDelete } }
     private var mine: Bool { message.senderNpub != nil && message.senderNpub == model.identity.npub }
@@ -27,16 +37,29 @@ struct MessageCell: View {
                 if let route {
                     NavigationLink(value: route) {
                         VStack(alignment: .leading, spacing: 0) {
+                            if let title = distinctTitle {
+                                Label(title, systemImage: "text.bubble")
+                                    .font(.caption.weight(.semibold)).foregroundStyle(Amb.itemHeading).lineLimit(1)
+                                    .padding(.leading, 60).padding(.trailing, 16).padding(.top, 6)
+                            }
                             row
                             if replyCount > 0 {
-                                Label("\(replyCount) \(replyCount == 1 ? "reply" : "replies")", systemImage: "bubble.left.and.text.bubble.right")
-                                    .font(.caption.weight(.semibold)).foregroundStyle(Amb.primary)
-                                    .padding(.leading, 60).padding(.bottom, 8)
+                                HStack(spacing: 6) {
+                                    Image(systemName: "bubble.left.and.text.bubble.right")
+                                    Text("\(replyCount) \(replyCount == 1 ? "reply" : "replies")")
+                                    if let lastReplyAt { Text("· last \(ChatTime.label(lastReplyAt))").fontWeight(.regular).foregroundStyle(Amb.mutedForeground) }
+                                    Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                }
+                                .font(.caption.weight(.semibold)).foregroundStyle(Amb.primary)
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(Amb.accent, in: Capsule())
+                                .padding(.leading, 58).padding(.bottom, 8)
                             }
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityHint(replyCount > 0 ? "Opens the thread" : "")
                     .accessibilityIdentifier("thread.\(replyCount)")
                 } else {
                     row

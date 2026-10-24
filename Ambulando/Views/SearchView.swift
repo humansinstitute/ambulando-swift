@@ -42,7 +42,7 @@ struct SearchView: View {
             .navigationTitle("Search")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-            .navigationDestination(for: WorkRoute.self) { WorkDestination(route: $0) }
+            .navigationDestination(for: WorkRoute.self) { WorkDestination(route: $0, adoptsContext: true) }
             .task(id: query) { await run() }
         }
     }
@@ -55,10 +55,18 @@ struct SearchView: View {
         }
     }
 
+    private func place(_ hit: SearchHit) -> String? {
+        let nav = model.navigation.value
+        guard let channel = nav.channel(hit.channelId) else { return nil }
+        return [nav.scope(channel.scopeId)?.name, "#" + nav.label(channel)].compactMap { $0 }.joined(separator: " · ")
+    }
+
     private func row(_ hit: SearchHit) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(hit.title).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
             if !hit.snippet.isEmpty { Text(hit.snippet).font(.caption).foregroundStyle(Amb.mutedForeground).lineLimit(2) }
+            // Search spans the workspace; each result says where it lives, and opening it follows that context.
+            if let place = place(hit) { Text(place).font(.caption2.weight(.semibold)).foregroundStyle(Amb.primary).lineLimit(1) }
         }
     }
 

@@ -222,7 +222,7 @@ final class WorkFlowUITests: XCTestCase {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Native edit test'")).firstMatch.waitForExistence(timeout: 3),
                        "gone from the channel too")
-        app.navigationBars.buttons.element(boundBy: 0).tap()   // back to the channel list (search lives in the shell toolbar)
+        app.showChannels()   // back to the channel list (search lives in the shell toolbar)
 
         // Search covers what is stored locally: load the task list once, then search from the shell toolbar.
         tab(app, "Tasks")

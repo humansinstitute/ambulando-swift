@@ -45,6 +45,9 @@ struct RootView: View {
                     // Whenever an existing identity is locked: a full-screen unlock instead of a workspace that cannot
                     // sync. The selected workspace, navigation, drafts and unsent messages are kept for when it opens.
                     LockScreen()
+                case .unavailable:
+                    // An identity exists but cannot be read yet (started while the iPhone was locked). Never an import.
+                    IdentityUnavailableView()
                 case .unlocked:
                     if model.connection != nil { WorkspaceShell() } else { ConnectView() }
                 case .none:

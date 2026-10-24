@@ -34,6 +34,9 @@ enum WorkRoute: Hashable {
     }
 }
 
+/// The app's modes, each reading the shared context (Inbox and Search span the workspace and say where results are).
+enum AppMode: String, CaseIterable, Codable { case inbox, chat, tasks, docs, files }
+
 /// App-wide state on the main actor. It owns no network or database work itself: it forwards
 /// intents to `WorkspaceSync`/`OutboxSender` via `SyncEngine` (sole network owner) and reads the store via `LiveQuery`.
 @MainActor
@@ -48,6 +51,13 @@ final class AppModel {
     private(set) var syncStatus = SyncSnapshot()
     /// Navigation inside the Chat tab for the selected workspace; persisted per connection and workspace.
     var chatPath: [ChatRoute] = [] { didSet { if chatPath != oldValue { persistChatPath() } } }
+    /// The shared Workspace → Scope → Channel context chosen in the sidebar. Chat, tasks, documents and files read and
+    /// write inside it; persisted per connection and workspace (see `WorkContext`).
+    private(set) var context: WorkContext = .home
+    /// The sidebar drawer (workspace, scopes and channels), reachable from every mode.
+    var sidebarOpen = false
+    /// The current mode (tab). Opening a record from Inbox or Search may switch it.
+    var mode: AppMode = .chat
     var notice: String?
     /// Set when the app runs on deterministic local sample data (UI automation); never a live Tower.
     private(set) var fixture: FixtureEnvironment?
@@ -109,7 +119,7 @@ final class AppModel {
     let workspaces = LiveQuery<[WorkspaceRecord]>(initial: [])
 
     static var dataDirectory: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("AmbulandoNative", isDirectory: true)
+        ProductionStorage.dataDirectory(applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
     }
 
     static let backgroundPreferenceKey = "background.refresh-enabled"
@@ -123,6 +133,31 @@ final class AppModel {
         await task.value
     }
 
+    /// A start that failed (for example the store could not be opened while the iPhone was locked) is tried again
+    /// when the app becomes active or protected data becomes available. Nothing is deleted or recreated to get past it.
+    private func retryStartIfFailed() async {
+        // Only a failure to open local storage is retried; later steps may already have started system services.
+        guard case .failed = phase, store == nil, transfers == nil else { return }
+        phase = .starting
+        startTask = nil
+        await start()
+    }
+
+    /// Reads the identity again. A launch while the iPhone was locked could not read the sealed vault or the
+    /// trusted-device session; once it is unlocked both are available again and no PIN or import is needed.
+    func refreshIdentityAvailability() async {
+        guard let sync else { return }
+        let state = await sync.identity.refreshAvailability()
+        guard state != identity else { return }
+        identity = state
+        canReadWhileLocked = await sync.identity.canReadWhileLocked
+        if case .unlocked = state {
+            refresh(force: false)
+            kickOutbox(force: true)
+            startLive()
+        }
+    }
+
     private func performStart() async {
         guard phase == .starting else { return }
         do {
@@ -132,12 +167,12 @@ final class AppModel {
             let background = fixture?.backgroundCredentials ?? KeychainBackgroundCredentialStore()
             let session = fixture?.sessionKeys ?? KeychainSessionKeyStore()
             let (store, identity) = try await Task.detached(priority: .userInitiated) {
-                let store = try LocalStore(directory: directory.appendingPathComponent("Store", isDirectory: true))
+                let store = try LocalStore(directory: ProductionStorage.storeDirectory(directory))
                 // Nothing is in flight at launch; an interrupted send is queued again (Tower replays by client_request_id),
                 // and an interrupted write is reconciled before it is sent again.
                 try await store.writer.resetInterruptedSends()
                 try await store.writer.resetInterruptedWrites()
-                let identity = IdentityService(vaultURL: directory.appendingPathComponent("Identity/vault.json"), secrets: secrets,
+                let identity = IdentityService(vaultURL: ProductionStorage.vaultURL(directory), secrets: secrets,
                                                background: background, session: session)
                 // Trusted-device session: stays unlocked across relaunch until Lock now / remove / disconnect. The
                 // Keychain item opens only while the iPhone is unlocked, so a background launch on a locked device stays
@@ -170,7 +205,7 @@ final class AppModel {
             try? stagingURL.setResourceValues(excluded)
             self.staging = staging
             self.fileCache = FileCache(root: fixture.map { $0.directory.appendingPathComponent("FileCache", isDirectory: true) }
-                ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("AmbulandoFiles", isDirectory: true))
+                ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(ProductionStorage.fileCacheDirectoryName, isDirectory: true))
             self.outbox = OutboxSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers)
             self.writes = WriteSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers)
             self.saver = DocumentSaver(store: store, identity: identity, transport: transport)
@@ -186,6 +221,7 @@ final class AppModel {
             if let connection {
                 selectedWorkspaceId = try await store.reader.state("selected.workspace:\(connection.id)")
                 observeWorkspaces(connection)
+                await restoreContext()
                 await restoreChatPath()
             }
             statusTask = Task { [weak self] in
@@ -198,6 +234,7 @@ final class AppModel {
                 }
             }
             watchNetwork()
+            observeProtectedData()
             phase = .ready
             if canRead { refresh(force: false); kickOutbox() }
             if isActive { startLive() }
@@ -305,6 +342,8 @@ final class AppModel {
             workspaces.stop()
             self.connection = nil
             selectedWorkspaceId = nil
+            context = .home
+            navigation.stop()
             restoringPath = true; chatPath = []; restoringPath = false
         } catch { notice = error.localizedDescription }
     }
@@ -313,8 +352,11 @@ final class AppModel {
         guard let store, let connection, id != selectedWorkspaceId else { return }
         selectedWorkspaceId = id
         restoringPath = true; chatPath = []; restoringPath = false
+        context = .home
+        navigation.stop()
         Task {
             try? await store.writer.setState("selected.workspace:\(connection.id)", id)
+            await restoreContext()
             await restoreChatPath()
         }
         if let workspace = workspaces.value.first(where: { $0.id == id }), let sync {
@@ -344,9 +386,23 @@ final class AppModel {
     /// Scene became active: resume live updates and retry anything unsent.
     func sceneDidBecomeActive() {
         isActive = true
-        refresh(force: false)
-        kickOutbox()
-        startLive()
+        Task {
+            await retryStartIfFailed()
+            await refreshIdentityAvailability()
+            refresh(force: false)
+            kickOutbox()
+            startLive()
+        }
+    }
+
+    /// iOS made files with complete protection readable again (the iPhone was unlocked) while this process kept running.
+    private func observeProtectedData() {
+        NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                await self?.retryStartIfFailed()
+                await self?.refreshIdentityAvailability()
+            }
+        }
     }
 
     /// Scene went to the background: close the stream (iOS would suspend it anyway), give unsent work the short
@@ -580,8 +636,146 @@ final class AppModel {
         let routes = stored.flatMap { try? JSONDecoder().decode([ChatRoute].self, from: Data($0.utf8)) } ?? []
         guard key == chatPathKey else { return }   // the workspace changed while reading
         let workspace = selectedWorkspaceId ?? selectedWorkspace?.id
+        let mine = routes.filter { $0.workspaceId == workspace }
+        // Builds before the shared context pushed the channel itself; it is now the context (the Chat root), so an
+        // upgraded path keeps the same open channel and thread.
+        if context.channelId == nil, case .channel(_, let channelId)? = mine.first,
+           let channel = try? await store.reader.channel(workspaceId: workspace ?? "", id: channelId) {
+            setContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id), resetChat: false)
+        }
         restoringPath = true
-        chatPath = routes.filter { $0.workspaceId == workspace }
+        chatPath = mine.filter { if case .thread(_, let channelId, _) = $0 { channelId == context.channelId } else { false } }
         restoringPath = false
+    }
+
+    // MARK: Shared context (sidebar)
+
+    /// Scopes, channels, collapse state and unread channels of the selected workspace for the sidebar and context bar.
+    let navigation = LiveQuery<NavigationSnapshot>(initial: NavigationSnapshot())
+
+    private var contextKey: String? {
+        guard let connection, let workspace = selectedWorkspaceId ?? selectedWorkspace?.id else { return nil }
+        return WorkContext.stateKey(connectionId: connection.id, workspaceId: workspace)
+    }
+
+    /// Chooses the context from the sidebar. Chat follows it (a channel's conversation becomes the Chat root); tasks,
+    /// documents and files filter to it. Persisted for relaunch.
+    func selectContext(_ next: WorkContext) {
+        sidebarOpen = false
+        guard next != context else { return }
+        contextSelections &+= 1
+        setContext(next, resetChat: true)
+    }
+
+    /// Counts sidebar choices; the shell returns the context-bound modes to their root on each (a record opened in the
+    /// old context would otherwise stay on top). Following a record's context does not count.
+    private(set) var contextSelections = 0
+
+    /// Opening a record from the global Inbox or Search (or a mention) follows its context, like the web app, without
+    /// closing it: the sidebar, Chat, Tasks, Docs and Files then show where it lives.
+    func adoptContext(for route: WorkRoute) {
+        guard let store, let workspace = selectedWorkspaceId, route.workspaceId == workspace else { return }
+        Task {
+            let channelId: String?
+            switch route {
+            case .channel(_, let id), .thread(_, let id, _): channelId = id
+            case .task(_, let id): channelId = try? await store.reader.task(workspaceId: workspace, id: id)?.channelId
+            case .doc(_, let id): channelId = try? await store.reader.doc(workspaceId: workspace, id: id)?.channelId
+            case .file(_, let id): channelId = try? await store.reader.file(workspaceId: workspace, id: id)?.channelId
+            }
+            guard let channelId, channelId != context.channelId,
+                  let channel = try? await store.reader.channel(workspaceId: workspace, id: channelId), workspace == selectedWorkspaceId else { return }
+            setContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id), resetChat: true)
+        }
+    }
+
+    /// A mentioned conversation: its channel becomes the context and the thread opens on top of it in Chat.
+    func openThreadMention(_ threadId: String) {
+        guard let store, let workspace = selectedWorkspaceId else { return }
+        Task {
+            guard let thread = try? await store.reader.thread(workspaceId: workspace, id: threadId),
+                  let channel = try? await store.reader.channel(workspaceId: workspace, id: thread.channelId), workspace == selectedWorkspaceId else { return }
+            setContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id), resetChat: true)
+            mode = .chat
+            chatPath = [.thread(workspaceId: workspace, channelId: channel.id, threadId: thread.id)]
+        }
+    }
+
+    private func setContext(_ next: WorkContext, resetChat: Bool) {
+        context = next
+        if resetChat { chatPath = [] }
+        guard let store, let key = contextKey else { return }
+        let encoded = next.encoded()
+        Task { try? await store.writer.setState(key, encoded) }
+    }
+
+    private func restoreContext() async {
+        guard let store, let connection, let key = contextKey, let workspace = selectedWorkspaceId ?? selectedWorkspace?.id else { return }
+        let stored = WorkContext.decode((try? await store.reader.state(key)) ?? nil) ?? .home
+        guard key == contextKey else { return }   // the workspace changed while reading
+        context = stored
+        observeNavigation(connection: connection, workspaceId: workspace)
+    }
+
+    private func observeNavigation(connection: ConnectionRecord, workspaceId: String) {
+        guard let store else { return }
+        let orderKey = WorkspaceSync.scopeOrderKey(workspaceId)
+        let collapsedKey = WorkspaceSync.collapsedKey(connectionId: connection.id, workspaceId: workspaceId)
+        let viewer = connection.signerNpub
+        navigation.start(store: store, matches: { key in
+            ([.scopes, .channels, .viewStates, .members].contains(key.table) && key.workspaceId == workspaceId) || key.table == .appState
+        }) {
+            async let scopes = store.reader.scopes(workspaceId: workspaceId)
+            async let channels = store.reader.channels(workspaceId: workspaceId)
+            async let order = store.reader.state(orderKey)
+            async let collapsed = store.reader.state(collapsedKey)
+            async let unread = store.reader.unreadChannelIds(workspaceId: workspaceId)
+            async let members = store.reader.members(workspaceId: workspaceId)
+            let groups = SidebarNavigation.groups(scopes: try await scopes, channels: try await channels, personalOrder: ScopeOrdering.decode(try await order))
+            let names = Dictionary(try await members.map { ($0.npub, $0.label) }, uniquingKeysWith: { a, _ in a })
+            var labels: [String: String] = [:]
+            for channel in groups.flatMap(\.channels) { labels[channel.id] = SidebarNavigation.label(channel, viewerNpub: viewer, names: names) }
+            return NavigationSnapshot(workspaceId: workspaceId, groups: groups, collapsed: Set(ScopeOrdering.decode(try await collapsed)),
+                                      unread: try await unread, labels: labels, loaded: true)
+        }
+    }
+
+    /// Narrows the context when its scope or channel is no longer listed (deleted, or access lost). Only a complete,
+    /// loaded list for this workspace is trusted, so a list still syncing never clears the selection.
+    func validateContext() {
+        let snapshot = navigation.value
+        guard snapshot.loaded, snapshot.workspaceId == selectedWorkspaceId, !snapshot.groups.isEmpty else { return }
+        let resolved = context.resolved(scopes: snapshot.groups.map(\.scope), channels: snapshot.groups.flatMap(\.channels))
+        if resolved != context { setContext(resolved, resetChat: true) }
+    }
+
+    /// Collapse is a personal preference on this iPhone (as on the web, per browser); persisted for relaunch.
+    func toggleScopeCollapsed(_ scopeId: String) {
+        guard let store, let connection, let workspace = selectedWorkspaceId else { return }
+        var collapsed = navigation.value.collapsed
+        if collapsed.contains(scopeId) { collapsed.remove(scopeId) } else { collapsed.insert(scopeId) }
+        let encoded = String(decoding: (try? JSONEncoder().encode(collapsed.sorted())) ?? Data("[]".utf8), as: UTF8.self)
+        let key = WorkspaceSync.collapsedKey(connectionId: connection.id, workspaceId: workspace)
+        Task { try? await store.writer.setState(key, encoded) }
+    }
+}
+
+/// The sidebar's view of the selected workspace (read off the main actor).
+struct NavigationSnapshot: Sendable, Equatable {
+    var workspaceId: String?
+    var groups: [SidebarGroup] = []
+    var collapsed: Set<String> = []
+    var unread: Set<String> = []
+    /// Display labels by channel id (direct messages are named after their participants).
+    var labels: [String: String] = [:]
+    var loaded = false
+
+    func scope(_ id: String?) -> ScopeRecord? { groups.first { $0.scope.id == id }?.scope }
+    func channel(_ id: String?) -> ChannelRecord? { groups.lazy.flatMap(\.channels).first { $0.id == id } }
+    func label(_ channel: ChannelRecord) -> String { labels[channel.id] ?? channel.name }
+    func channels(in context: WorkContext) -> [ChannelRecord] {
+        guard let scopeId = context.scopeId else { return groups.flatMap(\.channels) }
+        if let channelId = context.channelId { return groups.flatMap(\.channels).filter { $0.id == channelId } }
+        return groups.first { $0.scope.id == scopeId }?.channels ?? []
     }
 }

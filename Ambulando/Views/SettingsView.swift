@@ -22,9 +22,9 @@ struct SettingsView: View {
                     LabeledContent("Public key", value: model.identity.npub.map(shortNpub) ?? "None")
                     switch model.identity {
                     case .unlocked: Button("Lock now") { Task { await model.lock() } }
-                    case .locked, .none: EmptyView()
+                    case .locked, .none, .unavailable: EmptyView()
                     }
-                    if model.identity != .none {
+                    if model.identity.npub != nil {
                         Button("Remove identity from this iPhone", role: .destructive) { confirmRemove = true }
                     }
                 }

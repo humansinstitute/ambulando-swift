@@ -120,7 +120,9 @@ struct InboxView: View {
             let choice = try await scopeChoice(store, w)
             var needsYou: [InboxEntry] = [], unread: [InboxEntry] = []
             for state in states {
-                let channel = choice.channelName(state.channelId).map { "#\($0)" } ?? ""
+                // Where the item lives (the Inbox spans every scope): "Scope · #channel".
+                let channel = [choice.scopeName(state.channelId.flatMap(choice.scope(ofChannel:)) ?? state.scopeId),
+                               choice.channelName(state.channelId).map { "#\($0)" }].compactMap { $0 }.joined(separator: " · ")
                 var entry: InboxEntry
                 switch state.resourceType {
                 case .task:

@@ -37,19 +37,25 @@ final class ChatFlowUITests: XCTestCase {
     func testScopeOrderCollapseAndWorkspaceSwitch() {
         let app = launch(reset: true)
         XCTAssertTrue(app.buttons["channel.deploys"].waitForExistence(timeout: 15))
+        app.openSidebar()
         // Personal scope order from Tower: Operations before Ambulando.
-        XCTAssertLessThan(app.buttons["scope.Operations"].frame.minY, app.buttons["scope.Ambulando"].frame.minY)
-        app.buttons["scope.Ambulando"].tap()
-        XCTAssertFalse(app.buttons["channel.general"].waitForExistence(timeout: 2), "collapsed scope hides its channels")
+        XCTAssertLessThan(app.buttons["sidebar.scope.Operations"].frame.minY, app.buttons["sidebar.scope.Ambulando"].frame.minY)
+        if !app.buttons["sidebar.channel.general"].waitForExistence(timeout: 5) {
+            let tree = XCTAttachment(string: app.debugDescription); tree.name = "sidebar-tree"; tree.lifetime = .keepAlways; add(tree)
+            XCTFail("general listed under its scope")
+        }
+        app.buttons["sidebar.collapse.Ambulando"].tap()
+        XCTAssertFalse(app.buttons["sidebar.channel.general"].waitForExistence(timeout: 2), "collapsed scope hides its channels")
         app.terminate()
 
         let relaunched = launch(reset: false)
         XCTAssertTrue(relaunched.buttons["channel.deploys"].waitForExistence(timeout: 15))
-        XCTAssertFalse(relaunched.buttons["channel.general"].exists, "collapse survives relaunch")
-        relaunched.buttons["scope.Ambulando"].tap()
-        XCTAssertTrue(relaunched.buttons["channel.general"].waitForExistence(timeout: 5))
+        relaunched.openSidebar()
+        XCTAssertFalse(relaunched.buttons["sidebar.channel.general"].exists, "collapse survives relaunch")
+        relaunched.buttons["sidebar.collapse.Ambulando"].tap()
+        XCTAssertTrue(relaunched.buttons["sidebar.channel.general"].waitForExistence(timeout: 5))
 
-        relaunched.buttons["Switch workspace"].tap()
+        relaunched.buttons["sidebar.workspace"].tap()
         relaunched.buttons["Lab (sample)"].tap()
         XCTAssertTrue(relaunched.buttons["channel.notes"].waitForExistence(timeout: 15))
         XCTAssertFalse(relaunched.buttons["channel.general"].exists, "no rows from the other workspace")
@@ -61,10 +67,10 @@ final class ChatFlowUITests: XCTestCase {
         let composer = field(app)
         composer.tap()
         composer.typeText("Unsent draft for general")
-        app.navigationBars.buttons.element(boundBy: 0).tap()       // back to channels
-        app.buttons["channel.design"].tap()
+        app.selectSidebarChannel("design")                          // another channel from the sidebar
+        XCTAssertTrue(app.navigationBars["#design"].waitForExistence(timeout: 10))
         XCTAssertEqual(value(field(app)).contains("Unsent draft"), false, "drafts are per channel")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.showChannels()
         openGeneral(app)
         XCTAssertEqual(value(field(app)), "Unsent draft for general")
         sleep(1)                                                     // debounce flush

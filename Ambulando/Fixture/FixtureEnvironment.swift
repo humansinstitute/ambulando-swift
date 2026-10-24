@@ -95,6 +95,11 @@ final class FixtureEnvironment {
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
         guard args.contains("-AmbulandoUITestFixture") else { return nil }
+        #if !targetEnvironment(simulator)
+        // On a physical iPhone a sample-data process looks like a different account to whoever opens the app next, so it
+        // needs a second, deliberate flag (a designated test device only, never someone's everyday phone).
+        guard args.contains("-AmbulandoFixtureOnDevice") else { return nil }
+        #endif
         let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("AmbulandoFixture", isDirectory: true)
         if args.contains("-AmbulandoFixtureReset") {

@@ -47,7 +47,6 @@ final class LifecycleUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Live update 2 from Ana"].waitForExistence(timeout: 20), "live message rendered without refresh")
         field.typeText(" still here")
         XCTAssertEqual(field.value as? String, "Typing while updates arrive still here", "no dropped or reset characters")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
         app.buttons["settings"].tap()
         XCTAssertTrue(settingsRow(app, "settings.liveStatus", containing: "Connected"), "stream reported connected")
     }
@@ -62,7 +61,6 @@ final class LifecycleUITests: XCTestCase {
         waitForExpectations(timeout: 30)
         app.buttons["channel.general"].tap()
         XCTAssertTrue(app.staticTexts["Posted while the app was in the background"].waitForExistence(timeout: 10))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
         app.buttons["settings"].tap()
         XCTAssertTrue(settingsRow(app, "settings.lastBackgroundRefresh", containing: "Updated"), "last background refresh shown")
     }

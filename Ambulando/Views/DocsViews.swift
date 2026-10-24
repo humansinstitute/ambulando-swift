@@ -14,7 +14,9 @@ struct DocumentsView: View {
     @Environment(AppModel.self) private var model
     let workspace: WorkspaceRecord
     let store: LocalStore
-    @State private var scopeId: String?
+    /// The shared sidebar context (scope, channel or Home); the list reads and new records are written inside it.
+    private var context: WorkContext { model.context }
+    private var scopeId: String? { model.context.scopeId }
     @State private var filter = ""
     @State private var snapshot = LiveQuery<DocsSnapshot>(initial: DocsSnapshot())
     @State private var creating = false
@@ -61,22 +63,21 @@ struct DocumentsView: View {
         .navigationTitle("Docs")
         .safeAreaInset(edge: .top, spacing: 0) {
             ListHeaderBar {
-                ScopeMenu(choice: snapshot.value.choice, selection: $scopeId)
                 Spacer()
                 Button { creating = true } label: { Image(systemName: "plus.circle.fill").font(.title2) }
                     .accessibilityLabel("New document").accessibilityIdentifier("docs.new")
             }
         }
-        .sheet(isPresented: $creating) { DocumentCreateSheet(workspace: workspace, choice: snapshot.value.choice, scopeId: scopeId) }
+        .sheet(isPresented: $creating) { DocumentCreateSheet(workspace: workspace, choice: snapshot.value.choice, context: context) }
         .refreshable { model.openDocs(workspace, scopeId: scopeId, force: true) }
-        .task(id: scopeId) { start(); model.openDocs(workspace, scopeId: scopeId) }
+        .task(id: model.context) { start(); model.openDocs(workspace, scopeId: scopeId) }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openDocs(workspace, scopeId: scopeId) } }
     }
 
     private func start() {
-        let w = workspace.id, scope = scopeId, store = store, connection = model.connection?.id ?? ""
+        let w = workspace.id, context = context, store = store, connection = model.connection?.id ?? ""
         snapshot.start(store: store, matches: { $0.workspaceId == w && [.docs, .docDrafts, .writes, .channels, .scopes].contains($0.table) }) {
-            async let docs = store.reader.docs(workspaceId: w, scopeId: scope)
+            async let docs = store.reader.docs(workspaceId: w, context: context)
             async let drafts = store.reader.docDraftIds(connectionId: connection, workspaceId: w)
             async let writes = store.reader.writes(connectionId: connection, workspaceId: w)
             async let choice = scopeChoice(store, w)
@@ -91,7 +92,7 @@ struct DocumentCreateSheet: View {
     @Environment(\.dismiss) private var dismiss
     let workspace: WorkspaceRecord
     let choice: ScopeChoice
-    let scopeId: String?
+    let context: WorkContext
     @State private var title = ""
     @State private var text = ""
     @State private var channelId: String?
@@ -102,7 +103,7 @@ struct DocumentCreateSheet: View {
             Form {
                 TextField("Title", text: $title).accessibilityIdentifier("newdoc.title")
                 Picker("Channel", selection: $channelId) {
-                    ForEach(choice.channels.filter { scopeId == nil || $0.scopeId == scopeId }) { Text("#\($0.name)").tag(Optional($0.id)) }
+                    ForEach(choice.channels(in: context)) { Text("#\($0.name)").tag(Optional($0.id)) }
                 }
                 Section("Text") { TextEditor(text: $text).frame(minHeight: 160).accessibilityIdentifier("newdoc.text") }
                 if let error { Text(error).foregroundStyle(Amb.destructive) }
@@ -116,7 +117,7 @@ struct DocumentCreateSheet: View {
                         .accessibilityIdentifier("newdoc.create")
                 }
             }
-            .onAppear { channelId = channelId ?? choice.channels.first { scopeId == nil || $0.scopeId == scopeId }?.id }
+            .onAppear { channelId = channelId ?? context.channelId ?? choice.channels(in: context).first?.id }
         }
     }
 

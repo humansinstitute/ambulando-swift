@@ -138,3 +138,41 @@ struct LockScreen: View {
         }
     }
 }
+
+/// The identity is on this iPhone but cannot be read right now: the app was started while the iPhone was locked (the
+/// sealed vault and the session key open only after unlocking), or the vault file is damaged. Nothing is imported,
+/// replaced or deleted from here; the app reads it again as soon as iOS allows.
+struct IdentityUnavailableView: View {
+    @Environment(AppModel.self) private var model
+    @State private var checking = false
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer(minLength: 24)
+            VStack(spacing: 12) {
+                PassageMark(size: 88)
+                Text("Ambulando").font(.system(.largeTitle, design: .serif).weight(.semibold)).foregroundStyle(Amb.foreground)
+                Text("Your identity is on this iPhone").font(.headline).foregroundStyle(Amb.itemHeading)
+                    .accessibilityIdentifier("identity.unavailable")
+            }
+            VStack(spacing: 12) {
+                Text("It can't be opened right now. This happens when Ambulando was started while the iPhone was locked. Your key, Tower connection and saved work are kept; nothing needs to be imported again.")
+                    .font(.callout).foregroundStyle(Amb.foreground).multilineTextAlignment(.center)
+                Button {
+                    checking = true
+                    Task { await model.refreshIdentityAvailability(); checking = false }
+                } label: { checking ? AnyView(ProgressView().tint(Amb.primaryForeground)) : AnyView(Text("Try again")) }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(checking)
+                .accessibilityIdentifier("identity.retry")
+                Text("If this stays after unlocking your iPhone, the identity file may be damaged. Leave it in place and contact support; do not remove the app.")
+                    .font(.footnote).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: 360)
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Amb.background.ignoresSafeArea())
+    }
+}
