@@ -15,10 +15,19 @@ extension WorkspaceSync {
     public static func toolboxKey(_ w: String) -> String { "toolbox:\(w)" }
     public static func pinsKey(_ w: String) -> String { "pins:\(w)" }
 
-    /// Most channels whose agent activity is read for one context (Tower lists activity per channel).
+    /// Channels whose agent activity is read first, at the caller's priority (Tower lists activity per channel). The rest of
+    /// the context's channels follow at background priority, so none is left unread.
     public static let agentActivityChannelLimit = 12
-    /// Most board scenes fetched for one canvas snapshot.
+    /// Boards of one canvas fetched first, at the caller's priority; the others follow at background priority, and any
+    /// board shown or opened is also requested on demand (coalescing with its queued job).
     public static let boardFetchLimit = 6
+
+    /// Schedules every board of a snapshot: the first batch at `priority`, the rest in the background.
+    func scheduleBoards(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, scene: CanvasScene, priority: SyncPriority) async {
+        for (index, board) in scene.boards.enumerated() {
+            await refreshBoard(connection, workspace, board: board, priority: index < Self.boardFetchLimit ? priority : .background)
+        }
+    }
 
     static func lost(_ error: Error) -> Bool {
         if case TowerError.http(let status, _, _) = error { return status == 403 || status == 404 }
@@ -90,9 +99,7 @@ extension WorkspaceSync {
             }
             try Task.checkCancellation()
             try await sync.store.writer.saveCanvasSnapshot(fetched.snapshot, canvas: fetched.canvas)
-            for board in CanvasScene.parse(fetched.snapshot.bytes).boards.prefix(Self.boardFetchLimit) {
-                await sync.refreshBoard(connection, workspace, board: board, priority: priority)
-            }
+            await sync.scheduleBoards(connection, workspace, scene: try CanvasScene.parse(fetched.snapshot.bytes), priority: priority)
         }
     }
 
@@ -121,8 +128,8 @@ extension WorkspaceSync {
             try Task.checkCancellation()
             try await sync.store.writer.replaceWorkspaceAgents(workspaceId: workspace.id, agents)
         }
-        for channel in channelIds.prefix(Self.agentActivityChannelLimit) {
-            await refreshAgentActivity(connection, workspace, channelId: channel, priority: priority, force: force)
+        for (index, channel) in channelIds.enumerated() {
+            await refreshAgentActivity(connection, workspace, channelId: channel, priority: index < Self.agentActivityChannelLimit ? priority : .background, force: force)
         }
     }
 
@@ -150,9 +157,11 @@ extension WorkspaceSync {
         let sync = self
         await engine.enqueue(Self.toolboxKey(workspace.id), priority: priority, force: force) {
             try await sync.identity.requireReader(npub: connection.signerNpub)
-            let wapps = try await sync.api(origin: try TowerOrigin(connection.origin)).personalWapps(workspaceId: workspace.id, appNpub: workspace.appNpub)
+            let page = try await sync.api(origin: try TowerOrigin(connection.origin)).personalWapps(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
-            try await sync.store.writer.replacePersonalWapps(connectionId: connection.id, workspaceId: workspace.id, wapps)
+            try await sync.store.writer.replacePersonalWapps(connectionId: connection.id, workspaceId: workspace.id, page.wapps, complete: page.complete)
+            try await sync.store.writer.saveListSync(workspaceId: workspace.id, key: Self.toolboxKey(workspace.id), complete: page.complete)
+            await sync.store.writer.touch([ChangeKey(.toolbox, workspace.id)])
         }
     }
 

@@ -190,7 +190,7 @@ extension StoreWriter {
     /// that no stored snapshot shows any more (removed, or now denied to this viewer) loses its stored scene.
     public func saveCanvasSnapshot(_ snapshot: CanvasSnapshotRecord, canvas: CanvasRecord) async throws {
         guard snapshot.workspaceId == canvas.workspaceId, snapshot.canvasId == canvas.id else { throw TowerError.malformed("canvas snapshot") }
-        let boards = Set(CanvasScene.parse(snapshot.bytes).boards.map(\.fileId))
+        let boards = Set(try CanvasScene.parse(snapshot.bytes).boards.map(\.fileId))
         let changed: Bool = try db.transaction {
             _ = try replace(table: "canvases", columns: ["id", "title", "position", "row_version", "updated_at", "raw"],
                             rows: [[.text(canvas.id), .text(canvas.title), .int(Int64(canvas.position)), .int(Int64(canvas.rowVersion)), .text(canvas.updatedAt), .blob(canvas.raw)]],
@@ -267,12 +267,12 @@ extension StoreWriter {
     // MARK: Toolbox
 
     @discardableResult
-    public func replacePersonalWapps(connectionId: String, workspaceId: String, _ records: [PersonalWappRecord]) async throws -> Int {
+    public func replacePersonalWapps(connectionId: String, workspaceId: String, _ records: [PersonalWappRecord], complete: Bool = true) async throws -> Int {
         let rows = records.filter { $0.workspaceId == workspaceId }
         let changed: Int = try db.transaction {
             try replace(table: "personal_wapps", columns: ["id", "title", "sort_order", "status", "row_version", "updated_at", "raw"],
                         rows: rows.map { [.text($0.id), .text($0.title), .int(Int64($0.sortOrder)), .text($0.status), .int(Int64($0.rowVersion)), .text($0.updatedAt), .blob($0.raw)] },
-                        ids: rows.map(\.id), workspaceId: workspaceId, connectionId: connectionId, partition: nil, complete: true)
+                        ids: rows.map(\.id), workspaceId: workspaceId, connectionId: connectionId, partition: nil, complete: complete)
         }
         if changed > 0 { await emit([ChangeKey(.toolbox, workspaceId)]) }
         return changed

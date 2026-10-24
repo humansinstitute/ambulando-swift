@@ -61,6 +61,7 @@ extension TowerAPI {
         let canvas = try CanvasRecord(raw: rawJSON(row), workspaceId: workspaceId)
         guard canvas.id == canvasId.lowercased() else { throw TowerError.malformed("canvas snapshot") }
         let bytes = try rawJSON(["naplets": naplets, "elements": elements])
+        _ = try CanvasScene.parse(bytes)   // refuse a snapshot beyond the bounds before it is stored
         return (canvas, CanvasSnapshotRecord(workspaceId: workspaceId, canvasId: canvas.id, canvasRowVersion: canvas.rowVersion, bytes: bytes,
                                              fetchedAt: ISO8601DateFormatter.tower.string(from: Date())))
     }
@@ -111,13 +112,18 @@ extension TowerAPI {
 
     // MARK: Toolbox
 
-    public func personalWapps(workspaceId: String, appNpub: String) async throws -> [PersonalWappRecord] {
+    /// Tower caps this list at 200 and returns no continuation (`next_cursor: null`, `parseLimit`). A full page may
+    /// therefore be incomplete: it is reported as such and never used to remove local rows.
+    public static let personalWappLimit = 200
+
+    public func personalWapps(workspaceId: String, appNpub: String) async throws -> (wapps: [PersonalWappRecord], complete: Bool) {
         let o = try object(try await client.request(path: try Self.base(workspaceId) + "/personal-wapps",
-                                                    query: [URLQueryItem(name: "limit", value: "200")], appNpub: appNpub), "personal WApps")
+                                                    query: [URLQueryItem(name: "limit", value: String(Self.personalWappLimit))], appNpub: appNpub), "personal WApps")
         guard let rows = o["personal_wapps"] as? [[String: Any]] else { throw TowerError.malformed("personal WApps") }
         let wapps = try rows.map { try PersonalWappRecord(raw: rawJSON($0)) }
         guard wapps.allSatisfy({ $0.workspaceId == workspaceId }) else { throw TowerError.malformed("personal WApps") }
-        return wapps
+        let more = (o["next_cursor"] as? String).map { !$0.isEmpty } ?? false
+        return (wapps, rows.count < Self.personalWappLimit && !more)
     }
 
     // MARK: Personal pins

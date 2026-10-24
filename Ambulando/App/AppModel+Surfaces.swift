@@ -83,6 +83,12 @@ extension AppModel {
         withWorkspace(workspace) { sync, c in await sync.refreshAgents(c, workspace, channelIds: channelIds, force: force) }
     }
 
+    /// A board shown on a canvas or opened full screen: requested at user priority (coalesces with a queued job; a stored
+    /// current version is not fetched again).
+    func openBoard(_ board: BoardReference, in workspace: WorkspaceRecord) {
+        withWorkspace(workspace) { sync, c in await sync.refreshBoard(c, workspace, board: board, priority: .user) }
+    }
+
     func openToolbox(_ workspace: WorkspaceRecord, force: Bool = false) {
         withWorkspace(workspace) { sync, c in await sync.refreshToolbox(c, workspace, force: force) }
     }

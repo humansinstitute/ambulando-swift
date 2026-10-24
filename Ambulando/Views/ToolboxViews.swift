@@ -11,6 +11,7 @@ struct ToolboxView: View {
     let workspace: WorkspaceRecord
     let store: LocalStore
     @State private var wapps = LiveQuery<[PersonalWappRecord]>(initial: [])
+    @State private var complete = LiveQuery<Bool>(initial: true)
 
     var body: some View {
         let key = WorkspaceSync.toolboxKey(workspace.id)
@@ -26,6 +27,9 @@ struct ToolboxView: View {
                     }
                 }
             } footer: {
+                if !complete.value {
+                    Text("Tower lists at most \(TowerAPI.personalWappLimit) WApps, so this list may be incomplete.").font(.caption).foregroundStyle(Amb.warning)
+                }
                 Text("WApps are web apps their publishers own. They open in a labelled web view, separate from your Ambulando identity. Adding, editing and placing WApps is done in the web app.")
                     .font(.caption)
             }
@@ -43,6 +47,9 @@ struct ToolboxView: View {
         .task {
             let w = workspace.id, store = store, connection = model.connection?.id ?? ""
             wapps.start(store: store, matches: { $0.workspaceId == w && $0.table == .toolbox }) { try await store.reader.personalWapps(connectionId: connection, workspaceId: w) }
+            complete.start(store: store, matches: { $0.workspaceId == w && $0.table == .toolbox }) {
+                try await store.reader.listSyncComplete(workspaceId: w, key: WorkspaceSync.toolboxKey(w)) ?? true
+            }
             model.openToolbox(workspace)
         }
     }

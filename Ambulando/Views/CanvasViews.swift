@@ -91,6 +91,7 @@ struct CanvasBoardView: View {
                         .accessibilityAddTraits(.isButton)
                         .accessibilityAction { open(naplet) }
                         .accessibilityIdentifier("naplet.\(naplet.title)")
+                        .task(id: naplet.id) { requestBoardIfNeeded(naplet, value) }
                 }
             }
             .clipped()
@@ -112,7 +113,9 @@ struct CanvasBoardView: View {
         .sheet(isPresented: $showItems, onDismiss: { if let next = pendingOpen { pendingOpen = nil; open(next) } }) { itemsSheet(value) }
         .fixtureLabel()
         .overlay {
-            if snapshot.loaded && !value.stored {
+            if let error = snapshot.error {
+                EmptyNote(title: "Canvas cannot be shown", systemImage: "exclamationmark.triangle", detail: error)
+            } else if snapshot.loaded && !value.stored {
                 let key = WorkspaceSync.canvasKey(workspace.id, canvasId)
                 if let error = model.syncError(forKey: key) { EmptyNote(title: "Canvas unavailable", systemImage: "lock", detail: error) }
                 else if !model.canRead { EmptyNote(title: "Canvas not on this iPhone", systemImage: "lock", detail: "Unlock to load it.") }
@@ -127,7 +130,7 @@ struct CanvasBoardView: View {
                 guard let stored = try await store.reader.canvasSnapshot(workspaceId: w, canvasId: id) else {
                     return CanvasBoardSnapshot(canvas: try await store.reader.canvas(workspaceId: w, id: id))
                 }
-                let scene = CanvasScene.parse(stored.bytes)
+                let scene = try CanvasScene.parse(stored.bytes)
                 var boards: [String: PreparedBoard] = [:]
                 for naplet in scene.naplets {
                     guard case .excalidraw(let ref) = naplet.content else { continue }
@@ -139,6 +142,13 @@ struct CanvasBoardView: View {
             model.openCanvas(workspace, canvasId: canvasId)
         }
         .refreshable { model.openCanvas(workspace, canvasId: canvasId, force: true) }
+    }
+
+    /// A board naplet on screen whose scene is not stored yet is fetched now (boards beyond the first batch otherwise
+    /// arrive in the background).
+    private func requestBoardIfNeeded(_ naplet: CanvasNaplet, _ value: CanvasBoardSnapshot) {
+        guard case .excalidraw(let ref) = naplet.content, value.boards[naplet.id]?.state == .notStored else { return }
+        model.openBoard(ref, in: workspace)
     }
 
     // MARK: Geometry
@@ -409,6 +419,7 @@ struct BoardSceneView: View {
         }
         .navigationTitle(value.title)
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: value.reference) { _, ref in if let ref, value.prepared.state == .notStored { model.openBoard(ref, in: workspace) } }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { withAnimation(.snappy) { scale = 1; offset = .zero } } label: { Image(systemName: "arrow.up.left.and.down.right.magnifyingglass") }
@@ -420,7 +431,7 @@ struct BoardSceneView: View {
             let w = workspace.id, canvas = canvasId, naplet = napletId, store = store
             board.start(store: store, matches: { $0.workspaceId == w && [.canvases, .boards].contains($0.table) }) {
                 guard let snapshot = try await store.reader.canvasSnapshot(workspaceId: w, canvasId: canvas),
-                      let n = CanvasScene.parse(snapshot.bytes).naplets.first(where: { $0.id == naplet }),
+                      let n = try CanvasScene.parse(snapshot.bytes).naplets.first(where: { $0.id == naplet }),
                       case .excalidraw(let ref) = n.content else { return BoardSnapshot() }
                 return BoardSnapshot(title: n.title, reference: ref,
                                      prepared: try PreparedBoard.prepare(try await store.reader.boardScene(workspaceId: w, fileId: ref.fileId), expected: ref))

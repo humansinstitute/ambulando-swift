@@ -11,8 +11,6 @@ struct AgentsSnapshot: Sendable, Equatable {
     var activity: [AgentActivityRecord] = []
     var channelNames: [String: String] = [:]
     var names: [String: String] = [:]
-    /// Channels of the context beyond the per-context read limit (their activity is not read).
-    var omittedChannels = 0
 }
 
 struct AgentsView: View {
@@ -53,10 +51,6 @@ struct AgentsView: View {
             activitySection("Working now", live, value)
             activitySection("Not responding", stale, value, note: "These agents stopped reporting before finishing.")
             activitySection("Recently finished", Array(recent.prefix(30)), value)
-            if value.omittedChannels > 0 {
-                Section { Text("Activity is read for the first \(WorkspaceSync.agentActivityChannelLimit) channels of this context. Choose a scope or channel to see others.")
-                    .font(.footnote).foregroundStyle(Amb.mutedForeground) }
-            }
             Section("Not available on iPhone") {
                 Label("Pipeline runs and Autopilot sessions need a direct Autopilot connection, which this HTTPS-only app does not make.", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                     .font(.footnote).foregroundStyle(Amb.mutedForeground)
@@ -120,8 +114,8 @@ struct AgentsView: View {
     private func start() {
         let w = workspace.id, store = store
         let ids = channelIds
-        let limit = WorkspaceSync.agentActivityChannelLimit
-        let read: [String]? = model.context.isHome ? nil : Array(ids.prefix(limit))
+        // Every channel of the context is read (the first batch first, the rest in the background).
+        let read: [String]? = model.context.isHome ? nil : ids
         snapshot.start(store: store, matches: { $0.workspaceId == w && [.agents, .channels, .members].contains($0.table) }) {
             async let agents = store.reader.workspaceAgents(workspaceId: w)
             async let activity = store.reader.agentActivities(workspaceId: w, channelIds: read)
@@ -133,7 +127,7 @@ struct AgentsView: View {
             for agent in agentList { labels[agent.agentNpub] = agent.displayName }
             return AgentsSnapshot(agents: agentList, activity: try await activity,
                                   channelNames: Dictionary(try await channels.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a }),
-                                  names: labels, omittedChannels: max(0, ids.count - limit))
+                                  names: labels)
         }
     }
 }

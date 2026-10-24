@@ -110,11 +110,36 @@ public struct CanvasScene: Sendable, Equatable {
         naplets.compactMap { if case .excalidraw(let ref) = $0.content { ref } else { nil } }
     }
 
-    public static func parse(_ bytes: Data) -> CanvasScene {
+    public enum ParseError: Error, Equatable, LocalizedError {
+        case invalid, tooLarge(String)
+        public var errorDescription: String? {
+            switch self {
+            case .invalid: "This canvas could not be read."
+            case .tooLarge(let what): "This canvas is too large to show on iPhone (\(what))."
+            }
+        }
+    }
+
+    /// Client-side bounds for one stored snapshot. Tower sets no explicit limit; these keep parsing and drawing bounded,
+    /// and a snapshot beyond them is refused with a visible error instead of being shown partly.
+    public static let maxBytes = 32 * 1024 * 1024
+    public static let maxNaplets = 2_000
+    public static let maxElements = 20_000
+
+    /// Parses on the caller's (background) executor and stops with `CancellationError` when its task is cancelled.
+    public static func parse(_ bytes: Data) throws -> CanvasScene {
+        guard bytes.count <= maxBytes else { throw ParseError.tooLarge("more than 32 MB") }
+        guard let o = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
+              let napletRows = o["naplets"] as? [[String: Any]], let elementRows = o["elements"] as? [[String: Any]] else { throw ParseError.invalid }
+        guard napletRows.count <= maxNaplets else { throw ParseError.tooLarge("more than \(maxNaplets) items") }
+        guard elementRows.count <= maxElements else { throw ParseError.tooLarge("more than \(maxElements) drawing elements") }
         var scene = CanvasScene()
-        guard let o = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] else { return scene }
-        for row in (o["naplets"] as? [[String: Any]]) ?? [] { if let n = naplet(row) { scene.naplets.append(n) } }
-        for row in (o["elements"] as? [[String: Any]]) ?? [] {
+        for (index, row) in napletRows.enumerated() {
+            if index % 128 == 0 { try Task.checkCancellation() }
+            if let n = naplet(row) { scene.naplets.append(n) }
+        }
+        for (index, row) in elementRows.enumerated() {
+            if index % 512 == 0 { try Task.checkCancellation() }
             guard let e = element(row) else { continue }
             if e.kind == nil { scene.unsupportedElements[e.kindName, default: 0] += 1 } else { scene.elements.append(e) }
         }

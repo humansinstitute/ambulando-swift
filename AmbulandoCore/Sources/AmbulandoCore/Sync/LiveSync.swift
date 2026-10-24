@@ -398,9 +398,7 @@ extension WorkspaceSync {
             do {
                 let fetched = try await api.canvasSnapshot(workspaceId: w, appNpub: app, canvasId: id)
                 try await store.writer.saveCanvasSnapshot(fetched.snapshot, canvas: fetched.canvas)
-                for board in CanvasScene.parse(fetched.snapshot.bytes).boards.prefix(Self.boardFetchLimit) {
-                    await refreshBoard(connection, workspace, board: board, priority: .background)
-                }
+                await scheduleBoards(connection, workspace, scene: try CanvasScene.parse(fetched.snapshot.bytes), priority: .background)
             } catch where lost(error) { try await store.writer.removeCanvas(workspaceId: w, id: id) }
         case .contextTree(let scope):
             guard try await store.reader.listSyncComplete(workspaceId: w, key: Self.contextTreeKey(w, scope)) != nil else { return }
@@ -424,7 +422,10 @@ extension WorkspaceSync {
                 try await store.writer.replaceAgentActivities(workspaceId: w, channelId: channel, try await api.agentActivities(workspaceId: w, appNpub: app, channelId: channel))
             } catch where lost(error) { try await store.writer.replaceAgentActivities(workspaceId: w, channelId: channel, []) }
         case .toolbox:
-            try await store.writer.replacePersonalWapps(connectionId: connection.id, workspaceId: w, try await api.personalWapps(workspaceId: w, appNpub: app))
+            let page = try await api.personalWapps(workspaceId: w, appNpub: app)
+            try await store.writer.replacePersonalWapps(connectionId: connection.id, workspaceId: w, page.wapps, complete: page.complete)
+            try await store.writer.saveListSync(workspaceId: w, key: Self.toolboxKey(w), complete: page.complete)
+            await store.writer.touch([ChangeKey(.toolbox, w)])
         }
     }
 }

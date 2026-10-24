@@ -157,7 +157,7 @@ final class SurfaceTests: XCTestCase {
         XCTAssertEqual(canvases[0].viewport, CanvasViewport(x: -120, y: 40, scale: 0.8))
         let storedSnapshot = try await h.store.reader.canvasSnapshot(workspaceId: h.workspace.id, canvasId: seeded.canvas)
         let snapshot = try XCTUnwrap(storedSnapshot)
-        let scene = CanvasScene.parse(snapshot.bytes)
+        let scene = try CanvasScene.parse(snapshot.bytes)
         XCTAssertEqual(scene.naplets.map(\.layout.z), [1, 2, 3, 4], "drawn in saved z order")
         let doc = try XCTUnwrap(scene.naplets.first { $0.title == "Release notes" })
         XCTAssertEqual(doc.layout, CanvasLayout(x: 40, y: 60, width: 360, height: 280, z: 2), "exact saved position and size")
@@ -247,7 +247,7 @@ final class SurfaceTests: XCTestCase {
         let unopened = h.tower.seedCanvas(title: "Never opened", position: 3)
         await h.sync.refreshCanvas(h.connection, h.workspace, canvasId: seeded.canvas)
         await h.idle()
-        let naplet = CanvasScene.parse(try await h.store.reader.canvasSnapshot(workspaceId: h.workspace.id, canvasId: seeded.canvas)!.bytes)
+        let naplet = try CanvasScene.parse(try await h.store.reader.canvasSnapshot(workspaceId: h.workspace.id, canvasId: seeded.canvas)!.bytes)
             .naplets.first { $0.title == "Release notes" }!
         h.tower.moveNaplet(naplet.id, layout: ["x": 900, "y": 900, "width": 360, "height": 280, "z": 2])
         let events = [event(1, "canvas_naplet", naplet.id, "updated", canvas: seeded.canvas), event(2, "canvas_element", UUID().uuidString.lowercased(), "created", canvas: unopened)]
@@ -256,7 +256,7 @@ final class SurfaceTests: XCTestCase {
         let before = h.tower.requestLog.count
         try await h.sync.applyEvents(events, h.connection, h.workspace)
         await h.idle()
-        let moved = CanvasScene.parse(try await h.store.reader.canvasSnapshot(workspaceId: h.workspace.id, canvasId: seeded.canvas)!.bytes)
+        let moved = try CanvasScene.parse(try await h.store.reader.canvasSnapshot(workspaceId: h.workspace.id, canvasId: seeded.canvas)!.bytes)
             .naplets.first { $0.id == naplet.id }!
         XCTAssertEqual(moved.layout.x, 900)
         let fetched = h.tower.requestLog.dropFirst(before)
@@ -267,6 +267,82 @@ final class SurfaceTests: XCTestCase {
                component: String? = nil) -> TowerEvent {
         TowerEvent(rowVersion: row, cursor: "c\(row)", workspaceId: Fixtures.workspaceId, entityType: type, entityId: id, operation: op,
                    scopeId: scope, channelId: channel, canvasId: canvas, componentId: component)
+    }
+
+    func testEveryBoardAndEveryContextChannelIsEventuallyRead() async throws {
+        let h = try await SurfaceHarness.make()
+        let canvas = h.tower.seedCanvas(title: "Many boards", position: 1)
+        var files: [String] = []
+        for n in 0..<(WorkspaceSync.boardFetchLimit + 2) {
+            let board = BoardSceneFixture.make()
+            files.append(board.fileId)
+            let projection = h.tower.seedBoardVersion(fileId: board.fileId, versionId: board.versionId, versionNumber: 1, bytes: board.bytes)
+            h.tower.seedNaplet(canvas: canvas, sourceType: "excalidraw", sourceId: board.fileId, title: "Board \(n)",
+                               layout: ["x": n * 700, "y": 0, "width": 600, "height": 400, "z": n + 1], content: projection)
+        }
+        await h.sync.refreshCanvas(h.connection, h.workspace, canvasId: canvas)
+        await h.idle()
+        for file in files {
+            let stored = try await h.store.reader.boardScene(workspaceId: h.workspace.id, fileId: file)
+            XCTAssertNotNil(stored, "boards beyond the first \(WorkspaceSync.boardFetchLimit) are fetched in the background too")
+        }
+        // A board shown or opened is requested on demand; a stored current version is not fetched again.
+        let before = h.tower.requestLog.count
+        let stored = try await h.store.reader.canvasSnapshot(workspaceId: h.workspace.id, canvasId: canvas)
+        let ref = try XCTUnwrap(try CanvasScene.parse(try XCTUnwrap(stored).bytes).boards.last)
+        await h.sync.refreshBoard(h.connection, h.workspace, board: ref)
+        await h.idle()
+        XCTAssertEqual(h.tower.requestLog.count, before)
+
+        // Agent activity for every channel of the context, not only the first batch.
+        let channels = (0..<(WorkspaceSync.agentActivityChannelLimit + 2)).map { _ in UUID().uuidString.lowercased() }
+        h.tower.seedActivity(channel: channels.last!, scope: scope, thread: UUID().uuidString.lowercased(), agent: TestKeys.npub, state: "working", label: "Late channel")
+        await h.sync.refreshAgents(h.connection, h.workspace, channelIds: channels)
+        await h.idle()
+        let late = try await h.store.reader.agentActivities(workspaceId: h.workspace.id, channelIds: [channels.last!])
+        XCTAssertEqual(late.map(\.label), ["Late channel"])
+    }
+
+    func testCanvasSnapshotBoundsAndCancellation() async throws {
+        XCTAssertThrowsError(try CanvasScene.parse(Data("not json".utf8))) { XCTAssertEqual($0 as? CanvasScene.ParseError, .invalid) }
+        XCTAssertThrowsError(try CanvasScene.parse(Data(count: CanvasScene.maxBytes + 1))) { XCTAssertEqual($0 as? CanvasScene.ParseError, .tooLarge("more than 32 MB")) }
+        let many = (0...CanvasScene.maxNaplets).map { _ in ["id": UUID().uuidString, "access": "denied", "layout": [:], "row_version": 1] as [String: Any] }
+        XCTAssertThrowsError(try CanvasScene.parse(Fixtures.json(["naplets": many, "elements": []]))) {
+            XCTAssertEqual(($0 as? LocalizedError)?.errorDescription, "This canvas is too large to show on iPhone (more than 2000 items).")
+        }
+        let bytes = Fixtures.json(["naplets": (0..<1500).map { _ in ["id": UUID().uuidString, "access": "denied", "layout": [:], "row_version": 1] as [String: Any] }, "elements": []])
+        let task = Task.detached { () -> Error? in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do { _ = try CanvasScene.parse(bytes); return nil } catch { return error }
+        }
+        let outcome = await task.value
+        XCTAssertTrue(outcome is CancellationError)
+
+        // An oversized snapshot from Tower is refused before it is stored, and the failure is visible on the job.
+        let h = try await SurfaceHarness.make()
+        let canvas = h.tower.seedCanvas(title: "Huge", position: 1)
+        for n in 0...CanvasScene.maxNaplets { h.tower.seedNaplet(canvas: canvas, sourceType: "canvas", sourceId: canvas, title: "\(n)", layout: ["x": n], content: [:]) }
+        await h.sync.refreshCanvas(h.connection, h.workspace, canvasId: canvas)
+        await h.idle()
+        let stored = try await h.store.reader.canvasSnapshot(workspaceId: h.workspace.id, canvasId: canvas)
+        XCTAssertNil(stored)
+        let failure = await h.error(WorkspaceSync.canvasKey(h.workspace.id, canvas))
+        XCTAssertNotNil(failure)
+    }
+
+    func testAFullToolboxPageIsTreatedAsPossiblyIncomplete() async throws {
+        let h = try await SurfaceHarness.make()
+        for n in 0..<TowerAPI.personalWappLimit { h.tower.seedWapp(title: "W\(n)", launchURL: "https://w\(n).example", sortOrder: n, owner: TestKeys.npub) }
+        // A WApp stored earlier that is not in this (full) page stays: the page cannot prove it was removed.
+        let earlier = try PersonalWappRecord(raw: Fixtures.json(["id": UUID().uuidString, "workspace_id": Fixtures.workspaceId, "title": "Earlier",
+                                                                "launch_url": "https://earlier.example", "sort_order": 999, "status": "active", "row_version": 1]))
+        try await h.store.writer.replacePersonalWapps(connectionId: h.connection.id, workspaceId: h.workspace.id, [earlier])
+        await h.sync.refreshToolbox(h.connection, h.workspace)
+        await h.idle()
+        let kept = try await h.store.reader.personalWapp(connectionId: h.connection.id, workspaceId: h.workspace.id, id: earlier.id)
+        XCTAssertEqual(kept?.title, "Earlier")
+        let complete = try await h.store.reader.listSyncComplete(workspaceId: h.workspace.id, key: WorkspaceSync.toolboxKey(h.workspace.id))
+        XCTAssertEqual(complete, false)
     }
 
     func testEventPlanCoversEveryNewFamily() {
