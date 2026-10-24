@@ -19,6 +19,8 @@ architecture that later packages build on. Implementation status:
 - WP5 (0.1.0 build 4) delivers foreground live updates (SSE plus a durable event cursor), the background refresh
   pipeline, background transfers for presigned object-store URLs, the opt-in read credential, and the
   responsiveness work in §5.2 (§5.1–§5.3, §6).
+- Build 7 (task 6b035d34) delivers the Context Tree outline, Canvas boards with native Excalidraw rendering, agents and
+  activity, the Toolbox with a labelled web view, and personal pins, on schema v4 (§4.6).
 - Device validation and packaging are WP6, as is anything else here without evidence in the parity matrix.
 
 The feature-by-feature status is in [parity-matrix.md](parity-matrix.md); package order and
@@ -61,6 +63,11 @@ routes carry `x-flightdeck-pg-app-npub` with the workspace's `app_npub`.
 | Documents | `GET/POST /channels/:c/docs`, `GET /docs/:d`, `GET /docs/:d/body`, `PATCH /docs/:d`, edit leases, comments, versions | WP4 |
 | Files | `GET/POST /channels/:c/files`, folders, versions, `GET /files/:f/object`, `/storage/prepare`, `/api/v4/storage/:id[/content|/complete]` | WP4 |
 | Inbox inputs | `resource-view-states`, `message-activity`, task `attention`, mentions | WP4 |
+| Context Tree | `GET /scopes/:s/context/components`, `…/components/:c/references` (`routes/context-tree.ts`) | build 7 |
+| Canvas | `GET /canvases`, `GET /canvases/:c/snapshot`, `GET /canvases/:c/naplets/:n/html`, `GET /files/:f/versions/:v/object` | build 7 |
+| Agents | `GET /workspace-agents`, `GET /agent-activities?channel_id=` | build 7 |
+| Toolbox | `GET /personal-wapps` | build 7 |
+| Personal pins | `GET /record-sync/priority?family=personal_pin`, `PUT /me/pins/:type/:id` | build 7 |
 | Notifications | `notifications/subscriptions` — Web Push (VAPID) only | Not native (see §6) |
 
 Serializer shapes were read from Tower `src/services/flightdeck-pg-api.ts`
@@ -262,6 +269,39 @@ Shared context: `WorkContext` (Home, a scope or a scope's channel) is app state 
 context:)` bound reads in SQL. It is narrowed when its scope or channel disappears from the synced list (lost access
 or deletion). A build-5 chat path that opened a channel becomes that channel's context on upgrade.
 
+### 4.6 Workspace surfaces and pins (build 7)
+
+Contracts were read from Tower `/Users/mini/code/wm/tower` at `99d18d4` (the checkout with `routes/context-tree.ts`, the
+`personal_pin` record family and canvas elements) and sol at `c7fafcb`. No route or schema was added.
+
+- **Schema v4** adds `context_components`, `context_references`, `canvases`, `canvas_snapshots`, `board_scenes`,
+  `board_links`, `workspace_agents`, `agent_activities`, `personal_wapps` and `pins`. All are workspace-scoped and cleared
+  with the workspace. The actor-private tables (`pins`, `personal_wapps`) also carry `connection_id` (cascade on
+  disconnect) and every read filters by it.
+- **Jobs** (`SurfaceSync.swift`): `context:<w>:<s>`, `context-refs:<w>:<c>`, `canvases:<w>`, `canvas:<w>:<c>`,
+  `board:<w>:<file>`, `agents:<w>`, `agent-activity:<w>:<c>`, `toolbox:<w>`, `pins:<w>`, `thread-record:<w>:<t>`. Each is
+  keyed, coalescing and cancellable like every other read; work beyond a first batch (boards after 6, channels after 12)
+  is scheduled at background priority instead of being dropped, and boards on screen are also requested on demand.
+- **Events**: `context_component`/`context_reference` refresh a stored tree or component; `canvas*` events refresh the
+  list and re-read only snapshots stored on this phone; `personal_pin`, `agent_activity`, `workspace_agent` and
+  `personal_wapp` refresh their lists. Reseed lists pins, canvases, the Toolbox and agents in the background.
+- **Access loss**: a 403/404 on a tree, component, canvas or channel activity removes the stored copy; a scope or channel
+  that leaves the complete lists takes its tree and activity with it; a board scene is kept only while a stored snapshot
+  shows the board (`board_links`), and a fetch finishing afterwards stores nothing. Denied naplets are stored as Tower
+  projects them: layout only.
+- **Parsing** of snapshots (`CanvasScene`, ≤ 32 MB / 2,000 items / 20,000 elements) and boards (`ExcalidrawScene`, ≤ 24 MB /
+  20,000 elements / 200 images of ≤ 6 MB) runs in store reads and LiveQuery loads, checks cancellation, and reports an
+  over-limit scene as a visible error. Images are decoded with ImageIO thumbnails (≤ 1024 px) off the main actor.
+- **Reads never write**: no screen issues a canvas, naplet, element or context mutation; viewport changes stay in memory.
+- **Web content** (`LabelledWebView`): HTTPS-only launch URLs without credentials or `.fips` hosts, a non-persistent
+  `WKWebsiteDataStore`, no `WKScriptMessageHandler`, and `WebContentPolicy.decide` applied to every navigation including
+  redirects and new-window requests (same origin loads in place; another HTTPS origin is only offered to Safari). HTML
+  naplets load from a string with sol's sandbox CSP and may not navigate.
+- **Pipeline viewer** is not offered: its only contract is the Autopilot control plane over a verified Autopilot
+  connection (`/api/owners/:owner/control-plane/v1/pipeline-viewer/{definitions,runs,…}`, capability `pipeline_viewer`),
+  which this HTTPS-only Tower client does not have and the web build gates off. A native version needs either a
+  Tower-mediated read route or an authorised HTTPS Autopilot connection; both are backend/manager decisions.
+
 ## 5. Sync engine and responsiveness budgets
 
 `SyncEngine` is the only owner of network refresh. Jobs are keyed (for example
@@ -375,6 +415,12 @@ plain-keyboard control p99 24.46 ms, max 47.41 ms. No dropped characters. The 50
 storm run, as in build 4/5, and is not relaxed. An isolated run taken while another simulator was building on the same
 Mac read storm p99 16.71 ms; it is not used as evidence.
 
+Build 7 (new surfaces; the composer and sync paths are unchanged apart from the new event families) full-suite run on a
+fresh iPhone 17 Pro simulator, same tests: storm p99 13.79 ms, max 57.17 ms (after first key p99 9.32 / max 46.37 ms);
+no-write control p99 25.65 ms, max 58.52 ms; plain-keyboard control p99 24.69 ms, max 57.82 ms; no dropped characters;
+first frame → cached list 234–257 ms. The 50 ms max target remains unmet in storm and control alike and is not relaxed.
+No phone measurement of build 7 exists.
+
 ### 5.5 WP5 responsiveness work and attribution (simulator)
 
 Time Profiler traces of the control typing run (`tmp/` evidence, not committed) attribute every main-thread stall of
@@ -446,5 +492,5 @@ SQLite WAL checkpoints are shared, so these targets are measured, not assumed.
 - **Web content**: only records that are themselves HTML documents, such as
   HTML artefacts and WApps' own UIs, open in an explicitly labelled web view, and
   they are not counted as native parity. Canvas, naplets, Excalidraw, the context
-  tree, agents and the pipeline viewer are *proposed later native packages*,
-  not exclusions. Their scope awaits Pete's prioritisation.
+  tree and agents are native since build 7 (§4.6); the pipeline viewer needs an
+  Autopilot contract this app does not have.

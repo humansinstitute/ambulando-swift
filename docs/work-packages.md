@@ -11,6 +11,7 @@ live) and its gaps. Flight Deck tasks with the same names track the work.
 | 3 | Workspace/scope/channel navigation, chat and outbox | 2 | Real channel/thread history persisted and incrementally synced; composer with durable drafts; signed send through outbox with idempotent retry; scroll and draft stable across relaunch. **Delivered in 0.1.0 (2), source + simulator** (see parity matrix). Personal pins and chat image attachments are a scoped follow-up |
 | 4 | Tasks, documents, files, inbox and other native surfaces | 3 | Each parity-matrix row for WP4 is delivered or explicitly re-scoped; read and write through existing routes; offline reads. **Delivered in 0.1.0 (3), source + simulator** (see parity matrix). Personal pins (follow-up bb1dbde7) and the listed per-row gaps stay open |
 | 5 | Background sync, resume, retry, conflict handling, performance instrumentation | 3 (4 for its surfaces) | BGAppRefreshTask + expiration cancellation; foreground SSE with cursor resume; conflict policy; measured hitch/keystroke/launch budgets under a sync storm. **Delivered in 0.1.0 (4), source + simulator, first iPhone readings** (see parity matrix and architecture §5.2–§5.5). Open: the 50 ms typing max is not met on the simulator (attributed to test harness and keyboard presentation), scroll hitch ratio and real OS-granted background windows need the phone (WP6), and no live Tower stream has been exercised. Build 5 (task 9333df01): full-screen unlock and trusted-device session, background catch-up of all channels, source-less threads shown |
+| 7 (build) | Canvas, Context Tree, agents, Toolbox and personal pins (task 6b035d34, pins task bb1dbde7) | 6 | Native surfaces over existing Tower routes with persisted, bounded, cancellable reads; ACL/error handling tested; simulator flows; upgrade retention 6 → 7; typing regression with budgets unchanged. **Delivered in 0.1.0 (7), source + simulator** (see parity matrix rows for exact gaps). Not yet installed on the phone; pipeline viewer needs a contract decision |
 | 6 | Simulator/device validation and packaging | 5 | Exact build number, simulator test run, **signed install and launch on Pete's own iPhone with on-device verification (required acceptance)**, device evidence reported separately from simulator evidence; no App Store submission. A simulator build is not project completion |
 
 ## Build and test commands
@@ -60,3 +61,8 @@ Release gate for every build that changes storage, identity or startup. Never ru
 
 Build 6 result: passed (twice, second run = further relaunch); vault hash unchanged; `vault.pub` written; installed
 `CFBundleVersion` 6.
+
+Build 7 result (previous release `b31005a`, build 6; fresh "Ambulando Upgrade 6to7" simulator): passed twice; vault SHA-256
+identical before and after; store migrated from schema 3 to 4; draft kept; the unsent message kept (it moves to
+`retrying` against the invalid origin); the new sidebar sections present; installed `CFBundleVersion` 7. The synthetic
+rows now read "previous build" instead of naming a build. Helper files used: ignored `tmp/upgrade7/`.

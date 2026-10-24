@@ -17,7 +17,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-Version 0.1.0 (6). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+Version 0.1.0 (7). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -68,7 +68,23 @@ Keeping your account (build 6): an update never asks you to import again. If the
 locked, iOS keeps the identity file sealed; the app now says so and opens it once the iPhone is unlocked, instead of
 showing "no identity". Imports are refused while an identity exists or for a key other than the connected one.
 
-Personal pins remain a follow-up. See the parity matrix for gaps.
+Workspace surfaces and pins (build 7): the sidebar has two new sections.
+
+- **Pinned** lists your personal pins in the same order as on the web. Pin or unpin from a task, document, conversation
+  or channel (the pin button in its toolbar). Pins are private to your identity and synced through Tower's record-sync
+  feed.
+- **Workspace** opens Canvas, Context, Agents and Toolbox over the tabs, with the same sidebar and Scope | Channel
+  context. Anything you open from them goes back to where you were.
+  - **Context** shows the chosen scope's Context Tree as an outline; a component lists its linked tasks, documents and
+    files, which open natively. Links you cannot read show as "Not available to you".
+  - **Canvas** shows each item at its saved position and size over the drawing. Pan and zoom are yours only and are
+    never saved to the board. Items open natively (documents, conversations, tasks, other canvases); Excalidraw boards
+    are drawn natively, and what cannot be drawn is listed. Locked items show only their frame.
+  - **Agents** lists the workspace's agents and what they are doing in the current context, from Tower's records.
+  - **Toolbox** lists your WApps; each opens in a labelled web view that stays on the WApp's own HTTPS origin.
+
+Editing boards and the Context Tree, reordering pins, the pipeline viewer and Autopilot session control stay in the web
+app. See the parity matrix for every gap.
 
 Security notes:
 
