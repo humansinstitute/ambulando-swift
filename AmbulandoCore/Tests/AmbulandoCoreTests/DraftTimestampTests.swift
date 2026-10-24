@@ -16,11 +16,12 @@ final class DraftTimestampTests: XCTestCase {
                                                         appNpub: Fixtures.appNpub, body: "before send", mentions: [])
         let cleared = try await h.store.reader.draft(target)
         XCTAssertNil(cleared, "sending clears the draft in the same transaction")
-        XCTAssertLessThanOrEqual(savedAt, sentAt, "the pre-send draft is not newer than the send")
+        // Stored times are rounded to milliseconds; the composer treats anything within 1 ms of the send as before it.
+        XCTAssertLessThanOrEqual(savedAt, sentAt.addingTimeInterval(0.001), "the pre-send draft is not newer than the send")
         try await Task.sleep(for: .milliseconds(5))
         try await h.store.writer.discardOutbox(id: item.id, restoreDraft: true)
         let restored = try await h.store.reader.draft(target)
         XCTAssertEqual(restored?.text, "before send")
-        XCTAssertGreaterThan(try XCTUnwrapValue(restored?.updatedAt), sentAt, "an Edit restore is newer than the send")
+        XCTAssertGreaterThan(try XCTUnwrapValue(restored?.updatedAt), sentAt.addingTimeInterval(0.001), "an Edit restore is newer than the send")
     }
 }

@@ -502,7 +502,8 @@ final class ComposerModel {
     /// not sent) is adopted when the composer is empty, so the text appears where the user is looking.
     func adopt(_ draft: Draft?) {
         guard let draft, text.isEmpty, !draft.text.isEmpty else { return }
-        if let sentAt, (draft.updatedAt ?? .distantPast) <= sentAt { return }
+        // Stored times are rounded to milliseconds, so anything within 1 ms of the send counts as before it.
+        if let sentAt, (draft.updatedAt ?? .distantPast) <= sentAt.addingTimeInterval(0.001) { return }
         mentions = draft.mentions
         text = draft.text
         edited = false
