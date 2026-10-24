@@ -3,6 +3,7 @@ import Foundation
 public enum StoreTable: String, Sendable, Hashable, CaseIterable {
     case connections, workspaces, scopes, channels, messages, threads, members, drafts, outbox, appState
     case tasks, comments, docs, docBodies, docDrafts, files, folders, viewStates, reactions, writes
+    case contextTree, canvases, boards, agents, toolbox, pins
 }
 
 /// A change notification key. `workspaceId == nil` means "not workspace-scoped".
@@ -30,7 +31,7 @@ public struct ConnectionRecord: Sendable, Equatable, Identifiable, Codable {
 }
 
 enum Schema {
-    static let version = 3
+    static let version = 4
 
     static func migrate(_ db: SQLiteConnection) throws {
         let current = try db.userVersion
@@ -102,6 +103,7 @@ enum Schema {
                 """)
             }
             if current < 3 { try migrateV3(db) }
+            if current < 4 { try migrateV4(db) }
             try db.execute("PRAGMA user_version = \(version)")
         }
     }
@@ -173,7 +175,7 @@ public actor StoreWriter {
     }
 
     func deleteWorkspaceRows(_ workspaceId: String) throws {
-        for table in ["scopes", "channels", "messages", "threads", "members", "channel_sync"] + Schema.v3WorkspaceTables {
+        for table in ["scopes", "channels", "messages", "threads", "members", "channel_sync"] + Schema.v3WorkspaceTables + Schema.v4WorkspaceTables {
             try db.prepare("DELETE FROM \(table) WHERE workspace_id = ?").run([.text(workspaceId)])
         }
     }
@@ -204,7 +206,8 @@ public actor StoreWriter {
         for id in removed {
             keys.formUnion([ChangeKey(.scopes, id), ChangeKey(.channels, id), ChangeKey(.messages, id), ChangeKey(.threads, id), ChangeKey(.members, id),
                             ChangeKey(.tasks, id), ChangeKey(.comments, id), ChangeKey(.docs, id), ChangeKey(.docBodies, id), ChangeKey(.files, id),
-                            ChangeKey(.folders, id), ChangeKey(.viewStates, id), ChangeKey(.reactions, id)])
+                            ChangeKey(.folders, id), ChangeKey(.viewStates, id), ChangeKey(.reactions, id), ChangeKey(.contextTree, id),
+                            ChangeKey(.canvases, id), ChangeKey(.boards, id), ChangeKey(.agents, id), ChangeKey(.toolbox, id), ChangeKey(.pins, id)])
         }
         await emit(keys)
     }
@@ -238,6 +241,7 @@ public actor StoreWriter {
                     var channelIds: [String] = []
                     while try channels.step() { if let c = channels.text(0) { channelIds.append(c) } }
                     for c in channelIds { try purgeChannelContent(workspaceId: workspaceId, channelId: c); purged = true }
+                    try purgeScopeSurfaces(workspaceId: workspaceId, scopeId: id); purged = true
                     try db.prepare("DELETE FROM scopes WHERE workspace_id = ? AND id = ?").run([.text(workspaceId), .text(id)])
                     try db.prepare("DELETE FROM channels WHERE workspace_id = ? AND scope_id = ?").run([.text(workspaceId), .text(id)])
                     changed += 1
@@ -284,7 +288,8 @@ public actor StoreWriter {
     }
 
     static func channelContentKeys(_ w: String) -> Set<ChangeKey> {
-        Set([StoreTable.channels, .messages, .threads, .tasks, .comments, .docs, .docBodies, .files, .folders, .viewStates, .reactions].map { ChangeKey($0, w) })
+        Set([StoreTable.channels, .messages, .threads, .tasks, .comments, .docs, .docBodies, .files, .folders, .viewStates, .reactions,
+             .contextTree, .agents].map { ChangeKey($0, w) })
     }
 
     /// Removes everything stored for a channel the actor can no longer see (access loss or archive). Drafts and unsent
@@ -298,6 +303,7 @@ public actor StoreWriter {
         for table in ["messages", "threads", "tasks", "docs", "files", "folders", "view_states", "channel_sync"] {
             try db.prepare("DELETE FROM \(table) WHERE workspace_id = ? AND channel_id = ?").run([w, c])
         }
+        try purgeChannelSurfaces(workspaceId: workspaceId, channelId: channelId)
     }
 
     /// Upserts one batch of messages in a single transaction. Callers keep batches ≤ 500 rows

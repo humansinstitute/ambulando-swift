@@ -311,6 +311,9 @@ public struct WriteSender: Sendable {
             }
             return Self.classify(status: r.status, body: r.body, attempts: item.attempts + 1, what: "mark this read")
 
+        case .pinSet:
+            return try await setPin(item, api: api, send: send)
+
         case .fileUpload, .docCreate:
             guard let channel = p["channel_id"] as? String, let staged = p["staged"] as? String, let contentType = p["content_type"] as? String,
                   let name = p["file_name"] as? String else { return .permanent(status: nil, code: nil, message: "Missing upload.") }
@@ -347,6 +350,39 @@ public struct WriteSender: Sendable {
                 return Self.classify(status: r.status, body: r.body, attempts: item.attempts + 1, what: "create documents in this channel")
             }
         }
+    }
+
+    /// Pin or unpin. Tower checks `expected_row_version` and replays a known `mutation_id`, so resending after a lost
+    /// reply is safe. On a version conflict the pins are re-read: if Tower already has what the user asked for, the write is
+    /// done; otherwise it is resent once against the current version with a fresh mutation id (the user's latest intent wins,
+    /// as it does on the web). A target the viewer may no longer read is refused permanently and shown as failed.
+    func setPin(_ item: WriteItem, api: TowerAPI, send: (String, String, [String: Any]?) async throws -> (status: Int, body: Data)) async throws -> WriteOutcome {
+        let p = item.payloadObject
+        guard let typeName = p["resource_type"] as? String, let type = PinRecord.ResourceType(rawValue: typeName), let resource = item.targetId,
+              let pinned = p["pinned"] as? Bool, var expected = p["expected_row_version"] as? Int, var mutation = p["mutation_id"] as? String else {
+            return .permanent(status: nil, code: nil, message: "Missing pin.")
+        }
+        let path = try TowerAPI.base(item.workspaceId) + "/me/pins/" + type.rawValue + "/" + TowerAPI.uuid(resource)
+        for attempt in 0..<2 {
+            let r = try await send("PUT", path, ["pinned": pinned, "expected_row_version": expected, "mutation_id": mutation])
+            if (200..<300).contains(r.status), let pin = record(r.body, "pin", PinRecord.init(raw:)) {
+                var a = WriteAcknowledgement(); a.pins = [pin]; return .done(a)
+            }
+            let code = reply(r.body)["code"] as? String ?? reply(r.body)["error"] as? String
+            guard r.status == 409, attempt == 0, code == "thread_pin_conflict" || code == "mutation_id_reused" else {
+                if r.status == 403 { return .permanent(status: 403, code: code, message: "You can no longer pin this.") }
+                return Self.classify(status: r.status, body: r.body, attempts: item.attempts + 1, what: "change this pin")
+            }
+            let current = try await api.personalPins(workspaceId: item.workspaceId, appNpub: item.appNpub).pins
+                .first { $0.resourceType == type && $0.resourceId == resource }
+            if (current?.pinned ?? false) == pinned {
+                var a = WriteAcknowledgement(); a.pins = current.map { [$0] } ?? []; return .done(a)
+            }
+            expected = current?.rowVersion ?? 0
+            mutation = UUID().uuidString.lowercased()
+            try await store.writer.updateWritePayload(id: item.id, merging: ["expected_row_version": expected, "mutation_id": mutation])
+        }
+        return .conflict(message: "Your pin changed on another device; tap Retry to apply this change.")
     }
 
     func deletedLocal(_ workspaceId: String, _ id: String) async throws -> [MessageRecord] {

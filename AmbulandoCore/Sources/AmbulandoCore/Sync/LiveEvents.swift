@@ -16,12 +16,17 @@ public struct TowerEvent: Sendable, Equatable {
     public let parentId: String?
     /// The changed record's `row_version` after the change, when Tower reports it.
     public let entityRowVersion: Int?
+    /// Canvas of a naplet/element event, and component of a Context Tree reference event (`payload`).
+    public let canvasId: String?
+    public let componentId: String?
 
     public init(rowVersion: Int, cursor: String, workspaceId: String, entityType: String, entityId: String?, operation: String,
-                scopeId: String? = nil, channelId: String? = nil, threadId: String? = nil, parentId: String? = nil, entityRowVersion: Int? = nil) {
+                scopeId: String? = nil, channelId: String? = nil, threadId: String? = nil, parentId: String? = nil, entityRowVersion: Int? = nil,
+                canvasId: String? = nil, componentId: String? = nil) {
         self.rowVersion = rowVersion; self.cursor = cursor; self.workspaceId = workspaceId; self.entityType = entityType
         self.entityId = entityId; self.operation = operation; self.scopeId = scopeId; self.channelId = channelId
         self.threadId = threadId; self.parentId = parentId; self.entityRowVersion = entityRowVersion
+        self.canvasId = canvasId; self.componentId = componentId
     }
 
     /// Parses one serialized event. Ids are lower-cased UUIDs; anything else is dropped so it can never reach a path.
@@ -32,9 +37,10 @@ public struct TowerEvent: Sendable, Equatable {
         let payload = o["payload"] as? [String: Any] ?? [:]
         let parent = ["task_id", "doc_id", "target_id", "message_id", "file_id"].lazy.compactMap { lowerUUID(payload[$0] as? String) }.first
         self.init(rowVersion: row, cursor: cursor, workspaceId: workspace, entityType: type, entityId: lowerUUID(o["entity_id"] as? String),
-                  operation: operation, scopeId: lowerUUID(o["scope_id"] as? String),
+                  operation: operation, scopeId: lowerUUID(o["scope_id"] as? String) ?? lowerUUID(payload["scope_id"] as? String),
                   channelId: lowerUUID(o["channel_id"] as? String) ?? lowerUUID(payload["channel_id"] as? String),
-                  threadId: lowerUUID(payload["thread_id"] as? String), parentId: parent, entityRowVersion: flexibleInt(o["entity_row_version"]))
+                  threadId: lowerUUID(payload["thread_id"] as? String), parentId: parent, entityRowVersion: flexibleInt(o["entity_row_version"]),
+                  canvasId: lowerUUID(payload["canvas_id"] as? String), componentId: lowerUUID(payload["component_id"] as? String))
     }
 }
 
@@ -126,6 +132,20 @@ public struct EventPlan: Sendable, Equatable {
         case directory
         /// Membership or grants changed: re-run discovery (a workspace no longer listed is removed locally).
         case access
+        /// The visible canvas list (definitions, order, visibility).
+        case canvases
+        /// One canvas's snapshot (only refetched when it is stored on this phone).
+        case canvas(String)
+        /// A scope's Context Tree components, and one component's references.
+        case contextTree(scopeId: String)
+        case contextReferences(scopeId: String, componentId: String)
+        /// The viewer's personal pins (actor-only events).
+        case pins
+        /// Installed agents, and Tower's materialised agent activity of one channel.
+        case agents
+        case agentActivity(channelId: String)
+        /// The viewer's Toolbox (personal WApps).
+        case toolbox
     }
 
     public enum Tombstone: Sendable, Hashable {
@@ -136,7 +156,7 @@ public struct EventPlan: Sendable, Equatable {
     public var tombstones: Set<Tombstone> = []
     /// Highest reported `row_version` per direct record refresh; a local row already at that version is not fetched.
     public var versions: [Refresh: Int] = [:]
-    /// Events of types this client does not render (canvas, agents, workrooms …); counted, not fetched.
+    /// Events of types this client does not render (workrooms, jobs, reports …); counted, not fetched.
     public var ignored = 0
     /// More events than `targetedLimit`: per-record fetches were folded into per-channel list catch-ups.
     public var folded = false
@@ -204,6 +224,23 @@ public struct EventPlan: Sendable, Equatable {
                 plan.refreshes.insert(.inbox)
             case "scope", "channel":
                 plan.refreshes.insert(.structure)
+            case "canvas", "canvas_order":
+                plan.refreshes.insert(.canvases)
+                if let id = e.canvasId ?? (e.entityType == "canvas" ? e.entityId : nil), !deleted { plan.refreshes.insert(.canvas(id)) }
+            case "canvas_naplet", "canvas_element":
+                if let canvas = e.canvasId { plan.refreshes.insert(.canvas(canvas)) } else { plan.refreshes.insert(.canvases) }
+            case "context_component", "context_reference":
+                guard let scope = e.scopeId else { plan.ignored += 1; continue }
+                plan.refreshes.insert(.contextTree(scopeId: scope))
+                if e.entityType == "context_reference", let component = e.componentId { plan.refreshes.insert(.contextReferences(scopeId: scope, componentId: component)) }
+            case "personal_pin", "thread_pin":
+                plan.refreshes.insert(.pins)
+            case "agent_activity":
+                if let channel { plan.refreshes.insert(.agentActivity(channelId: channel)) } else { plan.ignored += 1 }
+            case "workspace_agent", "autopilot_connection":
+                plan.refreshes.insert(.agents)
+            case "personal_wapp":
+                plan.refreshes.insert(.toolbox)
             default:
                 if accessTypes.contains(e.entityType) { plan.refreshes.formUnion([.access, .structure, .directory]) }
                 else if directoryTypes.contains(e.entityType) { plan.refreshes.insert(.directory) }

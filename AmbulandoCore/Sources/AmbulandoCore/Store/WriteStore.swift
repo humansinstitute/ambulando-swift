@@ -17,6 +17,8 @@ public enum WriteKind: String, Sendable, Codable, CaseIterable {
     case reactionRemove = "reaction.remove"
     case viewMark = "view.mark"
     case fileUpload = "file.upload"
+    /// Pin or unpin a thread, task, document or channel for this viewer (`PUT /me/pins/:type/:id`).
+    case pinSet = "pin.set"
 }
 
 public enum WriteState: String, Sendable, Codable {
@@ -74,6 +76,7 @@ public struct WriteAcknowledgement: Sendable {
     public var viewStates: [ViewStateRecord] = []
     public var files: [FileRecord] = []
     public var docs: [DocRecord] = []
+    public var pins: [PinRecord] = []
     public init() {}
 }
 
@@ -133,6 +136,7 @@ extension StoreWriter {
             if !ack.messages.isEmpty { _ = try writeMessages(ack.messages.filter { $0.workspaceId == workspaceId }, keys: &keys) }
             if !ack.docs.isEmpty { _ = try writeDocs(ack.docs.filter { $0.workspaceId == workspaceId }); keys.insert(ChangeKey(.docs, workspaceId)) }
             if !ack.reactions.isEmpty { try writeReactions(ack.reactions.filter { $0.workspaceId == workspaceId }); keys.insert(ChangeKey(.reactions, workspaceId)) }
+            if !ack.pins.isEmpty { _ = try writePins(workspaceId: workspaceId, ack.pins.filter { $0.workspaceId == workspaceId }, complete: false); keys.insert(ChangeKey(.pins, workspaceId)) }
             for reaction in ack.removedReactionIds {
                 try db.prepare("DELETE FROM reactions WHERE workspace_id = ? AND id = ?").run([.text(workspaceId), .text(reaction)])
                 keys.insert(ChangeKey(.reactions, workspaceId))

@@ -75,6 +75,13 @@ final class FakeEventTower: @unchecked Sendable {
                     .first { url.path.hasSuffix("/" + $0.replacingOccurrences(of: "_", with: "-")) } ?? "scopes"
                 return (200, [key: [], "states": [], "next_cursor": NSNull(), "order": []])
             }
+            // Reseed also lists pins, canvases, the Toolbox and agents; this workspace has none.
+            if url.path == base + "/record-sync/priority" {
+                return (200, ["protocol_version": 1, "captured_head": "0", "changes": [], "next_cursor": "done", "has_more": false])
+            }
+            if url.path == base + "/canvases" { return (200, ["workspace_id": Fixtures.workspaceId, "complete": true, "canvases": []]) }
+            if url.path == base + "/personal-wapps" { return (200, ["personal_wapps": [], "next_cursor": NSNull()]) }
+            if url.path == base + "/workspace-agents" { return (200, ["workspace_agents": [], "next_cursor": NSNull()]) }
             if url.path == "/api/v4/flightdeck-pg/workspaces" {
                 return (200, ["workspaces": [Fixtures.workspace(Fixtures.workspaceId, label: "Studio")], "next_cursor": NSNull()])
             }
@@ -155,7 +162,7 @@ final class EventPlanTests: XCTestCase {
         let plan = EventPlan.make([
             event("message", m, "created", version: 1), event("message", m, "updated", version: 3),
             event("message", gone, "deleted"), event("task_comment", UUID().uuidString.lowercased(), "created", parent: t),
-            event("resource_view_state", nil), event("channel_grant", nil), event("canvas", UUID().uuidString.lowercased()),
+            event("resource_view_state", nil), event("channel_grant", nil), event("workroom", UUID().uuidString.lowercased()),
             event("message", UUID().uuidString.lowercased(), workspace: Fixtures.workspaceId2),
         ], workspaceId: w)
         XCTAssertTrue(plan.refreshes.contains(.message(channelId: c, messageId: m)))

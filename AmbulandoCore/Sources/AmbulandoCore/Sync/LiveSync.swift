@@ -279,6 +279,10 @@ extension WorkspaceSync {
         await refreshTasks(connection, workspace, priority: .background)
         await refreshDocs(connection, workspace, priority: .background)
         await refreshFiles(connection, workspace, priority: .background)
+        await refreshPins(connection, workspace, priority: .background)
+        await refreshCanvases(connection, workspace, priority: .background)
+        await refreshToolbox(connection, workspace, priority: .background)
+        await refreshAgents(connection, workspace, channelIds: [], priority: .background)
     }
 
     /// Applies one ordered batch: tombstones first, then the records it names (visible channel first, bounded
@@ -306,8 +310,10 @@ extension WorkspaceSync {
         case .message(let c, _), .thread(let c, _), .channelMessages(let c), .reactions(let c, _): c == visible ? 0 : 2
         case .channelTasks(let c), .channelDocs(let c), .channelFiles(let c): c == visible ? 1 : 3
         case .task, .doc: 2
-        case .inbox: 3
-        case .structure, .directory, .access: 4
+        case .inbox, .pins: 3
+        case .agentActivity(let c): c == visible ? 1 : 3
+        case .canvas, .contextReferences: 3
+        case .structure, .directory, .access, .canvases, .contextTree, .agents, .toolbox: 4
         }
     }
 
@@ -384,6 +390,41 @@ extension WorkspaceSync {
             await refreshDirectory(connection, workspace, priority: .background)
         case .access:
             await discover(connection, priority: .background, force: true)
+        case .canvases:
+            try await store.writer.replaceCanvases(workspaceId: w, try await api.canvases(workspaceId: w, appNpub: app))
+        case .canvas(let id):
+            // Only canvases this phone has opened are kept current; others are read when opened.
+            guard try await store.reader.canvasSnapshot(workspaceId: w, canvasId: id) != nil else { return }
+            do {
+                let fetched = try await api.canvasSnapshot(workspaceId: w, appNpub: app, canvasId: id)
+                try await store.writer.saveCanvasSnapshot(fetched.snapshot, canvas: fetched.canvas)
+                for board in CanvasScene.parse(fetched.snapshot.bytes).boards.prefix(Self.boardFetchLimit) {
+                    await refreshBoard(connection, workspace, board: board, priority: .background)
+                }
+            } catch where lost(error) { try await store.writer.removeCanvas(workspaceId: w, id: id) }
+        case .contextTree(let scope):
+            guard try await store.reader.listSyncComplete(workspaceId: w, key: Self.contextTreeKey(w, scope)) != nil else { return }
+            do {
+                let components = try await api.contextComponents(workspaceId: w, appNpub: app, scopeId: scope)
+                try await store.writer.upsertContextComponents(workspaceId: w, scopeId: scope, components, complete: true)
+            } catch where lost(error) { try await store.writer.removeContextTree(workspaceId: w, scopeId: scope) }
+        case .contextReferences(let scope, let component):
+            guard try await store.reader.listSyncComplete(workspaceId: w, key: Self.contextReferencesKey(w, component)) != nil else { return }
+            do {
+                let references = try await api.contextReferences(workspaceId: w, appNpub: app, scopeId: scope, componentId: component)
+                try await store.writer.replaceContextReferences(workspaceId: w, scopeId: scope, componentId: component, references)
+            } catch where lost(error) { try await store.writer.removeContextComponent(workspaceId: w, id: component) }
+        case .pins:
+            try await store.writer.upsertPins(workspaceId: w, try await api.personalPins(workspaceId: w, appNpub: app).pins, complete: true)
+        case .agents:
+            try await store.writer.replaceWorkspaceAgents(workspaceId: w, try await api.workspaceAgents(workspaceId: w, appNpub: app))
+        case .agentActivity(let channel):
+            guard try await store.reader.listSyncComplete(workspaceId: w, key: Self.agentActivityKey(w, channel)) != nil else { return }
+            do {
+                try await store.writer.replaceAgentActivities(workspaceId: w, channelId: channel, try await api.agentActivities(workspaceId: w, appNpub: app, channelId: channel))
+            } catch where lost(error) { try await store.writer.replaceAgentActivities(workspaceId: w, channelId: channel, []) }
+        case .toolbox:
+            try await store.writer.replacePersonalWapps(workspaceId: w, try await api.personalWapps(workspaceId: w, appNpub: app))
         }
     }
 }
