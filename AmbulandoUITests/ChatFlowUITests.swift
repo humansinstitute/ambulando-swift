@@ -168,8 +168,12 @@ final class ChatFlowUITests: XCTestCase {
     /// main-thread work from sync impact.
     func testTypingControlWithoutStorm() throws { try typingCheck(storm: false) }
 
-    private func typingCheck(storm stormOn: Bool) throws {
-        let app = launch(reset: true, [stormOn ? "-AmbulandoFixtureStorm" : "-AmbulandoFixtureStormControl"])
+    /// Diagnostic, not a budget run: the no-write control with autocorrection/predictive text off, to attribute the
+    /// remaining stall to system text input. Asserts nothing beyond the freeze guard and no dropped characters.
+    func testTypingControlPlainKeyboardDiagnostic() throws { try typingCheck(storm: false, extra: ["-AmbulandoDiagnosticPlainKeyboard"]) }
+
+    private func typingCheck(storm stormOn: Bool, extra: [String] = []) throws {
+        let app = launch(reset: true, [stormOn ? "-AmbulandoFixtureStorm" : "-AmbulandoFixtureStormControl"] + extra)
         openGeneral(app)
         let composer = field(app)
         composer.tap()
@@ -184,7 +188,7 @@ final class ChatFlowUITests: XCTestCase {
         while !storm.label.hasPrefix("storm: done") && Date() < deadline { usleep(250_000) }
         XCTAssertTrue(storm.label.hasPrefix("storm: done"), storm.label)
         let report = storm.label
-        print("STORM-UI \(stormOn ? "storm" : "control") typing=\(String(format: "%.2f", typing))s chars=\(text.count) \(report)")
+        print("STORM-UI \(stormOn ? "storm" : (extra.isEmpty ? "control" : "control-plain-keyboard")) typing=\(String(format: "%.2f", typing))s chars=\(text.count) \(report)")
         let attachment = XCTAttachment(string: "typing=\(typing)s chars=\(text.count)\n\(report)")
         attachment.lifetime = .keepAlways
         add(attachment)

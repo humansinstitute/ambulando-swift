@@ -22,6 +22,9 @@ final class FixtureEnvironment {
     /// In-process stand-in for the SSE route, fed from the fixture's event log.
     let events: EventStreamTransport
     private let live: Bool
+    /// Diagnostic only (`-AmbulandoDiagnosticPlainKeyboard`): turns off autocorrection/predictive text in the composer
+    /// to attribute stalls to system text input. Never used for the budget runs.
+    let plainKeyboard = ProcessInfo.processInfo.arguments.contains("-AmbulandoDiagnosticPlainKeyboard")
     private let simulateBackground: Bool
     /// Result of the simulated background refresh (`-AmbulandoFixtureSimulateBackgroundRefresh`), shown on screen.
     private(set) var backgroundSimulation: String?
@@ -127,19 +130,46 @@ final class FixtureEnvironment {
     /// Sync storm for the responsiveness check: 20,000 messages materialised into another channel of the visible
     /// workspace in 500-row transactions (as catch-up would), while the main-actor probe samples latency.
     func startStormIfRequested(store: LocalStore, workspaceId: String) {
+        keystrokes.append(ContinuousClock.now)
         guard storm, stormStatus == nil else { return }
         stormStatus = "storm: running"
+        stormStarted = ContinuousClock.now
+        frames.start()
         Task { [weak self] in
-            let text = await Self.runStorm(store: store, workspaceId: workspaceId, writes: !(self?.stormControl ?? false))
-            self?.stormStatus = text
+            let result = await Self.runStorm(store: store, workspaceId: workspaceId, writes: !(self?.stormControl ?? false))
+            guard let self else { return }
+            self.frames.stop()
+            self.stormStatus = result.text + " " + self.attribution(result.timeline)
         }
     }
 
-    nonisolated private static func runStorm(store: LocalStore, workspaceId: String, writes: Bool) async -> String {
+    private let frames = FrameMonitor()
+    private var keystrokes: [ContinuousClock.Instant] = []
+    private var stormStarted: ContinuousClock.Instant?
+
+    /// Frame pacing and the three worst main-actor stalls, each with the distance to the nearest keystroke, so a stall
+    /// can be attributed to input handling, rendering or sync (compare with the no-write control).
+    private func attribution(_ samples: [MainActorProbe.Sample]) -> String {
+        let f = frames.summary()
+        let origin = stormStarted ?? .now
+        let keys = keystrokes.map { ($0 - origin).milliseconds }
+        let worst = samples.sorted { $0.latency > $1.latency }.prefix(3).map { sample -> String in
+            let nearest = keys.min { abs($0 - sample.at) < abs($1 - sample.at) }.map { $0 - sample.at } ?? .nan
+            return String(format: "t%.0f:%.1fms(key%+.0fms)", sample.at, sample.latency, nearest)
+        }
+        let firstKeyStall = samples.filter { $0.at < (keys.dropFirst().first ?? 0) }.map(\.latency).max() ?? 0
+        let afterFirst = samples.filter { $0.at >= (keys.dropFirst().first ?? 0) }.map(\.latency)
+        let typing = LatencyReport(samples: afterFirst)
+        return String(format: "frames=%d maxFrame=%.1fms hitches=%d hitchRatio=%.1fms/s firstKeyMax=%.1fms afterFirstKey p99=%.2fms max=%.2fms keys=%d stalls=[%@]",
+                      f.frames, f.maxGap, f.hitches, f.hitchRatio, firstKeyStall, typing.percentile(99), typing.max, keystrokes.count,
+                      worst.joined(separator: " "))
+    }
+
+    nonisolated private static func runStorm(store: LocalStore, workspaceId: String, writes: Bool) async -> (text: String, timeline: [MainActorProbe.Sample]) {
         await Task.detached(priority: .utility) {
             // The probe covers exactly the storm window (which overlaps typing), not launch or navigation.
             let done = StormFlag()
-            async let report = MainActorProbe.measure { await done.value }
+            async let timeline = MainActorProbe.timeline { await done.value }
             let clock = ContinuousClock(), start = clock.now
             for batch in 0..<40 {
                 let rows = (0..<500).map { i -> MessageRecord in
@@ -154,10 +184,11 @@ final class FixtureEnvironment {
             }
             let elapsed = clock.now - start
             await done.set()
-            let probe = await report
-            return String(format: "storm: done rows=%d window=%.0fms probe n=%d p99=%.2fms max=%.2fms", writes ? 20000 : 0,
-                          Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15,
-                          probe.count, probe.percentile(99), probe.max)
+            let samples = await timeline
+            let probe = LatencyReport(samples: samples.map(\.latency))
+            let text = String(format: "storm: done rows=%d window=%.0fms probe n=%d p99=%.2fms max=%.2fms", writes ? 20000 : 0,
+                              elapsed.milliseconds, probe.count, probe.percentile(99), probe.max)
+            return (text, samples)
         }.value
     }
 }

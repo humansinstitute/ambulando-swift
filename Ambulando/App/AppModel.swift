@@ -3,6 +3,7 @@ import BackgroundTasks
 import Foundation
 import Network
 import Observation
+import os
 import UIKit
 
 /// A place in chat navigation. Routes carry their workspace so a restored or stale path can never open a
@@ -74,6 +75,23 @@ final class AppModel {
     private(set) var canReadWhileLocked = false
     private(set) var lastBackgroundReport: BackgroundRefreshReport?
     private(set) var backgroundScheduleError: String?
+    /// First frame → stored channel list on screen, measured once per launch (budget: ≤ 400 ms; signposted).
+    private(set) var launchToCachedListMs: Double?
+    @ObservationIgnored private var firstFrame: ContinuousClock.Instant?
+    @ObservationIgnored private var launchInterval: OSSignpostIntervalState?
+    @ObservationIgnored private static let signposter = OSSignposter(subsystem: "studio.otherstuff.ambulando.native", category: "launch")
+
+    func markFirstFrame() {
+        guard firstFrame == nil else { return }
+        firstFrame = .now
+        launchInterval = Self.signposter.beginInterval("launch-to-cached-list")
+    }
+
+    func markCachedListShown() {
+        guard launchToCachedListMs == nil, let firstFrame else { return }
+        launchToCachedListMs = (ContinuousClock.now - firstFrame).milliseconds
+        if let launchInterval { Self.signposter.endInterval("launch-to-cached-list", launchInterval) }
+    }
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
     @ObservationIgnored private var restoringPath = false
 
@@ -155,7 +173,13 @@ final class AppModel {
                 await restoreChatPath()
             }
             statusTask = Task { [weak self] in
-                for await snapshot in await engine.statusStream() { self?.syncStatus = snapshot }
+                // Sync status changes on every job start/finish; screens get at most 4 updates a second, and only
+                // real changes (Observation would otherwise invalidate every reader on each assignment).
+                for await snapshot in await engine.statusStream() {
+                    guard let self else { return }
+                    if snapshot != self.syncStatus { self.syncStatus = snapshot }
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
             }
             watchNetwork()
             phase = .ready

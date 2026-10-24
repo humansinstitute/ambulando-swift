@@ -49,23 +49,43 @@ private func chatMatches(_ workspaceId: String) -> @Sendable (ChangeKey) -> Bool
 
 // MARK: Scroll following
 
+/// Zero-height marker after the last row; reports whether the newest message is on screen.
+private struct NewestSentinel: View {
+    @Binding var visible: Bool
+    var body: some View {
+        Color.clear.frame(height: 1)
+            .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
+            .accessibilityHidden(true)
+    }
+}
+
 /// Keeps the newest message in view when the user sends one, or when one arrives while they are already at the
 /// bottom. Reading older messages is never interrupted.
 private struct FollowLatest: ViewModifier {
     let lastId: String?
     let pendingCount: Int
+    /// Whether the end of the list is on screen, reported by `NewestSentinel` (scroll geometry is unreliable here:
+    /// LazyVStack revises its size estimates while the newest rows stay visible).
+    let nearBottom: Bool
     @State private var position = ScrollPosition(edge: .bottom)
-    @State private var nearBottom = true
     @State private var lastPending = 0
     @State private var positioned = false
+    /// The list was at the newest message when the keyboard started to hide (for example a context menu took focus).
+    @State private var restoreOnKeyboard = false
 
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.contentOffset.y + geometry.containerSize.height - geometry.contentInsets.bottom
-                    >= geometry.contentSize.height - 120
-            } action: { _, value in nearBottom = value }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                restoreOnKeyboard = nearBottom
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                // The keyboard came back (menu closed, composer refocused): return to the newest message if the user was
+                // there, instead of leaving it hidden behind the composer.
+                guard restoreOnKeyboard || nearBottom else { return }
+                restoreOnKeyboard = false
+                Task { @MainActor in withAnimation(.snappy) { position.scrollTo(edge: .bottom) } }
+            }
             .onAppear { positionInitially(lastId) }
             .onChange(of: lastId) { _, id in
                 // Rows usually arrive after the first (empty) layout: open at the newest message, once.
@@ -88,6 +108,31 @@ private struct FollowLatest: ViewModifier {
 
 // MARK: Channel
 
+/// A job's last error, read in its own view so sync status changes do not re-render the surrounding list.
+struct SyncErrorNote: View {
+    @Environment(AppModel.self) private var model
+    let key: String
+    var body: some View {
+        if let error = model.syncError(forKey: key) { SyncNote(text: error, tone: .warning) }
+    }
+}
+
+/// Sync state for one channel, in its own view so status changes re-render only this note, never the message list.
+private struct ChannelSyncNote: View {
+    @Environment(AppModel.self) private var model
+    let key: String
+    let historyComplete: Bool
+
+    var body: some View {
+        if !historyComplete {
+            SyncNote(text: model.syncError(forKey: key)
+                     ?? (model.identity.npub != nil && model.canRead ? "Loading history…" : "Showing saved messages. Unlock to load history."))
+        } else if let error = model.syncError(forKey: key) {
+            SyncNote(text: error, tone: .warning)
+        }
+    }
+}
+
 /// A channel's conversations (thread roots), newest at the bottom, with unsent messages inline and a composer
 /// that starts a new conversation. Reads only the local store; opening it asks the sync engine for catch-up.
 struct ChannelView: View {
@@ -97,6 +142,7 @@ struct ChannelView: View {
     let store: LocalStore
     @State private var snapshot = LiveQuery<ChannelSnapshot>(initial: ChannelSnapshot())
     @State private var limit = 150
+    @State private var atNewest = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -106,11 +152,8 @@ struct ChannelView: View {
                     Button("Show earlier messages") { limit += 150 }
                         .font(.footnote.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
                 }
-                if snapshot.loaded && !snapshot.value.historyComplete {
-                    SyncNote(text: model.syncError(forKey: WorkspaceSync.messagesKey(workspace.id, target.channelId))
-                             ?? (model.identity.npub != nil && isUnlocked ? "Loading history…" : "Showing saved messages. Unlock to load history."))
-                } else if let error = model.syncError(forKey: WorkspaceSync.messagesKey(workspace.id, target.channelId)) {
-                    SyncNote(text: error, tone: .warning)
+                if snapshot.loaded {
+                    ChannelSyncNote(key: WorkspaceSync.messagesKey(workspace.id, target.channelId), historyComplete: snapshot.value.historyComplete)
                 }
                 ForEach(snapshot.value.posts) { post in
                     PostRow(post: post, names: snapshot.value.names, workspace: workspace, extras: snapshot.value.extras)
@@ -124,11 +167,12 @@ struct ChannelView: View {
                 }
             }
             .padding(.bottom, 8)
+            NewestSentinel(visible: $atNewest)
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .modifier(FollowLatest(lastId: snapshot.value.pending.last?.id ?? snapshot.value.posts.last?.id,
-                               pendingCount: snapshot.value.pending.count))
+                               pendingCount: snapshot.value.pending.count, nearBottom: atNewest))
         .scrollDismissesKeyboard(.interactively)
         .refreshable { model.openChannel(target.channelId, in: workspace, force: true) }
             // A stacked composer (not an inset) so keyboard avoidance shrinks the list itself and the newest
@@ -157,6 +201,7 @@ struct ChannelView: View {
             async let sync = store.reader.channelSync(workspaceId: target.workspaceId, channelId: target.channelId)
             async let directory = names(store, target.workspaceId)
             let rows = try await posts
+            MessageDisplayCache.shared.prepare(rows.map(\.message))
             let extras = try await messageExtras(store, target.workspaceId, connectionId: target.connectionId, ids: rows.map(\.id))
             return ChannelSnapshot(title: try await channel?.name ?? "", posts: rows, pending: try await pending,
                                    names: try await directory, historyComplete: try await sync?.complete ?? false, extras: extras)
@@ -172,14 +217,13 @@ struct ThreadView: View {
     let workspace: WorkspaceRecord
     let store: LocalStore
     @State private var snapshot = LiveQuery<ThreadSnapshot>(initial: ThreadSnapshot())
+    @State private var atNewest = true
 
     var body: some View {
         VStack(spacing: 0) {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if let error = target.threadId.flatMap({ model.syncError(forKey: WorkspaceSync.threadKey(workspace.id, $0)) }) {
-                    SyncNote(text: error, tone: .warning)
-                }
+                if let threadId = target.threadId { SyncErrorNote(key: WorkspaceSync.threadKey(workspace.id, threadId)) }
                 if snapshot.value.archived { SyncNote(text: "This thread is archived. Replying reopens it.") }
                 ForEach(Array(snapshot.value.messages.enumerated()), id: \.element.id) { index, message in
                     MessageCell(message: message, names: snapshot.value.names, workspace: workspace, extras: snapshot.value.extras)
@@ -197,11 +241,12 @@ struct ThreadView: View {
                 }
             }
             .padding(.bottom, 8)
+            NewestSentinel(visible: $atNewest)
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .modifier(FollowLatest(lastId: snapshot.value.pending.last?.id ?? snapshot.value.messages.last?.id,
-                               pendingCount: snapshot.value.pending.count))
+                               pendingCount: snapshot.value.pending.count, nearBottom: atNewest))
         .scrollDismissesKeyboard(.interactively)
         .refreshable { if let thread = target.threadId { model.openThread(thread, channelId: target.channelId, in: workspace) } }
             Composer(target: target, workspace: workspace, store: store, placeholder: "Reply")
@@ -233,6 +278,7 @@ struct ThreadView: View {
             async let pending = store.reader.outbox(target: target)
             async let directory = names(store, target.workspaceId)
             let rows = try await messages
+            MessageDisplayCache.shared.prepare(rows)
             let record = try await thread
             let title = record?.title.map(MentionCodec.plain) ?? rows.first.map { MentionCodec.plain($0.body) } ?? ""
             let extras = try await messageExtras(store, target.workspaceId, connectionId: target.connectionId, ids: rows.map(\.id))
@@ -273,16 +319,21 @@ struct MessageRow: View {
     }
 
     var body: some View {
+        let display = MessageDisplayCache.shared.display(message)
         HStack(alignment: .top, spacing: 10) {
             Avatar(name: sender)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(sender).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
-                    Text(ChatTime.label(message.createdAt)).font(.caption).foregroundStyle(Amb.mutedForeground)
+                    Text(display.time).font(.caption).foregroundStyle(Amb.mutedForeground)
                 }
-                if !(bodyOverride ?? message.body).isEmpty { MessageBody(text: bodyOverride ?? message.body, muted: bodyOverride != nil) }
+                if let bodyOverride {
+                    if !bodyOverride.isEmpty { MessageBody(text: bodyOverride, muted: true) }
+                } else if !message.body.isEmpty {
+                    if let rich = display.rich { MessageBody(attributed: rich) } else { MessageBody(plain: message.body) }
+                }
                 if let workspace {
-                    ForEach(MessageAttachment.from(messageRaw: message.raw), id: \.storageObjectId) { AttachmentView(attachment: $0, workspace: workspace) }
+                    ForEach(display.attachments, id: \.storageObjectId) { AttachmentView(attachment: $0, workspace: workspace) }
                 }
             }
             Spacer(minLength: 0)
@@ -295,34 +346,21 @@ struct MessageRow: View {
 
 /// Renders mention tokens from the structured identity in the body (`@[Label](mention:type:npub)`) as styled names.
 struct MessageBody: View {
-    let text: String
+    private let attributed: AttributedString?
+    private let plain: String
     var muted = false
 
+    init(text: String, muted: Bool = false) {
+        if MessageText.isPlain(text) { attributed = nil; plain = text } else { attributed = MessageText.attributed(text); plain = "" }
+        self.muted = muted
+    }
+    init(attributed: AttributedString, muted: Bool = false) { self.attributed = attributed; plain = ""; self.muted = muted }
+    init(plain: String, muted: Bool = false) { attributed = nil; self.plain = plain; self.muted = muted }
+
     var body: some View {
-        Text(Self.attributed(text)).font(.body).foregroundStyle(muted ? Amb.mutedForeground : Amb.foreground)
+        (attributed.map { Text($0) } ?? Text(verbatim: plain)).font(.body).foregroundStyle(muted ? Amb.mutedForeground : Amb.foreground)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
-    }
-
-    static func attributed(_ body: String) -> AttributedString {
-        var out = AttributedString()
-        for segment in MentionCodec.segments(body) {
-            switch segment {
-            case .text(let text): out += AttributedString(text)
-            case .mention(let mention):
-                var part = AttributedString(mention.visible)
-                part.foregroundColor = Amb.primary
-                part.font = .body.weight(.semibold)
-                part.backgroundColor = Amb.accent
-                out += part
-            case .reference(let label, _, _):
-                var part = AttributedString(label)
-                part.foregroundColor = Amb.info
-                part.font = .body.weight(.medium)
-                out += part
-            }
-        }
-        return out
     }
 }
 
@@ -407,8 +445,26 @@ enum ChatTime {
     }()
     nonisolated(unsafe) private static let plain = ISO8601DateFormatter()
 
+    /// Labels are memoised per calendar day (list rows ask for them on every layout pass).
+    nonisolated(unsafe) private static var labels: [String: String] = [:]
+    nonisolated(unsafe) private static var labelsDay = 0
+    private static let lock = NSLock()
+
+    static func dayStamp() -> Int { Int(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970 / 86_400) }
+
     static func label(_ iso: String) -> String {
-        guard let date = parser.date(from: iso) ?? plain.date(from: iso) else { return "" }
+        let day = dayStamp()
+        if let hit = lock.withLock({ () -> String? in
+            if labelsDay != day { labels.removeAll(); labelsDay = day }
+            return labels[iso]
+        }) { return hit }
+        let made = compute(iso)
+        lock.withLock { if labels.count > 5000 { labels.removeAll() }; labels[iso] = made }
+        return made
+    }
+
+    private static func compute(_ iso: String) -> String {
+        guard let date = lock.withLock({ parser.date(from: iso) ?? plain.date(from: iso) }) else { return "" }
         if Calendar.current.isDateInToday(date) { return date.formatted(date: .omitted, time: .shortened) }
         return date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
     }
@@ -546,6 +602,7 @@ struct Composer: View {
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .accessibilityIdentifier("composer.field")
+                    .autocorrectionDisabled(model.fixture?.plainKeyboard == true)
                 Button { send() } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).foregroundStyle(canSend ? Amb.primary : Amb.border)
                 }

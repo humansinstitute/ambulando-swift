@@ -114,6 +114,7 @@ private struct ChannelList: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
+        .onChange(of: state.value.sections.isEmpty, initial: true) { _, empty in if !empty { model.markCachedListShown() } }
         .overlay {
             if state.loaded && state.value.sections.isEmpty {
                 ContentUnavailableView("No scopes yet", systemImage: "square.grid.2x2",

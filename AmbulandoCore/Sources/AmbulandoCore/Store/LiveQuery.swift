@@ -48,19 +48,31 @@ public final class LiveQuery<Value: Sendable & Equatable> {
         handle.replace(nil)
     }
 
-    private func reload(_ load: @Sendable () async throws -> Value, generation started: UInt64) async {
-        let result: Result<Value, Error>
-        do { result = .success(try await load()) } catch { result = .failure(error) }
+    private func reload(_ load: @escaping @Sendable () async throws -> Value, generation started: UInt64) async {
+        // The read and the equality check both run off the main actor (a snapshot of a busy channel compares
+        // hundreds of rows); the main actor only assigns a value that actually changed.
+        let result = await Self.fetch(load, previous: value)
         // The query may have been restarted or stopped while the read was in flight.
         guard started == generation, !Task.isCancelled else { return }
         switch result {
         case .success(let next):
-            if next != value { value = next }   // unchanged results never invalidate the view
-            error = nil
+            if let next { value = next }   // unchanged results never invalidate the view
+            if error != nil { error = nil }
         case .failure(let failure):
-            error = failure.localizedDescription
+            let message = failure.localizedDescription
+            if error != message { error = message }
         }
-        loaded = true
+        // Observation notifies on every assignment, so state that is already current is not assigned again.
+        if !loaded { loaded = true }
+    }
+
+    /// Loads and compares on the global concurrent executor. Returns nil when the result equals `previous`.
+    @concurrent
+    nonisolated private static func fetch(_ load: @Sendable () async throws -> Value, previous: Value) async -> Result<Value?, Error> {
+        do {
+            let next = try await load()
+            return .success(next == previous ? nil : next)
+        } catch { return .failure(error) }
     }
 
     deinit { handle.replace(nil) }

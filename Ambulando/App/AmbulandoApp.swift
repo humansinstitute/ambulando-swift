@@ -12,6 +12,7 @@ struct AmbulandoApp: App {
                 .environment(delegate.model)
                 .tint(Amb.primary)
                 .preferredColorScheme(AppearancePreference(rawValue: appearance)?.colorScheme)
+                .onAppear { delegate.model.markFirstFrame() }
                 .task { await delegate.model.start() }
         }
         .onChange(of: scenePhase) { _, phase in

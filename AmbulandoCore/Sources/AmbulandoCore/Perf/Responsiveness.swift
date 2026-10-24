@@ -52,6 +52,31 @@ public enum MainActorProbe {
     }
 }
 
+extension MainActorProbe {
+    /// One probe sample: when it was taken (ms since the probe started) and how long the main actor took to run it.
+    public struct Sample: Sendable { public let at: Double; public let latency: Double }
+
+    /// Like `measure`, keeping sample times so the worst stalls can be lined up with input events.
+    public static func timeline(interval: Duration = .milliseconds(2), until done: @escaping @Sendable () async -> Bool) async -> [Sample] {
+        await Task.detached(priority: .userInitiated) {
+            let clock = ContinuousClock(), origin = clock.now
+            var samples: [Sample] = []
+            while await !done() {
+                let start = clock.now
+                await MainActor.run {}
+                let end = clock.now
+                samples.append(Sample(at: (start - origin).milliseconds, latency: (end - start).milliseconds))
+                try? await Task.sleep(for: interval)
+            }
+            return samples
+        }.value
+    }
+}
+
+extension Duration {
+    public var milliseconds: Double { Double(components.seconds) * 1000 + Double(components.attoseconds) / 1e15 }
+}
+
 /// Measures wall-clock latency of a block, in milliseconds.
 public func measureMilliseconds<T>(_ body: () async throws -> T) async rethrows -> (T, Double) {
     let clock = ContinuousClock()
