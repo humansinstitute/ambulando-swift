@@ -12,19 +12,19 @@ struct WorkspaceShell: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            surface(.inbox) { PlannedSurfaceView(title: "Inbox", systemImage: "tray", package: "WP4",
+            surface(.inbox) { PlannedSurfaceView(title: "Inbox", systemImage: "tray",
                                                  detail: "Mentions, assigned tasks and unread conversations will collect here, read from local storage.") }
                 .tabItem { Label("Inbox", systemImage: "tray") }.tag(Tab.inbox)
-            surface(.chat) { ChannelNavigatorView() }
+            ChatStack(showSettings: $showSettings) { banners }
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }.tag(Tab.chat)
-            surface(.tasks) { PlannedSurfaceView(title: "Tasks", systemImage: "checklist", package: "WP4",
+            surface(.tasks) { PlannedSurfaceView(title: "Tasks", systemImage: "checklist",
                                                  detail: "Task lists, board columns, state changes and comments.") }
                 .tabItem { Label("Tasks", systemImage: "checklist") }.tag(Tab.tasks)
-            surface(.docs) { PlannedSurfaceView(title: "Documents", systemImage: "doc.text", package: "WP4",
-                                                detail: "Native Markdown reading, editing with edit leases, and comments.") }
+            surface(.docs) { PlannedSurfaceView(title: "Documents", systemImage: "doc.text",
+                                                detail: "Markdown reading, editing and comments.") }
                 .tabItem { Label("Docs", systemImage: "doc.text") }.tag(Tab.docs)
-            surface(.files) { PlannedSurfaceView(title: "Files", systemImage: "folder", package: "WP4",
-                                                 detail: "Folders, QuickLook previews, downloads and uploads through authenticated storage.") }
+            surface(.files) { PlannedSurfaceView(title: "Files", systemImage: "folder",
+                                                 detail: "Folders, previews, downloads and uploads.") }
                 .tabItem { Label("Files", systemImage: "folder") }.tag(Tab.files)
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
@@ -40,13 +40,27 @@ struct WorkspaceShell: View {
         .onChange(of: model.identity) { _, state in if case .unlocked = state { showUnlock = false } }
     }
 
+    @ViewBuilder private var banners: some View {
+        FixtureBanner()
+        IdentityBanner { showUnlock = true }
+    }
+
     private func surface<Content: View>(_ tab: Tab, @ViewBuilder content: () -> Content) -> some View {
         NavigationStack {
             VStack(spacing: 0) {
-                IdentityBanner { showUnlock = true }
+                banners
                 content()
             }
             .background(Amb.background)
+            .toolbarItems(showSettings: $showSettings)
+        }
+    }
+}
+
+private struct ShellToolbar: ViewModifier {
+    @Binding var showSettings: Bool
+    func body(content: Content) -> some View {
+        content
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { WorkspaceMenu() }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -54,10 +68,35 @@ struct WorkspaceShell: View {
                         SyncIndicator()
                         Button { showSettings = true } label: { Image(systemName: "person.crop.circle") }
                             .accessibilityLabel("Settings")
+                            .accessibilityIdentifier("settings")
                     }
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+extension View {
+    /// Sample-data label under the navigation bar of a pushed screen (no-op outside sample-data mode).
+    func fixtureLabel() -> some View { safeAreaInset(edge: .top, spacing: 0) { FixtureBanner() } }
+
+    func toolbarItems(showSettings: Binding<Bool>) -> some View { modifier(ShellToolbar(showSettings: showSettings)) }
+}
+
+/// Shown on every surface when the app runs on local sample data instead of a Tower.
+struct FixtureBanner: View {
+    @Environment(AppModel.self) private var model
+    var body: some View {
+        if let fixture = model.fixture {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Sample data on this iPhone. Not connected to a Tower.").font(.caption.weight(.semibold))
+                    .accessibilityIdentifier("fixture.banner")
+                if let storm = fixture.stormStatus { Text(storm).font(.caption2.monospaced()).accessibilityIdentifier("fixture.storm") }
+            }
+            .foregroundStyle(Amb.warning)
+            .padding(.horizontal, 16).padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Amb.warningBackground)
         }
     }
 }
@@ -110,17 +149,16 @@ struct IdentityBanner: View {
     }
 }
 
-/// Honest placeholder for a surface scheduled in a later work package (see docs/parity-matrix.md).
+/// Honest placeholder for a surface that is not in this build yet (see docs/parity-matrix.md).
 struct PlannedSurfaceView: View {
     let title: String
     let systemImage: String
-    let package: String
     let detail: String
     var body: some View {
         ContentUnavailableView {
             Label(title, systemImage: systemImage)
         } description: {
-            Text("Not yet available in this build. Native \(title.lowercased()) arrive in \(package).\n\(detail)")
+            Text("\(title) is not available in this build yet. It is coming in a later update.\n\(detail)")
         }
         .foregroundStyle(Amb.mutedForeground)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

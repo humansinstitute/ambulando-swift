@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage("appearance") private var appearance = AppearancePreference.system.rawValue
     @State private var confirmRemove = false
     @State private var confirmDisconnect = false
+    @State private var unsent = 0
 
     private var version: String {
         let info = Bundle.main.infoDictionary
@@ -32,7 +33,9 @@ struct SettingsView: View {
                         LabeledContent("Transport", value: "HTTPS + NIP-98")
                         LabeledContent("Workspaces", value: "\(model.workspaces.value.count)")
                         Button("Refresh now") { model.refresh(force: true) }.disabled(model.identity.npub == nil)
-                        Button("Disconnect and clear local data", role: .destructive) { confirmDisconnect = true }
+                        Button("Disconnect and clear local data", role: .destructive) {
+                            Task { unsent = await model.unsentCount(); confirmDisconnect = true }
+                        }
                     }
                 }
                 Section("Sync") {
@@ -45,6 +48,7 @@ struct SettingsView: View {
                         }
                     }
                 }
+                if let fixture = model.fixture { FixtureControls(fixture: fixture) }
                 Section("Appearance") {
                     Picker("Theme", selection: $appearance) {
                         ForEach(AppearancePreference.allCases) { Text($0.label).tag($0.rawValue) }
@@ -70,8 +74,22 @@ struct SettingsView: View {
             .confirmationDialog("Disconnect?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
                 Button("Disconnect", role: .destructive) { Task { await model.disconnect(); dismiss() } }
             } message: {
-                Text("Removes saved workspaces, scopes and channels for this Tower from this iPhone. Nothing on the server changes.")
+                Text((unsent > 0 ? "\(unsent) unsent \(unsent == 1 ? "message" : "messages") will be discarded. " : "")
+                     + "Removes saved workspaces, channels, messages and drafts for this Tower from this iPhone. Nothing on the server changes.")
             }
+        }
+    }
+}
+
+/// Controls for the local sample data used by UI automation. Only present when the app runs on sample data.
+private struct FixtureControls: View {
+    @Bindable var fixture: FixtureEnvironment
+    var body: some View {
+        Section {
+            Toggle("Simulate offline", isOn: $fixture.offline).accessibilityIdentifier("fixture.offline")
+            Toggle("Reject next send", isOn: $fixture.rejectNextSend).accessibilityIdentifier("fixture.reject")
+        } header: { Text("Sample data") } footer: {
+            Text("This build is running on sample data stored on this iPhone. Nothing is sent to a Tower.")
         }
     }
 }

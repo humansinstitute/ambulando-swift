@@ -15,8 +15,9 @@ struct AmbulandoApp: App {
                 .task { await model.start() }
         }
         .onChange(of: scenePhase) { _, phase in
-            // Foreground resume refreshes from the local cursor-less read path; background work is WP5.
-            if phase == .active { model.refresh(force: false) }
+            // Foreground resume: refresh the visible workspace and resume any unsent messages.
+            // Suspended-state refresh (BackgroundTasks) is not part of this build.
+            if phase == .active { model.refresh(force: false); model.kickOutbox() }
         }
     }
 }
