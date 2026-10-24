@@ -44,9 +44,11 @@ public enum MessageInstructionSignature {
         }
     }
 
+    /// Signs a send (`messageId == nil`) or a revision of an existing message (`message_id` and `revision` tags,
+    /// where `revision` is the row version the edit will create).
     public static func sign(body: String, workspaceId: String, channelId: String, threadId: String? = nil,
-                            signer: EventSigner) async throws -> Signed {
-        let tags = tags(body: body, workspaceId: workspaceId, channelId: channelId, threadId: threadId)
+                            messageId: String? = nil, revision: Int? = nil, signer: EventSigner) async throws -> Signed {
+        let tags = tags(body: body, workspaceId: workspaceId, channelId: channelId, threadId: threadId, messageId: messageId, revision: revision)
         let event = try await signer.sign(NostrEventTemplate(kind: kind, tags: tags, content: body))
         guard let npub = NostrKeys.npub(publicKeyHex: event.pubkey) else { throw IdentityError.invalidVault }
         return Signed(event: event, signerNpub: npub, bodySha256: SHA256Hex.of(body))

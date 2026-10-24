@@ -15,6 +15,6 @@ let package = Package(
             dependencies: [.product(name: "P256K", package: "swift-secp256k1")],
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
-        .testTarget(name: "AmbulandoCoreTests", dependencies: ["AmbulandoCore"]),
+        .testTarget(name: "AmbulandoCoreTests", dependencies: ["AmbulandoCore"], exclude: ["Fixtures"]),
     ]
 )

@@ -24,6 +24,11 @@ public enum OutboxRequest {
         ]
         if let thread = item.threadId { object["thread_id"] = thread } else { object["create_thread"] = true }
         if !item.mentions.isEmpty { object["mentions"] = item.mentions.map(\.requestObject) }
+        if !item.attachments.isEmpty {
+            let wire = item.attachments.compactMap(\.wire)
+            guard wire.count == item.attachments.count, item.attachments.allSatisfy(\.complete) else { throw FileTransferError.notAttachable }
+            object["metadata"] = ["attachments": wire.map(\.requestObject)]
+        }
         return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 
@@ -67,9 +72,11 @@ public struct OutboxSender: Sendable {
     public let engine: SyncEngine
     public let identity: IdentityService
     public let transport: HTTPTransport
+    /// Directory holding staged attachment bytes (privacy-stripped images) until their message is accepted.
+    public let staging: URL?
 
-    public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport) {
-        self.store = store; self.engine = engine; self.identity = identity; self.transport = transport
+    public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport, staging: URL? = nil) {
+        self.store = store; self.engine = engine; self.identity = identity; self.transport = transport; self.staging = staging
     }
 
     public static func key(_ connection: ConnectionRecord) -> String { "outbox:\(connection.id)" }
@@ -77,15 +84,53 @@ public struct OutboxSender: Sendable {
     /// Composes a message into the outbox (clearing that draft) and starts sending if unlocked.
     @discardableResult
     public func send(text: String, mentions selected: [Mention], target: ChatTarget, connection: ConnectionRecord,
-                     workspace: WorkspaceRecord) async throws -> OutboxItem? {
+                     workspace: WorkspaceRecord, attachments: [PendingAttachment] = []) async throws -> OutboxItem? {
         guard target.connectionId == connection.id, target.workspaceId == workspace.id else { throw TowerError.unsafePath }
         let (encoded, mentions) = MentionCodec.encode(text: text, selected: selected)
         let body = OutboxRequest.normalizedBody(encoded)
-        guard !body.isEmpty else { return nil }
+        guard !body.isEmpty || !attachments.isEmpty else { return nil }
         let item = try await store.writer.enqueueSend(target: target, origin: connection.origin, signerNpub: connection.signerNpub,
-                                                      appNpub: workspace.appNpub, body: body, mentions: mentions)
+                                                      appNpub: workspace.appNpub, body: body, mentions: mentions, attachments: attachments)
         await kick(connection)
         return item
+    }
+
+    /// Removes an unsent message and its staged attachment bytes.
+    public func discard(_ id: String, restoreDraft: Bool) async throws {
+        let item = try await store.reader.outboxItem(id: id)
+        try await store.writer.discardOutbox(id: id, restoreDraft: restoreDraft)
+        if try await store.reader.outboxItem(id: id) == nil { removeStaged(item?.attachments ?? []) }
+    }
+
+    func removeStaged(_ attachments: [PendingAttachment]) {
+        guard let staging else { return }
+        for a in attachments { try? FileManager.default.removeItem(at: staging.appendingPathComponent(a.staged)) }
+    }
+
+    /// Uploads a row's staged images (prepare → upload → complete, resumable), recording progress on the row.
+    func uploadAttachments(_ item: OutboxItem, api: TowerAPI) async throws -> OutboxItem {
+        guard item.attachments.contains(where: { !$0.complete }) else { return item }
+        guard let staging else { throw FileTransferError.notAttachable }
+        var attachments = item.attachments
+        for index in attachments.indices where !attachments[index].complete {
+            let a = attachments[index]
+            let bytes = try Data(contentsOf: staging.appendingPathComponent(a.staged))
+            guard SHA256Hex.of(bytes) == a.sha256 else { throw FileTransferError.integrity }
+            let previous = a.objectId.flatMap { id in a.uploadURL.map { PreparedObject(objectId: id, uploadURL: $0) } }
+            let store = store, current = attachments
+            let objectId = try await api.store(workspaceId: item.workspaceId, appNpub: item.appNpub, bytes: bytes, contentType: a.mimeType,
+                                               fileName: a.filename, prepared: previous) { fresh in
+                var next = current
+                next[index].objectId = fresh.objectId; next[index].uploadURL = fresh.uploadURL
+                try await store.writer.updateOutboxAttachments(id: item.id, next)
+            }
+            attachments[index].objectId = objectId
+            attachments[index].complete = true
+            try await store.writer.updateOutboxAttachments(id: item.id, attachments)
+        }
+        var updated = item
+        updated.attachments = attachments
+        return updated
     }
 
     public func retry(_ id: String, connection: ConnectionRecord) async throws {
@@ -117,7 +162,20 @@ public struct OutboxSender: Sendable {
             var request = item.request
             if request == nil {
                 try await identity.requireSigner(npub: item.signerNpub)
-                let built = try await OutboxRequest.build(item, signer: identity)
+                let ready: OutboxItem
+                do {
+                    ready = try await uploadAttachments(item, api: TowerAPI(client: client))
+                } catch {
+                    if Task.isCancelled || error is CancellationError { throw CancellationError() }
+                    let permanent = error is FileTransferError
+                    try await store.writer.markOutbox(id: item.id, state: permanent ? .failed : .retrying,
+                                                      error: "Image upload: " + ((error as? LocalizedError)?.errorDescription ?? Self.networkMessage(error)),
+                                                      countAttempt: true)
+                    blocked.insert(conversation)
+                    if !permanent { nextRetry = min(nextRetry ?? .max, item.attempts + 1) }
+                    continue
+                }
+                let built = try await OutboxRequest.build(ready, signer: identity)
                 try await store.writer.freezeOutbox(id: item.id, request: built)
                 request = try await store.reader.outboxItem(id: item.id)?.request
             }
@@ -149,6 +207,7 @@ public struct OutboxSender: Sendable {
                         continue
                     }
                     try await store.writer.acknowledgeSend(id: item.id, message: ack.message, thread: ack.thread)
+                    removeStaged(item.attachments)
                     continue
                 }
             }

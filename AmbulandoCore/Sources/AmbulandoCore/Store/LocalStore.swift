@@ -2,6 +2,7 @@ import Foundation
 
 public enum StoreTable: String, Sendable, Hashable, CaseIterable {
     case connections, workspaces, scopes, channels, messages, threads, members, drafts, outbox, appState
+    case tasks, comments, docs, docBodies, docDrafts, files, folders, viewStates, reactions, writes
 }
 
 /// A change notification key. `workspaceId == nil` means "not workspace-scoped".
@@ -29,7 +30,7 @@ public struct ConnectionRecord: Sendable, Equatable, Identifiable, Codable {
 }
 
 enum Schema {
-    static let version = 2
+    static let version = 3
 
     static func migrate(_ db: SQLiteConnection) throws {
         let current = try db.userVersion
@@ -100,6 +101,7 @@ enum Schema {
                   PRIMARY KEY(workspace_id, channel_id));
                 """)
             }
+            if current < 3 { try migrateV3(db) }
             try db.execute("PRAGMA user_version = \(version)")
         }
     }
@@ -168,7 +170,7 @@ public actor StoreWriter {
     }
 
     func deleteWorkspaceRows(_ workspaceId: String) throws {
-        for table in ["scopes", "channels", "messages", "threads", "members", "channel_sync"] {
+        for table in ["scopes", "channels", "messages", "threads", "members", "channel_sync"] + Schema.v3WorkspaceTables {
             try db.prepare("DELETE FROM \(table) WHERE workspace_id = ?").run([.text(workspaceId)])
         }
     }
@@ -197,7 +199,9 @@ public actor StoreWriter {
         }
         var keys: Set<ChangeKey> = [ChangeKey(.workspaces)]
         for id in removed {
-            keys.formUnion([ChangeKey(.scopes, id), ChangeKey(.channels, id), ChangeKey(.messages, id), ChangeKey(.threads, id), ChangeKey(.members, id)])
+            keys.formUnion([ChangeKey(.scopes, id), ChangeKey(.channels, id), ChangeKey(.messages, id), ChangeKey(.threads, id), ChangeKey(.members, id),
+                            ChangeKey(.tasks, id), ChangeKey(.comments, id), ChangeKey(.docs, id), ChangeKey(.docBodies, id), ChangeKey(.files, id),
+                            ChangeKey(.folders, id), ChangeKey(.viewStates, id), ChangeKey(.reactions, id)])
         }
         await emit(keys)
     }

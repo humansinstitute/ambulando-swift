@@ -54,6 +54,8 @@ public struct OutboxItem: Sendable, Equatable, Identifiable {
     public let lastCode: String?
     public let lastError: String?
     public let createdAt: String
+    /// Images to upload before the message is signed (their storage ids become part of the signed request).
+    public var attachments: [PendingAttachment] = []
 
     public var target: ChatTarget { ChatTarget(connectionId: connectionId, workspaceId: workspaceId, channelId: channelId, threadId: threadId) }
 }
@@ -84,6 +86,32 @@ public struct MessageKey: Sendable, Equatable, Comparable {
 enum JSONText {
     static func mentions(_ value: [Mention]) -> String { String(decoding: (try? JSONEncoder().encode(value)) ?? Data("[]".utf8), as: UTF8.self) }
     static func mentions(_ text: String?) -> [Mention] { text.flatMap { try? JSONDecoder().decode([Mention].self, from: Data($0.utf8)) } ?? [] }
+    static func attachments(_ value: [PendingAttachment]) -> String { String(decoding: (try? JSONEncoder().encode(value)) ?? Data("[]".utf8), as: UTF8.self) }
+    static func attachments(_ text: String?) -> [PendingAttachment] { text.flatMap { try? JSONDecoder().decode([PendingAttachment].self, from: Data($0.utf8)) } ?? [] }
+}
+
+/// An image staged on the device for a chat message. Its bytes are already privacy-stripped (see `ImagePrivacy`).
+public struct PendingAttachment: Sendable, Equatable, Codable, Hashable, Identifiable {
+    public let id: String
+    public let filename: String
+    public let mimeType: String
+    public let sizeBytes: Int
+    public let sha256: String
+    /// File name inside the staging directory.
+    public let staged: String
+    public var objectId: String?
+    public var uploadURL: String?
+    public var complete: Bool
+
+    public init(id: String = UUID().uuidString.lowercased(), filename: String, mimeType: String, sizeBytes: Int, sha256: String, staged: String,
+                objectId: String? = nil, uploadURL: String? = nil, complete: Bool = false) {
+        self.id = id; self.filename = filename; self.mimeType = mimeType; self.sizeBytes = sizeBytes; self.sha256 = sha256; self.staged = staged
+        self.objectId = objectId; self.uploadURL = uploadURL; self.complete = complete
+    }
+
+    public var wire: MessageAttachment? {
+        objectId.map { MessageAttachment(kind: "image", storageObjectId: $0, filename: filename, mimeType: mimeType, sizeBytes: sizeBytes) }
+    }
 }
 
 extension StoreWriter {
@@ -109,23 +137,30 @@ extension StoreWriter {
     /// the text is never held only in memory between the two.
     @discardableResult
     public func enqueueSend(id: String = UUID().uuidString.lowercased(), target: ChatTarget, origin: String, signerNpub: String, appNpub: String,
-                            body: String, mentions: [Mention]) async throws -> OutboxItem {
+                            body: String, mentions: [Mention], attachments: [PendingAttachment] = []) async throws -> OutboxItem {
         let stamp = now()
         try db.transaction {
             try db.prepare("""
             INSERT INTO outbox(id, connection_id, origin, signer_npub, workspace_id, app_npub, channel_id, thread_id, create_thread, body, mentions,
-                               request, state, attempts, created_at, updated_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,?,0,?,?)
+                               request, state, attempts, created_at, updated_at, attachments)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,?,0,?,?,?)
             """).run([.text(id), .text(target.connectionId), .text(origin), .text(signerNpub), .text(target.workspaceId), .text(appNpub),
                       .text(target.channelId), target.threadId.sql, .int(target.threadId == nil ? 1 : 0), .text(body),
-                      .text(JSONText.mentions(mentions)), .text(OutboxState.awaitingSignature.rawValue), .text(stamp), .text(stamp)])
+                      .text(JSONText.mentions(mentions)), .text(OutboxState.awaitingSignature.rawValue), .text(stamp), .text(stamp),
+                      .text(JSONText.attachments(attachments))])
             try db.prepare("DELETE FROM drafts WHERE key = ?").run([.text(target.draftKey)])
         }
         await emit([ChangeKey(.outbox, target.workspaceId), ChangeKey(.drafts, target.workspaceId)])
         return OutboxItem(id: id, connectionId: target.connectionId, origin: origin, signerNpub: signerNpub, workspaceId: target.workspaceId,
                           appNpub: appNpub, channelId: target.channelId, threadId: target.threadId, createThread: target.threadId == nil,
                           body: body, mentions: mentions, request: nil, state: .awaitingSignature, attempts: 0, lastStatus: nil, lastCode: nil,
-                          lastError: nil, createdAt: stamp)
+                          lastError: nil, createdAt: stamp, attachments: attachments)
+    }
+
+    /// Records upload progress for an unsigned row's attachments (never after the request is frozen).
+    public func updateOutboxAttachments(id: String, _ attachments: [PendingAttachment]) async throws {
+        try db.prepare("UPDATE outbox SET attachments = ?, updated_at = ? WHERE id = ? AND request IS NULL")
+            .run([.text(JSONText.attachments(attachments)), .text(now()), .text(id)])
     }
 
     /// Stores the signed request bytes exactly once. A row that is already frozen keeps its original request,
@@ -291,14 +326,15 @@ extension StoreReader {
 
     static let outboxColumns = """
     id, connection_id, origin, signer_npub, workspace_id, app_npub, channel_id, thread_id, create_thread, body, mentions, request, state, attempts,
-    last_status, last_code, last_error, created_at
+    last_status, last_code, last_error, created_at, attachments
     """
 
     static func outbox(_ s: SQLiteConnection.Statement) -> OutboxItem {
         OutboxItem(id: s.text(0)!, connectionId: s.text(1)!, origin: s.text(2)!, signerNpub: s.text(3)!, workspaceId: s.text(4)!, appNpub: s.text(5)!,
                    channelId: s.text(6)!, threadId: s.text(7), createThread: s.int(8) != 0, body: s.text(9)!, mentions: JSONText.mentions(s.text(10)),
                    request: s.isNull(11) ? nil : s.blob(11), state: OutboxState(rawValue: s.text(12) ?? "") ?? .failed, attempts: Int(s.int(13)),
-                   lastStatus: s.isNull(14) ? nil : Int(s.int(14)), lastCode: s.text(15), lastError: s.text(16), createdAt: s.text(17)!)
+                   lastStatus: s.isNull(14) ? nil : Int(s.int(14)), lastCode: s.text(15), lastError: s.text(16), createdAt: s.text(17)!,
+                   attachments: JSONText.attachments(s.text(18)))
     }
 
     /// Newest `limit` channel-level posts (thread roots), oldest first, each with its reply count.

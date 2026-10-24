@@ -134,8 +134,8 @@ public struct TowerClient: Sendable {
 
     /// Signed request that returns any HTTP status with its body, for callers that classify failures themselves
     /// (the outbox). Every call signs a fresh NIP-98 event over exactly `jsonBody`.
-    public func exchange(method: String, path: String, appNpub: String?, jsonBody: Data?) async throws -> (status: Int, body: Data) {
-        let request = try await signedRequest(method: method, path: path, query: [], appNpub: appNpub, jsonBody: jsonBody)
+    public func exchange(method: String, path: String, appNpub: String?, jsonBody: Data?, query: [URLQueryItem] = []) async throws -> (status: Int, body: Data) {
+        let request = try await signedRequest(method: method, path: path, query: query, appNpub: appNpub, jsonBody: jsonBody)
         try Task.checkCancellation()
         let (data, response) = try await transport.send(request)
         try Task.checkCancellation()

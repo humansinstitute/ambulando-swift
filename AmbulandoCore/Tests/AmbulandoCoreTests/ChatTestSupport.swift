@@ -10,11 +10,12 @@ final class FakeChatTower: @unchecked Sendable {
 
     struct Post { let request: URLRequest; let body: Data; let auth: NostrEvent }
 
-    private let lock = NSLock()
-    private(set) var messages: [[String: Any]] = []
+    let lock = NSLock()
+    var messages: [[String: Any]] = []
+    var revisions: [NostrEvent] = []
     private var byRequest: [String: (hash: String, message: [String: Any])] = [:]
     private var threads: [String: [String: Any]] = [:]
-    private var faults: [Fault] = []
+    var faults: [Fault] = []
     private var clock = 0
     private(set) var posts: [Post] = []
     private(set) var gets: [URLRequest] = []
@@ -100,7 +101,13 @@ final class FakeChatTower: @unchecked Sendable {
             if parts.count == 2, parts[0] == "threads" {
                 return lock.withLock { threads[parts[1]].map { (200, ["thread": $0]) } ?? (404, ["code": "thread_not_found"]) }
             }
+            if parts.count == 2, parts[0] == "messages" {
+                return lock.withLock { messages.first { $0["id"] as? String == parts[1] }.map { (200, ["message": $0]) } ?? (404, ["code": "message_not_found"]) }
+            }
             return (404, ["code": "not_found"])
+        }
+        if parts.count == 2, parts[0] == "messages", request.httpMethod == "PATCH" || request.httpMethod == "DELETE" {
+            return try revise(request, id: parts[1], auth: auth, query: query)
         }
         guard request.httpMethod == "POST", parts.count == 3, parts[0] == "channels", parts[2] == "messages" else { return (404, ["code": "not_found"]) }
         let bodyData = request.httpBody ?? Data()
@@ -158,6 +165,52 @@ final class FakeChatTower: @unchecked Sendable {
         }
         if case .dropResponseAfterCommit = fault { throw URLError(.networkConnectionLost) }
         return result
+    }
+}
+
+extension FakeChatTower {
+    /// `PATCH /messages/:m` (author only, row_version, kind 33358 with message_id + revision) and `DELETE ?row_version`.
+    func revise(_ request: URLRequest, id: String, auth: NostrEvent, query: [URLQueryItem]) throws -> (Int, Any) {
+        let bodyData = request.httpBody ?? Data()
+        if !bodyData.isEmpty { guard auth.tags.contains(["payload", SHA256Hex.of(bodyData)]) else { return (401, ["code": "payload_mismatch"]) } }
+        let fault: Fault? = lock.withLock { faults.isEmpty ? nil : faults.removeFirst() }
+        if case .offline = fault { throw URLError(.notConnectedToInternet) }
+        if case .status(let status, let code) = fault { return (status, ["code": code]) }
+        return try lock.withLock {
+            guard let index = messages.firstIndex(where: { $0["id"] as? String == id }) else { return (404, ["code": "message_not_found"]) }
+            var row = messages[index]
+            let version = row["row_version"] as? Int ?? 1
+            if request.httpMethod == "DELETE" {
+                if let q = query.first(where: { $0.name == "row_version" })?.value, Int(q) != version { return (409, ["code": "stale_row_version"]) }
+                row["record_state"] = "deleted"; row["row_version"] = version + 1; row["body"] = ""
+                messages[index] = row
+                return (200, ["message": row])
+            }
+            guard row["sender_npub"] as? String == actorNpub else { return (403, ["code": "message_author_required"]) }
+            let object = try JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+            guard object["row_version"] as? Int == version else { return (409, ["code": "stale_row_version"]) }
+            let body = (object["body"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let wrapper = object["message_signature"] as? [String: Any], let eventObject = wrapper["nostr_event"],
+                  let event = try? JSONDecoder().decode(NostrEvent.self, from: JSONSerialization.data(withJSONObject: eventObject)),
+                  SignatureVerifier.verify(event), event.kind == 33358, event.content == body,
+                  event.tags.contains(["message_id", id]), event.tags.contains(["revision", String(version + 1)]),
+                  event.tags.contains(["channel_id", row["channel_id"] as? String ?? ""]),
+                  (row["thread_id"] as? String).map({ event.tags.contains(["thread_id", $0]) }) ?? true
+            else { return (400, ["code": "validation_error"]) }
+            row["body"] = body; row["row_version"] = version + 1; row["updated_at"] = "2026-10-24T09:59:00.000Z"
+            messages[index] = row
+            revisions.append(event)
+            return (200, ["message": row, "revision": version + 1])
+        }
+    }
+
+    /// Someone else edits a message (moves its row version).
+    func externalEdit(id: String, body: String) {
+        lock.withLock {
+            guard let index = messages.firstIndex(where: { $0["id"] as? String == id }) else { return }
+            messages[index]["body"] = body
+            messages[index]["row_version"] = (messages[index]["row_version"] as? Int ?? 1) + 1
+        }
     }
 }
 

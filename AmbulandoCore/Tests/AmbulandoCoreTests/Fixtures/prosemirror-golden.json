@@ -1,0 +1,1142 @@
+{
+ "plain": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "Hello world."
+      }
+     ]
+    }
+   ]
+  },
+  "content": "Hello world\\.",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "Hello world\\."
+   }
+  ]
+ },
+ "escapes": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "a*b_c [x](y) #1 > q | 2+2-1! & `tick` \\ {}"
+      }
+     ]
+    }
+   ]
+  },
+  "content": "a\\*b\\_c \\[x\\]\\(y\\) \\#1 \\> q \\| 2\\+2\\-1\\! \\& \\`tick\\` \\\\ \\{\\}",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "a\\*b\\_c \\[x\\]\\(y\\) \\#1 \\> q \\| 2\\+2\\-1\\! \\& \\`tick\\` \\\\ \\{\\}"
+   }
+  ]
+ },
+ "marks": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "plain "
+      },
+      {
+       "type": "text",
+       "text": "bold",
+       "marks": [
+        {
+         "type": "bold"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": " and "
+      },
+      {
+       "type": "text",
+       "text": "both",
+       "marks": [
+        {
+         "type": "bold"
+        },
+        {
+         "type": "italic"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": " "
+      },
+      {
+       "type": "text",
+       "text": "struck",
+       "marks": [
+        {
+         "type": "strike"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": "under",
+       "marks": [
+        {
+         "type": "underline"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "content": "plain **bold** and _**both**_ ~~struc&#107;~~<u>&#117;nder</u>",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "plain **bold** and _**both**_ ~~struc&#107;~~<u>&#117;nder</u>"
+   }
+  ]
+ },
+ "sharedOuter": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "one ",
+       "marks": [
+        {
+         "type": "italic"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": "two",
+       "marks": [
+        {
+         "type": "bold"
+        },
+        {
+         "type": "italic"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": " three",
+       "marks": [
+        {
+         "type": "italic"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "content": "_one&#32;**&#116;w&#111;**&#32;three_",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "_one&#32;**&#116;w&#111;**&#32;three_"
+   }
+  ]
+ },
+ "boundaryWhitespace": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": " lead",
+       "marks": [
+        {
+         "type": "bold"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": "trail ",
+       "marks": [
+        {
+         "type": "bold"
+        },
+        {
+         "type": "italic"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": " nbsp\t",
+       "marks": [
+        {
+         "type": "italic"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "content": "**&#32;lea&#100;**_**&#116;rail&#32;**&#160;nbsp&#9;_",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "**&#32;lea&#100;**_**&#116;rail&#32;**&#160;nbsp&#9;_"
+   }
+  ]
+ },
+ "adjacentWordMarks": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "word",
+       "marks": [
+        {
+         "type": "bold"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": "-"
+      },
+      {
+       "type": "text",
+       "text": "word",
+       "marks": [
+        {
+         "type": "bold"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": "x"
+      },
+      {
+       "type": "text",
+       "text": "y",
+       "marks": [
+        {
+         "type": "italic"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "content": "**word**\\-**word**&#120;_y_",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "**word**\\-**word**&#120;_y_"
+   }
+  ]
+ },
+ "code": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "use "
+      },
+      {
+       "type": "text",
+       "text": "a`b",
+       "marks": [
+        {
+         "type": "code"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": " here"
+      }
+     ]
+    }
+   ]
+  },
+  "content": "use `a\\`b` here",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "use `a\\`b` here"
+   }
+  ]
+ },
+ "links": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "see "
+      },
+      {
+       "type": "text",
+       "text": "docs",
+       "marks": [
+        {
+         "type": "link",
+         "attrs": {
+          "href": "https://example.com/a?b=c",
+          "target": "_blank",
+          "rel": "noopener",
+          "class": null
+         }
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": " now"
+      }
+     ]
+    }
+   ]
+  },
+  "content": "see [docs](https://example.com/a?b=c) now",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "see [docs](https://example.com/a?b=c) now"
+   }
+  ]
+ },
+ "mention": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "hi "
+      },
+      {
+       "type": "text",
+       "text": "Ana",
+       "marks": [
+        {
+         "type": "fdMention",
+         "attrs": {
+          "mentionType": "person",
+          "mentionId": "npub1abc",
+          "label": "Ana"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "content": "hi @[Ana](mention:person:npub1abc)",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "hi @[Ana](mention:person:npub1abc)"
+   }
+  ]
+ },
+ "wiki": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "fdWikiLink",
+       "attrs": {
+        "documentId": "doc/1 2",
+        "title": "Plan [v2]"
+       }
+      },
+      {
+       "type": "text",
+       "text": " and "
+      },
+      {
+       "type": "fdWikiLink",
+       "attrs": {
+        "title": "Unbound"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "content": "[Plan \\[v2\\]](wiki:doc%2F1%202) and [[Unbound]]",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "[Plan \\[v2\\]](wiki:doc%2F1%202) and [[Unbound]]"
+   }
+  ]
+ },
+ "hardBreaks": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "line one"
+      },
+      {
+       "type": "hardBreak"
+      },
+      {
+       "type": "text",
+       "text": "line two "
+      },
+      {
+       "type": "hardBreak"
+      },
+      {
+       "type": "hardBreak"
+      },
+      {
+       "type": "text",
+       "text": "three"
+      }
+     ]
+    }
+   ]
+  },
+  "content": "line one<br>line two&#32;<br><br>three",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "line one<br>line two&#32;<br><br>three"
+   }
+  ]
+ },
+ "headings": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "heading",
+     "attrs": {
+      "level": 2,
+      "fdBlockId": "h1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "Title "
+      },
+      {
+       "type": "text",
+       "text": "x",
+       "marks": [
+        {
+         "type": "bold"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "heading",
+     "attrs": {
+      "level": 1,
+      "fdBlockId": "h2"
+     },
+     "content": []
+    }
+   ]
+  },
+  "content": "## Title **x**\n\n#",
+  "blocks": [
+   {
+    "id": "h1",
+    "type": "heading",
+    "text": "## Title **x**"
+   },
+   {
+    "id": "h2",
+    "type": "heading",
+    "text": "#"
+   }
+  ]
+ },
+ "codeBlock": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "codeBlock",
+     "attrs": {
+      "language": "swift",
+      "fdBlockId": "c1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "let x = 1\n// `a`"
+      }
+     ]
+    }
+   ]
+  },
+  "content": "```swift\nlet x = 1\n// `a`\n```",
+  "blocks": [
+   {
+    "id": "c1",
+    "type": "code",
+    "text": "```swift\nlet x = 1\n// `a`\n```"
+   }
+  ]
+ },
+ "quote": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "blockquote",
+     "attrs": {
+      "fdBlockId": "q1"
+     },
+     "content": [
+      {
+       "type": "paragraph",
+       "attrs": {
+        "fdBlockId": null
+       },
+       "content": [
+        {
+         "type": "text",
+         "text": "quoted"
+        }
+       ]
+      },
+      {
+       "type": "bulletList",
+       "content": [
+        {
+         "type": "listItem",
+         "content": [
+          {
+           "type": "paragraph",
+           "attrs": {
+            "fdBlockId": null
+           },
+           "content": [
+            {
+             "type": "text",
+             "text": "inner"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "content": "> quoted\n>\n> - inner",
+  "blocks": [
+   {
+    "id": "q1",
+    "type": "blockquote",
+    "text": "> quoted\n>\n> - inner"
+   }
+  ]
+ },
+ "lists": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "bulletList",
+     "attrs": {
+      "fdBlockId": "l1"
+     },
+     "content": [
+      {
+       "type": "listItem",
+       "content": [
+        {
+         "type": "paragraph",
+         "attrs": {
+          "fdBlockId": null
+         },
+         "content": [
+          {
+           "type": "text",
+           "text": "one"
+          }
+         ]
+        },
+        {
+         "type": "paragraph",
+         "attrs": {
+          "fdBlockId": null
+         },
+         "content": [
+          {
+           "type": "text",
+           "text": "second para"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "type": "listItem",
+       "content": [
+        {
+         "type": "paragraph",
+         "attrs": {
+          "fdBlockId": null
+         },
+         "content": [
+          {
+           "type": "text",
+           "text": "two"
+          }
+         ]
+        },
+        {
+         "type": "orderedList",
+         "attrs": {
+          "start": 1
+         },
+         "content": [
+          {
+           "type": "listItem",
+           "content": [
+            {
+             "type": "paragraph",
+             "attrs": {
+              "fdBlockId": null
+             },
+             "content": [
+              {
+               "type": "text",
+               "text": "nested"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "orderedList",
+     "attrs": {
+      "start": 9,
+      "fdBlockId": "l2"
+     },
+     "content": [
+      {
+       "type": "listItem",
+       "content": [
+        {
+         "type": "paragraph",
+         "attrs": {
+          "fdBlockId": null
+         },
+         "content": [
+          {
+           "type": "text",
+           "text": "nine"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "type": "listItem",
+       "content": [
+        {
+         "type": "paragraph",
+         "attrs": {
+          "fdBlockId": null
+         },
+         "content": [
+          {
+           "type": "text",
+           "text": "ten"
+          },
+          {
+           "type": "hardBreak"
+          },
+          {
+           "type": "text",
+           "text": "more"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "taskList",
+     "attrs": {
+      "fdBlockId": "l3"
+     },
+     "content": [
+      {
+       "type": "taskItem",
+       "attrs": {
+        "checked": true
+       },
+       "content": [
+        {
+         "type": "paragraph",
+         "attrs": {
+          "fdBlockId": null
+         },
+         "content": [
+          {
+           "type": "text",
+           "text": "done"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "type": "taskItem",
+       "attrs": {
+        "checked": false
+       },
+       "content": [
+        {
+         "type": "paragraph",
+         "attrs": {
+          "fdBlockId": null
+         },
+         "content": [
+          {
+           "type": "text",
+           "text": "todo"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "content": "- one\n  \n  second para\n- two\n  \n  1. nested\n\n9. nine\n10. ten<br>more\n\n- [x] done\n- [ ] todo",
+  "blocks": [
+   {
+    "id": "l1",
+    "type": "list",
+    "text": "- one\n  \n  second para\n- two\n  \n  1. nested"
+   },
+   {
+    "id": "l2",
+    "type": "list",
+    "text": "9. nine\n10. ten<br>more"
+   },
+   {
+    "id": "l3",
+    "type": "list",
+    "text": "- [x] done\n- [ ] todo"
+   }
+  ]
+ },
+ "table": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "table",
+     "attrs": {
+      "fdBlockId": "t1"
+     },
+     "content": [
+      {
+       "type": "tableRow",
+       "content": [
+        {
+         "type": "tableHeader",
+         "content": [
+          {
+           "type": "paragraph",
+           "attrs": {
+            "fdBlockId": null
+           },
+           "content": [
+            {
+             "type": "text",
+             "text": "A"
+            }
+           ]
+          }
+         ]
+        },
+        {
+         "type": "tableHeader",
+         "content": [
+          {
+           "type": "paragraph",
+           "attrs": {
+            "fdBlockId": null
+           },
+           "content": [
+            {
+             "type": "text",
+             "text": "B",
+             "marks": [
+              {
+               "type": "bold"
+              }
+             ]
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "type": "tableRow",
+       "content": [
+        {
+         "type": "tableCell",
+         "content": [
+          {
+           "type": "paragraph",
+           "attrs": {
+            "fdBlockId": null
+           },
+           "content": [
+            {
+             "type": "text",
+             "text": "1"
+            }
+           ]
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "content": "| A | **B** |\n| --- | --- |\n| 1 |  |",
+  "blocks": [
+   {
+    "id": "t1",
+    "type": "table",
+    "text": "| A | **B** |\n| --- | --- |\n| 1 |  |"
+   }
+  ]
+ },
+ "media": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "fdStorageImage",
+       "attrs": {
+        "objectId": "11111111-2222-4333-8444-555555555555",
+        "alt": "A [pic]"
+       }
+      }
+     ]
+    },
+    {
+     "type": "image",
+     "attrs": {
+      "src": "https://img.example/x.png",
+      "alt": ""
+     }
+    },
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b3"
+     },
+     "content": [
+      {
+       "type": "fdStorageFile",
+       "attrs": {
+        "src": "storage://abc",
+        "label": "Report.pdf"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "content": "![A \\[pic\\]](storage://11111111-2222-4333-8444-555555555555)\n\n![](https://img.example/x.png)\n\n[Report\\.pdf](storage://abc)",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "![A \\[pic\\]](storage://11111111-2222-4333-8444-555555555555)"
+   },
+   {
+    "id": "pm_a5558e43-c3d4-413e-8a1c-37b926b690f0",
+    "type": "image",
+    "text": "![](https://img.example/x.png)"
+   },
+   {
+    "id": "b3",
+    "type": "paragraph",
+    "text": "[Report\\.pdf](storage://abc)"
+   }
+  ]
+ },
+ "misc": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "horizontalRule",
+     "attrs": {
+      "fdBlockId": "r1"
+     }
+    },
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "e1"
+     },
+     "content": []
+    },
+    {
+     "type": "fdUploadPlaceholder",
+     "attrs": {
+      "label": "x"
+     }
+    },
+    {
+     "type": "customWidget",
+     "attrs": {
+      "fdBlockId": "w1",
+      "payload": {
+       "n": 1.5
+      }
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "inside custom"
+      }
+     ]
+    }
+   ]
+  },
+  "content": "---\n\ninside custom",
+  "blocks": [
+   {
+    "id": "r1",
+    "type": "horizontalRule",
+    "text": "---"
+   },
+   {
+    "id": "w1",
+    "type": "customWidget",
+    "text": "inside custom"
+   }
+  ]
+ },
+ "unicode": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "café "
+      },
+      {
+       "type": "text",
+       "text": "émph",
+       "marks": [
+        {
+         "type": "bold"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": " 🎉👍🏽 "
+      },
+      {
+       "type": "text",
+       "text": "日本",
+       "marks": [
+        {
+         "type": "italic"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": "語"
+      }
+     ]
+    }
+   ]
+  },
+  "content": "café **émph** 🎉👍🏽 _日本_&#35486;",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "café **émph** 🎉👍🏽 _日本_&#35486;"
+   }
+  ]
+ },
+ "unknownMark": {
+  "state": {
+   "type": "doc",
+   "content": [
+    {
+     "type": "paragraph",
+     "attrs": {
+      "fdBlockId": "b1"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "x",
+       "marks": [
+        {
+         "type": "highlight",
+         "attrs": {
+          "color": "yellow"
+         }
+        },
+        {
+         "type": "bold"
+        }
+       ]
+      },
+      {
+       "type": "text",
+       "text": "y"
+      }
+     ]
+    }
+   ]
+  },
+  "content": "**x**&#121;",
+  "blocks": [
+   {
+    "id": "b1",
+    "type": "paragraph",
+    "text": "**x**&#121;"
+   }
+  ]
+ }
+}
