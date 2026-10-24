@@ -25,6 +25,10 @@ public struct BackgroundRefreshReport: Codable, Sendable, Equatable {
     public var error: String?
 
     public static let stateKey = "background.last-refresh"
+
+    public init(result: Result, startedAt: Date, finishedAt: Date) {
+        self.result = result; self.startedAt = startedAt; self.finishedAt = finishedAt
+    }
 }
 
 extension WorkspaceSync {

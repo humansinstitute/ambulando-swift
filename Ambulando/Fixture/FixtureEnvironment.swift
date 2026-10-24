@@ -17,6 +17,14 @@ final class FixtureEnvironment {
     let directory: URL
     let tower: FixtureTower
     let secrets: VaultSecretStore
+    /// Real Keychain item under a fixture-only service, so the opt-in background credential path runs as in production.
+    let backgroundCredentials: BackgroundCredentialStore
+    /// In-process stand-in for the SSE route, fed from the fixture's event log.
+    let events: EventStreamTransport
+    private let live: Bool
+    private let simulateBackground: Bool
+    /// Result of the simulated background refresh (`-AmbulandoFixtureSimulateBackgroundRefresh`), shown on screen.
+    private(set) var backgroundSimulation: String?
     private let startLocked: Bool
     private let storm: Bool
     /// Control run for the storm check: same typing and probe window, no database writes.
@@ -32,14 +40,48 @@ final class FixtureEnvironment {
         set { withMutation(keyPath: \.rejectNextSend) { tower.rejectNext = newValue } }
     }
 
-    private init(directory: URL, startLocked: Bool, storm: Bool, stormControl: Bool, offline: Bool) {
+    private init(directory: URL, startLocked: Bool, storm: Bool, stormControl: Bool, offline: Bool, live: Bool = false, simulateBackground: Bool = false) {
         self.directory = directory
+        self.live = live
+        self.simulateBackground = simulateBackground
         self.startLocked = startLocked
         self.storm = storm || stormControl
         self.stormControl = stormControl
         tower = FixtureTower(file: directory.appendingPathComponent("fixture-tower.json"))
         tower.offline = offline
         secrets = KeychainVaultSecretStore(service: "studio.otherstuff.ambulando.native.fixture-vault.v1")
+        backgroundCredentials = KeychainBackgroundCredentialStore(service: Self.backgroundService)
+        events = FixtureEventStream(tower: tower)
+    }
+
+    nonisolated static let backgroundService = "studio.otherstuff.ambulando.native.fixture-background.v1"
+
+    /// `-AmbulandoFixtureLive`: another member posts in #general every few seconds (≤ 5 messages), delivered through
+    /// the event log and the SSE stand-in, so live updates are visible while the user types.
+    func startLiveIfRequested() {
+        guard live else { return }
+        let tower = tower
+        Task.detached(priority: .utility) {
+            for n in 1...5 {
+                try? await Task.sleep(for: .seconds(3))
+                tower.postAsMember(channel: FixtureTower.generalChannel, body: "Live update \(n) from Ana")
+            }
+        }
+    }
+
+    /// `-AmbulandoFixtureSimulateBackgroundRefresh`: runs the same pipeline a BGAppRefreshTask runs (the simulator
+    /// cannot be granted real background windows on demand). Labelled as a simulation in the UI.
+    func simulateBackgroundRefreshIfRequested(_ model: AppModel) async {
+        guard simulateBackground, backgroundSimulation == nil, let sync = model.sync, let connection = model.connection,
+              let workspace = await model.resolvedWorkspace() else { return }
+        backgroundSimulation = "simulated background refresh: running"
+        // As in the real transition: the foreground stream closes, then a change happens elsewhere, then iOS grants a window.
+        await model.liveStream?.stop()
+        _ = try? await sync.catchUpEventsAndWait(connection, workspace)
+        await sync.engine.waitUntilIdle()
+        tower.postAsMember(channel: FixtureTower.generalChannel, body: "Posted while the app was in the background")
+        let report = await model.runBackgroundRefresh(budget: .seconds(20))
+        backgroundSimulation = "simulated background refresh: \(report.result.rawValue) events=\(report.events)"
     }
 
     static func fromLaunchArguments() -> FixtureEnvironment? {
@@ -48,11 +90,15 @@ final class FixtureEnvironment {
         guard args.contains("-AmbulandoUITestFixture") else { return nil }
         let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("AmbulandoFixture", isDirectory: true)
-        if args.contains("-AmbulandoFixtureReset") { try? FileManager.default.removeItem(at: directory) }
+        if args.contains("-AmbulandoFixtureReset") {
+            try? FileManager.default.removeItem(at: directory)
+            try? KeychainBackgroundCredentialStore(service: backgroundService).delete()
+        }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return FixtureEnvironment(directory: directory, startLocked: args.contains("-AmbulandoFixtureLocked"),
                                   storm: args.contains("-AmbulandoFixtureStorm"), stormControl: args.contains("-AmbulandoFixtureStormControl"),
-                                  offline: args.contains("-AmbulandoFixtureOffline"))
+                                  offline: args.contains("-AmbulandoFixtureOffline"), live: args.contains("-AmbulandoFixtureLive"),
+                                  simulateBackground: args.contains("-AmbulandoFixtureSimulateBackgroundRefresh"))
         #else
         return nil
         #endif
@@ -148,6 +194,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     /// Edits and deletions of messages, by id (persisted with the posted messages).
     private var revised: [String: [String: Any]] = [:]
     private var requests: [String: [String: Any]] = [:]
+    /// Tower outbox event log (`GET /events`, the SSE stand-in), persisted with the posted messages.
+    private var eventLog: [[String: Any]] = []
     private var _offline = false, _rejectNext = false
     private var _actor = ""
 
@@ -163,13 +211,14 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
                                   file: file.deletingLastPathComponent().appendingPathComponent("fixture-work-lab.json"))
         if let data = try? Data(contentsOf: file), let saved = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             posted = (saved["posted"] as? [[String: Any]]) ?? []
+            eventLog = (saved["events"] as? [[String: Any]]) ?? []
             revised = (saved["revised"] as? [String: [String: Any]]) ?? [:]
             for row in posted { if let id = row["client_request_id"] as? String { requests[id] = row } }
         }
     }
 
     private func persist() {
-        if let data = try? JSONSerialization.data(withJSONObject: ["posted": posted, "revised": revised]) { try? data.write(to: file, options: .atomic) }
+        if let data = try? JSONSerialization.data(withJSONObject: ["posted": posted, "revised": revised, "events": eventLog]) { try? data.write(to: file, options: .atomic) }
     }
 
     private static func uuid(_ n: Int, _ prefix: String) -> String { String(format: "\(prefix)-0000-4000-8000-%012d", n) }
@@ -282,6 +331,13 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             }
         case ("POST", 3, "channels") where rest[2] == "messages":
             return try post(request, workspace: w, channel: rest[1])
+        case ("GET", 1, "events"):
+            guard let after = Self.eventRow(q("cursor")) else { return (400, ["code": "validation_error"]) }
+            let page = events(workspace: w, after: after, limit: min(200, Int(q("limit") ?? "50") ?? 50))
+            let next: Any = (page.last?["cursor"] as? String) ?? q("cursor") ?? NSNull()
+            return (200, ["events": page, "next_cursor": next])
+        case ("GET", 1, "sync"):
+            return (200, ["mode": "snapshot", "through_cursor": Self.eventCursor(eventHead), "channel_bundles": []])
         case ("GET", 2, "messages"):
             return lock.withLock { allMessages().first { $0["id"] as? String == rest[1] }.map { (200, ["message": $0]) } ?? (404, ["code": "message_not_found"]) }
         case ("PATCH", 2, "messages"), ("DELETE", 2, "messages"):
@@ -319,10 +375,45 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
                                       "attachments": attachments, "metadata": ["attachments": attachments]]
             posted.append(row)
             if let requestId { requests[requestId] = row }
+            emitLocked(workspace: w, channel: c, type: "message", id: id, rowVersion: 1)
             persist()
             var reply = row
             reply["thread_source_message_id"] = nil   // like Tower's create reply
             return (201, ["message": reply, "created": true, "replayed": false])
+        }
+    }
+
+    static func eventCursor(_ row: Int) -> String { Data("fixture-event:\(row)".utf8).base64EncodedString() }
+    static func eventRow(_ cursor: String?) -> Int? {
+        guard let cursor else { return 0 }
+        guard let text = Data(base64Encoded: cursor).map({ String(decoding: $0, as: UTF8.self) }), text.hasPrefix("fixture-event:") else { return nil }
+        return Int(text.dropFirst("fixture-event:".count))
+    }
+
+    /// Appends an event; the caller holds `lock`.
+    private func emitLocked(workspace: String, channel: String?, type: String, id: String?, rowVersion: Int?, operation: String = "created") {
+        let row = eventLog.count + 1
+        eventLog.append(["id": UUID().uuidString.lowercased(), "cursor": Self.eventCursor(row), "row_version": row, "workspace_id": workspace,
+                         "scope_id": NSNull(), "channel_id": channel ?? NSNull(), "entity_type": type, "entity_id": id ?? NSNull(),
+                         "operation": operation, "entity_row_version": rowVersion ?? NSNull(), "payload": [:], "event_type": "flightdeck_pg.\(type).\(operation)"])
+    }
+
+    func events(workspace: String, after row: Int, limit: Int) -> [[String: Any]] {
+        lock.withLock { Array(eventLog.filter { ($0["workspace_id"] as? String) == workspace && ($0["row_version"] as! Int) > row }.prefix(limit)) }
+    }
+
+    var eventHead: Int { lock.withLock { eventLog.count } }
+
+    /// Another member (Ana) posts a new conversation, as if from another device.
+    func postAsMember(channel: String, body: String) {
+        lock.withLock {
+            let id = UUID().uuidString.lowercased()
+            let now = ISO8601DateFormatter.fixture.string(from: Date())
+            posted.append(["id": id, "workspace_id": Self.studio, "channel_id": channel, "thread_id": UUID().uuidString.lowercased(),
+                           "thread_source_message_id": id, "body": body, "client_request_id": NSNull(), "record_state": "active", "row_version": 1,
+                           "sender_npub": Self.ana, "created_by_actor_label": "Ana", "created_at": now, "updated_at": now])
+            emitLocked(workspace: Self.studio, channel: channel, type: "message", id: id, rowVersion: 1)
+            persist()
         }
     }
 
@@ -452,4 +543,44 @@ extension ISO8601DateFormatter {
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
     }()
+}
+
+/// SSE stand-in for sample-data mode: speaks the same frames as Tower's `/events/stream` (connected, events with ids,
+/// heartbeat comments), reading the fixture event log. Requests must be NIP-98 signed like the real route.
+final class FixtureEventStream: EventStreamTransport, @unchecked Sendable {
+    let tower: FixtureTower
+    init(tower: FixtureTower) { self.tower = tower }
+
+    func open(_ request: URLRequest) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
+        if tower.offline { throw URLError(.notConnectedToInternet) }
+        let url = request.url!
+        let authorized = request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Nostr ") == true
+        let parts = url.path.split(separator: "/").map(String.init)
+        let cursor = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "cursor" }?.value
+        let status = !authorized ? 401 : (parts.count >= 6 && parts.last == "stream" ? (FixtureTower.eventRow(cursor) == nil ? 400 : 200) : 404)
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/event-stream"])!
+        let workspace = parts.count >= 5 ? parts[4] : ""
+        let tower = self.tower
+        let stream = AsyncThrowingStream<Data, Error> { continuation in
+            let task = Task {
+                guard status == 200, var after = FixtureTower.eventRow(cursor) else { continuation.finish(); return }
+                continuation.yield(Data("event: connected\ndata: {\"cursor\":\"\(cursor ?? "")\",\"poll_ms\":1000}\n\n".utf8))
+                var beats = 0
+                while !Task.isCancelled {
+                    if tower.offline { continuation.finish(throwing: URLError(.networkConnectionLost)); return }
+                    for event in tower.events(workspace: workspace, after: after, limit: 50) {
+                        let data = (try? JSONSerialization.data(withJSONObject: event)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
+                        after = event["row_version"] as? Int ?? after
+                        continuation.yield(Data("id: \(after)\nevent: flightdeck_pg.event\ndata: \(data)\n\n".utf8))
+                    }
+                    try? await Task.sleep(for: .milliseconds(500))
+                    beats += 1
+                    if beats % 20 == 0 { continuation.yield(Data(": heartbeat\n\n".utf8)) }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+        return (response, stream)
+    }
 }

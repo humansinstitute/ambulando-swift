@@ -2,22 +2,24 @@ import SwiftUI
 
 @main
 struct AmbulandoApp: App {
-    @State private var model = AppModel()
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @AppStorage("appearance") private var appearance = AppearancePreference.system.rawValue
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environment(model)
+                .environment(delegate.model)
                 .tint(Amb.primary)
                 .preferredColorScheme(AppearancePreference(rawValue: appearance)?.colorScheme)
-                .task { await model.start() }
+                .task { await delegate.model.start() }
         }
         .onChange(of: scenePhase) { _, phase in
-            // Foreground resume: refresh the visible workspace and resume any unsent messages.
-            // Suspended-state refresh (BackgroundTasks) is not part of this build.
-            if phase == .active { model.refresh(force: false); model.kickOutbox() }
+            switch phase {
+            case .active: delegate.model.sceneDidBecomeActive()
+            case .background: delegate.model.sceneDidEnterBackground()
+            default: break
+            }
         }
     }
 }

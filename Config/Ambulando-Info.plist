@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged with the generated Info.plist (GENERATE_INFOPLIST_FILE). Only keys Xcode cannot generate live here. -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>studio.otherstuff.ambulando.native.refresh</string>
+	</array>
+	<!-- "fetch" is required for BGAppRefreshTask. No audio, location, VoIP or other keep-alive modes. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
+</dict>
+</plist>

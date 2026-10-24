@@ -212,6 +212,8 @@ public final class URLSessionTransferBackend: NSObject, TransferBackend, URLSess
     private var handler: (@Sendable (String, Int?, String?, URL?) -> Void)?
     private var downloaded: [Int: URL] = [:]
     private var eventsCompletion: (() -> Void)?
+    /// The session finished delivering events before the app handed over the system's completion handler.
+    private var eventsFinishedEarly = false
 
     public init(directory: URL, identifier: String = URLSessionTransferBackend.identifier) {
         self.directory = directory
@@ -228,7 +230,14 @@ public final class URLSessionTransferBackend: NSObject, TransferBackend, URLSess
     public func setCompletionHandler(_ handler: @escaping @Sendable (String, Int?, String?, URL?) -> Void) { lock.withLock { self.handler = handler } }
 
     /// Stores the system's completion handler from `application(_:handleEventsForBackgroundURLSession:completionHandler:)`.
-    public func setEventsCompletion(_ completion: @escaping () -> Void) { lock.withLock { eventsCompletion = completion } }
+    public func setEventsCompletion(_ completion: @escaping () -> Void) {
+        let runNow = lock.withLock { () -> Bool in
+            if eventsFinishedEarly { eventsFinishedEarly = false; return true }
+            eventsCompletion = completion
+            return false
+        }
+        if runNow { DispatchQueue.main.async(execute: completion) }
+    }
 
     public func startUpload(_ request: URLRequest, file: URL, description: String) {
         precondition(request.value(forHTTPHeaderField: "Authorization") == nil, "object-store transfers are never signed")
@@ -271,7 +280,11 @@ public final class URLSessionTransferBackend: NSObject, TransferBackend, URLSess
     }
 
     public func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        let completion = lock.withLock { () -> (() -> Void)? in defer { eventsCompletion = nil }; return eventsCompletion }
+        let completion = lock.withLock { () -> (() -> Void)? in
+            defer { eventsCompletion = nil }
+            if eventsCompletion == nil { eventsFinishedEarly = true }
+            return eventsCompletion
+        }
         if let completion { DispatchQueue.main.async(execute: completion) }
     }
 }

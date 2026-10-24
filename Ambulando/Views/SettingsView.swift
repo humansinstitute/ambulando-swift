@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var confirmRemove = false
     @State private var confirmDisconnect = false
     @State private var unsent = 0
+    @State private var live: LiveStatus?
 
     private var version: String {
         let info = Bundle.main.infoDictionary
@@ -48,6 +49,7 @@ struct SettingsView: View {
                         }
                     }
                 }
+                BackgroundSection(live: live)
                 if let fixture = model.fixture { FixtureControls(fixture: fixture) }
                 Section("Appearance") {
                     Picker("Theme", selection: $appearance) {
@@ -57,7 +59,7 @@ struct SettingsView: View {
                 }
                 Section {
                     LabeledContent("Version", value: version)
-                    Text("Background refresh, push notifications and FIPS transport are not part of this build. Tower provides Web Push only; this app uses HTTPS only.")
+                    Text("Push notifications and FIPS transport are not part of this build. Tower provides Web Push only; this app uses HTTPS only.")
                         .font(.caption).foregroundStyle(Amb.mutedForeground)
                 } header: { Text("About") }
             }
@@ -66,6 +68,12 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .task {
+                while !Task.isCancelled {
+                    live = await model.liveStatus()
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
             .confirmationDialog("Remove identity?", isPresented: $confirmRemove, titleVisibility: .visible) {
                 Button("Remove identity", role: .destructive) { Task { await model.removeIdentity() } }
             } message: {

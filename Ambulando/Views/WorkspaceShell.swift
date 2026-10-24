@@ -108,6 +108,7 @@ struct FixtureBanner: View {
                 Text("Sample data on this iPhone. Not connected to a Tower.").font(.caption.weight(.semibold))
                     .accessibilityIdentifier("fixture.banner")
                 if let storm = fixture.stormStatus { Text(storm).font(.caption2.monospaced()).accessibilityIdentifier("fixture.storm") }
+                if let simulated = fixture.backgroundSimulation { Text(simulated).font(.caption2.monospaced()).accessibilityIdentifier("fixture.background") }
             }
             .foregroundStyle(Amb.warning)
             .padding(.horizontal, 16).padding(.vertical, 6)
