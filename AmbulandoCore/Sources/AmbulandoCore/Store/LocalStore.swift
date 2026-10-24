@@ -212,8 +212,8 @@ public actor StoreWriter {
     /// Upserts scopes. When `complete`, rows the actor can no longer see are removed with their channels.
     @discardableResult
     public func upsertScopes(workspaceId: String, _ records: [ScopeRecord], complete: Bool) async throws -> Int {
-        let changed: Int = try db.transaction {
-            var changed = 0
+        let (changed, purged): (Int, Bool) = try db.transaction {
+            var changed = 0, purged = false
             let s = try db.prepare("""
             INSERT INTO scopes(workspace_id, id, name, kind, description, default_channel_id, row_version, updated_at, raw)
             VALUES(?,?,?,?,?,?,?,?,?)
@@ -233,21 +233,26 @@ public actor StoreWriter {
                 var gone: [String] = []
                 while try existing.step() { if let id = existing.text(0), !keep.contains(id) { gone.append(id) } }
                 for id in gone {
+                    let channels = try db.prepare("SELECT id FROM channels WHERE workspace_id = ? AND scope_id = ?")
+                    try channels.bind([.text(workspaceId), .text(id)])
+                    var channelIds: [String] = []
+                    while try channels.step() { if let c = channels.text(0) { channelIds.append(c) } }
+                    for c in channelIds { try purgeChannelContent(workspaceId: workspaceId, channelId: c); purged = true }
                     try db.prepare("DELETE FROM scopes WHERE workspace_id = ? AND id = ?").run([.text(workspaceId), .text(id)])
                     try db.prepare("DELETE FROM channels WHERE workspace_id = ? AND scope_id = ?").run([.text(workspaceId), .text(id)])
                     changed += 1
                 }
             }
-            return changed
+            return (changed, purged)
         }
-        if changed > 0 { await emit([ChangeKey(.scopes, workspaceId), ChangeKey(.channels, workspaceId)]) }
+        if changed > 0 { await emit(purged ? Self.channelContentKeys(workspaceId).union([ChangeKey(.scopes, workspaceId)]) : [ChangeKey(.scopes, workspaceId), ChangeKey(.channels, workspaceId)]) }
         return changed
     }
 
     @discardableResult
     public func upsertChannels(workspaceId: String, scopeId: String, _ records: [ChannelRecord], complete: Bool) async throws -> Int {
-        let changed: Int = try db.transaction {
-            var changed = 0
+        let (changed, purged): (Int, Bool) = try db.transaction {
+            var changed = 0, purged = false
             let s = try db.prepare("""
             INSERT INTO channels(workspace_id, id, scope_id, name, kind, position, row_version, updated_at, raw) VALUES(?,?,?,?,?,?,?,?,?)
             ON CONFLICT(workspace_id, id) DO UPDATE SET scope_id=excluded.scope_id, name=excluded.name, kind=excluded.kind,
@@ -266,14 +271,33 @@ public actor StoreWriter {
                 var gone: [String] = []
                 while try existing.step() { if let id = existing.text(0), !keep.contains(id) { gone.append(id) } }
                 for id in gone {
+                    try purgeChannelContent(workspaceId: workspaceId, channelId: id)
+                    purged = true
                     try db.prepare("DELETE FROM channels WHERE workspace_id = ? AND id = ?").run([.text(workspaceId), .text(id)])
                     changed += 1
                 }
             }
-            return changed
+            return (changed, purged)
         }
-        if changed > 0 { await emit([ChangeKey(.channels, workspaceId)]) }
+        if changed > 0 { await emit(purged ? Self.channelContentKeys(workspaceId) : [ChangeKey(.channels, workspaceId)]) }
         return changed
+    }
+
+    static func channelContentKeys(_ w: String) -> Set<ChangeKey> {
+        Set([StoreTable.channels, .messages, .threads, .tasks, .comments, .docs, .docBodies, .files, .folders, .viewStates, .reactions].map { ChangeKey($0, w) })
+    }
+
+    /// Removes everything stored for a channel the actor can no longer see (access loss or archive). Drafts and unsent
+    /// rows stay: they belong to the user and show as failed if Tower refuses them.
+    func purgeChannelContent(workspaceId: String, channelId: String) throws {
+        let w = SQLValue.text(workspaceId), c = SQLValue.text(channelId)
+        try db.prepare("DELETE FROM reactions WHERE workspace_id = ? AND target_id IN (SELECT id FROM messages WHERE workspace_id = ? AND channel_id = ?)").run([w, w, c])
+        try db.prepare("DELETE FROM comments WHERE workspace_id = ? AND parent = 'task' AND parent_id IN (SELECT id FROM tasks WHERE workspace_id = ? AND channel_id = ?)").run([w, w, c])
+        try db.prepare("DELETE FROM comments WHERE workspace_id = ? AND parent = 'doc' AND parent_id IN (SELECT id FROM docs WHERE workspace_id = ? AND channel_id = ?)").run([w, w, c])
+        try db.prepare("DELETE FROM doc_bodies WHERE workspace_id = ? AND doc_id IN (SELECT id FROM docs WHERE workspace_id = ? AND channel_id = ?)").run([w, w, c])
+        for table in ["messages", "threads", "tasks", "docs", "files", "folders", "view_states", "channel_sync"] {
+            try db.prepare("DELETE FROM \(table) WHERE workspace_id = ? AND channel_id = ?").run([w, c])
+        }
     }
 
     /// Upserts one batch of messages in a single transaction. Callers keep batches ≤ 500 rows

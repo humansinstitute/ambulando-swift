@@ -74,9 +74,13 @@ public struct OutboxSender: Sendable {
     public let transport: HTTPTransport
     /// Directory holding staged attachment bytes (privacy-stripped images) until their message is accepted.
     public let staging: URL?
+    /// Background transfers for presigned attachment uploads (nil: in-process).
+    public let transfers: BackgroundTransfers?
 
-    public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport, staging: URL? = nil) {
+    public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport, staging: URL? = nil,
+                transfers: BackgroundTransfers? = nil) {
         self.store = store; self.engine = engine; self.identity = identity; self.transport = transport; self.staging = staging
+        self.transfers = transfers
     }
 
     public static func key(_ connection: ConnectionRecord) -> String { "outbox:\(connection.id)" }
@@ -164,7 +168,7 @@ public struct OutboxSender: Sendable {
                 try await identity.requireSigner(npub: item.signerNpub)
                 let ready: OutboxItem
                 do {
-                    ready = try await uploadAttachments(item, api: TowerAPI(client: client))
+                    ready = try await uploadAttachments(item, api: TowerAPI(client: client, transfers: transfers))
                 } catch {
                     if Task.isCancelled || error is CancellationError { throw CancellationError() }
                     let permanent = error is FileTransferError

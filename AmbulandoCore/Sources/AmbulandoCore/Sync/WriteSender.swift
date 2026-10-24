@@ -25,9 +25,13 @@ public struct WriteSender: Sendable {
     public let identity: IdentityService
     public let transport: HTTPTransport
     public let staging: URL
+    /// Background transfers for presigned uploads (nil: uploads run in-process).
+    public let transfers: BackgroundTransfers?
 
-    public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport, staging: URL) {
+    public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport, staging: URL,
+                transfers: BackgroundTransfers? = nil) {
         self.store = store; self.engine = engine; self.identity = identity; self.transport = transport; self.staging = staging
+        self.transfers = transfers
     }
 
     public static func key(_ connection: ConnectionRecord) -> String { "writes:\(connection.id)" }
@@ -53,7 +57,7 @@ public struct WriteSender: Sendable {
     func drain(_ connection: ConnectionRecord) async throws {
         guard case .unlocked(let npub) = await identity.state, npub == connection.signerNpub else { return }
         let client = TowerClient(origin: try TowerOrigin(connection.origin), transport: transport, signer: identity)
-        let api = TowerAPI(client: client)
+        let api = TowerAPI(client: client, transfers: transfers)
         var blocked = Set<String>()
         var nextRetry: Int?
         for item in try await store.reader.writes(connectionId: connection.id, signerNpub: npub) {

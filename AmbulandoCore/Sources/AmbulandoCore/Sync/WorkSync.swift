@@ -30,7 +30,7 @@ extension WorkspaceSync {
         let sync = self
         for channel in channels {
             await engine.enqueue(Self.tasksKey(workspace.id, channel), priority: priority, force: force) {
-                try await sync.identity.requireSigner(npub: connection.signerNpub)
+                try await sync.identity.requireReader(npub: connection.signerNpub)
                 let tasks = try await sync.api(origin: try TowerOrigin(connection.origin)).channelTasks(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channel)
                 try Task.checkCancellation()
                 try await sync.store.writer.upsertTasks(workspaceId: workspace.id, tasks, completeChannel: channel)
@@ -43,7 +43,7 @@ extension WorkspaceSync {
     public func refreshTask(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, taskId: String, priority: SyncPriority = .user, force: Bool = false) async {
         let sync = self
         await engine.enqueue(Self.taskKey(workspace.id, taskId), priority: priority, force: force) {
-            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             let task = try await api.task(workspaceId: workspace.id, appNpub: workspace.appNpub, taskId: taskId)
             try await sync.store.writer.upsertTasks(workspaceId: workspace.id, [task])
@@ -61,7 +61,7 @@ extension WorkspaceSync {
         let sync = self
         for channel in channels {
             await engine.enqueue(Self.docsKey(workspace.id, channel), priority: priority, force: force) {
-                try await sync.identity.requireSigner(npub: connection.signerNpub)
+                try await sync.identity.requireReader(npub: connection.signerNpub)
                 let page = try await sync.api(origin: try TowerOrigin(connection.origin)).channelDocs(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channel)
                 try Task.checkCancellation()
                 // A possibly truncated page is never used to remove local documents.
@@ -75,7 +75,7 @@ extension WorkspaceSync {
     public func refreshDoc(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String, priority: SyncPriority = .user, force: Bool = false) async {
         let sync = self
         await engine.enqueue(Self.docKey(workspace.id, docId), priority: priority, force: force) {
-            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             let fetched = try await api.docBody(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: docId)
             try Task.checkCancellation()
@@ -95,7 +95,7 @@ extension WorkspaceSync {
         let sync = self
         for channel in channels {
             await engine.enqueue(Self.filesKey(workspace.id, channel), priority: priority, force: force) {
-                try await sync.identity.requireSigner(npub: connection.signerNpub)
+                try await sync.identity.requireReader(npub: connection.signerNpub)
                 let api = sync.api(origin: try TowerOrigin(connection.origin))
                 let files = try await api.channelFiles(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channel)
                 try Task.checkCancellation()
@@ -114,7 +114,7 @@ extension WorkspaceSync {
     public func refreshInbox(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, priority: SyncPriority = .visible, force: Bool = false) async {
         let sync = self
         await engine.enqueue(Self.inboxKey(workspace.id), priority: priority, force: force) {
-            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             let states = try await api.viewStates(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
@@ -155,7 +155,7 @@ extension WorkspaceSync {
         guard !targets.isEmpty else { return }
         let sync = self
         await engine.enqueue(Self.reactionsKey(workspace.id, scope), priority: priority) {
-            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             var all: [ReactionRecord] = []
             var done: [String] = []
@@ -205,6 +205,16 @@ public struct FileCache: Sendable {
         return url
     }
 
+    /// Moves a verified downloaded file into the cache.
+    func store(fileAt source: URL, for file: FileRecord) throws -> URL {
+        let url = url(for: file)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: url)
+        try FileManager.default.copyItem(at: source, to: url)
+        try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: url.path)
+        return url
+    }
+
     /// Removes cached content of one workspace (disconnect, workspace removal).
     public func purge(workspaceId: String) { try? FileManager.default.removeItem(at: root.appendingPathComponent(workspaceId, isDirectory: true)) }
 }
@@ -216,8 +226,19 @@ extension WorkspaceSync {
     public func download(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, file: FileRecord, cache: FileCache) async {
         let sync = self
         await engine.enqueue(Self.downloadKey(workspace.id, file.id), priority: .user, force: true) {
-            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
+            if let transfers = sync.transfers, let objectId = file.storageObjectId, let sha = file.sha256,
+               let presigned = try? await api.presignedDownloadURL(objectId: objectId), presigned.sha256 == nil || presigned.sha256 == sha {
+                // Unsigned background download from the object store; verified against the file's sha256 before caching.
+                let key = "download:" + file.id + ":" + sha
+                let downloaded = try await transfers.download(key: key, url: presigned.url, towerHost: api.client.origin.url.host)
+                defer { Task { await transfers.forget(key) } }
+                guard try SHA256Hex.ofFile(downloaded) == sha else { throw TowerError.malformed("file checksum") }
+                _ = try cache.store(fileAt: downloaded, for: file)
+                await sync.store.writer.touch([ChangeKey(.files, workspace.id)])
+                return
+            }
             let object = try await api.fileObject(workspaceId: workspace.id, appNpub: workspace.appNpub, fileId: file.id)
             try Task.checkCancellation()
             let current = FileRecord(workspaceId: file.workspaceId, id: file.id, scopeId: file.scopeId, channelId: file.channelId, folderId: file.folderId,

@@ -57,7 +57,7 @@ public actor SyncEngine {
     private var errors: [String: String] = [:]
     private var sequence: UInt64 = 0
     private var generation: UInt64 = 0
-    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+    private var idleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private var wakeTask: Task<Void, Never>?
     private var observers: [UUID: AsyncStream<SyncSnapshot>.Continuation] = [:]
 
@@ -144,10 +144,21 @@ public actor SyncEngine {
         resumeIdleWaitersIfIdle()
     }
 
+    /// Returns when nothing is queued or running, or when the calling task is cancelled (BG expiration).
     public func waitUntilIdle() async {
         if queue.isEmpty && running.isEmpty { return }
-        await withCheckedContinuation { idleWaiters.append($0) }
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { c in
+                if Task.isCancelled { c.resume(); return }
+                idleWaiters[id] = c
+            }
+        } onCancel: {
+            Task { await self.releaseIdleWaiter(id) }
+        }
     }
+
+    private func releaseIdleWaiter(_ id: UUID) { idleWaiters.removeValue(forKey: id)?.resume() }
 
     public func failureCount(_ key: String) -> Int { failures[key] ?? 0 }
 
@@ -216,7 +227,7 @@ public actor SyncEngine {
 
     private func resumeIdleWaitersIfIdle() {
         guard queue.isEmpty, running.isEmpty else { return }
-        let waiters = idleWaiters
+        let waiters = idleWaiters.values
         idleWaiters.removeAll()
         for waiter in waiters { waiter.resume() }
     }

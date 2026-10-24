@@ -142,6 +142,11 @@ public struct TowerClient: Sendable {
         return (response.statusCode, data)
     }
 
+    /// A signed request that the caller sends itself (the event stream). Same NIP-98 rules as `request`.
+    public func signed(method: String, path: String, query: [URLQueryItem], appNpub: String?, jsonBody: Data?) async throws -> URLRequest {
+        try await signedRequest(method: method, path: path, query: query, appNpub: appNpub, jsonBody: jsonBody)
+    }
+
     private func signedRequest(method: String, path: String, query: [URLQueryItem], appNpub: String?, jsonBody: Data?) async throws -> URLRequest {
         guard let signer else { throw IdentityError.locked }
         try Task.checkCancellation()

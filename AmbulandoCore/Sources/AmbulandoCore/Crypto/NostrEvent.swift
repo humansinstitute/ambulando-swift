@@ -72,4 +72,13 @@ public enum NostrSerialization {
 public enum SHA256Hex {
     public static func of(_ data: Data) -> String { Data(SHA256.hash(data: data)).hex }
     public static func of(_ string: String) -> String { of(Data(string.utf8)) }
+
+    /// Streams a file through SHA-256 in 1 MB reads (large downloads are never loaded whole).
+    public static func ofFile(_ url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+        return Data(hasher.finalize()).hex
+    }
 }

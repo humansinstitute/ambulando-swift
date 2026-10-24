@@ -168,6 +168,12 @@ public final class IdentityVault {
         publicKeyHex = nil
     }
 
+    /// A copy of the unlocked key for the user-enabled background credential only.
+    func secretCopy() throws -> Data {
+        guard let clear else { throw IdentityError.locked }
+        return Data(clear)
+    }
+
     public func sign(_ template: NostrEventTemplate) throws -> NostrEvent {
         guard let clear else { throw IdentityError.locked }
         let key = try P256K.Schnorr.PrivateKey(dataRepresentation: clear)
@@ -202,16 +208,32 @@ public enum IdentityState: Sendable, Equatable {
 }
 
 /// Actor isolating the vault: PBKDF2 and Schnorr signing never run on the main actor.
+///
+/// Two signing capabilities exist. The unlocked vault signs anything the app asks for. The optional background
+/// credential (see `BackgroundReadCredential`) is used only when the vault is locked, and only for NIP-98 GETs its
+/// policy allows; `state` still reports `.locked`, so the UI never treats it as an unlock.
 public actor IdentityService: EventSigner {
     private let vault: IdentityVault
+    private let backgroundStore: BackgroundCredentialStore?
+    private var reader: BackgroundReader?
 
-    public init(vaultURL: URL, secrets: VaultSecretStore = KeychainVaultSecretStore()) {
+    public init(vaultURL: URL, secrets: VaultSecretStore = KeychainVaultSecretStore(), background: BackgroundCredentialStore? = nil) {
         vault = IdentityVault(url: vaultURL, secrets: secrets)
+        backgroundStore = background
     }
 
     public var state: IdentityState {
         guard vault.exists, let hex = vault.publicKeyHex, let npub = NostrKeys.npub(publicKeyHex: hex) else { return .none }
         return vault.isUnlocked ? .unlocked(npub: npub) : .locked(npub: npub)
+    }
+
+    /// True while reads can be signed without the PIN (background credential loaded and matching this identity).
+    public var canReadWhileLocked: Bool { reader != nil }
+
+    /// Whether a background credential is stored for this identity (it may not be loaded yet).
+    public var backgroundReadEnabled: Bool {
+        guard let stored = try? backgroundStore?.read() else { return false }
+        return stored.publicKeyHex == vault.publicKeyHex
     }
 
     @discardableResult public func importIdentity(nsec: String, pin: String) throws -> IdentityState {
@@ -224,27 +246,83 @@ public actor IdentityService: EventSigner {
         return state
     }
 
+    /// Manual lock. Also revokes the background credential: nothing is signed until the PIN is entered again.
     @discardableResult public func lock() -> IdentityState {
         vault.lock()
+        reader = nil
+        try? backgroundStore?.delete()
         return state
     }
 
     @discardableResult public func remove() throws -> IdentityState {
+        reader = nil
+        try backgroundStore?.delete()
         try vault.remove()
         return state
     }
 
-    public func sign(_ template: NostrEventTemplate) throws -> NostrEvent { try vault.sign(template) }
-
-    public func publicKeyHex() throws -> String {
-        guard vault.isUnlocked, let hex = vault.publicKeyHex else { throw IdentityError.locked }
-        return hex
+    /// Stores the background credential for `origin` and the given workspaces. Requires the unlocked vault.
+    public func enableBackgroundRead(origin: TowerOrigin, workspaceIds: [String]) throws {
+        guard let backgroundStore else { throw IdentityError.keychainUnavailable }
+        guard let hex = vault.publicKeyHex else { throw IdentityError.missing }
+        let credential = BackgroundReadCredential(publicKeyHex: hex, secretKey: try vault.secretCopy(), origin: origin.description,
+                                                  workspaceIds: workspaceIds.compactMap(lowerUUID).sorted(),
+                                                  createdAt: ISO8601DateFormatter().string(from: Date()))
+        try backgroundStore.write(credential)
+        reader = BackgroundReader(credential: credential)
     }
 
-    /// Throws unless the unlocked identity is exactly `npub` (connection binding).
+    public func disableBackgroundRead() throws {
+        reader = nil
+        try backgroundStore?.delete()
+    }
+
+    /// Updates the pinned workspaces (after discovery while unlocked). Only an existing credential is changed.
+    public func updateBackgroundWorkspaces(origin: TowerOrigin, workspaceIds: [String]) throws {
+        guard vault.isUnlocked, let backgroundStore, let stored = try backgroundStore.read(), stored.publicKeyHex == vault.publicKeyHex,
+              stored.origin == origin.description else { return }
+        let ids = workspaceIds.compactMap(lowerUUID).sorted()
+        guard ids != stored.workspaceIds else { return }
+        var updated = stored
+        updated.workspaceIds = ids
+        try backgroundStore.write(updated)
+        reader = BackgroundReader(credential: updated)
+    }
+
+    /// Loads a stored background credential if it belongs to this identity (launch, including background launch).
+    @discardableResult public func loadBackgroundRead() -> Bool {
+        guard reader == nil else { return true }
+        guard let stored = try? backgroundStore?.read(), stored.publicKeyHex == vault.publicKeyHex else { return false }
+        reader = BackgroundReader(credential: stored)
+        return true
+    }
+
+    public func backgroundPolicy() -> ReadPolicy? { reader?.credential.policy }
+
+    public func sign(_ template: NostrEventTemplate) throws -> NostrEvent {
+        if vault.isUnlocked { return try vault.sign(template) }
+        guard let reader else { throw IdentityError.locked }
+        return try reader.sign(template)
+    }
+
+    public func publicKeyHex() throws -> String {
+        if vault.isUnlocked, let hex = vault.publicKeyHex { return hex }
+        if let reader { return reader.credential.publicKeyHex }
+        throw IdentityError.locked
+    }
+
+    /// Throws unless the unlocked identity is exactly `npub` (connection binding). Required for every write.
     public func requireSigner(npub: String) throws {
         guard case .unlocked(let current) = state else { throw IdentityError.locked }
         guard current == npub else { throw IdentityError.signerMismatch }
+    }
+
+    /// Like `requireSigner`, but also satisfied by the background credential of the same identity. For read jobs only;
+    /// the credential's policy still refuses anything but GETs on its pinned origin and workspaces.
+    public func requireReader(npub: String) throws {
+        if case .unlocked = state { return try requireSigner(npub: npub) }
+        guard let reader else { throw IdentityError.locked }
+        guard reader.npub == npub else { throw IdentityError.signerMismatch }
     }
 }
 

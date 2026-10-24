@@ -46,7 +46,9 @@ public struct NStackDescriptor: Sendable, Equatable, Decodable {
 /// Typed Tower reads used by the sync engine. Paths are built only from validated UUIDs.
 public struct TowerAPI: Sendable {
     public let client: TowerClient
-    public init(client: TowerClient) { self.client = client }
+    /// Background transfers for presigned object-store URLs; nil means in-process transfers.
+    public let transfers: BackgroundTransfers?
+    public init(client: TowerClient, transfers: BackgroundTransfers? = nil) { self.client = client; self.transfers = transfers }
 
     static func base(_ workspaceId: String) throws -> String {
         guard UUID(uuidString: workspaceId) != nil else { throw TowerError.unsafePath }

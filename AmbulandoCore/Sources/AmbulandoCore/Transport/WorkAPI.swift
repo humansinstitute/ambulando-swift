@@ -257,6 +257,14 @@ extension TowerAPI {
         return PreparedObject(objectId: id, uploadURL: upload)
     }
 
+    /// Presigned download URL of a storage object, when Tower offers one on another host (otherwise nil: the signed
+    /// Tower routes are used in-process).
+    public func presignedDownloadURL(objectId: String) async throws -> (url: URL, sha256: String?, size: Int?)? {
+        guard let meta = try await storageObject(objectId: objectId), let raw = meta["download_url"] as? String, let url = URL(string: raw),
+              (try? BackgroundTransfers.validate(url, towerHost: client.origin.url.host)) != nil else { return nil }
+        return (url, (meta["sha256_hex"] as? String)?.lowercased(), flexibleInt(meta["size_bytes"]))
+    }
+
     /// Storage metadata (`GET /api/v4/storage/:id`), or nil when the object is gone.
     public func storageObject(objectId: String) async throws -> [String: Any]? {
         do { return try object(try await client.request(path: "/api/v4/storage/" + Self.uuid(objectId)), "storage object") }
@@ -283,7 +291,12 @@ extension TowerAPI {
             return
         }
         guard url.scheme?.lowercased() == "https", !url.path.hasPrefix("/api/v4/") else { throw FileTransferError.unsafeUploadURL }
-        try await client.putUnsigned(url: url, body: bytes, contentType: contentType)
+        if let transfers {
+            // Background URLSession: continues while suspended; keyed by object id so a finished upload is not repeated.
+            try await transfers.upload(key: "upload:" + prepared.objectId, url: url, bytes: bytes, contentType: contentType, towerHost: towerHost)
+        } else {
+            try await client.putUnsigned(url: url, body: bytes, contentType: contentType)
+        }
     }
 
     public func completeStorage(objectId: String, sizeBytes: Int, sha256: String) async throws {

@@ -7,13 +7,19 @@ public struct WorkspaceSync: Sendable {
     public let engine: SyncEngine
     public let identity: IdentityService
     public let transport: HTTPTransport
+    /// Live-update state per workspace (event stream batches, poll requests, diagnostics).
+    public let live: LiveRegistry
+    /// Background `URLSession` transfers for presigned object-store URLs, when the app provides them.
+    public let transfers: BackgroundTransfers?
 
-    public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport) {
+    public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport,
+                live: LiveRegistry = LiveRegistry(), transfers: BackgroundTransfers? = nil) {
         self.store = store; self.engine = engine; self.identity = identity; self.transport = transport
+        self.live = live; self.transfers = transfers
     }
 
     func api(origin: TowerOrigin, signed: Bool = true) -> TowerAPI {
-        TowerAPI(client: TowerClient(origin: origin, transport: transport, signer: signed ? identity : nil))
+        TowerAPI(client: TowerClient(origin: origin, transport: transport, signer: signed ? identity : nil), transfers: transfers)
     }
 
     /// Reads the public descriptor for an origin the user typed. No identity is used.
@@ -32,11 +38,13 @@ public struct WorkspaceSync: Sendable {
     public func discover(_ connection: ConnectionRecord, priority: SyncPriority = .visible, force: Bool = false) async {
         let sync = self
         await engine.enqueue("discover:\(connection.id)", priority: priority, force: force) {
-            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            try await sync.identity.requireReader(npub: connection.signerNpub)
             let origin = try TowerOrigin(connection.origin)
             let workspaces = try await sync.api(origin: origin).workspaces()
             try Task.checkCancellation()
             try await sync.store.writer.replaceWorkspaces(connectionId: connection.id, workspaces)
+            // Keeps an enabled background credential pinned to exactly the workspaces this identity can see.
+            try? await sync.identity.updateBackgroundWorkspaces(origin: origin, workspaceIds: workspaces.map(\.id))
             for workspace in workspaces { await sync.refreshWorkspace(connection, workspace, priority: .background) }
         }
     }
@@ -45,7 +53,7 @@ public struct WorkspaceSync: Sendable {
     public func refreshWorkspace(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, priority: SyncPriority = .visible, force: Bool = false) async {
         let sync = self
         await engine.enqueue("scopes:\(workspace.id)", priority: priority, force: force) {
-            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             let scopes = try await api.scopes(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
@@ -53,7 +61,7 @@ public struct WorkspaceSync: Sendable {
             await sync.refreshDirectory(connection, workspace, priority: .background)
             for scope in scopes {
                 await sync.engine.enqueue("channels:\(workspace.id):\(scope.id)", priority: priority) {
-                    try await sync.identity.requireSigner(npub: connection.signerNpub)
+                    try await sync.identity.requireReader(npub: connection.signerNpub)
                     let channels = try await api.channels(workspaceId: workspace.id, scopeId: scope.id, appNpub: workspace.appNpub)
                     try Task.checkCancellation()
                     try await sync.store.writer.upsertChannels(workspaceId: workspace.id, scopeId: scope.id, channels, complete: true)

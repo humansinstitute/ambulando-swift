@@ -17,7 +17,7 @@ extension WorkspaceSync {
                                priority: SyncPriority = .visible, force: Bool = false) async {
         let sync = self
         await engine.enqueue(Self.messagesKey(workspace.id, channelId), priority: priority, force: force) {
-            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            try await sync.identity.requireReader(npub: connection.signerNpub)
             try await sync.runChannelCatchUp(connection, workspace, channelId: channelId, fromStart: force)
         }
     }
@@ -59,7 +59,7 @@ extension WorkspaceSync {
                               priority: SyncPriority = .user, force: Bool = false) async {
         let sync = self
         await engine.enqueue(Self.threadKey(workspace.id, threadId), priority: priority, force: force) {
-            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             var cursor: String?, keep = Set<String>(), last: MessageKey?, seen = Set<String>()
             let started = ISO8601DateFormatter.tower.string(from: Date())
@@ -87,7 +87,7 @@ extension WorkspaceSync {
                                  force: Bool = false) async {
         let sync = self
         await engine.enqueue("directory:\(workspace.id)", priority: priority, force: force) {
-            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             let members = try await api.members(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
