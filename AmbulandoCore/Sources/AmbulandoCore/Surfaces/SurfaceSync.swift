@@ -152,7 +152,7 @@ extension WorkspaceSync {
             try await sync.identity.requireReader(npub: connection.signerNpub)
             let wapps = try await sync.api(origin: try TowerOrigin(connection.origin)).personalWapps(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
-            try await sync.store.writer.replacePersonalWapps(workspaceId: workspace.id, wapps)
+            try await sync.store.writer.replacePersonalWapps(connectionId: connection.id, workspaceId: workspace.id, wapps)
         }
     }
 
@@ -166,7 +166,7 @@ extension WorkspaceSync {
             try await sync.identity.requireReader(npub: connection.signerNpub)
             let result = try await sync.api(origin: try TowerOrigin(connection.origin)).personalPins(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
-            try await sync.store.writer.upsertPins(workspaceId: workspace.id, result.pins, complete: true)
+            try await sync.store.writer.upsertPins(connectionId: connection.id, workspaceId: workspace.id, result.pins, complete: true)
         }
     }
 }

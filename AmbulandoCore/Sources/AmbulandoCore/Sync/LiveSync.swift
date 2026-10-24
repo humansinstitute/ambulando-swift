@@ -415,7 +415,7 @@ extension WorkspaceSync {
                 try await store.writer.replaceContextReferences(workspaceId: w, scopeId: scope, componentId: component, references)
             } catch where lost(error) { try await store.writer.removeContextComponent(workspaceId: w, id: component) }
         case .pins:
-            try await store.writer.upsertPins(workspaceId: w, try await api.personalPins(workspaceId: w, appNpub: app).pins, complete: true)
+            try await store.writer.upsertPins(connectionId: connection.id, workspaceId: w, try await api.personalPins(workspaceId: w, appNpub: app).pins, complete: true)
         case .agents:
             try await store.writer.replaceWorkspaceAgents(workspaceId: w, try await api.workspaceAgents(workspaceId: w, appNpub: app))
         case .agentActivity(let channel):
@@ -424,7 +424,7 @@ extension WorkspaceSync {
                 try await store.writer.replaceAgentActivities(workspaceId: w, channelId: channel, try await api.agentActivities(workspaceId: w, appNpub: app, channelId: channel))
             } catch where lost(error) { try await store.writer.replaceAgentActivities(workspaceId: w, channelId: channel, []) }
         case .toolbox:
-            try await store.writer.replacePersonalWapps(workspaceId: w, try await api.personalWapps(workspaceId: w, appNpub: app))
+            try await store.writer.replacePersonalWapps(connectionId: connection.id, workspaceId: w, try await api.personalWapps(workspaceId: w, appNpub: app))
         }
     }
 }

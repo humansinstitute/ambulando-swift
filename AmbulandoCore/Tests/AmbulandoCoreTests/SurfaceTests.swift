@@ -164,6 +164,8 @@ final class SurfaceTests: XCTestCase {
         XCTAssertEqual(doc.content, .document(docId: seeded.doc, excerpt: "# Build 7\nContext tree and canvas."))
         let denied = try XCTUnwrap(scene.naplets.first { $0.layout.z == 3 })
         XCTAssertEqual(denied.content, .denied)
+        XCTAssertEqual(denied.sourceType, "", "a locked naplet does not say what it points at")
+        XCTAssertEqual(denied.title, "Not available to you", "nor its title")
         XCTAssertEqual(denied.layout, CanvasLayout(x: -300, y: 400, width: 240, height: 180, z: 3), "a denied naplet keeps its frame")
         XCTAssertFalse(String(decoding: snapshot.bytes, as: UTF8.self).contains("secret"), "denied source content never reaches the phone")
         XCTAssertEqual(scene.elements.map(\.kind), [.arrow, .text])
@@ -204,6 +206,39 @@ final class SurfaceTests: XCTestCase {
         XCTAssertNil(gone)
         let list = try await h.store.reader.canvas(workspaceId: h.workspace.id, id: seeded.canvas)
         XCTAssertNil(list)
+    }
+
+    func testBoardScenesArePurgedWhenNoVisibleCanvasShowsThem() async throws {
+        let h = try await SurfaceHarness.make()
+        let seeded = seedCanvas(h)
+        await h.sync.refreshCanvas(h.connection, h.workspace, canvasId: seeded.canvas)
+        await h.idle()
+        var board = try await h.store.reader.boardScene(workspaceId: h.workspace.id, fileId: seeded.board.fileId)
+        XCTAssertNotNil(board)
+        // The board File becomes unreadable: Tower now projects the naplet as denied, so the stored scene goes.
+        h.tower.deny(record: seeded.board.fileId)
+        await h.sync.refreshCanvas(h.connection, h.workspace, canvasId: seeded.canvas, force: true)
+        await h.idle()
+        board = try await h.store.reader.boardScene(workspaceId: h.workspace.id, fileId: seeded.board.fileId)
+        XCTAssertNil(board, "no stored scene once no visible canvas shows the board")
+        // A fetch that completes after access was lost stores nothing.
+        try await h.store.writer.saveBoardScene(BoardSceneRecord(workspaceId: h.workspace.id, fileId: seeded.board.fileId, versionId: seeded.board.versionId,
+                                                                 sha256: SHA256Hex.of(seeded.board.bytes), bytes: seeded.board.bytes, fetchedAt: "now"))
+        board = try await h.store.reader.boardScene(workspaceId: h.workspace.id, fileId: seeded.board.fileId)
+        XCTAssertNil(board)
+        // Access back, then the whole canvas is hidden: definition, snapshot and scene all go.
+        h.tower.allow(record: seeded.board.fileId)
+        await h.sync.refreshCanvas(h.connection, h.workspace, canvasId: seeded.canvas, force: true)
+        await h.idle()
+        board = try await h.store.reader.boardScene(workspaceId: h.workspace.id, fileId: seeded.board.fileId)
+        XCTAssertNotNil(board)
+        h.tower.hide(canvas: seeded.canvas)
+        await h.sync.refreshCanvases(h.connection, h.workspace, force: true)
+        await h.idle()
+        board = try await h.store.reader.boardScene(workspaceId: h.workspace.id, fileId: seeded.board.fileId)
+        XCTAssertNil(board)
+        let snapshot = try await h.store.reader.canvasSnapshot(workspaceId: h.workspace.id, canvasId: seeded.canvas)
+        XCTAssertNil(snapshot)
     }
 
     func testCanvasEventsRefreshOnlyStoredCanvases() async throws {
@@ -279,6 +314,42 @@ final class SurfaceTests: XCTestCase {
         XCTAssertEqual(wrapped.elements.count, 1)
     }
 
+    func testExcalidrawLimitsAndCancellation() async throws {
+        XCTAssertThrowsError(try ExcalidrawScene.parse(Data(count: ExcalidrawScene.maxBytes + 1))) { XCTAssertEqual($0 as? ExcalidrawScene.ParseError, .tooLarge) }
+        let many = (0...ExcalidrawScene.maxElements).map { ["id": "e\($0)", "type": "rectangle", "version": 1] as [String: Any] }
+        XCTAssertThrowsError(try ExcalidrawScene.parse(Fixtures.json(["elements": many]))) { XCTAssertEqual($0 as? ExcalidrawScene.ParseError, .tooLarge) }
+        let big = Data(count: ExcalidrawScene.maxImageBytes + 1).base64EncodedString()
+        let scene = try ExcalidrawScene.parse(Fixtures.json([
+            "elements": [["id": "i", "type": "image", "fileId": "f", "x": 0, "y": 0, "width": 1, "height": 1, "version": 1]],
+            "files": ["f": ["id": "f", "mimeType": "image/png", "dataURL": "data:image/png;base64," + big]],
+        ]))
+        XCTAssertTrue(scene.elements.isEmpty)
+        XCTAssertEqual(scene.unsupported, ["image (larger than 6 MB)": 1])
+        // Closing a board while a large scene is parsed stops the work.
+        let bytes = Fixtures.json(["elements": (0..<5000).map { ["id": "e\($0)", "type": "rectangle", "version": 1] as [String: Any] }])
+        let task = Task.detached { () -> Error? in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do { _ = try ExcalidrawScene.parse(bytes); return nil } catch { return error }
+        }
+        let outcome = await task.value
+        XCTAssertTrue(outcome is CancellationError)
+    }
+
+    func testWebContentNavigationStaysOnItsOrigin() throws {
+        let origin = "https://artifacts.example"
+        XCTAssertEqual(WebContentPolicy.decide(URL(string: "https://artifacts.example/next"), within: origin, newWindow: false), .allow)
+        XCTAssertEqual(WebContentPolicy.decide(URL(string: "https://artifacts.example/popup"), within: origin, newWindow: true), .allow,
+                       "a same-origin new-window link loads in place")
+        // A server redirect is a new navigation to its target; another origin is refused (offered to Safari only).
+        XCTAssertEqual(WebContentPolicy.decide(URL(string: "https://login.example/redirected"), within: origin, newWindow: false),
+                       .refuse(offerExternal: URL(string: "https://login.example/redirected")))
+        XCTAssertEqual(WebContentPolicy.decide(URL(string: "http://artifacts.example/"), within: origin, newWindow: false), .refuse(offerExternal: nil))
+        XCTAssertEqual(WebContentPolicy.decide(URL(string: "javascript:alert(1)"), within: origin, newWindow: true), .refuse(offerExternal: nil))
+        XCTAssertEqual(WebContentPolicy.decide(URL(string: "https://evil.example@artifacts.example.attacker.example/"), within: origin, newWindow: false),
+                       .refuse(offerExternal: nil), "embedded credentials are never offered")
+        XCTAssertEqual(WebContentPolicy.decide(nil, within: origin, newWindow: true), .refuse(offerExternal: nil))
+    }
+
     // MARK: Agents
 
     func testAgentsAndActivityAreReadFromTowerRecordsPerChannel() async throws {
@@ -324,7 +395,7 @@ final class SurfaceTests: XCTestCase {
         h.tower.seedWapp(title: "Plain HTTP", launchURL: "http://insecure.example", sortOrder: 3, owner: TestKeys.npub)
         await h.sync.refreshToolbox(h.connection, h.workspace)
         await h.idle()
-        let wapps = try await h.store.reader.personalWapps(workspaceId: h.workspace.id)
+        let wapps = try await h.store.reader.personalWapps(connectionId: h.connection.id, workspaceId: h.workspace.id)
         XCTAssertEqual(wapps.map(\.title), ["Timesheets", "Artifacts", "Plain HTTP"])
         XCTAssertEqual(wapps[0].safeLaunchURL?.absoluteString, "https://time.example")
         XCTAssertNil(wapps[2].safeLaunchURL, "only HTTPS is opened")
@@ -362,7 +433,7 @@ final class SurfaceTests: XCTestCase {
         h.other.externalPin(type: "task", resource: r.task, pinned: true)
         await h.sync.refreshPins(h.connection, h.workspace)
         await h.idle()
-        let items = try await h.store.reader.pinnedItems(workspaceId: h.workspace.id)
+        let items = try await h.store.reader.pinnedItems(connectionId: h.connection.id, workspaceId: h.workspace.id)
         XCTAssertEqual(Set(items.map(\.pin.resourceType)), [.thread, .task, .channel], "an unpinned row is a tombstone, not a pin")
         let feed = h.transport.recorded.compactMap(\.url).filter { $0.path.hasSuffix("/record-sync/priority") }
         XCTAssertEqual(feed.count, 2, "two pages of two")
@@ -372,9 +443,9 @@ final class SurfaceTests: XCTestCase {
         let task = try XCTUnwrap(items.first { $0.pin.resourceType == .task })
         XCTAssertNil(task.title, "a task not stored on this phone has no title yet")
         XCTAssertEqual(task.channelId, Fixtures.channel1)
-        let tombstone = try await h.store.reader.pin(workspaceId: h.workspace.id, type: .document, resourceId: r.doc)
+        let tombstone = try await h.store.reader.pin(connectionId: h.connection.id, workspaceId: h.workspace.id, type: .document, resourceId: r.doc)
         XCTAssertEqual(tombstone?.pinned, false)
-        let other = try await h.store.reader.pinnedItems(workspaceId: Fixtures.workspaceId2)
+        let other = try await h.store.reader.pinnedItems(connectionId: h.connection.id, workspaceId: Fixtures.workspaceId2)
         XCTAssertTrue(other.isEmpty)
 
         // An expired continuation restarts the pass once instead of failing.
@@ -400,7 +471,7 @@ final class SurfaceTests: XCTestCase {
         var pending = try await h.work.pending()
         XCTAssertTrue(pending.isEmpty, "\(pending.map { ($0.state, $0.lastError) })")
         XCTAssertEqual(h.tower.pinRows().filter { $0["resource_id"] as? String == r.thread }.first?["row_version"] as? Int, 1, "applied once")
-        let thread = try await h.store.reader.pin(workspaceId: h.workspace.id, type: .thread, resourceId: r.thread)
+        let thread = try await h.store.reader.pin(connectionId: h.connection.id, workspaceId: h.workspace.id, type: .thread, resourceId: r.thread)
         XCTAssertEqual(thread?.pinned, true, "acknowledged row stored")
 
         // 2. Another device pinned and unpinned the task meanwhile (version 2); this phone still believes version 0.
@@ -430,6 +501,29 @@ final class SurfaceTests: XCTestCase {
         XCTAssertFalse(h.tower.pinRows().contains { $0["resource_id"] as? String == r.forbidden && $0["pinned"] as? Bool == true })
     }
 
+    func testPinsAndToolboxAreBoundToTheirConnection() async throws {
+        let h = try await SurfaceHarness.make()
+        let r = pinnable(h)
+        h.tower.externalPin(type: "task", resource: r.task, pinned: true)
+        h.tower.seedWapp(title: "Mine", launchURL: "https://mine.example", sortOrder: 0, owner: TestKeys.npub)
+        await h.sync.refreshPins(h.connection, h.workspace)
+        await h.sync.refreshToolbox(h.connection, h.workspace)
+        await h.idle()
+        // A second connection (another origin/signer) to the same workspace id sees none of them.
+        let other = try await h.store.writer.saveConnection(ConnectionRecord(origin: try TowerOrigin("https://other-tower.example"),
+                                                                             signerNpub: Bech32.encode(hrp: "npub", data: Data(repeating: 0x42, count: 32)), towerNpub: nil))
+        let foreignPins = try await h.store.reader.pinnedItems(connectionId: other.id, workspaceId: h.workspace.id)
+        let foreignWapps = try await h.store.reader.personalWapps(connectionId: other.id, workspaceId: h.workspace.id)
+        XCTAssertTrue(foreignPins.isEmpty); XCTAssertTrue(foreignWapps.isEmpty)
+        let mine = try await h.store.reader.pinnedItems(connectionId: h.connection.id, workspaceId: h.workspace.id)
+        XCTAssertEqual(mine.count, 1)
+        // Disconnecting removes them with the connection.
+        try await h.store.writer.removeConnection(id: h.connection.id)
+        let afterPins = try await h.store.reader.pinnedItems(connectionId: h.connection.id, workspaceId: h.workspace.id)
+        let afterWapps = try await h.store.reader.personalWapps(connectionId: h.connection.id, workspaceId: h.workspace.id)
+        XCTAssertTrue(afterPins.isEmpty); XCTAssertTrue(afterWapps.isEmpty)
+    }
+
     // MARK: Retention and isolation
 
     func testBuildSixStoreUpgradesToSchemaFourKeepingEverything() async throws {
@@ -451,7 +545,7 @@ final class SurfaceTests: XCTestCase {
         XCTAssertEqual(connections.map(\.origin), ["https://tower.example"])
         let selected = try await reopened.reader.state("selected.connection")
         XCTAssertEqual(selected, connections.first?.id)
-        let pins = try await reopened.reader.pinnedItems(workspaceId: Fixtures.workspaceId)
+        let pins = try await reopened.reader.pinnedItems(connectionId: connections.first!.id, workspaceId: Fixtures.workspaceId)
         XCTAssertTrue(pins.isEmpty, "new tables exist and start empty")
     }
 

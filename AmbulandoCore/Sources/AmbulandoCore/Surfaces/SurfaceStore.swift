@@ -6,7 +6,7 @@ import Foundation
 
 extension Schema {
     /// Workspace-scoped v4 tables, cleared with the workspace.
-    static let v4WorkspaceTables = ["context_components", "context_references", "canvases", "canvas_snapshots", "board_scenes",
+    static let v4WorkspaceTables = ["context_components", "context_references", "canvases", "canvas_snapshots", "board_scenes", "board_links",
                                     "workspace_agents", "agent_activities", "personal_wapps", "pins"]
 
     static func migrateV4(_ db: SQLiteConnection) throws {
@@ -31,6 +31,9 @@ extension Schema {
         CREATE TABLE board_scenes(
           workspace_id TEXT NOT NULL, file_id TEXT NOT NULL, version_id TEXT NOT NULL, sha256 TEXT NOT NULL, bytes BLOB NOT NULL, fetched_at TEXT NOT NULL,
           PRIMARY KEY(workspace_id, file_id));
+        CREATE TABLE board_links(
+          workspace_id TEXT NOT NULL, canvas_id TEXT NOT NULL, file_id TEXT NOT NULL,
+          PRIMARY KEY(workspace_id, canvas_id, file_id));
         CREATE TABLE workspace_agents(
           workspace_id TEXT NOT NULL, id TEXT NOT NULL, agent_npub TEXT NOT NULL, display_name TEXT NOT NULL, sort_order INTEGER NOT NULL,
           visible INTEGER NOT NULL, row_version INTEGER NOT NULL, updated_at TEXT NOT NULL, raw BLOB NOT NULL,
@@ -41,14 +44,16 @@ extension Schema {
           PRIMARY KEY(workspace_id, id));
         CREATE INDEX agent_activities_channel ON agent_activities(workspace_id, channel_id, updated_at);
         CREATE TABLE personal_wapps(
+          connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
           workspace_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL, sort_order INTEGER NOT NULL, status TEXT NOT NULL,
           row_version INTEGER NOT NULL, updated_at TEXT NOT NULL, raw BLOB NOT NULL,
-          PRIMARY KEY(workspace_id, id));
+          PRIMARY KEY(connection_id, workspace_id, id));
         CREATE TABLE pins(
+          connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
           workspace_id TEXT NOT NULL, id TEXT NOT NULL, resource_type TEXT NOT NULL, resource_id TEXT NOT NULL, channel_id TEXT, scope_id TEXT,
           pinned INTEGER NOT NULL, row_version INTEGER NOT NULL, updated_at TEXT NOT NULL, raw BLOB NOT NULL,
-          PRIMARY KEY(workspace_id, id));
-        CREATE INDEX pins_resource ON pins(workspace_id, resource_type, resource_id);
+          PRIMARY KEY(connection_id, workspace_id, id));
+        CREATE INDEX pins_resource ON pins(connection_id, workspace_id, resource_type, resource_id);
         """)
     }
 }
@@ -56,32 +61,45 @@ extension Schema {
 extension StoreWriter {
     /// Upserts rows of one simple table under the shared row-version guard and, when `complete`, removes rows of the
     /// same partition that Tower no longer lists. Returns the number of rows written or removed.
-    private func replace(table: String, columns: [String], rows: [[SQLValue]], ids: [String], workspaceId: String,
+    /// `connectionId` binds actor-personal tables (pins, personal WApps) to the connection (origin + signer) as well.
+    private func replace(table: String, columns: [String], rows: [[SQLValue]], ids: [String], workspaceId: String, connectionId: String? = nil,
                          partition: (column: String, value: String)?, complete: Bool) throws -> Int {
         var changed = 0
-        let placeholders = Array(repeating: "?", count: columns.count + 1).joined(separator: ",")
+        let owner = connectionId.map { _ in "connection_id, " } ?? ""
+        let ownerKey = connectionId.map { _ in "connection_id, " } ?? ""
+        let ownerFilter = connectionId.map { _ in " AND connection_id = ?" } ?? ""
+        let ownerValues: [SQLValue] = connectionId.map { [.text($0)] } ?? []
+        let placeholders = Array(repeating: "?", count: columns.count + 1 + ownerValues.count).joined(separator: ",")
         let updates = columns.filter { $0 != "id" }.map { "\($0)=excluded.\($0)" }.joined(separator: ", ")
         let s = try db.prepare("""
-        INSERT INTO \(table)(workspace_id, \(columns.joined(separator: ", "))) VALUES(\(placeholders))
-        ON CONFLICT(workspace_id, id) DO UPDATE SET \(updates)
+        INSERT INTO \(table)(\(owner)workspace_id, \(columns.joined(separator: ", "))) VALUES(\(placeholders))
+        ON CONFLICT(\(ownerKey)workspace_id, id) DO UPDATE SET \(updates)
         \(newerGuard(table))
         """)
         for row in rows {
-            try s.run([.text(workspaceId)] + row)
+            try s.run(ownerValues + [.text(workspaceId)] + row)
             changed += db.changes
         }
         if complete {
             let filter = partition.map { " AND \($0.column) = ?" } ?? ""
-            let existing = try db.prepare("SELECT id FROM \(table) WHERE workspace_id = ?\(filter)")
-            try existing.bind([.text(workspaceId)] + (partition.map { [.text($0.value)] } ?? []))
+            let existing = try db.prepare("SELECT id FROM \(table) WHERE workspace_id = ?\(ownerFilter)\(filter)")
+            try existing.bind([.text(workspaceId)] + ownerValues + (partition.map { [.text($0.value)] } ?? []))
             let keep = Set(ids)
             var gone: [String] = []
             while try existing.step() { if let id = existing.text(0), !keep.contains(id) { gone.append(id) } }
-            let delete = try db.prepare("DELETE FROM \(table) WHERE workspace_id = ? AND id = ?")
-            for id in gone { try delete.run([.text(workspaceId), .text(id)]) }
+            let delete = try db.prepare("DELETE FROM \(table) WHERE workspace_id = ? AND id = ?\(ownerFilter)")
+            for id in gone { try delete.run([.text(workspaceId), .text(id)] + ownerValues) }
             changed += gone.count
         }
         return changed
+    }
+
+    /// Board scenes are kept only while a stored canvas snapshot still shows the board to this viewer.
+    func purgeUnlinkedBoards(workspaceId: String) throws {
+        try db.prepare("DELETE FROM board_links WHERE workspace_id = ? AND canvas_id NOT IN (SELECT canvas_id FROM canvas_snapshots WHERE workspace_id = ?)")
+            .run([.text(workspaceId), .text(workspaceId)])
+        try db.prepare("DELETE FROM board_scenes WHERE workspace_id = ? AND file_id NOT IN (SELECT file_id FROM board_links WHERE workspace_id = ?)")
+            .run([.text(workspaceId), .text(workspaceId)])
     }
 
     // MARK: Context Tree
@@ -161,15 +179,18 @@ extension StoreWriter {
             try db.prepare("DELETE FROM canvas_snapshots WHERE workspace_id = ? AND canvas_id NOT IN (SELECT id FROM canvases WHERE workspace_id = ?)")
                 .run([.text(workspaceId), .text(workspaceId)])
             changed += db.changes
+            try purgeUnlinkedBoards(workspaceId: workspaceId)
             return changed
         }
         if changed > 0 { await emit([ChangeKey(.canvases, workspaceId)]) }
         return changed
     }
 
-    /// Stores a fetched snapshot with the canvas definition it came with.
+    /// Stores a fetched snapshot with the canvas definition it came with. The boards it shows become its links; a board
+    /// that no stored snapshot shows any more (removed, or now denied to this viewer) loses its stored scene.
     public func saveCanvasSnapshot(_ snapshot: CanvasSnapshotRecord, canvas: CanvasRecord) async throws {
         guard snapshot.workspaceId == canvas.workspaceId, snapshot.canvasId == canvas.id else { throw TowerError.malformed("canvas snapshot") }
+        let boards = Set(CanvasScene.parse(snapshot.bytes).boards.map(\.fileId))
         let changed: Bool = try db.transaction {
             _ = try replace(table: "canvases", columns: ["id", "title", "position", "row_version", "updated_at", "raw"],
                             rows: [[.text(canvas.id), .text(canvas.title), .int(Int64(canvas.position)), .int(Int64(canvas.rowVersion)), .text(canvas.updatedAt), .blob(canvas.raw)]],
@@ -179,9 +200,15 @@ extension StoreWriter {
             ON CONFLICT(workspace_id, canvas_id) DO UPDATE SET canvas_row_version=excluded.canvas_row_version, bytes=excluded.bytes, fetched_at=excluded.fetched_at
             WHERE excluded.bytes IS NOT canvas_snapshots.bytes OR excluded.canvas_row_version IS NOT canvas_snapshots.canvas_row_version
             """).run([.text(snapshot.workspaceId), .text(snapshot.canvasId), .int(Int64(snapshot.canvasRowVersion)), .blob(snapshot.bytes), .text(snapshot.fetchedAt)])
-            return db.changes > 0
+            let stored = db.changes > 0
+            let w = SQLValue.text(snapshot.workspaceId), c = SQLValue.text(snapshot.canvasId)
+            try db.prepare("DELETE FROM board_links WHERE workspace_id = ? AND canvas_id = ?").run([w, c])
+            let link = try db.prepare("INSERT INTO board_links(workspace_id, canvas_id, file_id) VALUES(?,?,?)")
+            for board in boards { try link.run([w, c, .text(board)]) }
+            try purgeUnlinkedBoards(workspaceId: snapshot.workspaceId)
+            return stored
         }
-        if changed { await emit([ChangeKey(.canvases, snapshot.workspaceId)]) }
+        if changed { await emit([ChangeKey(.canvases, snapshot.workspaceId), ChangeKey(.boards, snapshot.workspaceId)]) }
     }
 
     /// A canvas that is no longer visible (404 `canvas_unavailable`): its definition and snapshot are removed.
@@ -189,17 +216,21 @@ extension StoreWriter {
         try db.transaction {
             try db.prepare("DELETE FROM canvas_snapshots WHERE workspace_id = ? AND canvas_id = ?").run([.text(workspaceId), .text(id)])
             try db.prepare("DELETE FROM canvases WHERE workspace_id = ? AND id = ?").run([.text(workspaceId), .text(id)])
+            try purgeUnlinkedBoards(workspaceId: workspaceId)
         }
-        await emit([ChangeKey(.canvases, workspaceId)])
+        await emit([ChangeKey(.canvases, workspaceId), ChangeKey(.boards, workspaceId)])
     }
 
-    /// Stores verified board bytes; only the newest fetched version per board is kept.
+    /// Stores verified board bytes; only the newest fetched version per board is kept, and only while a stored canvas
+    /// still shows the board (a fetch that finishes after access was lost stores nothing).
     public func saveBoardScene(_ scene: BoardSceneRecord) async throws {
         try db.prepare("""
-        INSERT INTO board_scenes(workspace_id, file_id, version_id, sha256, bytes, fetched_at) VALUES(?,?,?,?,?,?)
+        INSERT INTO board_scenes(workspace_id, file_id, version_id, sha256, bytes, fetched_at)
+        SELECT ?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM board_links WHERE workspace_id = ? AND file_id = ?)
         ON CONFLICT(workspace_id, file_id) DO UPDATE SET version_id=excluded.version_id, sha256=excluded.sha256, bytes=excluded.bytes, fetched_at=excluded.fetched_at
-        """).run([.text(scene.workspaceId), .text(scene.fileId), .text(scene.versionId), .text(scene.sha256), .blob(scene.bytes), .text(scene.fetchedAt)])
-        await emit([ChangeKey(.boards, scene.workspaceId)])
+        """).run([.text(scene.workspaceId), .text(scene.fileId), .text(scene.versionId), .text(scene.sha256), .blob(scene.bytes), .text(scene.fetchedAt),
+                  .text(scene.workspaceId), .text(scene.fileId)])
+        if db.changes > 0 { await emit([ChangeKey(.boards, scene.workspaceId)]) }
     }
 
     // MARK: Agents
@@ -236,12 +267,12 @@ extension StoreWriter {
     // MARK: Toolbox
 
     @discardableResult
-    public func replacePersonalWapps(workspaceId: String, _ records: [PersonalWappRecord]) async throws -> Int {
+    public func replacePersonalWapps(connectionId: String, workspaceId: String, _ records: [PersonalWappRecord]) async throws -> Int {
         let rows = records.filter { $0.workspaceId == workspaceId }
         let changed: Int = try db.transaction {
             try replace(table: "personal_wapps", columns: ["id", "title", "sort_order", "status", "row_version", "updated_at", "raw"],
                         rows: rows.map { [.text($0.id), .text($0.title), .int(Int64($0.sortOrder)), .text($0.status), .int(Int64($0.rowVersion)), .text($0.updatedAt), .blob($0.raw)] },
-                        ids: rows.map(\.id), workspaceId: workspaceId, partition: nil, complete: true)
+                        ids: rows.map(\.id), workspaceId: workspaceId, connectionId: connectionId, partition: nil, complete: true)
         }
         if changed > 0 { await emit([ChangeKey(.toolbox, workspaceId)]) }
         return changed
@@ -249,30 +280,21 @@ extension StoreWriter {
 
     // MARK: Pins
 
-    /// Upserts pin rows (pinned or tombstoned). With `complete`, a pin Tower no longer returns is removed.
+    /// Upserts pin rows (pinned or tombstoned) for one connection. With `complete`, a pin Tower no longer returns is removed.
+    /// Pins are private to the actor: they are stored under the connection (origin + signer) that read them.
     @discardableResult
-    public func upsertPins(workspaceId: String, _ records: [PinRecord], complete: Bool) async throws -> Int {
+    public func upsertPins(connectionId: String, workspaceId: String, _ records: [PinRecord], complete: Bool) async throws -> Int {
         let rows = records.filter { $0.workspaceId == workspaceId }
-        let changed: Int = try db.transaction { try writePins(workspaceId: workspaceId, rows, complete: complete) }
+        let changed: Int = try db.transaction { try writePins(connectionId: connectionId, workspaceId: workspaceId, rows, complete: complete) }
         if changed > 0 { await emit([ChangeKey(.pins, workspaceId)]) }
         return changed
     }
 
-    func writePins(workspaceId: String, _ rows: [PinRecord], complete: Bool) throws -> Int {
+    func writePins(connectionId: String, workspaceId: String, _ rows: [PinRecord], complete: Bool) throws -> Int {
         try replace(table: "pins", columns: ["id", "resource_type", "resource_id", "channel_id", "scope_id", "pinned", "row_version", "updated_at", "raw"],
                     rows: rows.map { [.text($0.id), .text($0.resourceType.rawValue), .text($0.resourceId), $0.channelId.sql, $0.scopeId.sql,
                                       .int($0.pinned ? 1 : 0), .int(Int64($0.rowVersion)), .text($0.updatedAt), .blob($0.raw)] },
-                    ids: rows.map(\.id), workspaceId: workspaceId, partition: nil, complete: complete)
-    }
-
-    /// Removes pins the record-sync feed reports deleted (membership tombstones are kept by Tower as unpinned rows).
-    public func removePins(workspaceId: String, ids: [String]) async throws {
-        guard !ids.isEmpty else { return }
-        try db.transaction {
-            let delete = try db.prepare("DELETE FROM pins WHERE workspace_id = ? AND id = ?")
-            for id in ids { try delete.run([.text(workspaceId), .text(id)]) }
-        }
-        await emit([ChangeKey(.pins, workspaceId)])
+                    ids: rows.map(\.id), workspaceId: workspaceId, connectionId: connectionId, partition: nil, complete: complete)
     }
 }
 
@@ -395,26 +417,30 @@ extension StoreReader {
 
     // MARK: Toolbox
 
-    public func personalWapps(workspaceId: String) throws -> [PersonalWappRecord] {
-        try rows("SELECT raw FROM personal_wapps WHERE workspace_id = ? AND status = 'active' ORDER BY sort_order, title COLLATE NOCASE, id LIMIT 200",
-                 [.text(workspaceId)], PersonalWappRecord.init(raw:))
+    public func personalWapps(connectionId: String, workspaceId: String) throws -> [PersonalWappRecord] {
+        try rows("""
+        SELECT raw FROM personal_wapps WHERE connection_id = ? AND workspace_id = ? AND status = 'active'
+        ORDER BY sort_order, title COLLATE NOCASE, id LIMIT 200
+        """, [.text(connectionId), .text(workspaceId)], PersonalWappRecord.init(raw:))
     }
 
-    public func personalWapp(workspaceId: String, id: String) throws -> PersonalWappRecord? {
-        try rows("SELECT raw FROM personal_wapps WHERE workspace_id = ? AND id = ?", [.text(workspaceId), .text(id)], PersonalWappRecord.init(raw:)).first
+    public func personalWapp(connectionId: String, workspaceId: String, id: String) throws -> PersonalWappRecord? {
+        try rows("SELECT raw FROM personal_wapps WHERE connection_id = ? AND workspace_id = ? AND id = ?",
+                 [.text(connectionId), .text(workspaceId), .text(id)], PersonalWappRecord.init(raw:)).first
     }
 
     // MARK: Pins
 
-    /// Every stored pin row for a resource type/id (pinned or tombstoned).
-    public func pin(workspaceId: String, type: PinRecord.ResourceType, resourceId: String) throws -> PinRecord? {
-        try rows("SELECT raw FROM pins WHERE workspace_id = ? AND resource_type = ? AND resource_id = ? LIMIT 1",
-                 [.text(workspaceId), .text(type.rawValue), .text(resourceId)], PinRecord.init(raw:)).first
+    /// The stored pin row for a resource type/id (pinned or tombstoned).
+    public func pin(connectionId: String, workspaceId: String, type: PinRecord.ResourceType, resourceId: String) throws -> PinRecord? {
+        try rows("SELECT raw FROM pins WHERE connection_id = ? AND workspace_id = ? AND resource_type = ? AND resource_id = ? LIMIT 1",
+                 [.text(connectionId), .text(workspaceId), .text(type.rawValue), .text(resourceId)], PinRecord.init(raw:)).first
     }
 
     /// Pinned items in Tower's order, with titles from the local store where the record is stored.
-    public func pinnedItems(workspaceId: String) throws -> [PinnedItem] {
-        let pins = try rows("SELECT raw FROM pins WHERE workspace_id = ? AND pinned = 1 LIMIT 500", [.text(workspaceId)], PinRecord.init(raw:))
+    public func pinnedItems(connectionId: String, workspaceId: String) throws -> [PinnedItem] {
+        let pins = try rows("SELECT raw FROM pins WHERE connection_id = ? AND workspace_id = ? AND pinned = 1 LIMIT 500",
+                            [.text(connectionId), .text(workspaceId)], PinRecord.init(raw:))
             .sorted(by: PinRecord.displayOrder)
         return try pins.map { pin in
             switch pin.resourceType {

@@ -327,6 +327,22 @@ public enum WebContentPolicy {
         if url.scheme == "about" { return url.absoluteString == "about:blank" }
         return Self.origin(of: url) == origin
     }
+
+    public enum Decision: Equatable, Sendable {
+        /// Load inside the labelled view.
+        case allow
+        /// Not loaded. `offerExternal` is the HTTPS URL the user may choose to open in Safari (outside the app).
+        case refuse(offerExternal: URL?)
+    }
+
+    /// The single navigation rule for publisher web content. It is applied to every navigation, including server
+    /// redirects (a redirect is a new navigation to its target) and links asking for a new window, which never open a
+    /// second view: a same-origin target loads in place, anything else is refused and only offered to Safari if HTTPS.
+    public static func decide(_ url: URL?, within origin: String, newWindow: Bool) -> Decision {
+        guard let url else { return .refuse(offerExternal: nil) }
+        if allows(url, within: origin) { return .allow }
+        return .refuse(offerExternal: launchURL(url.absoluteString))
+    }
 }
 
 // MARK: Personal pins

@@ -136,7 +136,15 @@ extension StoreWriter {
             if !ack.messages.isEmpty { _ = try writeMessages(ack.messages.filter { $0.workspaceId == workspaceId }, keys: &keys) }
             if !ack.docs.isEmpty { _ = try writeDocs(ack.docs.filter { $0.workspaceId == workspaceId }); keys.insert(ChangeKey(.docs, workspaceId)) }
             if !ack.reactions.isEmpty { try writeReactions(ack.reactions.filter { $0.workspaceId == workspaceId }); keys.insert(ChangeKey(.reactions, workspaceId)) }
-            if !ack.pins.isEmpty { _ = try writePins(workspaceId: workspaceId, ack.pins.filter { $0.workspaceId == workspaceId }, complete: false); keys.insert(ChangeKey(.pins, workspaceId)) }
+            if !ack.pins.isEmpty {
+                // Stored under the connection that made the write (pins are private to that signer).
+                let owner = try db.prepare("SELECT connection_id FROM writes WHERE id = ?")
+                try owner.bind([.text(id)])
+                if try owner.step(), let connection = owner.text(0) {
+                    _ = try writePins(connectionId: connection, workspaceId: workspaceId, ack.pins.filter { $0.workspaceId == workspaceId }, complete: false)
+                    keys.insert(ChangeKey(.pins, workspaceId))
+                }
+            }
             for reaction in ack.removedReactionIds {
                 try db.prepare("DELETE FROM reactions WHERE workspace_id = ? AND id = ?").run([.text(workspaceId), .text(reaction)])
                 keys.insert(ChangeKey(.reactions, workspaceId))

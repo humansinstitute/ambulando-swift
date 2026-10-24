@@ -266,11 +266,15 @@ public struct ExcalidrawScene: Sendable, Equatable {
 
     public enum ParseError: Error, Equatable { case invalid(String), tooLarge }
 
-    /// Same limits as sol `BOARD_LIMITS`.
+    /// Same limits as sol `BOARD_LIMITS`: scene bytes, elements, embedded images and bytes per image.
     public static let maxBytes = 24 * 1024 * 1024
     public static let maxElements = 20_000
+    public static let maxImages = 200
+    public static let maxImageBytes = 6 * 1024 * 1024
     static let rasterTypes: Set<String> = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/avif"]
 
+    /// Parses on the caller's executor (never the main actor) and stops with `CancellationError` when its task is
+    /// cancelled, for example when the board is closed while a large scene is still being read.
     public static func parse(_ bytes: Data) throws -> ExcalidrawScene {
         guard bytes.count <= maxBytes else { throw ParseError.tooLarge }
         guard var o = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] else { throw ParseError.invalid("Board is not valid JSON") }
@@ -283,7 +287,8 @@ public struct ExcalidrawScene: Sendable, Equatable {
         let files = o["files"] as? [String: Any] ?? [:]
         var notes = Set<String>()
         var first = true
-        for value in rows {
+        for (index, value) in rows.enumerated() {
+            if index % 256 == 0 { try Task.checkCancellation() }
             guard let e = value as? [String: Any], let id = e["id"] as? String, !id.isEmpty, let typeName = e["type"] as? String else {
                 scene.unsupported["malformed", default: 0] += 1; continue
             }
@@ -296,10 +301,12 @@ public struct ExcalidrawScene: Sendable, Equatable {
                 let mime = ((file["mimeType"] as? String) ?? "").lowercased()
                 guard rasterTypes.contains(mime) else { scene.unsupported["image (\(mime.isEmpty ? "unknown type" : mime))", default: 0] += 1; continue }
                 if scene.images[fid] == nil {
+                    guard scene.images.count < maxImages else { scene.unsupported["image (over \(maxImages) images)", default: 0] += 1; continue }
                     guard let url = file["dataURL"] as? String, let comma = url.firstIndex(of: ","), url[..<comma].lowercased().hasPrefix("data:\(mime)"),
                           url[..<comma].lowercased().hasSuffix(";base64"), let data = Data(base64Encoded: String(url[url.index(after: comma)...])) else {
                         scene.unsupported["image (unreadable data)", default: 0] += 1; continue
                     }
+                    guard data.count <= maxImageBytes else { scene.unsupported["image (larger than 6 MB)", default: 0] += 1; continue }
                     scene.images[fid] = Image(mimeType: mime, data: data)
                 }
                 fileId = fid
