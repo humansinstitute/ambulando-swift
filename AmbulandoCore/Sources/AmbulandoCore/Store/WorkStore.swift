@@ -629,6 +629,10 @@ extension StoreReader {
         return rows
     }
 
+    public func viewState(workspaceId: String, type: ViewStateRecord.ResourceType, id: String) throws -> ViewStateRecord? {
+        try viewStates(workspaceId: workspaceId).first { $0.resourceType == type && $0.resourceId == id }
+    }
+
     public func reactions(workspaceId: String, targetIds: [String]) throws -> [ReactionRecord] {
         guard !targetIds.isEmpty else { return [] }
         var rows: [ReactionRecord] = []

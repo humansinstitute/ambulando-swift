@@ -169,3 +169,86 @@ extension WorkspaceSync {
         }
     }
 }
+
+/// Downloaded file content, content-addressed under Caches so the system may purge it. A cached copy is used only
+/// when its bytes still hash to the file's current sha256.
+public struct FileCache: Sendable {
+    public let root: URL
+
+    public init(root: URL) { self.root = root }
+
+    static func safeName(_ name: String) -> String {
+        let cleaned = name.replacingOccurrences(of: "[/\\\\:\\x00-\\x1f]", with: "_", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+        return String((cleaned.isEmpty ? "file" : cleaned).prefix(120))
+    }
+
+    public func url(for file: FileRecord) -> URL {
+        let version = file.sha256.map { String($0.prefix(16)) } ?? "v\(file.rowVersion)"
+        return root.appendingPathComponent(file.workspaceId, isDirectory: true)
+            .appendingPathComponent("\(file.id)-\(version)", isDirectory: true)
+            .appendingPathComponent(Self.safeName(file.displayName))
+    }
+
+    public func cached(_ file: FileRecord) -> URL? {
+        let url = url(for: file)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        if let sha = file.sha256 {
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), SHA256Hex.of(data) == sha else { return nil }
+        }
+        return url
+    }
+
+    func store(_ bytes: Data, for file: FileRecord) throws -> URL {
+        let url = url(for: file)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try bytes.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        return url
+    }
+
+    /// Removes cached content of one workspace (disconnect, workspace removal).
+    public func purge(workspaceId: String) { try? FileManager.default.removeItem(at: root.appendingPathComponent(workspaceId, isDirectory: true)) }
+}
+
+extension WorkspaceSync {
+    public static func downloadKey(_ w: String, _ f: String) -> String { "download:\(w):\(f)" }
+
+    /// User-initiated download through the typed object route; the verified bytes land in the cache.
+    public func download(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, file: FileRecord, cache: FileCache) async {
+        let sync = self
+        await engine.enqueue(Self.downloadKey(workspace.id, file.id), priority: .user, force: true) {
+            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            let api = sync.api(origin: try TowerOrigin(connection.origin))
+            let object = try await api.fileObject(workspaceId: workspace.id, appNpub: workspace.appNpub, fileId: file.id)
+            try Task.checkCancellation()
+            let current = FileRecord(workspaceId: file.workspaceId, id: file.id, scopeId: file.scopeId, channelId: file.channelId, folderId: file.folderId,
+                                     storageObjectId: file.storageObjectId, displayName: file.displayName, description: file.description,
+                                     contentType: object.contentType ?? file.contentType, sizeBytes: object.bytes.count, sha256: object.sha256,
+                                     archived: file.archived, rowVersion: file.rowVersion, createdAt: file.createdAt, updatedAt: file.updatedAt, raw: file.raw)
+            _ = try cache.store(object.bytes, for: current)
+            await sync.store.writer.touch([ChangeKey(.files, workspace.id)])
+        }
+    }
+
+    /// Chat attachment bytes (signed `GET /api/v4/storage/:id/content` on the pinned origin), cached by object id.
+    public func downloadAttachment(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, objectId: String, cache: FileCache) async {
+        let sync = self
+        await engine.enqueue("attachment:\(workspace.id):\(objectId)", priority: .visible) {
+            let target = cache.root.appendingPathComponent(workspace.id, isDirectory: true).appendingPathComponent("attachments", isDirectory: true)
+                .appendingPathComponent(objectId)
+            guard !FileManager.default.fileExists(atPath: target.path) else { return }
+            try await sync.identity.requireSigner(npub: connection.signerNpub)
+            let bytes = try await sync.api(origin: try TowerOrigin(connection.origin)).storageContent(objectId: objectId)
+            try Task.checkCancellation()
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try bytes.write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            await sync.store.writer.touch([ChangeKey(.messages, workspace.id)])
+        }
+    }
+}
+
+extension FileCache {
+    public func attachment(workspaceId: String, objectId: String) -> URL? {
+        let url = root.appendingPathComponent(workspaceId, isDirectory: true).appendingPathComponent("attachments", isDirectory: true).appendingPathComponent(objectId)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+}

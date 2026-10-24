@@ -197,4 +197,21 @@ final class DocumentModelTests: XCTestCase {
         XCTAssertEqual(body.markdown, "First para\n\nSecond")
         XCTAssertEqual(body.contentModel?["editor_state_format"], .string("prosemirror_json_v1"))
     }
+
+    func testRenderKeepsUnknownBlocksVisibleAndReadsMarkdown() throws {
+        let custom = JSONValue.object([("type", .string("fdCalloutWidget")), ("content", .array([text("note")]))])
+        let bytes = envelope([para("b1", [text("Hi "), text("there", ["bold"])]), custom])
+        let blocks = DocumentRender.blocks(DocumentBody(bytes: bytes, contentType: DocumentBody.envelopeContentType))
+        guard case .paragraph(let runs) = blocks[0] else { return XCTFail("paragraph") }
+        XCTAssertEqual(runs.map(\.text), ["Hi ", "there"])
+        XCTAssertTrue(runs[1].bold)
+        XCTAssertEqual(blocks[1], .preserved(type: "fdCalloutWidget", text: "note"))
+
+        let md = DocumentRender.markdownBlocks("# Title\n\nSome **bold** text\n\n- [x] done\n- [ ] todo\n\n```\ncode\n```")
+        XCTAssertEqual(md.count, 4)
+        guard case .heading(1, _) = md[0], case .list(false, _, let items) = md[2], case .code(_, "code") = md[3] else { return XCTFail("blocks: \(md)") }
+        XCTAssertEqual(items.map(\.checked), [true, false])
+        guard case .paragraph(let p) = md[1] else { return XCTFail("paragraph") }
+        XCTAssertTrue(p.contains { $0.bold && $0.text == "bold" })
+    }
 }

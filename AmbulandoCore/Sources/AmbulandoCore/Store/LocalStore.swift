@@ -130,6 +130,9 @@ public actor StoreWriter {
 
     func emit(_ keys: Set<ChangeKey>) async { if !keys.isEmpty { await changes.record(keys) } }
 
+    /// Notifies observers that data outside SQLite changed (for example a finished download in the file cache).
+    public func touch(_ keys: Set<ChangeKey>) async { await emit(keys) }
+
     public func saveConnection(_ c: ConnectionRecord) async throws -> ConnectionRecord {
         let saved: ConnectionRecord = try db.transaction {
             try db.prepare("""

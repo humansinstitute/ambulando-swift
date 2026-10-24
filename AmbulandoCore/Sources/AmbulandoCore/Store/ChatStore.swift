@@ -315,13 +315,13 @@ extension StoreWriter {
 }
 
 extension StoreReader {
-    static let messageColumns = "id, channel_id, thread_id, thread_source_id, body, sender_npub, sender_label, client_request_id, created_at, updated_at, row_version, deleted"
+    static let messageColumns = "id, channel_id, thread_id, thread_source_id, body, sender_npub, sender_label, client_request_id, created_at, updated_at, row_version, deleted, raw"
 
     static func message(_ s: SQLiteConnection.Statement, workspaceId: String, offset: Int32 = 0) -> MessageRecord {
         MessageRecord(workspaceId: workspaceId, id: s.text(offset)!, channelId: s.text(offset + 1)!, threadId: s.text(offset + 2),
                       threadSourceId: s.text(offset + 3), body: s.text(offset + 4) ?? "", senderNpub: s.text(offset + 5),
                       senderLabel: s.text(offset + 6), clientRequestId: s.text(offset + 7), createdAt: s.text(offset + 8)!,
-                      updatedAt: s.text(offset + 9), rowVersion: Int(s.int(offset + 10)), deleted: s.int(offset + 11) != 0)
+                      updatedAt: s.text(offset + 9), rowVersion: Int(s.int(offset + 10)), deleted: s.int(offset + 11) != 0, raw: s.blob(offset + 12))
     }
 
     static let outboxColumns = """
@@ -350,7 +350,7 @@ extension StoreReader {
         try s.bind([.text(workspaceId), .text(channelId), .int(Int64(limit))])
         var rows: [FeedPost] = []
         while try s.step() {
-            rows.append(FeedPost(message: Self.message(s, workspaceId: workspaceId), replyCount: Int(s.int(12)), lastReplyAt: s.text(13)))
+            rows.append(FeedPost(message: Self.message(s, workspaceId: workspaceId), replyCount: Int(s.int(13)), lastReplyAt: s.text(14)))
         }
         return rows.reversed()
     }
