@@ -1,0 +1,12 @@
+# Operational briefs, handoffs, screenshots, logs and private device details
+tmp/
+
+# Xcode / SwiftPM
+build/
+DerivedData/
+.build/
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+*.xcresult
+.DS_Store
