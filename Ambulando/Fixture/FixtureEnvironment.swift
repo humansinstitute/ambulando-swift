@@ -131,6 +131,7 @@ final class FixtureEnvironment {
         if startLocked { await identity.lock() } else if autoUnlock, case .locked = await identity.state { try await identity.unlock(pin: Self.pin) }
         if let npub = await identity.state.npub { tower.actorNpub = npub; tower.work.actorNpub = npub; tower.labWork.actorNpub = npub }
         tower.seedWorkIfNeeded()
+        tower.seedSurfacesIfNeeded()
         if try await store.reader.connections().isEmpty, case .unlocked = await identity.state {
             let connection = try await sync.connect(origin: try TowerOrigin(Self.origin))
             try await store.writer.setState("selected.connection", connection.id)
@@ -234,6 +235,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     let work: SampleWorkTower
     /// The second sample workspace has no tasks, documents or files (empty lists, not errors).
     let labWork: SampleWorkTower
+    /// Context Tree, canvases, boards, agents, Toolbox and pins (shared with the core tests); the lab workspace has none.
+    let surfaces: SampleSurfaceTower
+    let labSurfaces: SampleSurfaceTower
     private var posted: [[String: Any]] = []
     /// Edits and deletions of messages, by id (persisted with the posted messages).
     private var revised: [String: [String: Any]] = [:]
@@ -253,6 +257,18 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
                                file: file.deletingLastPathComponent().appendingPathComponent("fixture-work.json"))
         labWork = SampleWorkTower(workspaceId: Self.lab, towerOrigin: FixtureEnvironment.origin, objectHost: "objects-lab.sample.invalid",
                                   file: file.deletingLastPathComponent().appendingPathComponent("fixture-work-lab.json"))
+        surfaces = SampleSurfaceTower(workspaceId: Self.studio, file: file.deletingLastPathComponent().appendingPathComponent("fixture-surfaces.json"))
+        labSurfaces = SampleSurfaceTower(workspaceId: Self.lab, file: file.deletingLastPathComponent().appendingPathComponent("fixture-surfaces-lab.json"))
+        // Pins and references resolve against the sample tasks, documents and channels the other routes serve.
+        let work = work
+        surfaces.recordLookup = { id in
+            if let t = work.task(id) { return ["title": t["title"] ?? "", "channel_id": t["channel_id"] ?? NSNull(), "scope_id": t["scope_id"] ?? NSNull()] }
+            if let d = work.doc(id) { return ["title": d["title"] ?? "", "channel_id": d["channel_id"] ?? NSNull(), "scope_id": d["scope_id"] ?? NSNull()] }
+            let channels = [Self.generalChannel: Self.scopeAmbulando, Self.designChannel: Self.scopeAmbulando, Self.deploysChannel: Self.scopeOps]
+            if let scope = channels[id] { return ["title": "channel", "channel_id": id, "scope_id": scope] }
+            if id.hasPrefix("f1c7bbbb") { return ["title": "Conversation", "channel_id": Self.generalChannel, "scope_id": Self.scopeAmbulando] }
+            return nil
+        }
         if let data = try? Data(contentsOf: file), let saved = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             posted = (saved["posted"] as? [[String: Any]]) ?? []
             eventLog = (saved["events"] as? [[String: Any]]) ?? []
@@ -324,7 +340,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         }
         guard request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Nostr ") == true else { return (401, ["code": "unauthorized"]) }
         if offline { throw URLError(.notConnectedToInternet) }
-        if let handled = try work.handle(request) ?? labWork.handle(request) { return handled }
+        // Surface routes first: their ownership is exact (board versions live under `/files/:f/versions/:v/object`).
+        if let handled = try surfaces.handle(request) ?? labSurfaces.handle(request) ?? work.handle(request) ?? labWork.handle(request) { return handled }
         let base = "/api/v4/flightdeck-pg/workspaces"
         if path == base {
             return (200, ["workspaces": [workspace(Self.studio, "Studio (sample)"), workspace(Self.lab, "Lab (sample)")], "next_cursor": NSNull()])
@@ -547,6 +564,102 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         w.seedViewState(type: "document", resource: plan, scope: a, channel: general, activity: 2, viewed: 1)
         w.seedViewState(type: "thread", resource: Self.uuid(39, "f1c7bbbb"), scope: a, channel: general, activity: 4, viewed: 2)
         w.markSeeded()
+    }
+
+    static let canvasDoc = "f1c70000-0000-4000-8000-0000000000d7"
+    static let canvasTask = "f1c70000-0000-4000-8000-0000000000e7"
+    static let boardFile = "f1c70000-0000-4000-8000-0000000000f7"
+    static let boardVersion = "f1c70000-0000-4000-8000-0000000000f8"
+    static let lockedFile = "f1c70000-0000-4000-8000-0000000000f9"
+
+    /// Sample Context Tree, canvases (with every naplet kind, a board and a locked item), agents, WApps and pins, created
+    /// once per fixture directory. Shapes follow Tower's serializers; it is still sample data, never evidence of Tower.
+    func seedSurfacesIfNeeded() {
+        let s = surfaces
+        guard !s.seeded() else { return }
+        let a = Self.scopeAmbulando, general = Self.generalChannel, design = Self.designChannel
+        let thread = Self.uuid(39, "f1c7bbbb")
+        // Records the surfaces point at, in the sample task/document routes too.
+        let notes = "# Build 7 launch notes\n\nContext Tree, Canvas, agents and the Toolbox are native on iPhone.\n\n- Pins sync with the web\n- Boards are read only"
+        work.seedDoc(id: Self.canvasDoc, scope: a, channel: general, title: "Build 7 launch notes", body: Data(notes.utf8), contentType: "text/markdown")
+        work.seedTask(id: Self.canvasTask, scope: a, channel: general, title: "Ship build 7 to TestFlight-free phone", state: "ready", priority: "rock", creator: Self.ana)
+        s.seedRecord(id: Self.canvasDoc, type: "document", title: "Build 7 launch notes", channel: general, scope: a)
+        s.seedRecord(id: Self.canvasTask, type: "task", title: "Ship build 7 to TestFlight-free phone", channel: general, scope: a)
+        s.seedRecord(id: thread, type: "thread", title: "Native chat review", channel: general, scope: a)
+        s.seedRecord(id: design, type: "channel", title: "design", channel: design, scope: a)
+        s.seedRecord(id: Self.lockedFile, type: "file", title: "Board-only budget", channel: design, scope: a)
+        s.deny(record: Self.lockedFile)
+
+        // Context Tree for the Ambulando scope.
+        let root = s.seedComponent(scope: a, title: "Native iPhone app", sortOrder: 0)
+        let sync = s.seedComponent(scope: a, title: "Sync and storage", parent: root, sortOrder: 0)
+        let surfacesNode = s.seedComponent(scope: a, title: "Workspace surfaces", parent: root, sortOrder: 1)
+        s.seedComponent(scope: a, title: "Release", sortOrder: 1)
+        s.seedReference(component: sync, type: "doc", recordId: Self.canvasDoc, sortOrder: 0)
+        s.seedReference(component: surfacesNode, type: "task", recordId: Self.canvasTask, sortOrder: 0)
+        s.seedReference(component: surfacesNode, type: "file", recordId: Self.lockedFile, sortOrder: 1)
+        s.seedReference(component: surfacesNode, type: "artifact", artifact: ["origin": "https://artifacts.sample.invalid", "project": "Wingman_Suite",
+                                                                            "artifact": "wingman-suite-arch", "page": "index.html", "version_policy": "latest"], sortOrder: 2)
+
+        // Canvas with every naplet kind this app draws, a board and a locked item.
+        let launch = s.seedCanvas(title: "Launch board", position: 1, viewport: ["x": 0, "y": 0, "scale": 1])
+        s.seedCanvas(title: "Retro", position: 2)
+        s.seedNaplet(canvas: launch, sourceType: "document", sourceId: Self.canvasDoc, title: "Build 7 launch notes",
+                     layout: ["x": 40, "y": 80, "width": 360, "height": 260, "z": 1],
+                     content: ["title": "Build 7 launch notes", "body": notes, "updated_at": "2026-10-24T09:00:00.000Z"])
+        s.seedNaplet(canvas: launch, sourceType: "task_list", sourceId: general, title: "General tasks",
+                     layout: ["x": 440, "y": 80, "width": 320, "height": 260, "z": 2],
+                     content: ["tasks": [["id": Self.canvasTask, "title": "Ship build 7 to TestFlight-free phone", "state": "ready"]]])
+        s.seedNaplet(canvas: launch, sourceType: "chat_thread", sourceId: thread, title: "Native chat review",
+                     layout: ["x": 40, "y": 380, "width": 360, "height": 280, "z": 3],
+                     content: ["messages": [["id": Self.uuid(100, "f1c7aaaa"), "author": "Rick", "body": "Looks right on my phone", "created_at": Self.time(100)],
+                                            ["id": Self.uuid(101, "f1c7aaaa"), "author": "Ana", "body": "Retry kept the same request id", "created_at": Self.time(101)]]])
+        let board = Self.sampleBoard()
+        let projection = s.seedBoardVersion(fileId: Self.boardFile, versionId: Self.boardVersion, versionNumber: 2, bytes: board)
+        s.seedNaplet(canvas: launch, sourceType: "excalidraw", sourceId: Self.boardFile, title: "Architecture sketch",
+                     layout: ["x": 440, "y": 380, "width": 420, "height": 300, "z": 4], content: projection)
+        s.seedNaplet(canvas: launch, sourceType: "document", sourceId: Self.lockedFile, title: "Budget",
+                     layout: ["x": 900, "y": 80, "width": 240, "height": 180, "z": 5], content: ["body": "not for this viewer"])
+        s.seedNaplet(canvas: launch, sourceType: "html", sourceId: UUID().uuidString.lowercased(), title: "Status page",
+                     layout: ["x": 900, "y": 300, "width": 260, "height": 200, "z": 6],
+                     content: ["html": "<h1>Status</h1><p>All green.</p>", "version_number": 1])
+        s.seedElement(canvas: launch, kind: "text", layout: ["x": 40, "y": 20, "width": 400, "height": 40, "z": 7], data: ["text": "Build 7 launch", "fontSize": 28])
+        s.seedElement(canvas: launch, kind: "arrow", layout: ["x": 400, "y": 200, "width": 40, "height": 10, "z": 8], data: ["start": [0, 5], "end": [40, 5]])
+        s.seedElement(canvas: launch, kind: "rectangle", layout: ["x": 20, "y": 60, "width": 860, "height": 640, "z": 0], data: [:])
+
+        // Agents and their activity in #general.
+        s.seedAgent(npub: Self.rick, name: "Rick", sortOrder: 1)
+        s.seedActivity(channel: general, scope: a, thread: thread, agent: Self.rick, state: "working", label: "Checking the outbox retry states")
+        s.seedActivity(channel: general, scope: a, thread: thread, agent: Self.rick, state: "completed", label: "Answered the theme question")
+
+        // Toolbox and pins.
+        s.seedWapp(title: "Timesheets", launchURL: "https://timesheets.sample.invalid/", description: "Log time against tasks", sortOrder: 1, owner: Self.ana)
+        s.seedWapp(title: "Legacy tool", launchURL: "http://legacy.sample.invalid/", description: "Served without HTTPS", sortOrder: 2, owner: Self.ana)
+        s.externalPin(type: "thread", resource: thread, pinned: true)
+        s.externalPin(type: "channel", resource: design, pinned: true)
+        s.markSeeded()
+    }
+
+    /// A small Excalidraw scene: three boxes, arrows, text and one embeddable (listed as not drawn).
+    static func sampleBoard() -> Data {
+        func element(_ id: String, _ type: String, _ x: Double, _ y: Double, _ w: Double, _ h: Double, _ extra: [String: Any] = [:]) -> [String: Any] {
+            ["id": id, "type": type, "x": x, "y": y, "width": w, "height": h, "angle": 0, "strokeColor": "#1e1e1e", "backgroundColor": "transparent",
+             "fillStyle": "solid", "strokeWidth": 2, "strokeStyle": "solid", "roughness": 1, "opacity": 100, "version": 1, "isDeleted": false].merging(extra) { _, b in b }
+        }
+        let elements: [[String: Any]] = [
+            element("tower", "rectangle", 0, 0, 180, 80, ["backgroundColor": "#d0bfff", "roundness": ["type": 3]]),
+            element("tower-text", "text", 20, 28, 140, 25, ["text": "Tower", "fontSize": 20, "textAlign": "center", "containerId": "tower"]),
+            element("sync", "rectangle", 260, 0, 180, 80, ["backgroundColor": "#a5d8ff", "fillStyle": "hachure"]),
+            element("sync-text", "text", 280, 28, 140, 25, ["text": "Sync engine", "fontSize": 20, "textAlign": "center", "containerId": "sync"]),
+            element("store", "ellipse", 260, 160, 180, 90, ["backgroundColor": "#b2f2bb"]),
+            element("store-text", "text", 280, 192, 140, 25, ["text": "SQLite", "fontSize": 20, "textAlign": "center", "containerId": "store"]),
+            element("a1", "arrow", 180, 40, 80, 0, ["points": [[0, 0], [80, 0]], "endArrowhead": "arrow"]),
+            element("a2", "arrow", 350, 80, 0, 80, ["points": [[0, 0], [0, 80]], "endArrowhead": "triangle", "strokeStyle": "dashed"]),
+            element("note", "text", 0, 120, 220, 50, ["text": "Screens read only\nfrom SQLite", "fontSize": 16]),
+            element("embed", "embeddable", 0, 200, 200, 100, ["link": "https://example.invalid/video"]),
+        ]
+        let scene: [String: Any] = ["type": "excalidraw", "version": 2, "source": "wingman-ambulando", "elements": elements, "appState": [:], "files": [:]]
+        return (try? JSONSerialization.data(withJSONObject: scene, options: [.sortedKeys])) ?? Data()
     }
 
     /// A web-format document (ProseMirror authoritative) with marks, a task list, a link, a table and a node this app

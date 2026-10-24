@@ -1,0 +1,150 @@
+import AmbulandoCore
+import Foundation
+
+/// Workspace surfaces opened from the sidebar's Workspace section (sol's Canvas deck column, Context, Agents and
+/// Toolbox sections). Each is shown over the tabs and shares the sidebar context.
+enum Surface: String, Codable, CaseIterable, Identifiable {
+    case canvas, context, agents, toolbox
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .canvas: "Canvas"
+        case .context: "Context"
+        case .agents: "Agents"
+        case .toolbox: "Toolbox"
+        }
+    }
+    var systemImage: String {
+        switch self {
+        case .canvas: "rectangle.3.group"
+        case .context: "point.3.connected.trianglepath.dotted"
+        case .agents: "sparkles"
+        case .toolbox: "wrench.and.screwdriver"
+        }
+    }
+}
+
+/// What a labelled web view shows: a Toolbox WApp's own UI, an HTML naplet, or a Context Tree artifact page.
+enum WebContentSource: Hashable, Codable {
+    case wapp(id: String)
+    case htmlNaplet(canvasId: String, napletId: String, title: String)
+    case artifact(url: URL, title: String)
+}
+
+/// The viewer's pins with the state of any pin or unpin still waiting in the write queue.
+struct PinsSnapshot: Sendable, Equatable {
+    var items: [PinnedItem] = []
+    /// Latest queued pin write per resource (`type:id`), overlaid on the stored state until Tower acknowledges it.
+    var pending: [String: WriteItem] = [:]
+    var stored: [String: Bool] = [:]
+    var loaded = false
+
+    static func key(_ type: PinRecord.ResourceType, _ id: String) -> String { "\(type.rawValue):\(id)" }
+
+    /// Pinned as the user last asked (a pending write wins over the stored row).
+    func isPinned(_ type: PinRecord.ResourceType, _ id: String) -> Bool {
+        if let write = pending[Self.key(type, id)], write.isPending, let pinned = write.payloadObject["pinned"] as? Bool { return pinned }
+        return stored[Self.key(type, id)] ?? false
+    }
+
+    func failure(_ type: PinRecord.ResourceType, _ id: String) -> WriteItem? {
+        pending[Self.key(type, id)].flatMap { $0.isPending ? nil : $0 }
+    }
+}
+
+extension AppModel {
+    // MARK: Surfaces
+
+    func openSurface(_ next: Surface) {
+        sidebarOpen = false
+        surface = next
+    }
+
+    func closeSurface() { surface = nil }
+
+    func openContextTree(_ workspace: WorkspaceRecord, scopeId: String, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshContextTree(c, workspace, scopeId: scopeId, force: force) }
+    }
+
+    func openContextComponent(_ workspace: WorkspaceRecord, scopeId: String, componentId: String, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshContextReferences(c, workspace, scopeId: scopeId, componentId: componentId, force: force) }
+    }
+
+    func openCanvases(_ workspace: WorkspaceRecord, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshCanvases(c, workspace, force: force) }
+    }
+
+    func openCanvas(_ workspace: WorkspaceRecord, canvasId: String, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshCanvas(c, workspace, canvasId: canvasId, force: force) }
+    }
+
+    /// Agents and the activity of the context's channels (bounded by `WorkspaceSync.agentActivityChannelLimit`).
+    func openAgents(_ workspace: WorkspaceRecord, channelIds: [String], force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshAgents(c, workspace, channelIds: channelIds, force: force) }
+    }
+
+    func openToolbox(_ workspace: WorkspaceRecord, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshToolbox(c, workspace, force: force) }
+    }
+
+    func ensureThread(_ threadId: String, in workspace: WorkspaceRecord) {
+        withWorkspace(workspace) { sync, c in await sync.ensureThread(c, workspace, threadId: threadId) }
+    }
+
+    /// Opens a conversation by id in Chat. A thread not stored yet is fetched first (bounded wait); one that cannot be read
+    /// is reported instead of opening an empty screen.
+    func openThreadById(_ threadId: String) {
+        guard let store, let workspace = selectedWorkspace else { return }
+        Task {
+            if (try? await store.reader.thread(workspaceId: workspace.id, id: threadId)) == nil {
+                ensureThread(threadId, in: workspace)
+                for _ in 0..<50 {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    if (try? await store.reader.thread(workspaceId: workspace.id, id: threadId)) != nil { break }
+                    if syncError(forKey: WorkspaceSync.threadRecordKey(workspace.id, threadId)) != nil { break }
+                }
+            }
+            guard selectedWorkspace?.id == workspace.id else { return }
+            if (try? await store.reader.thread(workspaceId: workspace.id, id: threadId)) != nil { openThreadMention(threadId) }
+            else { notice = "This conversation is not available on this iPhone." }
+        }
+    }
+
+    // MARK: Pins
+
+    func observePins(connection: ConnectionRecord, workspaceId: String) {
+        guard let store else { return }
+        let connectionId = connection.id
+        pins.start(store: store, matches: { key in
+            key.workspaceId == workspaceId && [.pins, .writes, .tasks, .docs, .threads, .channels, .messages].contains(key.table)
+        }) {
+            async let items = store.reader.pinnedItems(connectionId: connectionId, workspaceId: workspaceId)
+            async let writes = store.reader.writes(connectionId: connectionId, workspaceId: workspaceId)
+            var pending: [String: WriteItem] = [:]
+            for write in try await writes where write.kind == .pinSet {
+                guard let type = write.string("resource_type").flatMap(PinRecord.ResourceType.init(rawValue:)), let id = write.targetId else { continue }
+                pending[PinsSnapshot.key(type, id)] = write   // rows are in creation order: the latest wins
+            }
+            let list = try await items
+            return PinsSnapshot(items: list, pending: pending,
+                                stored: Dictionary(list.map { (PinsSnapshot.key($0.pin.resourceType, $0.pin.resourceId), true) }, uniquingKeysWith: { a, _ in a }),
+                                loaded: true)
+        }
+        if let workspace = workspaces.value.first(where: { $0.id == workspaceId }), let sync, canRead {
+            Task { await sync.refreshPins(connection, workspace, priority: .background) }
+        }
+    }
+
+    /// Pins or unpins through the durable write queue. The expected row version is the stored pin's (0 if never pinned);
+    /// a stale one is resolved by the queue (re-read, then resent or found already done).
+    func setPinned(_ pinned: Bool, type: PinRecord.ResourceType, id: String, in workspace: WorkspaceRecord) {
+        guard let store, let connection else { return }
+        let connectionId = connection.id
+        Task {
+            let stored = try? await store.reader.pin(connectionId: connectionId, workspaceId: workspace.id, type: type, resourceId: id)
+            submit(WriteIntent(kind: .pinSet, targetId: id, payload: ["resource_type": type.rawValue, "pinned": pinned,
+                                                                       "expected_row_version": stored?.rowVersion ?? 0,
+                                                                       "mutation_id": UUID().uuidString.lowercased()]), in: workspace)
+        }
+    }
+}

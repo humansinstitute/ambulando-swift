@@ -26,10 +26,19 @@ enum WorkRoute: Hashable {
     case file(workspaceId: String, fileId: String)
     case thread(workspaceId: String, channelId: String, threadId: String)
     case channel(workspaceId: String, channelId: String)
+    /// A conversation known only by id (a pin or a canvas naplet); its channel is looked up or fetched first.
+    case threadById(workspaceId: String, threadId: String)
+    case canvas(workspaceId: String, canvasId: String)
+    /// An Excalidraw board on a canvas, full screen.
+    case board(workspaceId: String, canvasId: String, napletId: String)
+    case contextComponent(workspaceId: String, scopeId: String, componentId: String)
+    /// Publisher-owned web content in a labelled view.
+    case webContent(workspaceId: String, source: WebContentSource)
 
     var workspaceId: String {
         switch self {
-        case .task(let w, _), .doc(let w, _), .file(let w, _), .thread(let w, _, _), .channel(let w, _): w
+        case .task(let w, _), .doc(let w, _), .file(let w, _), .thread(let w, _, _), .channel(let w, _), .threadById(let w, _), .canvas(let w, _),
+             .board(let w, _, _), .contextComponent(let w, _, _), .webContent(let w, _): w
         }
     }
 }
@@ -58,6 +67,12 @@ final class AppModel {
     private(set) var context: WorkContext = .home
     /// The sidebar drawer (workspace, scopes and channels), reachable from every mode.
     var sidebarOpen = false
+    /// A workspace surface (Canvas, Context, Agents, Toolbox) shown over the tabs, or nil for the tabs themselves.
+    var surface: Surface?
+    /// The viewer's personal pins in the selected workspace (sidebar "Pinned").
+    let pins = LiveQuery<PinsSnapshot>(initial: PinsSnapshot())
+    /// Viewer-local board positions by canvas, so returning to a board keeps where it was (never written to Tower).
+    @ObservationIgnored var canvasViewports: [String: CanvasViewport] = [:]
     /// The current mode (tab). Opening a record from Inbox or Search may switch it.
     var mode: AppMode = .chat
     var notice: String?
@@ -349,6 +364,8 @@ final class AppModel {
             selectedWorkspaceId = nil
             context = .home
             navigation.stop()
+            pins.stop()
+            surface = nil
             restoringPath = true; chatPath = []; restoringPath = false
         } catch { notice = error.localizedDescription }
     }
@@ -359,6 +376,8 @@ final class AppModel {
         restoringPath = true; chatPath = []; restoringPath = false
         context = .home
         navigation.stop()
+        pins.stop()
+        canvasViewports = [:]
         Task {
             try? await store.writer.setState("selected.workspace:\(connection.id)", id)
             await restoreContext()
@@ -377,6 +396,7 @@ final class AppModel {
             await sync.discover(connection, priority: force ? .visible : .background, force: force)
             if let workspace = selectedWorkspace {
                 await sync.refreshWorkspace(connection, workspace, priority: .visible, force: force)
+                await sync.refreshPins(connection, workspace, priority: .background, force: force)
                 // Pull to refresh also replays missed events (edits/deletions older than the last page).
                 if force { await sync.catchUpEvents(connection, workspace, priority: .visible, force: true) }
             }
@@ -524,7 +544,7 @@ final class AppModel {
 
     var isUnlocked: Bool { if case .unlocked = identity { true } else { false } }
 
-    private func withWorkspace(_ workspace: WorkspaceRecord, _ body: @escaping @Sendable (WorkspaceSync, ConnectionRecord) async -> Void) {
+    func withWorkspace(_ workspace: WorkspaceRecord, _ body: @escaping @Sendable (WorkspaceSync, ConnectionRecord) async -> Void) {
         guard let sync, let connection, canRead, workspace.id == selectedWorkspace?.id else { return }
         Task { await body(sync, connection) }
     }
@@ -687,6 +707,8 @@ final class AppModel {
             case .task(_, let id): channelId = try? await store.reader.task(workspaceId: workspace, id: id)?.channelId
             case .doc(_, let id): channelId = try? await store.reader.doc(workspaceId: workspace, id: id)?.channelId
             case .file(_, let id): channelId = try? await store.reader.file(workspaceId: workspace, id: id)?.channelId
+            case .threadById(_, let id): channelId = try? await store.reader.thread(workspaceId: workspace, id: id)?.channelId
+            case .canvas, .board, .contextComponent, .webContent: channelId = nil
             }
             guard let channelId, channelId != context.channelId,
                   let channel = try? await store.reader.channel(workspaceId: workspace, id: channelId), workspace == selectedWorkspaceId else { return }
@@ -720,6 +742,7 @@ final class AppModel {
         guard key == contextKey else { return }   // the workspace changed while reading
         context = stored
         observeNavigation(connection: connection, workspaceId: workspace)
+        observePins(connection: connection, workspaceId: workspace)
     }
 
     private func observeNavigation(connection: ConnectionRecord, workspaceId: String) {

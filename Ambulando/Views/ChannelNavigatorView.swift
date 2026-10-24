@@ -25,9 +25,11 @@ struct ChatStack<Banner: View>: View {
                     case .channel(_, let channelId):
                         ChannelView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId),
                                     workspace: workspace, store: store)
+                            .pinToolbar(.channel, id: channelId, workspace: workspace)
                     case .thread(_, let channelId, let threadId):
                         ThreadView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId, threadId: threadId),
                                    workspace: workspace, store: store)
+                            .pinToolbar(.thread, id: threadId, workspace: workspace)
                     }
                 } else {
                     ContentUnavailableView("Not in this workspace", systemImage: "arrow.uturn.backward",
@@ -48,6 +50,7 @@ struct ChatContextRoot: View {
                 if let channelId = model.context.channelId {
                     ChannelView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId),
                                 workspace: workspace, store: store, pushed: false)
+                        .pinToolbar(.channel, id: channelId, workspace: workspace)
                         .id("\(workspace.id):\(channelId)")   // a fresh observer per channel: no rows cross over
                 } else {
                     ChannelDirectoryView()

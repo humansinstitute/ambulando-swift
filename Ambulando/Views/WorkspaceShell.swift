@@ -36,6 +36,10 @@ struct WorkspaceShell: View {
             .tabItem { Label("Files", systemImage: "folder") }.tag(AppMode.files)
         }
         .overlay {
+            // A workspace surface covers the tabs (they keep their state underneath); the sidebar stays above both.
+            if let surface = model.surface { SurfaceStack(surface: surface, showSettings: $showSettings).id(surface) }
+        }
+        .overlay {
             if model.sidebarOpen { SidebarDrawer().zIndex(1) }
         }
         // Record mentions in messages and documents open the record in its mode and follow its context.
@@ -64,6 +68,8 @@ struct WorkspaceShell: View {
     /// Opens a mentioned record. People and agents have no native profile screen yet, so their mentions stay styled text.
     private func openRecord(kind: String, id: String) {
         guard let workspace = model.selectedWorkspace?.id else { return }
+        // Opened from the sidebar (pins) or a tab: the record opens in its tab, so any surface steps aside.
+        model.closeSurface()
         let record = id.lowercased()
         switch kind.lowercased() {
         case "task":
@@ -75,7 +81,7 @@ struct WorkspaceShell: View {
         case "channel":
             model.adoptContext(for: .channel(workspaceId: workspace, channelId: record)); model.mode = .chat
         case "thread":
-            model.openThreadMention(record)
+            model.openThreadById(record)
         default:
             return
         }

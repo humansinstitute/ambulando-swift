@@ -156,6 +156,34 @@ extension WorkspaceSync {
         }
     }
 
+    // MARK: HTML naplets
+
+    /// The HTML of an HTML naplet, read when it is opened as web content. It is not stored on the phone: publisher HTML
+    /// is shown live, and Tower re-authorizes the File on every read.
+    public func napletHTML(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, canvasId: String, napletId: String) async throws -> (title: String, html: String) {
+        try await identity.requireReader(npub: connection.signerNpub)
+        return try await api(origin: try TowerOrigin(connection.origin)).napletHTML(workspaceId: workspace.id, appNpub: workspace.appNpub, canvasId: canvasId, napletId: napletId)
+    }
+
+    // MARK: Conversations known by id
+
+    public static func threadRecordKey(_ w: String, _ t: String) -> String { "thread-record:\(w):\(t)" }
+
+    /// A thread referenced by a pin or a canvas naplet that is not stored yet: its record (for the channel), then its
+    /// messages. A 403/404 leaves nothing stored and is reported on the job key.
+    public func ensureThread(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, threadId: String, priority: SyncPriority = .user) async {
+        let sync = self
+        await engine.enqueue(Self.threadRecordKey(workspace.id, threadId), priority: priority) {
+            try await sync.identity.requireReader(npub: connection.signerNpub)
+            let thread = try await sync.api(origin: try TowerOrigin(connection.origin)).thread(workspaceId: workspace.id, appNpub: workspace.appNpub, threadId: threadId)
+            guard thread.workspaceId == workspace.id, thread.id == threadId.lowercased() else { throw TowerError.malformed("thread") }
+            // Only a channel this viewer can see locally is used (the channel list is the access authority on the phone).
+            guard try await sync.store.reader.channel(workspaceId: workspace.id, id: thread.channelId) != nil else { throw TowerError.http(status: 404, code: "channel_not_found", stage: nil) }
+            try Task.checkCancellation()
+            try await sync.store.writer.upsertThreads(workspaceId: workspace.id, [thread])
+        }
+    }
+
     // MARK: Personal pins
 
     /// The complete pin set from the record-sync feed. The store mirrors Tower; a pin or unpin still in the write queue

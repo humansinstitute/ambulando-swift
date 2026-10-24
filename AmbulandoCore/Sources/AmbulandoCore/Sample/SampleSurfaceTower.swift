@@ -29,6 +29,9 @@ public final class SampleSurfaceTower: @unchecked Sendable {
     public private(set) var log: [String] = []
     /// Method and path of every non-GET request to a canvas route.
     public private(set) var canvasWrites: [String] = []
+    /// Records the host stand-in owns (sample tasks, documents, threads, channels), as `["title", "channel_id", "scope_id"]`.
+    /// Consulted after records seeded here, so pins and references resolve against the same data the other routes serve.
+    public var recordLookup: (@Sendable (String) -> [String: Any]?)?
     /// Page size of the pin feed (Tower's is 200; tests use a small one to exercise continuation).
     public var pinPageSize = 200
 
@@ -277,8 +280,10 @@ public final class SampleSurfaceTower: @unchecked Sendable {
         return (200, [key: slice, "next_cursor": next].merging(extra) { a, _ in a })
     }
 
+    private func known(_ record: String) -> [String: Any]? { table("records")[record] ?? recordLookup?(record) }
+
     private func readable(_ record: String) -> [String: Any]? {
-        guard !list("denied_records").contains(record), let r = table("records")[record],
+        guard !list("denied_records").contains(record), let r = known(record),
               !list("denied_channels").contains(r["channel_id"] as? String ?? "") else { return nil }
         return r
     }
@@ -436,7 +441,7 @@ public final class SampleSurfaceTower: @unchecked Sendable {
         let current = table("pins").values.first { $0["key"] as? String == pinKey(type, resource) }
         guard ((current?["row_version"] as? Int) ?? 0) == expected else { return error(409, "thread_pin_conflict") }
         if pinned {
-            guard table("records")[resource] != nil else { return error(404, "thread_not_found") }
+            guard known(resource) != nil else { return error(404, "thread_not_found") }
             guard readable(resource) != nil else { return error(403, "thread_pin_target_forbidden") }
         }
         var row = writePin(type: type, resource: resource, pinned: pinned)

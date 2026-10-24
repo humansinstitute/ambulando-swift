@@ -136,13 +136,22 @@ struct WorkDestination: View {
     @ViewBuilder private var destination: some View {
         if let workspace = model.selectedWorkspace, route.workspaceId == workspace.id, let store = model.store, let connection = model.connection {
             switch route {
-            case .task(_, let id): TaskDetailView(taskId: id, workspace: workspace, store: store)
-            case .doc(_, let id): DocumentView(docId: id, workspace: workspace, store: store)
+            case .task(_, let id): TaskDetailView(taskId: id, workspace: workspace, store: store).pinToolbar(.task, id: id, workspace: workspace)
+            case .doc(_, let id): DocumentView(docId: id, workspace: workspace, store: store).pinToolbar(.document, id: id, workspace: workspace)
             case .file(_, let id): FileDetailView(fileId: id, workspace: workspace, store: store)
             case .thread(_, let channel, let thread):
                 ThreadView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channel, threadId: thread), workspace: workspace, store: store)
+                    .pinToolbar(.thread, id: thread, workspace: workspace)
             case .channel(_, let channel):
                 ChannelView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channel), workspace: workspace, store: store)
+                    .pinToolbar(.channel, id: channel, workspace: workspace)
+            case .threadById(_, let thread):
+                ThreadByIdView(threadId: thread, workspace: workspace, store: store, connectionId: connection.id)
+                    .pinToolbar(.thread, id: thread, workspace: workspace)
+            case .canvas(_, let canvas): CanvasBoardView(canvasId: canvas, workspace: workspace, store: store)
+            case .board(_, let canvas, let naplet): BoardSceneView(canvasId: canvas, napletId: naplet, workspace: workspace, store: store)
+            case .contextComponent(_, let scope, let component): ContextComponentView(scopeId: scope, componentId: component, workspace: workspace, store: store)
+            case .webContent(_, let source): WebContentView(source: source, workspace: workspace, store: store)
             }
         } else {
             ContentUnavailableView("Not in this workspace", systemImage: "arrow.uturn.backward", description: Text("This item belongs to another workspace."))

@@ -152,6 +152,9 @@ private struct SidebarContent: View {
                             .font(.footnote).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 10)
                     }
 
+                    SidebarPinnedSection()
+                    SidebarWorkspaceSection()
+
                     let unread = SidebarNavigation.unreadChannels(nav.groups, unreadChannelIds: nav.unread)
                     if !unread.isEmpty {
                         SidebarHeading(text: "Unread & Active")
