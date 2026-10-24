@@ -210,6 +210,98 @@ final class AccountRetentionTests: XCTestCase {
     }
 }
 
+
+extension AccountRetentionTests {
+    /// Lifecycle refreshes never disturb an identity that is already open in memory.
+    func testRefreshDoesNotClobberAnUnlockedIdentity() async throws {
+        let data = temporaryDirectory()
+        let identity = IdentityService(vaultURL: ProductionStorage.vaultURL(data), secrets: MemorySecretStore(), session: MemorySessionStore())
+        try await identity.importIdentity(nsec: TestKeys.nsec, pin: TestKeys.pin)
+        for _ in 0..<3 {
+            let state = await identity.refreshAvailability()
+            XCTAssertEqual(state, .unlocked(npub: TestKeys.npub))
+        }
+        let event = try await identity.sign(NostrEventTemplate(kind: 1, tags: [], content: "still signing", createdAt: 1))
+        XCTAssertEqual(event.pubkey, TestKeys.pubkeyHex)
+        let problem = await identity.vaultProblem
+        XCTAssertNil(problem)
+    }
+
+    /// A damaged vault is reported as damaged (not sealed, not missing), kept byte for byte, and never replaced.
+    func testDamagedVaultIsSurfacedSeparatelyAndKept() async throws {
+        let data = temporaryDirectory()
+        let vaultURL = ProductionStorage.vaultURL(data)
+        try FileManager.default.createDirectory(at: vaultURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let garbage = Data("{\"version\":1,\"truncated".utf8)
+        try garbage.write(to: vaultURL)
+        let identity = IdentityService(vaultURL: vaultURL, secrets: MemorySecretStore(), session: MemorySessionStore())
+        let state = await identity.state
+        XCTAssertEqual(state, .unavailable)
+        let problem = await identity.vaultProblem
+        XCTAssertEqual(problem, .damaged)
+        do { try await identity.importIdentity(nsec: TestKeys.nsec, pin: TestKeys.pin); XCTFail("import over a damaged vault") }
+        catch { XCTAssertEqual(error as? IdentityError, .exists) }
+        XCTAssertEqual(try Data(contentsOf: vaultURL), garbage)
+    }
+
+    /// With a Tower connection on the device, only that connection's identity can be imported.
+    func testImportIsBoundToTheExistingConnectionIdentity() async throws {
+        let identity = IdentityService(vaultURL: ProductionStorage.vaultURL(temporaryDirectory()), secrets: MemorySecretStore())
+        do { try await identity.importIdentity(nsec: TestKeys.otherNsec(), pin: TestKeys.pin, requiredNpub: TestKeys.npub); XCTFail("imported another key") }
+        catch { XCTAssertEqual(error as? IdentityError, .accountMismatch) }
+        let none = await identity.state
+        XCTAssertEqual(none, .none)
+        let state = try await identity.importIdentity(nsec: TestKeys.nsec, pin: TestKeys.pin, requiredNpub: TestKeys.npub)
+        XCTAssertEqual(state, .unlocked(npub: TestKeys.npub))
+    }
+
+    /// After process death on a locked iPhone the vault is sealed, but the user-enabled background read credential still
+    /// loads (matched by the public-key hint). It reads only; the identity is not shown as unlocked and nothing can be written.
+    func testBackgroundCredentialStillLoadsWhileTheVaultIsSealed() async throws {
+        let data = temporaryDirectory()
+        let vaultURL = ProductionStorage.vaultURL(data)
+        let secrets = MemorySecretStore(), background = MemoryBackgroundStore()
+        do {
+            let identity = IdentityService(vaultURL: vaultURL, secrets: secrets, background: background, session: MemorySessionStore())
+            try await identity.importIdentity(nsec: TestKeys.nsec, pin: TestKeys.pin)
+            try await identity.enableBackgroundRead(origin: try TowerOrigin("https://tower.example"), workspaceIds: [Fixtures.workspaceId])
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: vaultURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: vaultURL.path) }
+        guard (try? Data(contentsOf: vaultURL)) == nil else { throw XCTSkip("running with privileges that ignore file permissions") }
+        let identity = IdentityService(vaultURL: vaultURL, secrets: secrets, background: background, session: MemorySessionStore())
+        let loaded = await identity.loadBackgroundRead()
+        XCTAssertTrue(loaded, "the background credential is matched by the public-key hint")
+        let canRead = await identity.canReadWhileLocked
+        XCTAssertTrue(canRead)
+        let state = await identity.state
+        XCTAssertEqual(state, .unavailable, "the UI is not unlocked by the background credential")
+        let problem = await identity.vaultProblem
+        XCTAssertEqual(problem, .unreadable)
+        do { try await identity.requireReader(npub: TestKeys.npub) } catch { XCTFail("reads allowed: \(error)") }
+        do { try await identity.requireSigner(npub: TestKeys.npub); XCTFail("writes need the unlocked vault") }
+        catch { XCTAssertEqual(error as? IdentityError, .locked) }
+    }
+
+    /// A vault from an earlier build (no hint yet) gets its hint the first time it is read, so later sealed launches work.
+    func testHintIsAddedForAVaultFromAnEarlierBuild() async throws {
+        let data = temporaryDirectory()
+        let vaultURL = ProductionStorage.vaultURL(data)
+        let secrets = MemorySecretStore()
+        do {
+            let identity = IdentityService(vaultURL: vaultURL, secrets: secrets)
+            try await identity.importIdentity(nsec: TestKeys.nsec, pin: TestKeys.pin)
+        }
+        let hint = vaultURL.deletingLastPathComponent().appendingPathComponent("vault.pub")
+        try FileManager.default.removeItem(at: hint)   // as left by builds 1-5
+        let identity = IdentityService(vaultURL: vaultURL, secrets: secrets)
+        let state = await identity.state
+        XCTAssertEqual(state, .locked(npub: TestKeys.npub))
+        XCTAssertEqual(try String(contentsOf: hint, encoding: .utf8), TestKeys.pubkeyHex)
+        XCTAssertFalse(try String(contentsOf: hint, encoding: .utf8).contains("nsec"), "the hint holds only the public key")
+    }
+}
+
 /// Keychain secret that cannot be read (as while the iPhone is locked: errSecInteractionNotAllowed).
 struct UnavailableSecretStore: VaultSecretStore {
     func read() throws -> Data? { throw IdentityError.keychainUnavailable }

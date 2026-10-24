@@ -156,8 +156,11 @@ struct IdentityUnavailableView: View {
                     .accessibilityIdentifier("identity.unavailable")
             }
             VStack(spacing: 12) {
-                Text("It can't be opened right now. This happens when Ambulando was started while the iPhone was locked. Your key, Tower connection and saved work are kept; nothing needs to be imported again.")
+                Text(model.vaultProblem == .damaged
+                     ? "The identity file on this iPhone could not be opened: it looks damaged. It has been left exactly as it is, together with your Tower connection and saved work. Nothing was replaced."
+                     : "It can't be opened right now. This happens when Ambulando was started while the iPhone was locked. Your key, Tower connection and saved work are kept; nothing needs to be imported again.")
                     .font(.callout).foregroundStyle(Amb.foreground).multilineTextAlignment(.center)
+                    .accessibilityIdentifier(model.vaultProblem == .damaged ? "identity.damaged" : "identity.sealed")
                 Button {
                     checking = true
                     Task { await model.refreshIdentityAvailability(); checking = false }

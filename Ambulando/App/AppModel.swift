@@ -46,6 +46,8 @@ final class AppModel {
 
     private(set) var phase: Phase = .starting
     private(set) var identity: IdentityState = .none
+    /// Why an existing identity cannot be opened (sealed while the iPhone is locked, or a damaged file).
+    private(set) var vaultProblem: VaultReadProblem?
     private(set) var connection: ConnectionRecord?
     private(set) var selectedWorkspaceId: String?
     private(set) var syncStatus = SyncSnapshot()
@@ -148,6 +150,7 @@ final class AppModel {
     func refreshIdentityAvailability() async {
         guard let sync else { return }
         let state = await sync.identity.refreshAvailability()
+        vaultProblem = await sync.identity.vaultProblem
         guard state != identity else { return }
         identity = state
         canReadWhileLocked = await sync.identity.canReadWhileLocked
@@ -212,6 +215,7 @@ final class AppModel {
             self.fixture = fixture
             if let fixture { try await fixture.prepare(identity: identity, sync: sync, store: store) }
             self.identity = await identity.state
+            vaultProblem = await identity.vaultProblem
             canReadWhileLocked = await identity.canReadWhileLocked
             backgroundRefreshEnabled = try await store.reader.state(Self.backgroundPreferenceKey) == "on"
             lastBackgroundReport = WorkspaceSync.decodeReport(try await store.reader.state(BackgroundRefreshReport.stateKey))
@@ -267,7 +271,8 @@ final class AppModel {
 
     func importIdentity(nsec: String, pin: String) async {
         guard let sync else { return }
-        do { identity = try await sync.identity.importIdentity(nsec: nsec, pin: pin); notice = nil }
+        // With a Tower connection on this iPhone only that connection's identity can be imported (never a replacement).
+        do { identity = try await sync.identity.importIdentity(nsec: nsec, pin: pin, requiredNpub: connection?.signerNpub); notice = nil }
         catch { notice = error.localizedDescription }
     }
 

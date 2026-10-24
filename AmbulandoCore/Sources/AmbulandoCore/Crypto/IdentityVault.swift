@@ -6,7 +6,7 @@ import P256K
 import Security
 
 public enum IdentityError: LocalizedError, Equatable, Sendable {
-    case invalidNsec, invalidPIN, exists, missing, locked, keychainUnavailable, invalidVault, signerMismatch
+    case invalidNsec, invalidPIN, exists, missing, locked, keychainUnavailable, invalidVault, signerMismatch, accountMismatch
 
     public var errorDescription: String? {
         switch self {
@@ -18,6 +18,7 @@ public enum IdentityError: LocalizedError, Equatable, Sendable {
         case .keychainUnavailable: "The Ambulando Keychain secret is unavailable. Your identity has been kept."
         case .invalidVault: "Incorrect PIN or damaged identity vault. Your identity has been kept."
         case .signerMismatch: "The unlocked identity is not the one this connection was made with."
+        case .accountMismatch: "This key is not the identity this iPhone's Tower connection belongs to. Nothing was replaced; import that identity's key instead."
         }
     }
 }
@@ -75,6 +76,21 @@ public final class IdentityVault {
     private let secrets: VaultSecretStore
     private var clear: Data?
     public private(set) var publicKeyHex: String?
+    /// Why an existing vault could not be read at the last attempt (nil when it was read).
+    public private(set) var readProblem: VaultReadProblem?
+
+    /// Public key only (no secret), kept beside the vault with protection that opens after the first unlock since boot,
+    /// so a background launch on a locked iPhone still knows which identity the vault holds. It never unlocks anything;
+    /// it lets the user-enabled background read credential be matched to this identity while the vault is sealed.
+    var publicKeyHintURL: URL { url.deletingLastPathComponent().appendingPathComponent("vault.pub") }
+
+    /// The vault's public key, or (while the vault cannot be read) the stored hint.
+    public var knownPublicKeyHex: String? {
+        if let publicKeyHex { return publicKeyHex }
+        guard let text = try? String(contentsOf: publicKeyHintURL, encoding: .utf8) else { return nil }
+        let hex = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return hex.count == 64 && Data(hex: hex) != nil ? hex : nil
+    }
 
     public var isUnlocked: Bool { clear != nil }
     public var exists: Bool { FileManager.default.fileExists(atPath: url.path) }
@@ -91,8 +107,26 @@ public final class IdentityVault {
     /// iPhone is unlocked recovers it. Nothing here writes, moves or deletes the vault.
     public func reload() {
         guard publicKeyHex == nil, exists else { return }
-        publicKeyHex = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(Envelope.self, from: $0) }?.publicKeyHex
+        guard let bytes = try? Data(contentsOf: url) else { readProblem = .unreadable; return }
+        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: bytes), envelope.publicKeyHex.count == 64 else {
+            readProblem = .damaged; return
+        }
+        publicKeyHex = envelope.publicKeyHex
+        readProblem = nil
+        writePublicKeyHint(envelope.publicKeyHex)
     }
+
+    /// Writes the hint when missing or different (also brings installs from earlier builds up to date once readable).
+    private func writePublicKeyHint(_ hex: String) {
+        guard knownHint != hex else { return }
+        #if os(iOS)
+        try? Data(hex.utf8).write(to: publicKeyHintURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        #else
+        try? Data(hex.utf8).write(to: publicKeyHintURL, options: [.atomic])
+        #endif
+    }
+
+    private var knownHint: String? { (try? String(contentsOf: publicKeyHintURL, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     /// A vault file exists but its public key could not be read (protected data unavailable, or damaged).
     public var unreadable: Bool { exists && publicKeyHex == nil }
@@ -150,6 +184,8 @@ public final class IdentityVault {
         #endif
         clear = scalar
         publicKeyHex = pubkey
+        readProblem = nil
+        writePublicKeyHint(pubkey)
     }
 
     public func unlock(pin: String) throws {
@@ -185,7 +221,9 @@ public final class IdentityVault {
     public func remove() throws {
         lock()
         if exists { try FileManager.default.removeItem(at: url) }
+        try? FileManager.default.removeItem(at: publicKeyHintURL)
         publicKeyHex = nil
+        readProblem = nil
     }
 
     /// A copy of the unlocked key for the user-enabled background credential only.
@@ -206,6 +244,13 @@ public final class IdentityVault {
         return NostrEvent(id: id, pubkey: pubkey, created_at: template.createdAt, kind: template.kind,
                           tags: template.tags, content: template.content, sig: Data(signature.dataRepresentation).hex)
     }
+}
+
+public enum VaultReadProblem: Sendable, Equatable {
+    /// The file exists but iOS has not made it readable (complete file protection while the iPhone is locked).
+    case unreadable
+    /// The file was read but is not a vault this app can open. It is kept as it is; nothing replaces it.
+    case damaged
 }
 
 /// Signs and verifies events. Implementations must keep secret material inside.
@@ -336,8 +381,11 @@ public actor IdentityService: EventSigner {
     /// Whether a usable background credential is stored for this identity (it may not be loaded yet).
     public var backgroundReadEnabled: Bool {
         guard !revoked, let stored = try? backgroundStore?.read() else { return false }
-        return stored.publicKeyHex == vault.publicKeyHex
+        return stored.publicKeyHex == vault.knownPublicKeyHex
     }
+
+    /// Why the existing vault could not be read (nil when readable or absent).
+    public var vaultProblem: VaultReadProblem? { vault.exists && vault.publicKeyHex == nil ? (vault.readProblem ?? .unreadable) : nil }
 
     /// Reads the vault and the trusted-device session again (scene became active, protected data became available).
     /// A launch while the iPhone was locked could read neither; this recovers both without the PIN when allowed.
@@ -347,7 +395,16 @@ public actor IdentityService: EventSigner {
         return state
     }
 
-    @discardableResult public func importIdentity(nsec: String, pin: String) throws -> IdentityState {
+    /// Imports an identity. Refused while any vault file exists (readable or not), and, when the app already has a
+    /// Tower connection, unless the key is that connection's identity: an import never replaces an account.
+    @discardableResult public func importIdentity(nsec: String, pin: String, requiredNpub: String? = nil) throws -> IdentityState {
+        if vault.exists { throw IdentityError.exists }
+        if let requiredNpub {
+            guard var scalar = NostrKeys.secretKey(nsec: nsec) else { throw IdentityError.invalidNsec }
+            defer { scalar.resetBytes(in: 0..<scalar.count) }
+            let hex = try Data(P256K.Schnorr.PrivateKey(dataRepresentation: scalar).xonly.bytes).hex
+            guard NostrKeys.npub(publicKeyHex: hex) == requiredNpub else { throw IdentityError.accountMismatch }
+        }
         try vault.create(nsec: nsec, pin: pin)
         storeSession()
         return state
@@ -413,7 +470,9 @@ public actor IdentityService: EventSigner {
             return false
         }
         guard reader == nil else { return true }
-        guard let stored = try? backgroundStore?.read(), stored.publicKeyHex == vault.publicKeyHex else { return false }
+        // Matched against the vault's key, or (vault sealed while the iPhone is locked) the public-key hint. The state
+        // stays locked/unavailable: this credential only signs the GETs its policy allows.
+        guard let stored = try? backgroundStore?.read(), let known = vault.knownPublicKeyHex, stored.publicKeyHex == known else { return false }
         reader = BackgroundReader(credential: stored)
         return true
     }
