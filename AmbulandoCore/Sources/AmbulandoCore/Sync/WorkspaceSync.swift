@@ -1,6 +1,6 @@
 import Foundation
 
-/// The WP2 read path: nStack descriptor → workspace discovery → scopes → channels, materialised into
+/// The workspace read path: nStack descriptor → workspace discovery → scopes → channels, materialised into
 /// the local store. All work is scheduled through `SyncEngine`; views only read the store.
 public struct WorkspaceSync: Sendable {
     public let store: LocalStore
@@ -50,6 +50,7 @@ public struct WorkspaceSync: Sendable {
             let scopes = try await api.scopes(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
             try await sync.store.writer.upsertScopes(workspaceId: workspace.id, scopes, complete: true)
+            await sync.refreshDirectory(connection, workspace, priority: .background)
             for scope in scopes {
                 await sync.engine.enqueue("channels:\(workspace.id):\(scope.id)", priority: priority) {
                     try await sync.identity.requireSigner(npub: connection.signerNpub)

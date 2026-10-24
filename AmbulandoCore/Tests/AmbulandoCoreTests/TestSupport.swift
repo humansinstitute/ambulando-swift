@@ -28,8 +28,9 @@ func temporaryDirectory(_ name: String = #function) -> URL {
     return url
 }
 
-func makeIdentity(unlocked: Bool = true, directory: URL = temporaryDirectory()) async throws -> IdentityService {
-    let service = IdentityService(vaultURL: directory.appendingPathComponent("vault.json"), secrets: MemorySecretStore())
+func makeIdentity(unlocked: Bool = true, directory: URL = temporaryDirectory(),
+                  secrets: VaultSecretStore = MemorySecretStore()) async throws -> IdentityService {
+    let service = IdentityService(vaultURL: directory.appendingPathComponent("vault.json"), secrets: secrets)
     try await service.importIdentity(nsec: TestKeys.nsec, pin: TestKeys.pin)
     if !unlocked { await service.lock() }
     return service
@@ -99,6 +100,10 @@ enum Fixtures {
         ["id": id, "workspace_id": workspace, "scope_id": scope, "name": name, "description": NSNull(), "metadata": [:],
          "kind": "channel", "position": position.map { $0 as Any } ?? NSNull(), "participant_npubs": NSNull(),
          "row_version": 1, "created_at": updated, "updated_at": updated]
+    }
+
+    static func member(_ npub: String, name: String, kind: String = "human") -> [String: Any] {
+        ["actor": ["actor_id": UUID().uuidString.lowercased(), "id": UUID().uuidString.lowercased(), "npub": npub, "kind": kind, "display_name": name]]
     }
 
     static func json(_ object: [String: Any]) -> Data { try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) }

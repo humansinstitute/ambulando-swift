@@ -68,7 +68,7 @@ final class SyncEngineTests: XCTestCase {
     }
 
     func testCancelAllStopsRunningAndQueuedWork() async {
-        let engine = SyncEngine(maxConcurrent: 2)
+        let engine = SyncEngine(maxConcurrent: 2, reservedForeground: 0)
         let counter = Counter()
         for i in 0..<10 {
             await engine.enqueue("long\(i)") {
@@ -134,6 +134,10 @@ final class WorkspaceSyncTests: XCTestCase {
                 return (200, ["scope_id": Fixtures.scopeA, "channels": [Fixtures.channel(Fixtures.channel1, scope: Fixtures.scopeA, name: "features", position: 1)], "next_cursor": NSNull()])
             case "/api/v4/flightdeck-pg/workspaces/\(Fixtures.workspaceId)/scopes/\(Fixtures.scopeB)/channels":
                 return (200, ["scope_id": Fixtures.scopeB, "channels": [Fixtures.channel(Fixtures.channel2, scope: Fixtures.scopeB, name: "deploys")], "next_cursor": NSNull()])
+            case "/api/v4/flightdeck-pg/workspaces/\(Fixtures.workspaceId)/members":
+                return (200, ["members": [Fixtures.member(TestKeys.npub, name: "Me")], "next_cursor": NSNull()])
+            case "/api/v4/flightdeck-pg/workspaces/\(Fixtures.workspaceId)/me/scope-order":
+                return (200, ["scope_order": ["scope_ids": [Fixtures.scopeB], "row_version": 1]])
             default:
                 return (404, ["code": "not_found"])
             }
@@ -167,7 +171,11 @@ final class WorkspaceSyncTests: XCTestCase {
             XCTAssertEqual(event.pubkey, TestKeys.pubkeyHex)
             XCTAssertEqual(event.tags.first, ["u", request.url!.absoluteString])
         }
-        XCTAssertEqual(transport.recorded.count, 5, "descriptor + workspaces + scopes + 2 channel lists")
+        XCTAssertEqual(transport.recorded.count, 7, "descriptor + workspaces + scopes + 2 channel lists + members + scope order")
+        let members = try await store.reader.members(workspaceId: Fixtures.workspaceId)
+        XCTAssertEqual(members.map(\.label), ["Me"])
+        let order = ScopeOrdering.decode(try await store.reader.state(WorkspaceSync.scopeOrderKey(Fixtures.workspaceId)))
+        XCTAssertEqual(order, [Fixtures.scopeB])
     }
 
     func testLockedIdentityRecordsErrorAndSendsNothing() async throws {

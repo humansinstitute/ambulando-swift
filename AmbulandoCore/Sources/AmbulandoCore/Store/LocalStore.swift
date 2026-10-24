@@ -1,7 +1,7 @@
 import Foundation
 
 public enum StoreTable: String, Sendable, Hashable, CaseIterable {
-    case connections, workspaces, scopes, channels, messages, appState
+    case connections, workspaces, scopes, channels, messages, threads, members, drafts, outbox, appState
 }
 
 /// A change notification key. `workspaceId == nil` means "not workspace-scoped".
@@ -29,7 +29,7 @@ public struct ConnectionRecord: Sendable, Equatable, Identifiable, Codable {
 }
 
 enum Schema {
-    static let version = 1
+    static let version = 2
 
     static func migrate(_ db: SQLiteConnection) throws {
         let current = try db.userVersion
@@ -63,6 +63,43 @@ enum Schema {
                 CREATE TABLE app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 """)
             }
+            if current < 2 {
+                // Chat: thread structure, directory, drafts, durable outbox and per-channel catch-up state.
+                try db.execute("""
+                ALTER TABLE messages ADD COLUMN thread_source_id TEXT;
+                ALTER TABLE messages ADD COLUMN sender_label TEXT;
+                ALTER TABLE messages ADD COLUMN client_request_id TEXT;
+                CREATE INDEX messages_thread_time ON messages(workspace_id, thread_id, created_at, id);
+                CREATE TABLE threads(
+                  workspace_id TEXT NOT NULL, id TEXT NOT NULL, channel_id TEXT NOT NULL, source_message_id TEXT, title TEXT, latest TEXT,
+                  archived INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0,
+                  row_version INTEGER NOT NULL, updated_at TEXT NOT NULL, raw BLOB NOT NULL,
+                  PRIMARY KEY(workspace_id, id));
+                CREATE INDEX threads_channel ON threads(workspace_id, channel_id);
+                CREATE TABLE members(
+                  workspace_id TEXT NOT NULL, npub TEXT NOT NULL, actor_id TEXT NOT NULL, kind TEXT, display_name TEXT,
+                  PRIMARY KEY(workspace_id, npub));
+                CREATE TABLE drafts(
+                  key TEXT PRIMARY KEY,
+                  connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+                  workspace_id TEXT NOT NULL, channel_id TEXT NOT NULL, thread_id TEXT,
+                  text TEXT NOT NULL, mentions TEXT NOT NULL, updated_at TEXT NOT NULL);
+                CREATE TABLE outbox(
+                  id TEXT PRIMARY KEY,
+                  connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+                  origin TEXT NOT NULL, signer_npub TEXT NOT NULL, workspace_id TEXT NOT NULL, app_npub TEXT NOT NULL,
+                  channel_id TEXT NOT NULL, thread_id TEXT, create_thread INTEGER NOT NULL,
+                  body TEXT NOT NULL, mentions TEXT NOT NULL, request BLOB,
+                  state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_status INTEGER, last_code TEXT, last_error TEXT,
+                  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+                CREATE INDEX outbox_target ON outbox(workspace_id, channel_id, thread_id, created_at);
+                CREATE TABLE channel_sync(
+                  workspace_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+                  resume_cursor TEXT, resume_after_created_at TEXT, resume_after_id TEXT,
+                  complete INTEGER NOT NULL DEFAULT 0, synced_at TEXT NOT NULL,
+                  PRIMARY KEY(workspace_id, channel_id));
+                """)
+            }
             try db.execute("PRAGMA user_version = \(version)")
         }
     }
@@ -70,7 +107,7 @@ enum Schema {
 
 /// Guard shared by every record upsert: never let an older (row_version, updated_at) overwrite a newer row,
 /// and skip identical payloads so re-syncing unchanged data produces no change notifications.
-private func newerGuard(_ table: String) -> String {
+func newerGuard(_ table: String) -> String {
     "WHERE (excluded.row_version > \(table).row_version OR (excluded.row_version = \(table).row_version AND excluded.updated_at >= \(table).updated_at)) AND excluded.raw IS NOT \(table).raw"
 }
 
@@ -87,9 +124,9 @@ public actor StoreWriter {
 
     public func schemaVersion() throws -> Int { try db.userVersion }
 
-    private func now() -> String { ISO8601DateFormatter().string(from: Date()) }
+    func now() -> String { ISO8601DateFormatter().string(from: Date()) }
 
-    private func emit(_ keys: Set<ChangeKey>) async { if !keys.isEmpty { await changes.record(keys) } }
+    func emit(_ keys: Set<ChangeKey>) async { if !keys.isEmpty { await changes.record(keys) } }
 
     public func saveConnection(_ c: ConnectionRecord) async throws -> ConnectionRecord {
         let saved: ConnectionRecord = try db.transaction {
@@ -124,14 +161,14 @@ public actor StoreWriter {
         return ids
     }
 
-    private func workspaceStillReferenced(_ workspaceId: String) throws -> Bool {
+    func workspaceStillReferenced(_ workspaceId: String) throws -> Bool {
         let s = try db.prepare("SELECT 1 FROM workspaces WHERE workspace_id = ? LIMIT 1")
         try s.bind([.text(workspaceId)])
         return try s.step()
     }
 
-    private func deleteWorkspaceRows(_ workspaceId: String) throws {
-        for table in ["scopes", "channels", "messages"] {
+    func deleteWorkspaceRows(_ workspaceId: String) throws {
+        for table in ["scopes", "channels", "messages", "threads", "members", "channel_sync"] {
             try db.prepare("DELETE FROM \(table) WHERE workspace_id = ?").run([.text(workspaceId)])
         }
     }
@@ -159,7 +196,9 @@ public actor StoreWriter {
             return gone
         }
         var keys: Set<ChangeKey> = [ChangeKey(.workspaces)]
-        for id in removed { keys.formUnion([ChangeKey(.scopes, id), ChangeKey(.channels, id), ChangeKey(.messages, id)]) }
+        for id in removed {
+            keys.formUnion([ChangeKey(.scopes, id), ChangeKey(.channels, id), ChangeKey(.messages, id), ChangeKey(.threads, id), ChangeKey(.members, id)])
+        }
         await emit(keys)
     }
 
@@ -234,25 +273,37 @@ public actor StoreWriter {
     /// so a reader is never blocked for long (WAL readers are never blocked by the writer at all).
     @discardableResult
     public func upsertMessages(_ records: [MessageRecord]) async throws -> Int {
-        var touched = Set<String>()
-        let changed: Int = try db.transaction {
-            var changed = 0
-            let s = try db.prepare("""
-            INSERT INTO messages(workspace_id, id, channel_id, thread_id, body, sender_npub, created_at, updated_at, row_version, deleted, raw)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(workspace_id, id) DO UPDATE SET channel_id=excluded.channel_id, thread_id=excluded.thread_id, body=excluded.body,
-              sender_npub=excluded.sender_npub, updated_at=excluded.updated_at, row_version=excluded.row_version,
-              deleted=excluded.deleted, raw=excluded.raw
-            \(newerGuard("messages"))
-            """)
-            for r in records {
-                try s.run([.text(r.workspaceId), .text(r.id), .text(r.channelId), r.threadId.sql, .text(r.body), r.senderNpub.sql,
-                           .text(r.createdAt), .text(r.updatedAt), .int(Int64(r.rowVersion)), .int(r.deleted ? 1 : 0), .blob(r.raw)])
-                if db.changes > 0 { changed += 1; touched.insert(r.workspaceId) }
+        var keys = Set<ChangeKey>()
+        let changed: Int = try db.transaction { try writeMessages(records, keys: &keys) }
+        await emit(keys)
+        return changed
+    }
+
+    /// Shared by catch-up and send acknowledgement. A server row carrying the `client_request_id` of one of this
+    /// sender's outbox rows retires that row in the same transaction, so a message is never shown twice.
+    func writeMessages(_ records: [MessageRecord], keys: inout Set<ChangeKey>) throws -> Int {
+        var changed = 0
+        let s = try db.prepare("""
+        INSERT INTO messages(workspace_id, id, channel_id, thread_id, thread_source_id, body, sender_npub, sender_label, client_request_id,
+                             created_at, updated_at, row_version, deleted, raw)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(workspace_id, id) DO UPDATE SET channel_id=excluded.channel_id, thread_id=excluded.thread_id,
+          thread_source_id=excluded.thread_source_id, body=excluded.body, sender_npub=excluded.sender_npub, sender_label=excluded.sender_label,
+          client_request_id=excluded.client_request_id, updated_at=excluded.updated_at, row_version=excluded.row_version,
+          deleted=excluded.deleted, raw=excluded.raw
+        \(newerGuard("messages"))
+        """)
+        let retire = try db.prepare("DELETE FROM outbox WHERE id = ? AND workspace_id = ? AND signer_npub = ?")
+        for r in records {
+            try s.run([.text(r.workspaceId), .text(r.id), .text(r.channelId), r.threadId.sql, r.threadSourceId.sql, .text(r.body), r.senderNpub.sql,
+                       r.senderLabel.sql, r.clientRequestId.sql, .text(r.createdAt), .text(r.updatedAt), .int(Int64(r.rowVersion)),
+                       .int(r.deleted ? 1 : 0), .blob(r.raw)])
+            if db.changes > 0 { changed += 1; keys.insert(ChangeKey(.messages, r.workspaceId)) }
+            if let request = r.clientRequestId, let sender = r.senderNpub {
+                try retire.run([.text(request.lowercased()), .text(r.workspaceId), .text(sender)])
+                if db.changes > 0 { keys.insert(ChangeKey(.outbox, r.workspaceId)) }
             }
-            return changed
         }
-        await emit(Set(touched.map { ChangeKey(.messages, $0) }))
         return changed
     }
 
@@ -327,16 +378,12 @@ public actor StoreReader {
     /// Newest `limit` messages of a channel, returned oldest first for display.
     public func latestMessages(workspaceId: String, channelId: String, limit: Int) throws -> [MessageRecord] {
         let s = try db.prepare("""
-        SELECT id, thread_id, body, sender_npub, created_at, updated_at, row_version, deleted FROM messages
+        SELECT \(Self.messageColumns) FROM messages
         WHERE workspace_id = ? AND channel_id = ? ORDER BY created_at DESC, id DESC LIMIT ?
         """)
         try s.bind([.text(workspaceId), .text(channelId), .int(Int64(limit))])
         var rows: [MessageRecord] = []
-        while try s.step() {
-            rows.append(MessageRecord(workspaceId: workspaceId, id: s.text(0)!, channelId: channelId, threadId: s.text(1), body: s.text(2)!,
-                                      senderNpub: s.text(3), createdAt: s.text(4)!, updatedAt: s.text(5), rowVersion: Int(s.int(6)),
-                                      deleted: s.int(7) != 0))
-        }
+        while try s.step() { rows.append(Self.message(s, workspaceId: workspaceId)) }
         return rows.reversed()
     }
 

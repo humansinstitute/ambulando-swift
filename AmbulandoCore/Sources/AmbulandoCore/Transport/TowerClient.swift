@@ -113,6 +113,9 @@ public struct TowerClient: Sendable {
         if path.hasSuffix("/scopes") { return "scope list" }
         if path.hasSuffix("/channels") { return "channel list" }
         if path.hasSuffix("/messages") { return "messages" }
+        if path.hasSuffix("/threads") || path.contains("/threads/") { return "threads" }
+        if path.hasSuffix("/members") { return "member directory" }
+        if path.hasSuffix("/scope-order") { return "scope order" }
         return nil
     }
 
@@ -126,6 +129,20 @@ public struct TowerClient: Sendable {
 
     public func request(method: String = "GET", path: String, query: [URLQueryItem] = [], appNpub: String? = nil,
                         jsonBody: Data? = nil) async throws -> Data {
+        try await perform(try await signedRequest(method: method, path: path, query: query, appNpub: appNpub, jsonBody: jsonBody), path: path)
+    }
+
+    /// Signed request that returns any HTTP status with its body, for callers that classify failures themselves
+    /// (the outbox). Every call signs a fresh NIP-98 event over exactly `jsonBody`.
+    public func exchange(method: String, path: String, appNpub: String?, jsonBody: Data?) async throws -> (status: Int, body: Data) {
+        let request = try await signedRequest(method: method, path: path, query: [], appNpub: appNpub, jsonBody: jsonBody)
+        try Task.checkCancellation()
+        let (data, response) = try await transport.send(request)
+        try Task.checkCancellation()
+        return (response.statusCode, data)
+    }
+
+    private func signedRequest(method: String, path: String, query: [URLQueryItem], appNpub: String?, jsonBody: Data?) async throws -> URLRequest {
         guard let signer else { throw IdentityError.locked }
         try Task.checkCancellation()
         let url = try origin.url(path: path, query: query)
@@ -136,7 +153,7 @@ public struct TowerClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let appNpub { request.setValue(appNpub, forHTTPHeaderField: "x-flightdeck-pg-app-npub") }
         if jsonBody != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-        return try await perform(request, path: path)
+        return request
     }
 
     private func perform(_ request: URLRequest, path: String) async throws -> Data {
