@@ -73,6 +73,8 @@ final class AppModel {
     private(set) var backgroundRefreshEnabled = false
     /// The read-only credential is loaded right now (enabled and not revoked by a manual lock since the last unlock).
     private(set) var canReadWhileLocked = false
+    /// The last revocation could not delete the Keychain item (it stays blocked by the revocation marker).
+    private(set) var backgroundRevocationIncomplete = false
     private(set) var lastBackgroundReport: BackgroundRefreshReport?
     private(set) var backgroundScheduleError: String?
     /// First frame → stored channel list on screen, measured once per launch (budget: ≤ 400 ms; signposted).
@@ -237,8 +239,9 @@ final class AppModel {
         await liveStream?.stop()
         await sync.engine.cancelAll()
         await saver?.forgetAll()
-        identity = await sync.identity.lock()   // also deletes the background credential
-        canReadWhileLocked = false
+        identity = await sync.identity.lock()   // also revokes the background credential (fail-closed marker + Keychain delete)
+        canReadWhileLocked = await sync.identity.canReadWhileLocked
+        backgroundRevocationIncomplete = await sync.identity.revocationIncomplete
     }
 
     /// Removes only this app's sealed identity and cancels sync. Cached workspace data stays until disconnect.
@@ -408,6 +411,7 @@ final class AppModel {
             await setBackgroundPreference(false)
         }
         canReadWhileLocked = await sync.identity.canReadWhileLocked
+        backgroundRevocationIncomplete = await sync.identity.revocationIncomplete
     }
 
     private func setBackgroundPreference(_ on: Bool) async {

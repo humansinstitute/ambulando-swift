@@ -47,21 +47,134 @@ extension TowerAPI {
     }
 }
 
-/// Streaming seam for SSE. Production uses a delegate-based `URLSession` data task; tests feed chunks.
-public protocol EventStreamTransport: Sendable {
-    /// Opens the request and returns the response head with a stream of body chunks. Cancelling the consuming task
-    /// (or terminating the stream) cancels the connection.
-    func open(_ request: URLRequest) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>)
+/// Body chunks of one event-stream connection, pulled on demand (so a bounded buffer stays bounded). `cancel` closes
+/// the connection; the reader calls it when it stops reading for any reason.
+public struct EventChunks: AsyncSequence, Sendable {
+    public typealias Element = Data
+    private let pull: @Sendable () async throws -> Data?
+    public let cancel: @Sendable () -> Void
+
+    public init(next: @escaping @Sendable () async throws -> Data?, cancel: @escaping @Sendable () -> Void) { pull = next; self.cancel = cancel }
+
+    /// Wraps a stream (tests and the sample-data stand-in).
+    public init(_ stream: AsyncThrowingStream<Data, Error>) {
+        let box = IteratorBox(stream.makeAsyncIterator())
+        self.init(next: { try await box.next() }, cancel: { box.cancel() })
+    }
+
+    public struct AsyncIterator: AsyncIteratorProtocol {
+        let pull: @Sendable () async throws -> Data?
+        public mutating func next() async throws -> Data? { try await pull() }
+    }
+
+    public func makeAsyncIterator() -> AsyncIterator { AsyncIterator(pull: pull) }
 }
 
-/// `URLSession` SSE transport: ephemeral, redirects refused, delegate callbacks on URLSession's own queue.
+private actor IteratorBox {
+    var iterator: AsyncThrowingStream<Data, Error>.AsyncIterator?
+    init(_ iterator: AsyncThrowingStream<Data, Error>.AsyncIterator) { self.iterator = iterator }
+    func next() async throws -> Data? {
+        guard var it = iterator else { return nil }
+        let value = try await it.next(isolation: self)
+        iterator = value == nil ? nil : it
+        return value
+    }
+    nonisolated func cancel() { Task { await self.drop() } }
+    private func drop() { iterator = nil }
+}
+
+/// Streaming seam for SSE. Production uses a delegate-based `URLSession` data task; tests feed chunks.
+public protocol EventStreamTransport: Sendable {
+    /// Opens the request and returns the response head with the body chunks.
+    func open(_ request: URLRequest) async throws -> (HTTPURLResponse, EventChunks)
+}
+
+/// Bounded hand-off between URLSession's delegate queue and the stream reader. Bytes count against `limit` until the
+/// reader takes them; if a slow reader lets more than `limit` accumulate, the buffer fails with `overflow` instead of
+/// dropping bytes, so the stream reconnects from the last durably stored cursor and nothing is silently skipped.
+public final class BoundedChunkBuffer: @unchecked Sendable {
+    public enum Failure: Error, Equatable { case overflow }
+
+    public let limit: Int
+    private let lock = NSLock()
+    private var chunks: [Data] = []
+    private var buffered = 0
+    private var finished = false
+    private var failure: Error?
+    private var waiter: CheckedContinuation<Data?, Error>?
+
+    public init(limit: Int) { self.limit = limit }
+
+    public var bufferedBytes: Int { lock.withLock { buffered } }
+
+    /// Producer side. Returns false once the buffer has failed or finished (the producer should cancel its task).
+    @discardableResult
+    public func append(_ data: Data) -> Bool {
+        let (resume, ok): (CheckedContinuation<Data?, Error>?, Bool) = lock.withLock {
+            guard !finished, failure == nil else { return (nil, false) }
+            if let waiter { self.waiter = nil; return (waiter, true) }
+            guard buffered + data.count <= limit else {
+                failure = Failure.overflow
+                chunks.removeAll()
+                buffered = 0
+                return (nil, false)
+            }
+            chunks.append(data)
+            buffered += data.count
+            return (nil, true)
+        }
+        resume?.resume(returning: data)
+        return ok
+    }
+
+    public func finish(throwing error: Error? = nil) {
+        let resume: CheckedContinuation<Data?, Error>? = lock.withLock {
+            guard !finished else { return nil }
+            finished = true
+            if let error, failure == nil { failure = error }
+            defer { waiter = nil }
+            return waiter
+        }
+        guard let resume else { return }
+        let (pendingFailure, hasChunks) = lock.withLock { (failure, !chunks.isEmpty) }
+        if hasChunks { resume.resume(returning: lock.withLock { () -> Data? in buffered -= chunks[0].count; return chunks.removeFirst() }) }
+        else if let pendingFailure { resume.resume(throwing: pendingFailure) }
+        else { resume.resume(returning: nil) }
+    }
+
+    /// Consumer side: the next chunk, nil at the end, or the failure (an overflow is reported as soon as it happens).
+    public func next() async throws -> Data? {
+        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Data?, Error>) in
+            let action: () -> Void = lock.withLock {
+                if let failure, chunks.isEmpty || failure as? Failure == .overflow { return { c.resume(throwing: failure) } }
+                if !chunks.isEmpty {
+                    let chunk = chunks.removeFirst()
+                    buffered -= chunk.count
+                    return { c.resume(returning: chunk) }
+                }
+                if finished { return { c.resume(returning: nil) } }
+                waiter = c
+                return {}
+            }
+            action()
+        }
+    }
+
+}
+
+/// `URLSession` SSE transport: ephemeral, redirects refused, delegate callbacks on URLSession's own queue, and a
+/// bounded receive buffer per connection (`bufferLimit`).
 public final class URLSessionEventStreamTransport: NSObject, EventStreamTransport, URLSessionDataDelegate, @unchecked Sendable {
+    public static let defaultBufferLimit = 2 * 1024 * 1024
+
     private let lock = NSLock()
     private var session: URLSession!
+    private let bufferLimit: Int
     private var heads: [Int: CheckedContinuation<HTTPURLResponse, Error>] = [:]
-    private var bodies: [Int: AsyncThrowingStream<Data, Error>.Continuation] = [:]
+    private var bodies: [Int: BoundedChunkBuffer] = [:]
 
-    public override init() {
+    public init(bufferLimit: Int = URLSessionEventStreamTransport.defaultBufferLimit) {
+        self.bufferLimit = bufferLimit
         super.init()
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 90
@@ -71,19 +184,27 @@ public final class URLSessionEventStreamTransport: NSObject, EventStreamTranspor
         session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }
 
-    public func open(_ request: URLRequest) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
+    public func open(_ request: URLRequest) async throws -> (HTTPURLResponse, EventChunks) {
         let task = session.dataTask(with: request)
         let id = task.taskIdentifier
-        let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream(bufferingPolicy: .unbounded)
-        continuation.onTermination = { _ in task.cancel() }
-        lock.withLock { bodies[id] = continuation }
+        let buffer = BoundedChunkBuffer(limit: bufferLimit)
+        lock.withLock { bodies[id] = buffer }
         let head = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (c: CheckedContinuation<HTTPURLResponse, Error>) in
                 lock.withLock { heads[id] = c }
                 task.resume()
             }
         } onCancel: { task.cancel() }
-        return (head, stream)
+        let chunks = EventChunks(next: {
+            try await withTaskCancellationHandler { try await buffer.next() } onCancel: {
+                task.cancel()
+                buffer.finish(throwing: CancellationError())
+            }
+        }, cancel: {
+            task.cancel()
+            buffer.finish(throwing: CancellationError())
+        })
+        return (head, chunks)
     }
 
     public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
@@ -94,13 +215,14 @@ public final class URLSessionEventStreamTransport: NSObject, EventStreamTranspor
     }
 
     public func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        _ = lock.withLock { bodies[dataTask.taskIdentifier] }?.yield(data)
+        guard let buffer = lock.withLock({ bodies[dataTask.taskIdentifier] }) else { return }
+        if !buffer.append(data) { dataTask.cancel() }   // overflow: fail the stream, reconnect from the stored cursor
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let (head, body) = lock.withLock { (heads.removeValue(forKey: task.taskIdentifier), bodies.removeValue(forKey: task.taskIdentifier)) }
         head?.resume(throwing: error ?? URLError(.badServerResponse))
-        if let error { body?.finish(throwing: error) } else { body?.finish() }
+        body?.finish(throwing: error)
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,

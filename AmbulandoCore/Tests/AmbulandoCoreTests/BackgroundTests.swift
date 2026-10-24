@@ -244,3 +244,106 @@ struct SlowTransport: HTTPTransport {
         return try await inner.send(request)
     }
 }
+
+/// Keychain stand-in whose delete fails a set number of times.
+final class FlakyBackgroundStore: BackgroundCredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: BackgroundReadCredential?
+    var failDeletes = 0
+    func read() throws -> BackgroundReadCredential? { lock.withLock { value } }
+    func write(_ credential: BackgroundReadCredential) throws { lock.withLock { value = credential } }
+    func delete() throws {
+        try lock.withLock {
+            if failDeletes > 0 { failDeletes -= 1; throw IdentityError.keychainUnavailable }
+            value = nil
+        }
+    }
+    var stored: Bool { lock.withLock { value != nil } }
+}
+
+final class BackgroundRevocationTests: XCTestCase {
+    let read = NostrEventTemplate(kind: NIP98.kind, tags: [["u", "https://tower.example/api/v4/flightdeck-pg/workspaces"], ["method", "GET"]], content: "")
+
+    func testManualLockRevokesEvenWhenKeychainDeleteFails() async throws {
+        let directory = temporaryDirectory()
+        let secrets = MemorySecretStore(), background = FlakyBackgroundStore()
+        let identity = IdentityService(vaultURL: directory.appendingPathComponent("vault.json"), secrets: secrets, background: background)
+        try await identity.importIdentity(nsec: TestKeys.nsec, pin: TestKeys.pin)
+        try await identity.enableBackgroundRead(origin: TowerOrigin("https://tower.example"), workspaceIds: [Fixtures.workspaceId])
+        background.failDeletes = 1
+        await identity.lock()
+        XCTAssertTrue(background.stored, "the Keychain item survived the failed delete")
+        let incomplete = await identity.revocationIncomplete
+        XCTAssertTrue(incomplete, "the failure is reported, not hidden")
+        // Same process: reload and sign both refuse.
+        let reloaded = await identity.loadBackgroundRead()
+        XCTAssertFalse(reloaded)
+        do { _ = try await identity.sign(read); XCTFail("revoked credential signed") } catch {}
+        XCTAssertFalse(background.stored, "the reload attempt finished the deletion")
+        // Relaunch with the item still present (delete failing again): still refused.
+        try background.write(BackgroundReadCredential(publicKeyHex: TestKeys.pubkeyHex, secretKey: Data(hex: TestKeys.secretHex)!,
+                                                      origin: "https://tower.example", workspaceIds: [Fixtures.workspaceId], createdAt: ""))
+        background.failDeletes = 5
+        let relaunched = IdentityService(vaultURL: directory.appendingPathComponent("vault.json"), secrets: secrets, background: background)
+        let loaded = await relaunched.loadBackgroundRead()
+        XCTAssertFalse(loaded)
+        let canRead = await relaunched.canReadWhileLocked
+        XCTAssertFalse(canRead)
+        do { try await relaunched.requireReader(npub: TestKeys.npub); XCTFail() } catch {}
+        // Unlock and enable again: the user's explicit choice un-revokes with a fresh credential.
+        background.failDeletes = 0
+        try await relaunched.unlock(pin: TestKeys.pin)
+        try await relaunched.enableBackgroundRead(origin: TowerOrigin("https://tower.example"), workspaceIds: [Fixtures.workspaceId])
+        await relaunched.lock()
+        let fresh = IdentityService(vaultURL: directory.appendingPathComponent("vault.json"), secrets: secrets, background: background)
+        let afterLock = await fresh.loadBackgroundRead()
+        XCTAssertFalse(afterLock, "a manual lock after re-enabling revokes again")
+    }
+
+    func testDisableAndRemoveFailClosed() async throws {
+        for operation in ["disable", "remove"] {
+            let directory = temporaryDirectory()
+            let secrets = MemorySecretStore(), background = FlakyBackgroundStore()
+            let identity = IdentityService(vaultURL: directory.appendingPathComponent("vault.json"), secrets: secrets, background: background)
+            try await identity.importIdentity(nsec: TestKeys.nsec, pin: TestKeys.pin)
+            try await identity.enableBackgroundRead(origin: TowerOrigin("https://tower.example"), workspaceIds: [Fixtures.workspaceId])
+            background.failDeletes = 1
+            if operation == "disable" { try await identity.disableBackgroundRead() } else { _ = try? await identity.remove() }
+            let relaunched = IdentityService(vaultURL: directory.appendingPathComponent("vault.json"), secrets: secrets, background: background)
+            let loaded = await relaunched.loadBackgroundRead()
+            XCTAssertFalse(loaded, operation)
+        }
+    }
+}
+
+final class BoundedChunkBufferTests: XCTestCase {
+    func testDeliversInOrderWithinLimit() async throws {
+        let buffer = BoundedChunkBuffer(limit: 10)
+        XCTAssertTrue(buffer.append(Data("abcd".utf8)))
+        XCTAssertTrue(buffer.append(Data("efgh".utf8)))
+        XCTAssertEqual(buffer.bufferedBytes, 8)
+        let first = try await buffer.next(), second = try await buffer.next()
+        XCTAssertEqual(first, Data("abcd".utf8)); XCTAssertEqual(second, Data("efgh".utf8))
+        XCTAssertEqual(buffer.bufferedBytes, 0)
+        buffer.finish()
+        let end = try await buffer.next()
+        XCTAssertNil(end)
+    }
+
+    func testSlowConsumerOverflowFailsInsteadOfDropping() async throws {
+        let buffer = BoundedChunkBuffer(limit: 10)
+        XCTAssertTrue(buffer.append(Data(repeating: 1, count: 6)))
+        XCTAssertFalse(buffer.append(Data(repeating: 2, count: 6)), "producer told to stop")
+        XCTAssertFalse(buffer.append(Data(repeating: 3, count: 1)))
+        do { _ = try await buffer.next(); XCTFail("overflow must surface") } catch { XCTAssertEqual(error as? BoundedChunkBuffer.Failure, .overflow) }
+    }
+
+    func testWaitingConsumerGetsChunkDirectly() async throws {
+        let buffer = BoundedChunkBuffer(limit: 4)
+        async let chunk = buffer.next()
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(buffer.append(Data(repeating: 7, count: 4)))
+        let value = try await chunk
+        XCTAssertEqual(value?.count, 4)
+    }
+}

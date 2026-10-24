@@ -21,6 +21,10 @@ struct BackgroundSection: View {
                 }
                 .accessibilityIdentifier("settings.lastBackgroundRefresh")
             }
+            if model.backgroundRevocationIncomplete {
+                Text("The stored key could not be deleted from the Keychain yet. It is blocked and will not be used; Ambulando retries the deletion.")
+                    .font(.caption).foregroundStyle(Amb.destructive)
+            }
             if let error = model.backgroundScheduleError {
                 Text("iOS did not accept a background refresh request: \(error)").font(.caption).foregroundStyle(Amb.mutedForeground)
             }
@@ -34,9 +38,11 @@ struct BackgroundSection: View {
     private var footer: String {
         var text = "While Ambulando is open, changes arrive live. In the background, iOS decides if and when the app may refresh "
             + "(opportunistically, never on demand). If the app was only suspended and is still unlocked, that refresh also sends waiting messages. "
-            + "Once iOS has ended the app, nothing can be signed without your PIN unless Refresh while locked is on: it keeps a read-only key "
-            + "on this iPhone that can only fetch updates from \(host) for your workspaces. Sending still needs your PIN, and Lock now removes the key "
-            + "until you unlock again."
+            + "Once iOS has ended the app, nothing can be signed without your PIN unless Refresh while locked is on.\n\n"
+            + "Refresh while locked keeps a copy of your full signing key on this iPhone, outside the PIN-protected vault, in a Keychain item "
+            + "that stays on this device and opens after the first unlock following a restart. It is not a separate read-only key: this app "
+            + "only allows it to sign requests that fetch updates from \(host) for your workspaces, and still asks for your PIN to send "
+            + "anything. Lock now and turning this off remove it."
         if model.backgroundRefreshEnabled && !model.canReadWhileLocked { text += " Paused until you unlock." }
         return text
     }

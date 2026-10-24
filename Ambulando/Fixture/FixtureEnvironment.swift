@@ -582,7 +582,7 @@ final class FixtureEventStream: EventStreamTransport, @unchecked Sendable {
     let tower: FixtureTower
     init(tower: FixtureTower) { self.tower = tower }
 
-    func open(_ request: URLRequest) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
+    func open(_ request: URLRequest) async throws -> (HTTPURLResponse, EventChunks) {
         if tower.offline { throw URLError(.notConnectedToInternet) }
         let url = request.url!
         let authorized = request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Nostr ") == true
@@ -612,6 +612,6 @@ final class FixtureEventStream: EventStreamTransport, @unchecked Sendable {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
-        return (response, stream)
+        return (response, EventChunks(stream))
     }
 }

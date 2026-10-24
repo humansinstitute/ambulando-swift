@@ -8,7 +8,7 @@ import Foundation
 /// A dropped or silent connection (no heartbeat for `idleTimeout`) reconnects with backoff and resumes from the stored
 /// cursor. The stream runs only while the app is active; iOS does not keep it open in the background.
 public actor LiveStream {
-    public typealias Opener = @Sendable (URLRequest) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>)
+    public typealias Opener = @Sendable (URLRequest) async throws -> (HTTPURLResponse, EventChunks)
 
     let sync: WorkspaceSync
     let open: Opener
@@ -97,6 +97,7 @@ public actor LiveStream {
         let api = sync.api(origin: try TowerOrigin(connection.origin))
         let request = try await api.streamRequest(workspaceId: workspace.id, appNpub: workspace.appNpub, cursor: cursor)
         let (response, chunks) = try await open(request)
+        defer { chunks.cancel() }   // the connection never outlives this attempt
         switch response.statusCode {
         case 200: break
         case 403, 404: return (.accessLost, false)

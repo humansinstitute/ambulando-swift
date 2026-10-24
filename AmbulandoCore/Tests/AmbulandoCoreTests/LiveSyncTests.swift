@@ -302,21 +302,26 @@ final class LiveStreamTests: XCTestCase {
     final class ScriptedStreams: EventStreamTransport, @unchecked Sendable {
         let lock = NSLock()
         var scripts: [(Int, [String])] = []
+        /// Connection numbers (0-based) whose body fails with a buffer overflow after its frames.
+        var overflowAfter: Set<Int> = []
         var opened: [URLRequest] = []
-        func open(_ request: URLRequest) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
-            let (status, frames) = lock.withLock { () -> (Int, [String]) in
+        func open(_ request: URLRequest) async throws -> (HTTPURLResponse, EventChunks) {
+            let (status, frames, overflow) = lock.withLock { () -> (Int, [String], Bool) in
                 opened.append(request)
-                return scripts.isEmpty ? (200, []) : scripts.removeFirst()
+                let n = opened.count - 1
+                let (status, frames) = scripts.isEmpty ? (200, []) : scripts.removeFirst()
+                return (status, frames, overflowAfter.contains(n))
             }
             let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
             let stream = AsyncThrowingStream<Data, Error> { c in
                 Task {
                     for f in frames { c.yield(Data(f.utf8)); try? await Task.sleep(for: .milliseconds(20)) }
+                    if overflow { c.finish(throwing: BoundedChunkBuffer.Failure.overflow); return }
                     if frames.isEmpty { try? await Task.sleep(for: .seconds(30)) }
                     c.finish()
                 }
             }
-            return (response, stream)
+            return (response, EventChunks(stream))
         }
         var openedCount: Int { lock.withLock { opened.count } }
     }
@@ -383,3 +388,45 @@ final class LiveErrorPropagationTests: XCTestCase {
     }
 }
 
+
+final class LiveStreamOverflowTests: XCTestCase {
+    /// A slow reader overflows the receive buffer mid-batch: the stream fails, reconnects from the durable cursor and
+    /// the events that were not stored arrive again; nothing is skipped.
+    func testOverflowReconnectsFromStoredCursorWithoutSkipping() async throws {
+        let h = try await LiveHarness.make()
+        _ = try await h.sync.catchUpEventsAndWait(h.connection, h.workspace)
+        let seeded = h.tower.head
+        let first = h.chat.tower.seed(channel: Fixtures.channel1, body: "before overflow")
+        let second = h.chat.tower.seed(channel: Fixtures.channel1, body: "after overflow")
+        h.tower.emit("message", id: first["id"] as? String, entityRowVersion: 1)
+        h.tower.emit("message", id: second["id"] as? String, entityRowVersion: 1)
+        let events = h.tower.lock.withLock { Array(h.tower.events.suffix(2)) }
+        let streams = LiveStreamTests.ScriptedStreams()
+        // Connection 0 delivers only the first event, then overflows (the second event's bytes were never read).
+        // Connection 1 starts from the stored cursor and delivers the second event, then access is revoked to end the test.
+        streams.scripts = [(200, ["event: connected\ndata: {}\n\n", LiveStreamTests.frame(events[0])]),
+                           (200, ["event: connected\ndata: {}\n\n", LiveStreamTests.frame(events[1]),
+                                  "event: flightdeck_pg.error\ndata: {\"error\":\"workspace_access_revoked\"}\n\n"])]
+        streams.overflowAfter = [0]
+        h.transport.setHandler { request in
+            if request.url!.path.hasSuffix("/events") {
+                let asked = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "cursor" }?.value
+                return (200, ["events": [], "next_cursor": asked ?? FakeEventTower.cursor(seeded)])
+            }
+            return try h.tower.handler()(request)
+        }
+        let live = LiveStream(sync: h.sync, transport: streams, idleTimeout: .seconds(5), batchWindow: .milliseconds(30), random: { 0 })
+        await live.start(h.connection, h.workspace)
+        let feed = await h.sync.live.feed(h.workspace.id)
+        let deadline = Date().addingTimeInterval(20)
+        while await feed.status.stream != .accessLost, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        let a = try await h.store.reader.message(workspaceId: h.workspace.id, id: first["id"] as! String)
+        let b = try await h.store.reader.message(workspaceId: h.workspace.id, id: second["id"] as! String)
+        XCTAssertEqual(a?.body, "before overflow")
+        XCTAssertEqual(b?.body, "after overflow")
+        let resumed = streams.lock.withLock { streams.opened[1] }
+        let cursor = URLComponents(url: resumed.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "cursor" }?.value
+        XCTAssertEqual(cursor, events[0]["cursor"] as? String, "reconnected exactly after the last stored event")
+        await live.stop()
+    }
+}

@@ -216,10 +216,41 @@ public actor IdentityService: EventSigner {
     private let vault: IdentityVault
     private let backgroundStore: BackgroundCredentialStore?
     private var reader: BackgroundReader?
+    /// Durable revocation marker, written before the Keychain item is deleted. While it exists the credential is never
+    /// loaded or used, even if deleting the Keychain item failed (revocation fails closed).
+    private let revocationURL: URL
+    /// The last revocation could not delete the Keychain item; the marker still blocks it and deletion is retried.
+    public private(set) var revocationIncomplete = false
 
     public init(vaultURL: URL, secrets: VaultSecretStore = KeychainVaultSecretStore(), background: BackgroundCredentialStore? = nil) {
         vault = IdentityVault(url: vaultURL, secrets: secrets)
         backgroundStore = background
+        revocationURL = vaultURL.deletingLastPathComponent().appendingPathComponent("background-read.revoked")
+    }
+
+    private var revoked: Bool { FileManager.default.fileExists(atPath: revocationURL.path) }
+
+    /// Revokes the background credential: memory first, then the durable marker, then the Keychain item. Throws only
+    /// if the marker could not be written either (nothing then guarantees revocation, so the caller must report it).
+    private func revokeBackgroundRead() throws {
+        reader = nil
+        guard let backgroundStore else { return }
+        var markerWritten = revoked
+        if !markerWritten {
+            try? FileManager.default.createDirectory(at: revocationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            #if os(iOS)
+            markerWritten = (try? Data("revoked".utf8).write(to: revocationURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])) != nil
+            #else
+            markerWritten = (try? Data("revoked".utf8).write(to: revocationURL, options: [.atomic])) != nil
+            #endif
+        }
+        do {
+            try backgroundStore.delete()
+            revocationIncomplete = false
+        } catch {
+            revocationIncomplete = true
+            if !markerWritten { throw IdentityError.keychainUnavailable }
+        }
     }
 
     public var state: IdentityState {
@@ -227,12 +258,12 @@ public actor IdentityService: EventSigner {
         return vault.isUnlocked ? .unlocked(npub: npub) : .locked(npub: npub)
     }
 
-    /// True while reads can be signed without the PIN (background credential loaded and matching this identity).
-    public var canReadWhileLocked: Bool { reader != nil }
+    /// True while reads can be signed without the PIN (background credential loaded, matching, not revoked).
+    public var canReadWhileLocked: Bool { reader != nil && !revoked }
 
-    /// Whether a background credential is stored for this identity (it may not be loaded yet).
+    /// Whether a usable background credential is stored for this identity (it may not be loaded yet).
     public var backgroundReadEnabled: Bool {
-        guard let stored = try? backgroundStore?.read() else { return false }
+        guard !revoked, let stored = try? backgroundStore?.read() else { return false }
         return stored.publicKeyHex == vault.publicKeyHex
     }
 
@@ -246,17 +277,16 @@ public actor IdentityService: EventSigner {
         return state
     }
 
-    /// Manual lock. Also revokes the background credential: nothing is signed until the PIN is entered again.
+    /// Manual lock. Also revokes the background credential: nothing is signed until the PIN is entered again. The
+    /// vault is always locked; a revocation that could not be recorded at all is reported by `revocationIncomplete`.
     @discardableResult public func lock() -> IdentityState {
         vault.lock()
-        reader = nil
-        try? backgroundStore?.delete()
+        do { try revokeBackgroundRead() } catch { revocationIncomplete = true }
         return state
     }
 
     @discardableResult public func remove() throws -> IdentityState {
-        reader = nil
-        try backgroundStore?.delete()
+        try revokeBackgroundRead()
         try vault.remove()
         return state
     }
@@ -269,17 +299,18 @@ public actor IdentityService: EventSigner {
                                                   workspaceIds: workspaceIds.compactMap(lowerUUID).sorted(),
                                                   createdAt: ISO8601DateFormatter().string(from: Date()))
         try backgroundStore.write(credential)
+        // The marker is removed only once the new credential is stored, so a failed enable never un-revokes an old one.
+        try? FileManager.default.removeItem(at: revocationURL)
+        guard !revoked else { throw IdentityError.keychainUnavailable }
         reader = BackgroundReader(credential: credential)
+        revocationIncomplete = false
     }
 
-    public func disableBackgroundRead() throws {
-        reader = nil
-        try backgroundStore?.delete()
-    }
+    public func disableBackgroundRead() throws { try revokeBackgroundRead() }
 
     /// Updates the pinned workspaces (after discovery while unlocked). Only an existing credential is changed.
     public func updateBackgroundWorkspaces(origin: TowerOrigin, workspaceIds: [String]) throws {
-        guard vault.isUnlocked, let backgroundStore, let stored = try backgroundStore.read(), stored.publicKeyHex == vault.publicKeyHex,
+        guard vault.isUnlocked, !revoked, let backgroundStore, let stored = try backgroundStore.read(), stored.publicKeyHex == vault.publicKeyHex,
               stored.origin == origin.description else { return }
         let ids = workspaceIds.compactMap(lowerUUID).sorted()
         guard ids != stored.workspaceIds else { return }
@@ -291,23 +322,29 @@ public actor IdentityService: EventSigner {
 
     /// Loads a stored background credential if it belongs to this identity (launch, including background launch).
     @discardableResult public func loadBackgroundRead() -> Bool {
+        if revoked {
+            // Revoked earlier: never load, and finish deleting the Keychain item if that failed before.
+            reader = nil
+            if revocationIncomplete || (try? backgroundStore?.read()) != nil { try? revokeBackgroundRead() }
+            return false
+        }
         guard reader == nil else { return true }
         guard let stored = try? backgroundStore?.read(), stored.publicKeyHex == vault.publicKeyHex else { return false }
         reader = BackgroundReader(credential: stored)
         return true
     }
 
-    public func backgroundPolicy() -> ReadPolicy? { reader?.credential.policy }
+    public func backgroundPolicy() -> ReadPolicy? { revoked ? nil : reader?.credential.policy }
 
     public func sign(_ template: NostrEventTemplate) throws -> NostrEvent {
         if vault.isUnlocked { return try vault.sign(template) }
-        guard let reader else { throw IdentityError.locked }
+        guard let reader, !revoked else { throw IdentityError.locked }
         return try reader.sign(template)
     }
 
     public func publicKeyHex() throws -> String {
         if vault.isUnlocked, let hex = vault.publicKeyHex { return hex }
-        if let reader { return reader.credential.publicKeyHex }
+        if let reader, !revoked { return reader.credential.publicKeyHex }
         throw IdentityError.locked
     }
 
@@ -321,7 +358,7 @@ public actor IdentityService: EventSigner {
     /// the credential's policy still refuses anything but GETs on its pinned origin and workspaces.
     public func requireReader(npub: String) throws {
         if case .unlocked = state { return try requireSigner(npub: npub) }
-        guard let reader else { throw IdentityError.locked }
+        guard let reader, !revoked else { throw IdentityError.locked }
         guard reader.npub == npub else { throw IdentityError.signerMismatch }
     }
 }
