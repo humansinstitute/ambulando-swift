@@ -14,6 +14,8 @@ architecture that later packages build on. Implementation status:
   descriptor → workspace → scope → channel read path, and the core storm budget tests.
 - WP3 (0.1.0 build 2) delivers native chat, the durable outbox, drafts, mentions, scope order and
   collapse, and chat path restoration (§4.1, §5.1).
+- WP4 (0.1.0 build 3) delivers native inbox, tasks, documents, files, search, message reactions/edit/delete and chat
+  photo attachments, on schema v3 with a durable write queue (§4.2–§4.4).
 - SSE, background refresh, and device UI hitch metrics remain target design for WP5–WP6, as does
   anything else here without evidence in the parity matrix.
 
@@ -190,6 +192,47 @@ Native behaviour:
 - **Disconnect.** Disconnecting deletes the connection's drafts and outbox (cascade) after a warning
   that counts unsent messages.
 
+
+### 4.2 Durable writes (WP4, delivered)
+
+Every non-chat mutation is a `writes` row bound to connection, origin, signer, workspace and `app_npub`, sent by
+`WriteSender` through the sync engine at `user` priority (the reserved slot). Writes to one record run in order; a
+retryable failure holds only that record's later writes.
+
+| Write | Route | Replay / conflict rule |
+| --- | --- | --- |
+| Task create | `POST /channels/:c/tasks` | `client_request_id` = row id (Tower replays) |
+| Task state | `POST /tasks/:t/state` | Set-style, idempotent |
+| Task title/description/priority | `PATCH /tasks/:t` | Tower does not check `row_version` here, so the task is re-read first; a field changed by someone else since the edit began becomes `conflict` (user: Apply mine / Discard) |
+| Task assignee | `PATCH /tasks/:t` with `assigned_to_npub`, `row_version` | 409 → re-read; retry only if the assignee is still what the user saw |
+| Task / doc comment | `POST …/comments` | `metadata.client_record_id`; after an ambiguous attempt the list is read before resending |
+| Doc comment status | `PATCH /docs/:d/comments/:c` | `row_version`, re-read on 409 |
+| Message edit | `PATCH /messages/:m` | kind 33358 with `message_id`, `revision`; frozen once; 409 → conflict unless Tower already has the text |
+| Message delete | `DELETE /messages/:m?row_version=` | 404 or already deleted counts as done |
+| Reaction add / remove | `POST/DELETE /reactions` | Add reconciled by author + emoji |
+| Read position | `PUT /resource-view-states/:t/:id`, `POST …/mark-viewed` | Monotonic; applied locally first (local read position is never lowered by a sync) |
+| File upload, doc create | storage prepare → upload → complete → `POST …/files` or `…/docs` | Prepared object id persisted and reused; reconciled by storage object id |
+
+An attempt interrupted mid-request (lock, relaunch, network loss) is flagged ambiguous and reconciled before resend.
+
+### 4.3 Document bodies and saves (WP4, delivered)
+
+- `GET /docs/:d/body` bytes are verified against Tower's sha256 and cached with the document row version.
+- `DocumentBody` decodes the `document_content_v1` envelope, legacy models and raw Markdown, and re-encodes in the
+  same representation. JSON is handled by a lossless parser (key order and number lexemes preserved).
+- ProseMirror `editor_state` is authoritative: edits change only touched text blocks (mark-preserving diff); the
+  derived Markdown `content` and `content_blocks` come from a port of sol's `prosemirror-to-flightdeck.js`, checked
+  byte-for-byte against output generated from sol (`Tests/…/Fixtures/generate-prosemirror-golden.mjs`).
+- Saving: the draft is written to SQLite first; `DocumentSaver` acquires (and the editor renews every 60 s) the edit
+  lease, uploads a new storage object, and `PATCH`es with base `row_version`, base body sha256 and lease token. A stale
+  base yields Tower's recovery copy (409 `document_recovery_created`) and keeps the draft; nothing overwrites the head.
+
+### 4.4 Storage transfers (WP4, delivered)
+
+A presigned upload URL on another HTTPS host receives an unsigned `PUT` (no Authorization, no cookies, redirects
+refused). Tower's own fallback URL is accepted only as the exact `/api/v4/storage/:id` path on the pinned origin and is
+sent signed (≤ 8 MB). Anything else is refused. Downloads use the typed object route (base64 + sha256) and land in a
+content-addressed cache under Caches; chat attachments use the signed storage content route on the pinned origin.
 
 ## 5. Sync engine and responsiveness budgets
 

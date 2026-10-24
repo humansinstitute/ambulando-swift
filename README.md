@@ -17,7 +17,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-Version 0.1.0 (2). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+Version 0.1.0 (3). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -31,7 +31,17 @@ Chat is native:
   and relaunching, retries on its own, and shows unsent, retrying and rejected messages with Retry,
   Edit and Discard.
 
-Tasks, documents, files and inbox are labelled in the app as not yet available.
+Tasks, documents, files and inbox are native too (0.1.0 build 3):
+
+- **Inbox** shows mentions, assignments and unread conversations from Tower's view states. Opening an item marks it read; Mark all read and task Done are available.
+- **Tasks** as a list or board: create, change state, priority and assignee, edit, comment.
+- **Docs** render natively from the stored ProseMirror model. The editor changes only the text you touch and keeps formatting, block ids and unknown content. It holds Tower's edit lease, keeps a draft on the phone, and never overwrites a newer version (Tower keeps a recovery copy instead).
+- **Files**: folders, checksum-verified download, QuickLook and Share, upload from Photos or Files.
+- **Search** covers what is stored on the phone.
+- **Chat** messages can be reacted to, edited (signed revision) and deleted; photos are attached without location or camera metadata.
+- Every change goes through a durable queue that survives offline periods, locking and relaunch, and shows sending, retrying, failed and conflict states.
+
+Personal pins remain a follow-up. See the parity matrix for gaps.
 
 Security notes:
 
@@ -61,7 +71,7 @@ swift test --package-path AmbulandoCore --scratch-path build/core
 xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Ambulando -configuration Debug \
   -destination 'platform=iOS Simulator,name=<simulator>' -derivedDataPath build/DerivedData build
 
-# Chat UI automation on the simulator (local sample data, labelled in the app; not a live Tower)
+# Chat and WP4 UI automation on the simulator (local sample data, labelled in the app; not a live Tower)
 xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Ambulando \
   -destination 'platform=iOS Simulator,name=<simulator>' -derivedDataPath build/dd test
 
