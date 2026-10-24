@@ -376,8 +376,20 @@ SQLite WAL checkpoints are shared, so these targets are measured, not assumed.
 - **Background execution**: iOS suspends apps. WP5 uses `BGAppRefreshTask` (opportunistic, short, cancelled at
   expiry) and a background `URLSession` for presigned transfers (§5.3). There is no background SSE and no fake
   audio/location modes. SSE runs only in the foreground and resumes from the stored cursor.
-- **Signing in the background**: the identity key exists only in memory while unlocked (§1.3).
-  - **Suspended and still unlocked:** a granted refresh window does everything, including sending.
+- **Unlock and stay unlocked (build 5)**: whenever an existing identity is locked, the app shows a full-screen unlock.
+  - **What is stored:** a PIN unlock (or import) keeps the key in a device-only Keychain item
+    (`studio.otherstuff.ambulando.native.session.v1`, `WhenUnlockedThisDeviceOnly`, never synchronised). On later
+    launches it is resumed without the PIN only if it matches the vault.
+  - **Revocation:** Lock now, removing the identity and disconnecting revoke it fail-closed (revocation marker before
+    the Keychain delete). After a manual lock the PIN is always required.
+  - **Background launches:** the item is unreadable while the iPhone itself is locked, so a background launch on a
+    locked device stays locked.
+  - **Separate from the read credential:** this session is independent of the background read credential below, which
+    never unlocks the UI.
+- **Signing in the background**: without the session above the identity key exists only in memory while unlocked
+  (§1.3).
+  - **Suspended and still unlocked, or relaunched in the background while the device is unlocked (session resumed):**
+    a granted refresh window does everything, including sending.
   - **After iOS ends the process:** the app relaunches locked and makes no request (`skippedLocked`), unless the user
     turned on *Refresh while locked*.
   - **What that option stores:** a copy of the full signing key in a separate Keychain item

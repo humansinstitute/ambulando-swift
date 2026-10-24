@@ -17,7 +17,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-Version 0.1.0 (4). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+Version 0.1.0 (5). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -51,6 +51,10 @@ Live updates and background refresh (0.1.0 build 4):
   your signing key in a device-only Keychain item, used under an app-enforced rule that only allows fetching updates from
   your Tower for your workspaces. Lock now removes it.
 - Large uploads and downloads to the object store continue in a background transfer session.
+
+Unlocking (build 5): when the identity is locked the app shows a full-screen unlock. After you enter your PIN it stays
+unlocked on this iPhone, including across relaunch, until you choose Lock now, remove the identity or disconnect. The key
+for this is kept in a device-only Keychain item that iOS opens only while the iPhone is unlocked.
 
 Personal pins remain a follow-up. See the parity matrix for gaps.
 
