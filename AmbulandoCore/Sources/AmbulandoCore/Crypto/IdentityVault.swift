@@ -32,7 +32,7 @@ public protocol VaultSecretStore: Sendable {
 /// It never queries other services or access groups.
 public struct KeychainVaultSecretStore: VaultSecretStore {
     let service: String
-    public init(service: String = "studio.otherstuff.ambulando.native.identity-vault.v1") { self.service = service }
+    public init(service: String = ProductionStorage.vaultSecretService) { self.service = service }
 
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
@@ -82,8 +82,20 @@ public final class IdentityVault {
     public init(url: URL, secrets: VaultSecretStore) {
         self.url = url
         self.secrets = secrets
+        reload()
+    }
+
+    /// Reads the public key from the sealed envelope if it is not known yet. The envelope is written with complete file
+    /// protection, so while the iPhone is locked (a background launch, or an install that launched the app on a locked
+    /// phone) it exists but cannot be read. That is `unreadable`, never a missing identity; reading again once the
+    /// iPhone is unlocked recovers it. Nothing here writes, moves or deletes the vault.
+    public func reload() {
+        guard publicKeyHex == nil, exists else { return }
         publicKeyHex = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(Envelope.self, from: $0) }?.publicKeyHex
     }
+
+    /// A vault file exists but its public key could not be read (protected data unavailable, or damaged).
+    public var unreadable: Bool { exists && publicKeyHex == nil }
 
     static func validPIN(_ pin: String) -> Bool { pin.range(of: "^[0-9]{4,12}$", options: .regularExpression) != nil }
 
@@ -204,12 +216,15 @@ public protocol EventSigner: Sendable {
 
 public enum IdentityState: Sendable, Equatable {
     case none
+    /// An identity vault is on this device but cannot be read right now (the iPhone is locked, or the file is damaged).
+    /// It is never treated as `.none`: no import is offered, nothing is replaced, and it is read again when possible.
+    case unavailable
     case locked(npub: String)
     case unlocked(npub: String)
 
     public var npub: String? {
         switch self {
-        case .none: nil
+        case .none, .unavailable: nil
         case .locked(let npub), .unlocked(let npub): npub
         }
     }
@@ -271,6 +286,7 @@ public actor IdentityService: EventSigner {
     /// identity and was not revoked by Lock now, remove or disconnect. Returns whether the identity is now unlocked.
     @discardableResult public func resumeSession() -> Bool {
         if vault.isUnlocked { return true }
+        vault.reload()
         guard let sessionStore, !sessionRevoked, let stored = try? sessionStore.read(), stored.publicKeyHex == vault.publicKeyHex,
               (try? vault.unlock(secretKey: stored.secretKey)) != nil else {
             if sessionRevoked, (try? sessionStore?.read()) != nil { try? sessionStore?.delete() }   // finish an earlier failed delete
@@ -308,7 +324,9 @@ public actor IdentityService: EventSigner {
     }
 
     public var state: IdentityState {
-        guard vault.exists, let hex = vault.publicKeyHex, let npub = NostrKeys.npub(publicKeyHex: hex) else { return .none }
+        guard vault.exists else { return .none }
+        vault.reload()
+        guard let hex = vault.publicKeyHex, let npub = NostrKeys.npub(publicKeyHex: hex) else { return .unavailable }
         return vault.isUnlocked ? .unlocked(npub: npub) : .locked(npub: npub)
     }
 
@@ -319,6 +337,14 @@ public actor IdentityService: EventSigner {
     public var backgroundReadEnabled: Bool {
         guard !revoked, let stored = try? backgroundStore?.read() else { return false }
         return stored.publicKeyHex == vault.publicKeyHex
+    }
+
+    /// Reads the vault and the trusted-device session again (scene became active, protected data became available).
+    /// A launch while the iPhone was locked could read neither; this recovers both without the PIN when allowed.
+    @discardableResult public func refreshAvailability() -> IdentityState {
+        vault.reload()
+        if vault.publicKeyHex != nil { resumeSession() }
+        return state
     }
 
     @discardableResult public func importIdentity(nsec: String, pin: String) throws -> IdentityState {

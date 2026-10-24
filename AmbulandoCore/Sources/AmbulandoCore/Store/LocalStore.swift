@@ -448,7 +448,7 @@ public final class LocalStore: Sendable {
         // Readable after first unlock so opportunistic background refresh can open it.
         try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: directory.path)
         #endif
-        path = directory.appendingPathComponent("ambulando.sqlite").path
+        path = directory.appendingPathComponent(ProductionStorage.databaseFileName).path
         changes = ChangeCoalescer(interval: coalesceInterval)
         writer = try StoreWriter(path: path, changes: changes)
         reader = try StoreReader(path: path)

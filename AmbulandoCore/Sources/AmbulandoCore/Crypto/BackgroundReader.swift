@@ -55,7 +55,7 @@ public protocol BackgroundCredentialStore: Sendable {
 /// Keychain item of this app's own service only; it is never shared, synchronised or backed up off the device.
 public struct KeychainBackgroundCredentialStore: BackgroundCredentialStore {
     let service: String
-    public init(service: String = "studio.otherstuff.ambulando.native.background-read.v1") { self.service = service }
+    public init(service: String = ProductionStorage.backgroundReadService) { self.service = service }
 
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
@@ -126,7 +126,7 @@ public protocol SessionKeyStore: Sendable {
 /// synchronised; a background launch while the device is locked cannot read it.
 public struct KeychainSessionKeyStore: SessionKeyStore {
     let service: String
-    public init(service: String = "studio.otherstuff.ambulando.native.session.v1") { self.service = service }
+    public init(service: String = ProductionStorage.sessionService) { self.service = service }
 
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
