@@ -17,7 +17,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-Version 0.1.0 (3). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+Version 0.1.0 (4). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -41,6 +41,17 @@ Tasks, documents, files and inbox are native too (0.1.0 build 3):
 - **Chat** messages can be reacted to, edited (signed revision) and deleted; photos are attached without location or camera metadata.
 - Every change goes through a durable queue that survives offline periods, locking and relaunch, and shows sending, retrying, failed and conflict states.
 
+Live updates and background refresh (0.1.0 build 4):
+
+- While the app is open, changes arrive live over Tower's event stream and are applied from a stored cursor, so
+  nothing is missed across reconnects. Deletions and lost access remove local copies.
+- In the background, iOS may grant short refresh windows; the app then runs the same sync jobs and stops when iOS says
+  so. If the app was only suspended and is unlocked, waiting messages are sent too. After iOS has ended the app,
+  nothing can be signed without your PIN unless you turn on **Refresh while locked** in Settings. That keeps a copy of
+  your signing key in a device-only Keychain item, used under an app-enforced rule that only allows fetching updates from
+  your Tower for your workspaces. Lock now removes it.
+- Large uploads and downloads to the object store continue in a background transfer session.
+
 Personal pins remain a follow-up. See the parity matrix for gaps.
 
 Security notes:
@@ -54,6 +65,8 @@ Security notes:
 - Chat sends carry a kind 33358 signature over the exact (trimmed) message body. The request is frozen
   once signed and reused for every retry under the same `client_request_id`, so Tower replays instead
   of duplicating. Messages written while locked are signed only after you unlock.
+- *Refresh while locked* (off by default) is the only way the app signs without the PIN, and only for GET requests to
+  the pinned Tower and workspaces. It is not a cryptographically limited key; see architecture §6.
 - Sample-data mode (`-AmbulandoUITestFixture`) exists only in Debug builds. It uses a throwaway key
   generated on the device and an in-process stand-in for Tower, and is labelled on every screen.
 

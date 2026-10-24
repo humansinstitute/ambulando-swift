@@ -16,8 +16,10 @@ architecture that later packages build on. Implementation status:
   collapse, and chat path restoration (§4.1, §5.1).
 - WP4 (0.1.0 build 3) delivers native inbox, tasks, documents, files, search, message reactions/edit/delete and chat
   photo attachments, on schema v3 with a durable write queue (§4.2–§4.4).
-- SSE, background refresh, and device UI hitch metrics remain target design for WP5–WP6, as does
-  anything else here without evidence in the parity matrix.
+- WP5 (0.1.0 build 4) delivers foreground live updates (SSE plus a durable event cursor), the background refresh
+  pipeline, background transfers for presigned object-store URLs, the opt-in read credential, and the
+  responsiveness work in §5.2 (§5.1–§5.3, §6).
+- Device validation and packaging are WP6, as is anything else here without evidence in the parity matrix.
 
 The feature-by-feature status is in [parity-matrix.md](parity-matrix.md); package order and
 acceptance are in [work-packages.md](work-packages.md).
@@ -267,32 +269,127 @@ WP3 uses the messages route:
 - A page with rows from another channel or workspace is refused, and a cancelled catch-up never
   reconciles.
 
-Known gap: edits or deletions older than the last page appear after a full refresh until
-foreground SSE / `/sync` deltas (WP5).
+Older edits and deletions now arrive as events (§5.2 below); a forced refresh still re-reads the whole channel.
 
-Measurable budgets, enforced by tests (WP2 for the core and WP5 for the UI):
+### 5.2 Live updates and event cursor (WP5, delivered)
+
+Contract read from Tower `GET /workspaces/:w/events` and `GET /workspaces/:w/events/stream` (`flightdeck-pg.ts`):
+events are the actor-visible rows of `flightdeck_pg_outbox_events` after an opaque cursor (`row_version` order, at
+most 200 per page). The stream polls the same query every second, sends `connected`, `flightdeck_pg.event` (with
+`id`) and `flightdeck_pg.error` frames and a heartbeat comment every 25 s, and closes with
+`workspace_access_revoked` when membership or `workspace.read` is lost. Events are never pruned; a missing cursor
+means row version 0 (the whole history), so the client never opens without one.
+
+- **One cursor per connection and workspace**, in `app_state` (`events.cursor:<connection>:<workspace>`), advanced only
+  by the `events:<w>` job and saved only after the batch it covers is stored.
+- **Seeding.** Without a cursor the job reads the head from `GET /sync?limit=1` (`through_cursor`), saves it, then
+  catches the lists up directly (scopes/channels, inbox, channels this phone has read, tasks, docs, files). History is
+  never replayed.
+- **Applying a batch** (`EventPlan`): deletions are applied as tombstones (message, thread with its messages, task and
+  doc with comments and cached body, file, comment, reaction). Other events become targeted reads: one message, thread,
+  task (+ comments), doc (+ comments; a cached body is refreshed when the version moved), the channel's files,
+  reactions, view states. A record already stored at the event's `entity_row_version` is not fetched. Membership/grant
+  events rerun discovery, scope order and directory. More than 100 events in a batch fold into per-channel list
+  catch-ups. Visible-channel work runs first, three reads at a time. A 403/404 on a record removes the local copy.
+- **Bounded catch-up.** A poll reads at most 10 pages (background: 5). A longer backlog, or a cursor Tower rejects
+  (400), is a gap: the job reseeds at the head and schedules the list catch-ups. 403/404 on the event route reruns
+  discovery, which removes a workspace that is no longer listed.
+- **Access loss.** A complete scope or channel list that no longer contains a channel deletes the channel's stored
+  messages, threads, tasks, docs and bodies, files, folders, comments, reactions and view states. Drafts and unsent
+  rows stay. Cached downloaded file bytes of that channel remain in Caches until disconnect or system purge (gap).
+- **Foreground stream** (`LiveStream`). Only while the scene is active and reads can be signed: a bounded catch-up,
+  then the stream at the stored cursor with a fresh NIP-98 header (the header form; no query token). Frames are parsed
+  incrementally (`SSEParser`), queued on the workspace's `LiveFeed` and applied in ≤ 250 ms batches by the same job.
+  A batch is applied only if it starts exactly at the stored cursor. The receive buffer is bounded (2 MB): a slow
+  reader fails the stream instead of dropping bytes. No data for 60 s, a closed stream, an overflow or an error frame
+  reconnect with backoff (2 s → 60 s) from the stored cursor. Access revocation stops the stream and reruns discovery.
+  Leaving the foreground, locking or switching workspace closes it.
+
+### 5.3 Background execution (WP5, delivered; scheduling is up to iOS)
+
+- `BGAppRefreshTask` `studio.otherstuff.ambulando.native.refresh` is registered in `didFinishLaunching` and requested
+  no earlier than 15 minutes after entering the background and after each run. The handler requests the next window
+  first, runs `WorkspaceSync.backgroundRefresh` (the same keyed jobs at background priority: event catch-up for up to
+  5 workspaces, selected first; unsent messages and changes only if the identity is unlocked in memory), and calls
+  `setTaskCompleted` once. The expiration handler cancels it, which cancels every job; stored pages and cursors stay.
+  The outcome (completed, expired, skipped because locked, failed) is saved and shown in Settings.
+- Leaving the foreground with unsent items asks iOS for its finishing time (`beginBackgroundTask`) and waits for the
+  engine to go idle, cancelling at expiry.
+- Info.plist declares only `UIBackgroundModes = fetch` and the task identifier. No audio, location, VoIP or other
+  keep-alive modes. iOS decides whether a refresh window is granted; the simulator does not grant them on demand, so the
+  simulator and device evidence runs the same pipeline from a labelled sample-data hook.
+- **Background transfers.** Uploads to a presigned object-store URL (another HTTPS host) and downloads from Tower's
+  presigned `download_url` run in a background `URLSession` (`studio.otherstuff.ambulando.native.transfers`). Requests
+  are unsigned (an Authorization header is a precondition failure), cookies are off and redirects are refused. Tower's
+  own storage routes stay signed and in-process. Each transfer has a stable persisted key (upload: storage object id,
+  download: file id + sha256). A finished transfer is picked up by the next attempt instead of repeated, including
+  after relaunch (the session is recreated at launch, and `handleEventsForBackgroundURLSession` hands over the
+  completion handler). A lost task is restarted. Waiting can be cancelled without cancelling the system transfer.
+  Prepare and complete stay with `TowerAPI.store`, which commits only after Tower verifies size and hash. Downloads are
+  hashed (streamed) against the file's sha256 before entering the cache.
+
+### 5.4 Responsiveness budgets
+
+Measured budgets (WP2 core tests; WP5 UI on the simulator plus first phone readings; WP6 phone profiling):
 
 | Budget | Target | Evidence |
 | --- | --- | --- |
 | Main-actor job latency during sync storm (20k rows) | p99 ≤ 16 ms, max ≤ 50 ms | `SyncStormTests` heartbeat probe |
 | Screen read latency during storm (reader vs. writer) | p95 ≤ 25 ms | `SyncStormTests` |
 | Coalesced UI change notifications | ≤ 10 per second per observer | `ChangeCoalescerTests` |
-| Typing in the chat composer during a 20k-row storm (simulator, sample data) | no dropped characters; main-actor p99 ≤ 16 ms | WP3 `ChatFlowUITests.testTypingDuringSyncStorm`, with a no-write control run. Result: p99 4.7–10.6 ms. **Max target ≤ 50 ms not met**: 53–60 ms, comparable to the no-write control (53–70 ms), so it is attributed to keyboard/UI work, not proven sync-free. Carried to WP5 device profiling; the test's 100 ms bound is a freeze guard only |
-| Keystroke-to-render (composer) | p95 ≤ 16.7 ms at 60 Hz, no dropped characters | WP5 XCUITest + `os_signpost` (device) |
-| Hitch ratio while scrolling chat under storm | < 5 ms/s (Apple "good") | WP5 XCTOSSignpostMetric/hitch metrics |
-| Cold launch to cached workspace list | ≤ 400 ms after first frame | WP5 XCTApplicationLaunchMetric |
+| Typing in the chat composer during a 20k-row storm (simulator, sample data) | no dropped characters; main-actor p99 ≤ 16 ms, max ≤ 50 ms | `ChatFlowUITests.testTypingDuringSyncStorm` with a matched no-write control and a plain-keyboard diagnostic. WP5 build 4 full-suite run: storm p99 7.78 ms, **max 65.5 ms: the 50 ms max target is not met**; control max 64.9 ms; after the first keystroke storm max 43.1 ms vs control 60.3 ms. No dropped characters. See §5.5 for attribution |
+| Keystroke-to-render (composer) | p95 ≤ 16.7 ms at 60 Hz, no dropped characters | Not measured as such. The probe and frame monitor cover the typing window; per-keystroke render timing on the phone is WP6 |
+| Hitch ratio while scrolling chat under storm | < 5 ms/s (Apple "good") | Not met / not measurable on the simulator: `XCTOSSignpostMetric.scrollDecelerationMetric` reported no data, and the in-app frame monitor (60 Hz simulator display link, including keyboard dismissal) reads 48–75 ms/s in storm and control alike. Phone measurement is WP6 |
+| Cold launch to cached workspace list | ≤ 400 ms after first frame | In-app signpost `launch-to-cached-list`: simulator 297–316 ms (asserted ≤ 400 in `PerformanceUITests`); iPhone 15 Pro (Debug build 4, sample data) 130 and 134 ms. `XCTApplicationLaunchMetric` first frame responsive, simulator Debug: 1.03–1.12 s |
+| Channel open (navigation) | no budget set; measured | `navigationTransitionMetric` 0.50–0.51 s (simulator, includes the push animation). Profiled main-thread list layout at first open 111 → 74 ms after the WP5 row changes (single traces) |
+
+### 5.5 WP5 responsiveness work and attribution (simulator)
+
+Time Profiler traces of the control typing run (`tmp/` evidence, not committed) attribute every main-thread stall of
+50 ms or more in the typing window to:
+
+- **XCTest accessibility snapshots** (`XCTElementSnapshotRequest`), which the UI-test runner takes between typed
+  chunks; they explain the stall about 1.1 s into typing in every variant.
+- **UIKit keyboard presentation** at the first keystroke (`UITextView becomeFirstResponder` →
+  `UIKeyboardSceneDelegate setInputViews`).
+
+Keystroke handling itself peaked at 23–39 ms. None of these stalls came from sync or app code. Turning off
+autocorrection (diagnostic only) did not change the result. So the remaining gap against the 50 ms target is
+measurement-harness and system work on the simulator; the phone run in WP6 decides it. The target stays as written.
+
+App-attributable costs found and fixed in WP5:
+
+- `LiveQuery` compared large snapshots on the main actor and re-assigned `loaded`/`error` on every reload. Each
+  assignment invalidated every reading view. Comparison now runs on the concurrent executor (`@concurrent`), and only
+  changed state is assigned.
+- Sync status reached screens on every job start and finish. It now updates at most 4 times a second, only on change,
+  and chat screens read it in small subviews.
+- Message rows parsed attachment JSON, built mention-styled text and parsed and formatted dates in every body
+  evaluation. These values are now prepared off-main into a bounded display cache. Time labels are memoised per day,
+  and plain messages render as verbatim `Text`.
 
 Zero shared-resource impact cannot be guaranteed. CPU, memory bandwidth and
 SQLite WAL checkpoints are shared, so these targets are measured, not assumed.
 
 ## 6. Platform limits (honest scope)
 
-- **Background execution**: iOS suspends apps. WP5 uses `BGAppRefreshTask`
-  (opportunistic, a short window, with an expiration handler that cancels the
-  sync jobs) and a background `URLSession` for large uploads and downloads.
-  There is no indefinite background SSE and no fake audio/location modes. SSE
-  runs only while the app is in the foreground and resumes from the stored
-  cursor.
+- **Background execution**: iOS suspends apps. WP5 uses `BGAppRefreshTask` (opportunistic, short, cancelled at
+  expiry) and a background `URLSession` for presigned transfers (§5.3). There is no background SSE and no fake
+  audio/location modes. SSE runs only in the foreground and resumes from the stored cursor.
+- **Signing in the background**: the identity key exists only in memory while unlocked (§1.3).
+  - **Suspended and still unlocked:** a granted refresh window does everything, including sending.
+  - **After iOS ends the process:** the app relaunches locked and makes no request (`skippedLocked`), unless the user
+    turned on *Refresh while locked*.
+  - **What that option stores:** a copy of the full signing key in a separate Keychain item
+    (`studio.otherstuff.ambulando.native.background-read.v1`, `AfterFirstUnlockThisDeviceOnly`, never synchronised),
+    together with the pinned origin and workspace ids. It is not a server-issued or cryptographically read-only
+    credential. An app-enforced policy (`ReadPolicy`) lets it sign only NIP-98 `GET` requests under
+    `/api/v4/flightdeck-pg/workspaces` on that origin for those workspaces. It never signs kind 33358 or a request with
+    a body, and the UI keeps showing *locked*. Sending still needs the PIN.
+  - **Revocation:** Lock now, turning the option off and removing the identity write a revocation marker before
+    deleting the Keychain item. While the marker exists the credential is never loaded or used, so revocation fails
+    closed even if the delete fails (which Settings reports).
+  - **Default and contracts:** the option is off by default. No Tower contract changed.
 - **Parallelism**: Swift concurrency within one process. There is no claim of
   arbitrary parallel OS processes.
 - **Push**: Tower implements Web Push (VAPID) only, in
