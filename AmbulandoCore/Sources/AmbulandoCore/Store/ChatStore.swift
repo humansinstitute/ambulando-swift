@@ -352,7 +352,14 @@ extension StoreReader {
           (SELECT COUNT(*) FROM messages r WHERE r.workspace_id = m.workspace_id AND r.thread_id = m.thread_id AND r.id <> m.id AND r.deleted = 0),
           (SELECT MAX(r.created_at) FROM messages r WHERE r.workspace_id = m.workspace_id AND r.thread_id = m.thread_id AND r.id <> m.id AND r.deleted = 0)
         FROM messages m
-        WHERE m.workspace_id = ? AND m.channel_id = ? AND m.deleted = 0 AND (m.thread_id IS NULL OR m.thread_source_id = m.id)
+        WHERE m.workspace_id = ? AND m.channel_id = ? AND m.deleted = 0 AND (
+          m.thread_id IS NULL OR m.thread_source_id = m.id
+          -- A thread with no stored source message (Tower thread without source_message_id, or the source was deleted)
+          -- is shown by its earliest stored message, so its conversation is not hidden. No source is invented.
+          OR (NOT EXISTS (SELECT 1 FROM messages s WHERE s.workspace_id = m.workspace_id AND s.thread_id = m.thread_id
+                          AND s.deleted = 0 AND s.thread_source_id = s.id)
+              AND NOT EXISTS (SELECT 1 FROM messages e WHERE e.workspace_id = m.workspace_id AND e.thread_id = m.thread_id AND e.deleted = 0
+                              AND (e.created_at < m.created_at OR (e.created_at = m.created_at AND e.id < m.id)))))
         ORDER BY m.created_at DESC, m.id DESC LIMIT ?
         """)
         try s.bind([.text(workspaceId), .text(channelId), .int(Int64(limit))])

@@ -19,6 +19,8 @@ final class FixtureEnvironment {
     let secrets: VaultSecretStore
     /// Real Keychain item under a fixture-only service, so the opt-in background credential path runs as in production.
     let backgroundCredentials: BackgroundCredentialStore
+    /// Trusted-device session item under a fixture-only service.
+    let sessionKeys: SessionKeyStore
     /// In-process stand-in for the SSE route, fed from the fixture's event log.
     let events: EventStreamTransport
     private let live: Bool
@@ -54,10 +56,12 @@ final class FixtureEnvironment {
         tower.offline = offline
         secrets = KeychainVaultSecretStore(service: "studio.otherstuff.ambulando.native.fixture-vault.v1")
         backgroundCredentials = KeychainBackgroundCredentialStore(service: Self.backgroundService)
+        sessionKeys = KeychainSessionKeyStore(service: Self.sessionService)
         events = FixtureEventStream(tower: tower)
     }
 
     nonisolated static let backgroundService = "studio.otherstuff.ambulando.native.fixture-background.v1"
+    nonisolated static let sessionService = "studio.otherstuff.ambulando.native.fixture-session.v1"
 
     /// `-AmbulandoFixtureLive`: another member posts in #general every few seconds (≤ 5 messages), delivered through
     /// the event log and the SSE stand-in, so live updates are visible while the user types.
@@ -96,6 +100,7 @@ final class FixtureEnvironment {
         if args.contains("-AmbulandoFixtureReset") {
             try? FileManager.default.removeItem(at: directory)
             try? KeychainBackgroundCredentialStore(service: backgroundService).delete()
+            try? KeychainSessionKeyStore(service: sessionService).delete()
         }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return FixtureEnvironment(directory: directory, startLocked: args.contains("-AmbulandoFixtureLocked"),
@@ -115,7 +120,10 @@ final class FixtureEnvironment {
             try await identity.importIdentity(nsec: Bech32.encode(hrp: "nsec", data: Data(bytes)), pin: Self.pin)
             await identity.lock()
         }
-        if !startLocked { try await identity.unlock(pin: Self.pin) }
+        // `-AmbulandoFixtureLocked` starts as after Lock now (no session resume); otherwise unlock with the PIN.
+        // `-AmbulandoFixtureNoAutoUnlock` leaves the state to the session resume (stay-unlocked tests).
+        let autoUnlock = !ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureNoAutoUnlock")
+        if startLocked { await identity.lock() } else if autoUnlock, case .locked = await identity.state { try await identity.unlock(pin: Self.pin) }
         if let npub = await identity.state.npub { tower.actorNpub = npub; tower.work.actorNpub = npub; tower.labWork.actorNpub = npub }
         tower.seedWorkIfNeeded()
         if try await store.reader.connections().isEmpty, case .unlocked = await identity.state {

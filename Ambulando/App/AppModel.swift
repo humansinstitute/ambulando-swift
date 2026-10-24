@@ -130,14 +130,19 @@ final class AppModel {
             let directory = fixture?.directory ?? Self.dataDirectory
             let secrets = fixture?.secrets ?? KeychainVaultSecretStore()
             let background = fixture?.backgroundCredentials ?? KeychainBackgroundCredentialStore()
+            let session = fixture?.sessionKeys ?? KeychainSessionKeyStore()
             let (store, identity) = try await Task.detached(priority: .userInitiated) {
                 let store = try LocalStore(directory: directory.appendingPathComponent("Store", isDirectory: true))
                 // Nothing is in flight at launch; an interrupted send is queued again (Tower replays by client_request_id),
                 // and an interrupted write is reconciled before it is sent again.
                 try await store.writer.resetInterruptedSends()
                 try await store.writer.resetInterruptedWrites()
-                let identity = IdentityService(vaultURL: directory.appendingPathComponent("Identity/vault.json"), secrets: secrets, background: background)
-                // A background launch after process death can read only with the user-enabled credential.
+                let identity = IdentityService(vaultURL: directory.appendingPathComponent("Identity/vault.json"), secrets: secrets,
+                                               background: background, session: session)
+                // Trusted-device session: stays unlocked across relaunch until Lock now / remove / disconnect. The
+                // Keychain item opens only while the iPhone is unlocked, so a background launch on a locked device stays
+                // locked and can read only with the user-enabled background credential.
+                await identity.resumeSession()
                 await identity.loadBackgroundRead()
                 return (store, identity)
             }.value
@@ -291,6 +296,8 @@ final class AppModel {
         guard let sync, let store, let connection else { return }
         await liveStream?.stop()
         await sync.engine.cancelAll()
+        // Disconnecting ends the trusted-device session; the next launch asks for the PIN.
+        do { try await sync.identity.endSession() } catch { notice = error.localizedDescription }
         do {
             for workspace in workspaces.value { fileCache?.purge(workspaceId: workspace.id) }
             try await store.writer.removeConnection(id: connection.id)

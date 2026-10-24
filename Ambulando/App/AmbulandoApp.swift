@@ -40,14 +40,15 @@ struct RootView: View {
                     Notice(tone: .error, text: "Local storage could not be opened: \(message)")
                 }.padding(24)
             case .ready:
-                if model.connection != nil {
-                    WorkspaceShell()
-                } else {
-                    switch model.identity {
-                    case .none: ImportIdentityView()
-                    case .locked: UnlockView()
-                    case .unlocked: ConnectView()
-                    }
+                switch model.identity {
+                case .locked:
+                    // Whenever an existing identity is locked: a full-screen unlock instead of a workspace that cannot
+                    // sync. The selected workspace, navigation, drafts and unsent messages are kept for when it opens.
+                    LockScreen()
+                case .unlocked:
+                    if model.connection != nil { WorkspaceShell() } else { ConnectView() }
+                case .none:
+                    if model.connection != nil { WorkspaceShell() } else { ImportIdentityView() }
                 }
             }
         }

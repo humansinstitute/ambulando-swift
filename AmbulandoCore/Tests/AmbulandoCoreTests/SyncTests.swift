@@ -138,6 +138,12 @@ final class WorkspaceSyncTests: XCTestCase {
                 return (200, ["members": [Fixtures.member(TestKeys.npub, name: "Me")], "next_cursor": NSNull()])
             case "/api/v4/flightdeck-pg/workspaces/\(Fixtures.workspaceId)/me/scope-order":
                 return (200, ["scope_order": ["scope_ids": [Fixtures.scopeB], "row_version": 1]])
+            case "/api/v4/flightdeck-pg/workspaces/\(Fixtures.workspaceId)/channels/\(Fixtures.channel1)/messages",
+                 "/api/v4/flightdeck-pg/workspaces/\(Fixtures.workspaceId)/channels/\(Fixtures.channel2)/messages":
+                return (200, ["messages": [], "next_cursor": NSNull()])
+            case "/api/v4/flightdeck-pg/workspaces/\(Fixtures.workspaceId)/channels/\(Fixtures.channel1)/threads",
+                 "/api/v4/flightdeck-pg/workspaces/\(Fixtures.workspaceId)/channels/\(Fixtures.channel2)/threads":
+                return (200, ["threads": [], "next_cursor": NSNull()])
             default:
                 return (404, ["code": "not_found"])
             }
@@ -171,7 +177,8 @@ final class WorkspaceSyncTests: XCTestCase {
             XCTAssertEqual(event.pubkey, TestKeys.pubkeyHex)
             XCTAssertEqual(event.tags.first, ["u", request.url!.absoluteString])
         }
-        XCTAssertEqual(transport.recorded.count, 7, "descriptor + workspaces + scopes + 2 channel lists + members + scope order")
+        XCTAssertEqual(transport.recorded.count, 11,
+                       "descriptor + workspaces + scopes + 2 channel lists + members + scope order + messages and threads of both channels")
         let members = try await store.reader.members(workspaceId: Fixtures.workspaceId)
         XCTAssertEqual(members.map(\.label), ["Me"])
         let order = ScopeOrdering.decode(try await store.reader.state(WorkspaceSync.scopeOrderKey(Fixtures.workspaceId)))

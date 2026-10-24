@@ -161,6 +161,14 @@ public final class IdentityVault {
         clear = nil
     }
 
+    /// Unlocks from a stored session key, only if it is this vault's key.
+    func unlock(secretKey: Data) throws {
+        guard exists, let expected = publicKeyHex, secretKey.count == 32,
+              try Data(P256K.Schnorr.PrivateKey(dataRepresentation: secretKey).xonly.bytes).hex == expected else { throw IdentityError.invalidVault }
+        lock()
+        clear = Data(secretKey)
+    }
+
     /// Removes only this app's sealed identity. The per-install secret is retained.
     public func remove() throws {
         lock()
@@ -216,17 +224,63 @@ public actor IdentityService: EventSigner {
     private let vault: IdentityVault
     private let backgroundStore: BackgroundCredentialStore?
     private var reader: BackgroundReader?
+    /// Trusted-device session: the unlocked key kept in a device-only Keychain item readable only while the iPhone
+    /// itself is unlocked, so the app stays unlocked across relaunch until Lock now / remove / disconnect.
+    private let sessionStore: SessionKeyStore?
+    private let sessionRevocationURL: URL
     /// Durable revocation marker, written before the Keychain item is deleted. While it exists the credential is never
     /// loaded or used, even if deleting the Keychain item failed (revocation fails closed).
     private let revocationURL: URL
     /// The last revocation could not delete the Keychain item; the marker still blocks it and deletion is retried.
     public private(set) var revocationIncomplete = false
 
-    public init(vaultURL: URL, secrets: VaultSecretStore = KeychainVaultSecretStore(), background: BackgroundCredentialStore? = nil) {
+    public init(vaultURL: URL, secrets: VaultSecretStore = KeychainVaultSecretStore(), background: BackgroundCredentialStore? = nil,
+                session: SessionKeyStore? = nil) {
         vault = IdentityVault(url: vaultURL, secrets: secrets)
         backgroundStore = background
+        sessionStore = session
         revocationURL = vaultURL.deletingLastPathComponent().appendingPathComponent("background-read.revoked")
+        sessionRevocationURL = vaultURL.deletingLastPathComponent().appendingPathComponent("session.revoked")
     }
+
+    private var sessionRevoked: Bool { FileManager.default.fileExists(atPath: sessionRevocationURL.path) }
+
+    /// Writes the session revocation marker first, then deletes the Keychain item (fails closed like the background
+    /// credential). Throws only if neither could be done.
+    private func revokeSession() throws {
+        guard let sessionStore else { return }
+        var markerWritten = sessionRevoked
+        if !markerWritten {
+            try? FileManager.default.createDirectory(at: sessionRevocationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            markerWritten = (try? Data("revoked".utf8).write(to: sessionRevocationURL, options: [.atomic])) != nil
+        }
+        do { try sessionStore.delete() } catch {
+            revocationIncomplete = true
+            if !markerWritten { throw IdentityError.keychainUnavailable }
+        }
+    }
+
+    /// Keeps the unlocked key for the trusted-device session (after a PIN unlock or import).
+    private func storeSession() {
+        guard let sessionStore, let hex = vault.publicKeyHex, let key = try? vault.secretCopy() else { return }
+        guard (try? sessionStore.write(SessionKey(publicKeyHex: hex, secretKey: key))) != nil else { return }
+        try? FileManager.default.removeItem(at: sessionRevocationURL)
+    }
+
+    /// Resumes the trusted-device session at launch: unlocked without the PIN only if a session key exists for this
+    /// identity and was not revoked by Lock now, remove or disconnect. Returns whether the identity is now unlocked.
+    @discardableResult public func resumeSession() -> Bool {
+        if vault.isUnlocked { return true }
+        guard let sessionStore, !sessionRevoked, let stored = try? sessionStore.read(), stored.publicKeyHex == vault.publicKeyHex,
+              (try? vault.unlock(secretKey: stored.secretKey)) != nil else {
+            if sessionRevoked, (try? sessionStore?.read()) != nil { try? sessionStore?.delete() }   // finish an earlier failed delete
+            return false
+        }
+        return true
+    }
+
+    /// Ends the trusted-device session without locking the identity in memory (disconnect).
+    public func endSession() throws { try revokeSession() }
 
     private var revoked: Bool { FileManager.default.fileExists(atPath: revocationURL.path) }
 
@@ -269,11 +323,13 @@ public actor IdentityService: EventSigner {
 
     @discardableResult public func importIdentity(nsec: String, pin: String) throws -> IdentityState {
         try vault.create(nsec: nsec, pin: pin)
+        storeSession()
         return state
     }
 
     @discardableResult public func unlock(pin: String) throws -> IdentityState {
         try vault.unlock(pin: pin)
+        storeSession()
         return state
     }
 
@@ -281,11 +337,13 @@ public actor IdentityService: EventSigner {
     /// vault is always locked; a revocation that could not be recorded at all is reported by `revocationIncomplete`.
     @discardableResult public func lock() -> IdentityState {
         vault.lock()
+        do { try revokeSession() } catch { revocationIncomplete = true }
         do { try revokeBackgroundRead() } catch { revocationIncomplete = true }
         return state
     }
 
     @discardableResult public func remove() throws -> IdentityState {
+        try revokeSession()
         try revokeBackgroundRead()
         try vault.remove()
         return state

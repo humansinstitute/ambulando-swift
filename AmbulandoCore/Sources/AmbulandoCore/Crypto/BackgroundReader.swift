@@ -108,3 +108,52 @@ struct BackgroundReader {
                           tags: template.tags, content: template.content, sig: Data(signature.dataRepresentation).hex)
     }
 }
+
+/// The trusted-device session key (see `IdentityService.resumeSession`).
+public struct SessionKey: Codable, Sendable, Equatable {
+    public var version = 1
+    public let publicKeyHex: String
+    let secretKey: Data
+}
+
+public protocol SessionKeyStore: Sendable {
+    func read() throws -> SessionKey?
+    func write(_ key: SessionKey) throws
+    func delete() throws
+}
+
+/// Device-only Keychain item readable only while the iPhone is unlocked (`WhenUnlockedThisDeviceOnly`), never
+/// synchronised; a background launch while the device is locked cannot read it.
+public struct KeychainSessionKeyStore: SessionKeyStore {
+    let service: String
+    public init(service: String = "studio.otherstuff.ambulando.native.session.v1") { self.service = service }
+
+    private var query: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+         kSecAttrAccount as String: "session", kSecAttrSynchronizable as String: false]
+    }
+
+    public func read() throws -> SessionKey? {
+        var q = query
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(q as CFDictionary, &result)
+        if status == errSecItemNotFound || status == errSecInteractionNotAllowed { return nil }
+        guard status == errSecSuccess, let data = result as? Data else { throw IdentityError.keychainUnavailable }
+        return try? JSONDecoder().decode(SessionKey.self, from: data)
+    }
+
+    public func write(_ key: SessionKey) throws {
+        try delete()
+        var q = query
+        q[kSecValueData as String] = try JSONEncoder().encode(key)
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        guard SecItemAdd(q as CFDictionary, nil) == errSecSuccess else { throw IdentityError.keychainUnavailable }
+    }
+
+    public func delete() throws {
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw IdentityError.keychainUnavailable }
+    }
+}

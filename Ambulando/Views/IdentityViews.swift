@@ -77,3 +77,64 @@ struct UnlockView: View {
 }
 
 func shortNpub(_ npub: String) -> String { npub.count > 20 ? "\(npub.prefix(12))…\(npub.suffix(6))" : npub }
+
+/// Full-screen unlock shown whenever an existing identity is locked (relaunch after Lock now, a new device session,
+/// or a disconnect). The PIN field is focused at once; a wrong PIN says so and keeps the field ready for another try.
+/// The workspace behind it is not shown, and nothing is lost: selection, navigation, drafts and unsent messages
+/// return when it opens. Once unlocked, the app stays unlocked on this iPhone until Lock now.
+struct LockScreen: View {
+    @Environment(AppModel.self) private var model
+    @State private var pin = ""
+    @State private var working = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(spacing: 28) {
+            Spacer(minLength: 24)
+            VStack(spacing: 12) {
+                PassageMark(size: 88)
+                Text("Ambulando").font(.system(.largeTitle, design: .serif).weight(.semibold)).foregroundStyle(Amb.foreground)
+                Text("Locked").font(.headline).foregroundStyle(Amb.itemHeading).accessibilityIdentifier("lock.screen")
+                if let npub = model.identity.npub {
+                    Text(shortNpub(npub)).font(Amb.code).foregroundStyle(Amb.mutedForeground)
+                }
+            }
+            VStack(spacing: 12) {
+                SecureField("PIN", text: $pin)
+                    .keyboardType(.numberPad).textContentType(.oneTimeCode)
+                    .multilineTextAlignment(.center).font(.title3.monospacedDigit())
+                    .padding(12).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+                    .focused($focused)
+                    .submitLabel(.go)
+                    .onSubmit(unlock)
+                    .accessibilityIdentifier("lock.pin")
+                if let notice = model.notice { Notice(tone: .error, text: notice).accessibilityIdentifier("lock.error") }
+                Button(action: unlock) {
+                    working ? AnyView(ProgressView().tint(Amb.primaryForeground)) : AnyView(Text("Unlock"))
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(pin.count < 4 || working)
+                .accessibilityIdentifier("lock.unlock")
+                Text("Enter your PIN to open your workspaces. Ambulando stays unlocked on this iPhone until you choose Lock now.")
+                    .font(.footnote).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: 360)
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Amb.background.ignoresSafeArea())
+        .onAppear { focused = true }
+    }
+
+    private func unlock() {
+        guard pin.count >= 4, !working else { return }
+        working = true
+        Task {
+            await model.unlock(pin: pin)
+            pin = ""
+            working = false
+            focused = true
+        }
+    }
+}

@@ -65,6 +65,13 @@ public struct WorkspaceSync: Sendable {
                     let channels = try await api.channels(workspaceId: workspace.id, scopeId: scope.id, appNpub: workspace.appNpub)
                     try Task.checkCancellation()
                     try await sync.store.writer.upsertChannels(workspaceId: workspace.id, scopeId: scope.id, channels, complete: true)
+                    // Every channel's history is fetched in the background, not only the ones opened on this phone, so
+                    // conversations are there before they are opened (bounded by the engine's background slots).
+                    for channel in channels {
+                        if try await sync.store.reader.channelSync(workspaceId: workspace.id, channelId: channel.id)?.complete != true {
+                            await sync.catchUpChannel(connection, workspace, channelId: channel.id, priority: .background)
+                        }
+                    }
                 }
             }
         }

@@ -82,9 +82,18 @@ final class LifecycleUITests: XCTestCase {
         waitForExpectations(timeout: 10)
         for _ in 0..<4 where !app.buttons["Lock now"].isHittable { app.swipeDown() }
         app.buttons["Lock now"].tap()
-        let paused = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Paused until you unlock'")).firstMatch
-        for _ in 0..<6 where !paused.waitForExistence(timeout: 1) { app.swipeUp() }
-        XCTAssertTrue(paused.exists, "manual lock revoked the read-only key")
-        XCTAssertEqual(toggle.value as? String, "1", "the user's choice is kept for the next unlock")
+        // Manual lock: the full-screen unlock replaces the workspace (the read-only key is revoked in the same step;
+        // core tests prove the revocation, including a failing Keychain delete).
+        XCTAssertTrue(app.secureTextFields["lock.pin"].waitForExistence(timeout: 10), "full-screen unlock after Lock now")
+        let pin = app.secureTextFields["lock.pin"]
+        pin.tap()
+        pin.typeText("135790")
+        app.buttons["lock.unlock"].tap()
+        XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 15), "unlocking returns to the workspace")
+        app.buttons["settings"].tap()
+        let again = app.switches["settings.backgroundRefresh"]
+        XCTAssertTrue(again.waitForExistence(timeout: 10))
+        for _ in 0..<4 where !again.isHittable { app.swipeUp() }
+        XCTAssertEqual(again.value as? String, "1", "the user's choice is kept and the key is provisioned again on unlock")
     }
 }
