@@ -17,7 +17,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-Version 0.1.0 (7). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+Version 0.1.0 (8). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -85,6 +85,16 @@ Workspace surfaces and pins (build 7): the sidebar has two new sections.
 
 Editing boards and the Context Tree, reordering pins, the pipeline viewer and Autopilot session control stay in the web
 app. See the parity matrix for every gap.
+
+Sidebar loading fix (build 8): builds 6 and 7 started reading scopes and channels only for a workspace chosen in the
+switcher. Most people never choose one, so the sidebar stayed on "Loading navigation…" and the Chat channel list kept
+spinning, although the data had been fetched. The app now shows the chosen workspace while Tower lists it, otherwise the
+first listed one (without storing that as a choice), and starts its sidebar at launch and whenever the workspace list
+arrives or changes. If Tower answers with no workspaces, nothing from a removed one stays on screen. The sidebar and the
+Chat channel list now always say why they are empty: loading, a failed refresh with the error and **Retry**, locked, or
+no scopes shared; when a refresh fails over saved scopes they stay visible with a "couldn't refresh" note. The launch
+restores the open channel exactly once before it starts watching the workspace list, and no restore overwrites a channel
+or thread the user opened after it began, so a later refresh never moves the screen or touches the composer.
 
 Security notes:
 

@@ -12,6 +12,7 @@ live) and its gaps. Flight Deck tasks with the same names track the work.
 | 4 | Tasks, documents, files, inbox and other native surfaces | 3 | Each parity-matrix row for WP4 is delivered or explicitly re-scoped; read and write through existing routes; offline reads. **Delivered in 0.1.0 (3), source + simulator** (see parity matrix). Personal pins (follow-up bb1dbde7) and the listed per-row gaps stay open |
 | 5 | Background sync, resume, retry, conflict handling, performance instrumentation | 3 (4 for its surfaces) | BGAppRefreshTask + expiration cancellation; foreground SSE with cursor resume; conflict policy; measured hitch/keystroke/launch budgets under a sync storm. **Delivered in 0.1.0 (4), source + simulator, first iPhone readings** (see parity matrix and architecture §5.2–§5.5). Open: the 50 ms typing max is not met on the simulator (attributed to test harness and keyboard presentation), scroll hitch ratio and real OS-granted background windows need the phone (WP6), and no live Tower stream has been exercised. Build 5 (task 9333df01): full-screen unlock and trusted-device session, background catch-up of all channels, source-less threads shown |
 | 7 (build) | Canvas, Context Tree, agents, Toolbox and personal pins (task 6b035d34, pins task bb1dbde7) | 6 | Native surfaces over existing Tower routes with persisted, bounded, cancellable reads; ACL/error handling tested; simulator flows; upgrade retention 6 → 7; typing regression with budgets unchanged. **Delivered in 0.1.0 (7), source + simulator** (see parity matrix rows for exact gaps). Not yet installed on the phone; pipeline viewer needs a contract decision |
+| 8 (build) | Sidebar navigation repair (task 0f470ce1) | 7 | Workspace → Scope → Channel loads with no stored workspace choice, a stale choice or an empty list; loading, error + Retry, locked and empty states instead of an unexplained empty sidebar; one context restore at launch and none over what the user opened; upgrade retention 6 → 8 and 7 → 8. **Delivered in 0.1.0 (8), source + simulator**; phone install recorded in the task |
 | 6 | Simulator/device validation and packaging | 5 | Exact build number, simulator test run, **signed install and launch on Pete's own iPhone with on-device verification (required acceptance)**, device evidence reported separately from simulator evidence; no App Store submission. A simulator build is not project completion |
 
 ## Build and test commands
@@ -66,3 +67,14 @@ Build 7 result (previous release `b31005a`, build 6; fresh "Ambulando Upgrade 6t
 identical before and after; store migrated from schema 3 to 4; draft kept; the unsent message kept (it moves to
 `retrying` against the invalid origin); the new sidebar sections present; installed `CFBundleVersion` 7. The synthetic
 rows now read "previous build" instead of naming a build. Helper files used: ignored `tmp/upgrade7/`.
+
+From build 8 the check is run in the states real phones are in, not only with a stored workspace choice: seed once with
+no `selected.workspace:<c>` row (a workspace is stored as a choice only when the switcher is used, so most phones have
+none; this is what hid the build 6–7 sidebar failure) and once with a choice for a workspace that is not listed. Both
+must restore the open channel, list the scopes in the sidebar and keep identity, connection, draft and outbox.
+
+Build 8 result (fresh simulators, two upgrade runs each): 6 → 8 with no workspace choice (previous release `b31005a`)
+and 7 → 8 with a choice Tower no longer lists (previous release `b4168ac`) both passed twice. Vault SHA-256 identical
+before and after; store at schema 4 (migrated from 3 for build 6); connection, workspace, draft and the unsent message
+kept (it moves to `retrying` against the invalid origin); the stale choice is left as stored, not replaced by the
+default; installed `CFBundleVersion` 8. Helper files used: ignored `tmp/upgrade8/`.
