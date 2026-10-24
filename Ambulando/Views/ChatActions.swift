@@ -175,46 +175,29 @@ struct AttachmentView: View {
     let attachment: MessageAttachment
     let workspace: WorkspaceRecord
     @State private var url: URL?
-    @State private var image: UIImage?
     @State private var preview: URL?
 
     var body: some View {
-        Group {
-            if let image {
-                Button { preview = url } label: {
-                    Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: 240, maxHeight: 240)
-                        .clipShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Image \(attachment.filename)")
-            } else {
-                Button {
-                    if let url { preview = url } else { model.downloadAttachment(attachment.storageObjectId, in: workspace) }
-                } label: {
-                    Label(attachment.filename, systemImage: attachment.kind == "image" ? "photo" : "paperclip").font(.footnote)
-                        .padding(8).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-                }
-                .buttonStyle(.plain)
+        if attachment.kind == "image" {
+            // Inline, downsampled and cached like images in Markdown and documents.
+            StorageImageView(objectId: attachment.storageObjectId, alt: attachment.filename, workspace: workspace, maxHeight: 260, maxWidth: 280)
+        } else {
+            Button {
+                if let url { preview = url } else { model.downloadAttachment(attachment.storageObjectId, in: workspace) }
+            } label: {
+                Label(attachment.filename, systemImage: "paperclip").font(.footnote)
+                    .padding(8).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
             }
+            .buttonStyle(.plain)
+            .quickLookPreview($preview)
+            .accessibilityIdentifier("attachment")
+            .task(id: attachment.storageObjectId) { load() }
+            .onChange(of: model.syncStatus) { _, _ in if url == nil { load() } }
         }
-        .quickLookPreview($preview)
-        .accessibilityIdentifier("attachment")
-        .task(id: attachment.storageObjectId) {
-            await load()
-            if url == nil, attachment.kind == "image" { model.downloadAttachment(attachment.storageObjectId, in: workspace) }
-        }
-        .onChange(of: model.syncStatus) { _, _ in if url == nil { Task { await load() } } }
     }
 
-    private func load() async {
-        guard let cache = model.fileCache, let found = cache.attachment(workspaceId: workspace.id, objectId: attachment.storageObjectId) else { return }
-        url = found
-        if attachment.kind == "image" {
-            image = await Task.detached {
-                guard let data = try? Data(contentsOf: found) else { return nil }
-                return UIImage(data: data)?.preparingThumbnail(of: CGSize(width: 480, height: 480))
-            }.value
-        }
+    private func load() {
+        url = model.fileCache?.attachment(workspaceId: workspace.id, objectId: attachment.storageObjectId)
     }
 }
 

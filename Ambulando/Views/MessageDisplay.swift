@@ -6,9 +6,9 @@ import SwiftUI
 /// prepared off the main actor when a screen's snapshot loads and cached by message version, so row bodies, which
 /// SwiftUI may evaluate many times while scrolling or sizing a list, only look them up.
 struct MessageDisplay: Sendable {
-    /// nil for plain text (no mentions or references): rendered as verbatim `Text`, which skips attributed-string
-    /// resolution, the dominant per-row cost when a channel opens.
-    let rich: AttributedString?
+    /// nil for plain text (no Markdown, mentions or links): rendered as verbatim `Text`, which skips Markdown parsing
+    /// and attributed-string resolution, the dominant per-row cost when a channel opens.
+    let blocks: [RenderBlock]?
     let time: String
     let attachments: [MessageAttachment]
 }
@@ -48,34 +48,27 @@ final class MessageDisplayCache: @unchecked Sendable {
     }
 
     static func make(_ m: MessageRecord) -> MessageDisplay {
-        MessageDisplay(rich: MessageText.isPlain(m.body) ? nil : MessageText.attributed(m.body), time: ChatTime.label(m.createdAt), attachments: MessageAttachment.from(messageRaw: m.raw))
+        MessageDisplay(blocks: MessageText.blocks(m.body), time: ChatTime.label(m.createdAt), attachments: MessageAttachment.from(messageRaw: m.raw))
     }
 }
 
-/// Mention tokens (`@[Label](mention:type:npub)`) styled as names; record references as labels.
+/// Message bodies as the web renders them: Markdown with line breaks, mentions and record references as typed runs.
 enum MessageText {
-    static func isPlain(_ body: String) -> Bool {
-        MentionCodec.segments(body).allSatisfy { if case .text = $0 { true } else { false } }
+    static func isPlain(_ body: String) -> Bool { MarkdownBlocks.isPlainText(body) }
+
+    /// Display blocks, or nil when the body can be shown verbatim.
+    static func blocks(_ body: String) -> [RenderBlock]? {
+        isPlain(body) ? nil : MarkdownBlocks.parse(body)
     }
 
-    static func attributed(_ body: String) -> AttributedString {
-        var out = AttributedString()
-        for segment in MentionCodec.segments(body) {
-            switch segment {
-            case .text(let text): out += AttributedString(text)
-            case .mention(let mention):
-                var part = AttributedString(mention.visible)
-                part.foregroundColor = Amb.primary
-                part.font = .body.weight(.semibold)
-                part.backgroundColor = Amb.accent
-                out += part
-            case .reference(let label, _, _):
-                var part = AttributedString(label)
-                part.foregroundColor = Amb.info
-                part.font = .body.weight(.medium)
-                out += part
-            }
-        }
-        return out
+    private final class Entry { let blocks: [RenderBlock]?; init(_ blocks: [RenderBlock]?) { self.blocks = blocks } }
+    nonisolated(unsafe) private static let memo: NSCache<NSString, Entry> = { let c = NSCache<NSString, Entry>(); c.countLimit = 500; return c }()
+
+    /// `blocks(_:)` memoised by text, for views that render a body directly (task descriptions, comments, outbox rows).
+    static func cachedBlocks(_ body: String) -> [RenderBlock]? {
+        if let hit = memo.object(forKey: body as NSString) { return hit.blocks }
+        let made = blocks(body)
+        memo.setObject(Entry(made), forKey: body as NSString)
+        return made
     }
 }

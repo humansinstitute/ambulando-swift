@@ -320,6 +320,9 @@ struct MessageRow: View {
 
     var body: some View {
         let display = MessageDisplayCache.shared.display(message)
+        // Code, tables and images keep their own controls (copy, scroll, open), so such rows contain elements instead
+        // of being read as a single combined label.
+        let interactive = bodyOverride == nil && (display.blocks.map(RichBlocksInfo.hasControls) ?? false)
         HStack(alignment: .top, spacing: 10) {
             Avatar(name: sender)
             VStack(alignment: .leading, spacing: 3) {
@@ -330,7 +333,7 @@ struct MessageRow: View {
                 if let bodyOverride {
                     if !bodyOverride.isEmpty { MessageBody(text: bodyOverride, muted: true) }
                 } else if !message.body.isEmpty {
-                    if let rich = display.rich { MessageBody(attributed: rich) } else { MessageBody(plain: message.body) }
+                    if let blocks = display.blocks { RichBlocksView(blocks: blocks, workspace: workspace) } else { MessageBody(plain: message.body) }
                 }
                 if let workspace {
                     ForEach(display.attachments, id: \.storageObjectId) { AttachmentView(attachment: $0, workspace: workspace) }
@@ -339,28 +342,34 @@ struct MessageRow: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: interactive ? .contain : .combine)
         .accessibilityIdentifier("message")
     }
 }
 
-/// Renders mention tokens from the structured identity in the body (`@[Label](mention:type:npub)`) as styled names.
+/// Message, comment or description text as the web renders it: Markdown with mentions (`@[Label](mention:type:npub)`)
+/// as styled, tappable names. Plain text skips parsing.
 struct MessageBody: View {
-    private let attributed: AttributedString?
+    private let blocks: [RenderBlock]?
     private let plain: String
     var muted = false
+    var workspace: WorkspaceRecord?
 
-    init(text: String, muted: Bool = false) {
-        if MessageText.isPlain(text) { attributed = nil; plain = text } else { attributed = MessageText.attributed(text); plain = "" }
+    init(text: String, muted: Bool = false, workspace: WorkspaceRecord? = nil) {
+        blocks = MessageText.cachedBlocks(text); plain = text
         self.muted = muted
+        self.workspace = workspace
     }
-    init(attributed: AttributedString, muted: Bool = false) { self.attributed = attributed; plain = ""; self.muted = muted }
-    init(plain: String, muted: Bool = false) { attributed = nil; self.plain = plain; self.muted = muted }
+    init(plain: String, muted: Bool = false) { blocks = nil; self.plain = plain; self.muted = muted }
 
     var body: some View {
-        (attributed.map { Text($0) } ?? Text(verbatim: plain)).font(.body).foregroundStyle(muted ? Amb.mutedForeground : Amb.foreground)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+        if let blocks {
+            RichBlocksView(blocks: blocks, muted: muted, workspace: workspace)
+        } else {
+            Text(verbatim: plain).font(.body).foregroundStyle(muted ? Amb.mutedForeground : Amb.foreground)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

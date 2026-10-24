@@ -288,6 +288,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             add(100 + i, Self.studio, Self.generalChannel, text, sender: i % 2 == 0 ? Self.rick : Self.ana, label: i % 2 == 0 ? "Rick" : "Ana", thread: thread)
         }
         add(200, Self.studio, Self.designChannel, "Passage mark stays on its white backing", sender: Self.ana, label: "Ana")
+        add(202, Self.studio, Self.designChannel, Self.richMessage, sender: Self.rick, label: "Rick")
         add(201, Self.studio, Self.deploysChannel, "Staging is green", sender: Self.rick, label: "Rick")
         add(300, Self.lab, Self.notesChannel, "Lab workspace notes live here", sender: Self.ana, label: "Ana")
         return rows
@@ -486,6 +487,27 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         }
     }
 
+    /// An agent-style reply with the Markdown the web renders: heading, list, code, table, link and a mention.
+    static let richMessage = """
+    ## Build checklist
+    @[Ana](mention:person:\(FixtureTower.ana)) the **native** pass is _ready_:
+
+    1. Open the channel
+    2. Check `swift test`
+       - nested item
+
+    ```sh
+    xcodebuild -scheme Ambulando test
+    ```
+
+    | Surface | State |
+    | --- | --- |
+    | Chat | Markdown |
+    | Docs | Images |
+
+    > Notes from [the web app](https://example.invalid/notes)
+    """
+
     /// Sample tasks, documents, files and inbox items, created once per fixture directory.
     func seedWorkIfNeeded() {
         guard !work.seeded() else { return }
@@ -508,7 +530,13 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         let folder = w.seedFolder(channel: general, scope: a, title: "Reports")
         w.seedFile(channel: general, scope: a, name: "sync-results.txt", bytes: Data("Sync storm: 20,000 rows, no dropped keystrokes.\n".utf8), contentType: "text/plain")
         w.seedFile(channel: general, scope: a, name: "q3-summary.csv", bytes: Data("week,tasks\n1,12\n2,9\n".utf8), contentType: "text/csv", folder: folder)
-        if let png = Self.samplePNG() { w.seedFile(channel: design, scope: a, name: "palette.png", bytes: png, contentType: "image/png") }
+        if let png = Self.samplePNG() {
+            w.seedFile(channel: design, scope: a, name: "palette.png", bytes: png, contentType: "image/png")
+            // A Markdown document with a stored image (served by the sample storage route, loaded like any other object).
+            let image = w.seedObject(png, contentType: "image/png", name: "board.png")
+            let markdown = "# Release board\n\nThe palette as it ships:\n\n![Palette board](storage://\(image))\n\n| Step | Owner |\n| --- | --- |\n| Build | Rick |\n| Review | Ana |\n"
+            w.seedDoc(scope: a, channel: design, title: "Release board (Markdown)", body: Data(markdown.utf8), contentType: "text/markdown")
+        }
 
         w.seedViewState(type: "task", resource: review, scope: a, channel: general, activity: 3, viewed: 1, attention: 3)
         w.seedViewState(type: "document", resource: plan, scope: a, channel: general, activity: 2, viewed: 1)

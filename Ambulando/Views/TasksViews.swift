@@ -243,7 +243,7 @@ struct TaskDetailView: View {
                     header(row)
                     ForEach(row.pending) { WriteStatusLine(item: $0, label: label(for: $0)) }
                     if let description = row.task.description, !description.isEmpty {
-                        MessageBody(text: description).ambCard()
+                        MessageBody(text: description, workspace: workspace).ambCard()
                     }
                     comments
                 } else if snapshot.loaded {

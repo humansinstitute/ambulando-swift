@@ -176,7 +176,8 @@ struct DocumentView: View {
                 }
                 if let reason = snapshot.value.readOnlyReason { Notice(tone: .info, text: reason) }
                 if snapshot.value.hasBody {
-                    DocBlocksView(blocks: snapshot.value.blocks).accessibilityIdentifier("doc.body")
+                    RichBlocksView(blocks: snapshot.value.blocks, style: .document, workspace: workspace)
+                        .accessibilityElement(children: .contain).accessibilityIdentifier("doc.body")
                 } else if snapshot.loaded {
                     SyncNote(text: model.syncError(forKey: WorkspaceSync.docKey(workspace.id, docId))
                              ?? (model.isUnlocked ? "Loading document…" : "This document is not saved on this iPhone yet. Unlock to load it."))
@@ -274,99 +275,6 @@ struct DocumentView: View {
             }
             return snapshot
         }
-    }
-}
-
-/// Native rendering of document blocks. Formatting comes from the stored model; nothing here writes back.
-struct DocBlocksView: View {
-    let blocks: [RenderBlock]
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in DocBlockView(block: block) }
-        }
-    }
-}
-
-struct DocBlockView: View {
-    let block: RenderBlock
-
-    var body: some View {
-        switch block {
-        case .heading(let level, let runs):
-            Text(InlineText.attributed(runs)).font(level <= 1 ? .title2.weight(.bold) : level == 2 ? .title3.weight(.semibold) : .headline)
-                .foregroundStyle(Amb.foreground)
-        case .paragraph(let runs):
-            Text(InlineText.attributed(runs)).font(.body).foregroundStyle(Amb.foreground).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-        case .code(_, let text):
-            ScrollView(.horizontal) { Text(text).font(Amb.code).textSelection(.enabled).padding(10) }
-                .background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-        case .quote(let blocks):
-            HStack(alignment: .top, spacing: 10) {
-                Rectangle().fill(Amb.border).frame(width: 3)
-                VStack(alignment: .leading, spacing: 8) { ForEach(Array(blocks.enumerated()), id: \.offset) { DocBlockView(block: $0.element) } }
-            }
-        case .list(let ordered, let start, let items):
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        if let checked = item.checked {
-                            Image(systemName: checked ? "checkmark.square.fill" : "square").foregroundStyle(checked ? Amb.success : Amb.mutedForeground)
-                        } else {
-                            Text(ordered ? "\(start + index)." : "•").foregroundStyle(Amb.mutedForeground)
-                        }
-                        VStack(alignment: .leading, spacing: 4) { ForEach(Array(item.blocks.enumerated()), id: \.offset) { DocBlockView(block: $0.element) } }
-                    }
-                }
-            }
-        case .table(let rows):
-            ScrollView(.horizontal) {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { r, row in
-                        GridRow { ForEach(Array(row.enumerated()), id: \.offset) { Text(InlineText.attributed($0.element)).font(r == 0 ? .subheadline.weight(.semibold) : .subheadline) } }
-                        if r == 0 { Divider() }
-                    }
-                }
-                .padding(10)
-            }
-            .background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-        case .image(let alt, _):
-            Label(alt.isEmpty ? "Image (open on the web to view)" : "Image: \(alt)", systemImage: "photo").font(.footnote).foregroundStyle(Amb.mutedForeground)
-        case .rule:
-            Divider()
-        case .preserved(let type, let text):
-            VStack(alignment: .leading, spacing: 4) {
-                Label("\(type) block — shown on the web; kept unchanged here", systemImage: "square.dashed").font(.caption).foregroundStyle(Amb.mutedForeground)
-                if !text.isEmpty { Text(text).font(.footnote).foregroundStyle(Amb.mutedForeground) }
-            }
-            .padding(8).frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl).stroke(Amb.border, style: StrokeStyle(lineWidth: 1, dash: [4])))
-            .accessibilityIdentifier("doc.preserved")
-        }
-    }
-}
-
-enum InlineText {
-    /// Styles come from presentation intents so they combine with the block's font (headings stay heading-sized).
-    static func attributed(_ runs: [InlineRun]) -> AttributedString {
-        var out = AttributedString()
-        for run in runs {
-            var part = AttributedString(run.text)
-            var intent: InlinePresentationIntent = []
-            if run.bold { intent.insert(.stronglyEmphasized) }
-            if run.italic { intent.insert(.emphasized) }
-            if run.code { intent.insert(.code) }
-            if run.strike { intent.insert(.strikethrough) }
-            if !intent.isEmpty { part.inlinePresentationIntent = intent }
-            if run.underline { part.underlineStyle = .single }
-            if let link = run.link, let url = URL(string: link), ["https", "http", "mailto"].contains(url.scheme?.lowercased() ?? "") {
-                part.link = url
-                part.foregroundColor = Amb.info
-            }
-            if run.mention || run.object { part.foregroundColor = Amb.primary; part.backgroundColor = Amb.accent }
-            out += part
-        }
-        return out
     }
 }
 

@@ -123,6 +123,16 @@ public final class SampleWorkTower: @unchecked Sendable {
         return id
     }
 
+    /// A stored object on its own (an image referenced from a document or message as `storage://<id>`).
+    @discardableResult
+    public func seedObject(_ bytes: Data, contentType: String, name: String) -> String {
+        lock.withLock {
+            let id = storeObject(bytes, contentType: contentType, name: name)
+            persist()
+            return id
+        }
+    }
+
     @discardableResult
     public func seedDoc(id: String = UUID().uuidString.lowercased(), scope: String, channel: String, title: String, body: Data, contentType: String) -> String {
         lock.withLock {
