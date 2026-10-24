@@ -236,6 +236,32 @@ refused). Tower's own fallback URL is accepted only as the exact `/api/v4/storag
 sent signed (≤ 8 MB). Anything else is refused. Downloads use the typed object route (base64 + sha256) and land in a
 content-addressed cache under Caches; chat attachments use the signed storage content route on the pinned origin.
 
+### 4.5 Account retention and the shared context (build 6)
+
+Every build keeps the account in the same places: Application Support `AmbulandoNative/Store/ambulando.sqlite`,
+`AmbulandoNative/Identity/vault.json` and the Keychain services `…identity-vault.v1`, `…session.v1` and
+`…background-read.v1` (`ProductionStorage`, pinned by `AccountRetentionTests`). Sample-data mode uses
+`Caches/AmbulandoFixture` and its own Keychain services, and is refused on a physical iPhone without
+`-AmbulandoFixtureOnDevice`.
+
+The vault keeps complete file protection. A process started while the iPhone is locked (background refresh, transfer
+events, an install that launches the app) cannot read it. Up to build 5 that read failure produced `.none` ("no
+identity") for the rest of the process. Since build 6:
+
+- A vault that exists but cannot be read is `.unavailable` with `vaultProblem` `.unreadable` (sealed) or `.damaged`.
+  It is never `.none`, and the app shows a recovery screen, not import.
+- It is read again when the scene becomes active and on `protectedDataDidBecomeAvailable`, and the trusted-device
+  session then resumes. An identity already open in memory is never replaced by these refreshes.
+- Import is refused while any vault file exists, and (with a Tower connection) for any key except the connection's.
+- `vault.pub` holds only the public key, readable after first unlock. It lets the opt-in background read credential be
+  matched while the vault is sealed. The state stays locked/unavailable and writes are refused. Vaults from builds 1–5
+  get the hint the first time they are read.
+
+Shared context: `WorkContext` (Home, a scope or a scope's channel) is app state keyed by connection and workspace
+(`context:<connection>:<workspace>`). The sidebar sets it; Chat's root follows it; `StoreReader.tasks/docs/files(…,
+context:)` bound reads in SQL. It is narrowed when its scope or channel disappears from the synced list (lost access
+or deletion). A build-5 chat path that opened a channel becomes that channel's context on upgrade.
+
 ## 5. Sync engine and responsiveness budgets
 
 `SyncEngine` is the only owner of network refresh. Jobs are keyed (for example
@@ -342,6 +368,12 @@ Measured budgets (WP2 core tests; WP5 UI on the simulator plus first phone readi
 | Hitch ratio while scrolling chat under storm | < 5 ms/s (Apple "good") | Not met / not measurable on the simulator: `XCTOSSignpostMetric.scrollDecelerationMetric` reported no data, and the in-app frame monitor (60 Hz simulator display link, including keyboard dismissal) reads 48–75 ms/s in storm and control alike. Phone measurement is WP6 |
 | Cold launch to cached workspace list | ≤ 400 ms after first frame | In-app signpost `launch-to-cached-list`: simulator 297–316 ms (asserted ≤ 400 in `PerformanceUITests`); iPhone 15 Pro (Debug build 4, sample data) 130 and 134 ms. `XCTApplicationLaunchMetric` first frame responsive, simulator Debug: 1.03–1.12 s |
 | Channel open (navigation) | no budget set; measured | `navigationTransitionMetric` 0.50–0.51 s (simulator, includes the push animation). Profiled main-thread list layout at first open 111 → 74 ms after the WP5 row changes (single traces) |
+
+Build 6 (sidebar context, thread panes and rich rendering) full-suite run on the simulator, same tests: storm p99
+13.32 ms, max 66.11 ms (after first key p99 12.60 / max 46.33 ms); no-write control p99 23.70 ms, max 59.06 ms;
+plain-keyboard control p99 24.46 ms, max 47.41 ms. No dropped characters. The 50 ms max target remains unmet in the
+storm run, as in build 4/5, and is not relaxed. An isolated run taken while another simulator was building on the same
+Mac read storm p99 16.71 ms; it is not used as evidence.
 
 ### 5.5 WP5 responsiveness work and attribution (simulator)
 

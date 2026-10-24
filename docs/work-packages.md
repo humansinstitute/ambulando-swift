@@ -42,3 +42,21 @@ Opt-in live read (public descriptor only; no identity used):
 ```sh
 AMBULANDO_LIVE_ORIGIN=https://<your-tower> swift test --package-path AmbulandoCore --filter LiveDescriptor
 ```
+
+## Upgrade retention check (simulator only, synthetic data)
+
+Release gate for every build that changes storage, identity or startup. Never run against a real account or device.
+
+1. Create and boot a fresh simulator. Check out the previous release (for build 6: `7919b00`) in an ignored worktree
+   under `tmp/`, add an untracked UI test there that launches the app normally and imports the public NIP-19 test key
+   (`TestKeys.nsec`, PIN 246810) through the import screen, and run it on that simulator.
+2. With the app not running, write synthetic rows into its store (`xcrun simctl get_app_container <sim>
+   studio.otherstuff.ambulando.native data`): a connection to `https://tower.example.invalid` for the test npub, one
+   workspace, scope and channel, `selected.connection`/`selected.workspace:<c>`, a `chat-path:<c>:<w>` with the channel
+   route, a channel draft and an `awaiting_signature` outbox row. Record the SHA-256 of `Identity/vault.json`.
+3. From this checkout run `TEST_RUNNER_AMBULANDO_UPGRADE_CHECK=1 xcodebuild … test
+   -only-testing:AmbulandoUITests/UpgradeRetentionUITests` on the same simulator (installs over the old build without
+   deleting data), then compare the vault hash and remove the worktree.
+
+Build 6 result: passed (twice, second run = further relaunch); vault hash unchanged; `vault.pub` written; installed
+`CFBundleVersion` 6.

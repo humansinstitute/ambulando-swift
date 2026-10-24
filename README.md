@@ -17,7 +17,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-Version 0.1.0 (5). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+Version 0.1.0 (6). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -55,6 +55,18 @@ Live updates and background refresh (0.1.0 build 4):
 Unlocking (build 5): when the identity is locked the app shows a full-screen unlock. After you enter your PIN it stays
 unlocked on this iPhone, including across relaunch, until you choose Lock now, remove the identity or disconnect. The key
 for this is kept in a device-only Keychain item that iOS opens only while the iPhone is unlocked.
+
+Navigation and rendering (build 6): a sidebar, opened from the menu button in every mode, holds Home, Unread &
+Active, your scopes (collapsible, in your order) with their channels, and the workspace switcher. The scope or channel
+you choose is the shared context: Chat opens that channel (or lists the scope's channels), and Tasks, Docs and Files
+show and create records there. It is remembered per workspace. Inbox and Search cover the whole workspace, show where
+each result lives, and opening one moves the context there. Channels have Messages and Threads panes. Messages and
+documents render Markdown natively (headings, lists, tasks, quotes, code, tables, links, mentions) with workspace
+images loaded through the signed storage route.
+
+Keeping your account (build 6): an update never asks you to import again. If the app is started while the iPhone is
+locked, iOS keeps the identity file sealed; the app now says so and opens it once the iPhone is unlocked, instead of
+showing "no identity". Imports are refused while an identity exists or for a key other than the connected one.
 
 Personal pins remain a follow-up. See the parity matrix for gaps.
 
