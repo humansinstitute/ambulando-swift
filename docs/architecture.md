@@ -8,14 +8,17 @@ Tower HTTPS + NIP-98 contracts. It adds no backend routes and changes no shared
 schema.
 
 This document records the source inventory (WP1) and the **target** native
-architecture that later packages build on. Implementation status: WP2 delivers
-the identity vault, signing, HTTPS transport, the SQLite store, the sync engine,
-the descriptor → workspace → scope → channel read path, and the core storm
-budget tests. Everything else described here, including chat, the outbox,
-drafts, SSE, background refresh and UI hitch metrics, is target design for
-WP3–WP6 until the parity matrix records evidence for it. The feature-by-feature status is in
-[parity-matrix.md](parity-matrix.md); package order and acceptance are in
-[work-packages.md](work-packages.md).
+architecture that later packages build on. Implementation status:
+
+- WP2 delivered the identity vault, signing, HTTPS transport, the SQLite store, the sync engine, the
+  descriptor → workspace → scope → channel read path, and the core storm budget tests.
+- WP3 (0.1.0 build 2) delivers native chat, the durable outbox, drafts, mentions, scope order and
+  collapse, and chat path restoration (§4.1, §5.1).
+- SSE, background refresh, and device UI hitch metrics remain target design for WP5–WP6, as does
+  anything else here without evidence in the parity matrix.
+
+The feature-by-feature status is in [parity-matrix.md](parity-matrix.md); package order and
+acceptance are in [work-packages.md](work-packages.md).
 
 ## 1. Source inventory
 
@@ -143,10 +146,50 @@ debounce, never while a key is being processed.
   New fields survive unknown-field round trips and later migrations.
 - Upserts are guarded by `row_version`: an older version never overwrites a
   newer one. This keeps snapshot/delta races idempotent.
-- The outbox (WP3) holds frozen signed-request inputs with
-  `client_request_id`. Tower idempotency keeps retries safe; outcome handling
-  follows NoteToSelf (`idempotency_conflict`, `thread_not_found`,
-  `channel_not_found`).
+- The outbox holds unsent chat messages (see §4.1).
+
+### 4.1 Chat outbox and drafts (WP3, delivered)
+
+Contract read from Tower `POST /workspaces/:w/channels/:c/messages` and
+`flightdeck-pg-message-signatures.ts`:
+
+- Tower trims `body`, and the kind 33358 `content` must equal the trimmed body.
+- The event's `workspace_id` and `channel_id` tags must match, plus `thread_id` for replies.
+- `client_request_id` replay hashes channel, thread, `create_thread`, body and attachments. It does
+  not hash the signature. A replay returns `200 {replayed: true}`; a different message under the same
+  id returns `409 idempotency_conflict`.
+- A new conversation is `create_thread: true`, as in the web client. A reply is `thread_id`.
+- Ordinary NIP-98 verification accepts events within 300 s of `created_at` and does not consume
+  event ids.
+
+Native behaviour:
+
+- **Durable composing.**
+  - A draft is keyed by connection, workspace, channel and thread, and written on a 350 ms debounce
+    through the store writer.
+  - Sending inserts the outbox row and deletes the draft in one transaction.
+  - Every row records `connection_id`, `origin`, `signer_npub`, `workspace_id` and `app_npub`. The
+    request is built only from the row. The composer captures its own target, never the current
+    selection, so a workspace switch or lock cannot redirect a message.
+- **Signing.**
+  - The body is signed (kind 33358) only while the bound identity is unlocked. Rows written while
+    locked wait in `awaiting_signature` until an explicit unlock.
+  - The exact JSON bytes are frozen once (`request IS NULL` guard) and resent unchanged on every
+    attempt, with a freshly signed NIP-98 header each time.
+- **States.**
+  - `queued` → `sending` → acknowledged: the row is deleted in the same transaction that stores
+    Tower's message and thread.
+  - `retrying` (automatic backoff): network errors, 408/425/429/5xx, the first two 401s, or an
+    unreadable 2xx.
+  - `failed` (the user can Retry, Edit or Discard): 403, 404 `thread_not_found` or
+    `channel_not_found`, 409 `idempotency_conflict`, validation errors.
+  - A retryable failure holds later messages of the same conversation, so order is kept.
+  - A synced copy carrying the row's `client_request_id` from the same signer also retires it,
+    so nothing is shown twice.
+- **Relaunch.** `sending` rows become `queued` at launch; Tower's replay makes the resend safe.
+- **Disconnect.** Disconnecting deletes the connection's drafts and outbox (cascade) after a warning
+  that counts unsent messages.
+
 
 ## 5. Sync engine and responsiveness budgets
 
@@ -158,6 +201,32 @@ duplicate key coalesces into the in-flight job. Concurrency is bounded (default
 are applied in batches of at most 500 rows per transaction, so readers are never
 starved.
 
+Priorities are `user` (a send, opening a thread), then `visible` (the open channel), then
+`background` (catch-up). One engine slot is reserved for non-background work, so a send never waits
+behind a storm of catch-up jobs. A delayed (retry) request never postpones an immediate one.
+
+### 5.1 Chat catch-up (WP3, delivered)
+
+`GET /channels/:c/messages` is the only message list route. It pages forward from the oldest message
+(`created_at ASC, id ASC`, opaque cursor, at most 200 per page), excludes deleted rows and has no
+"newest first" mode. `/sync` deltas re-send whole channel bundles, including tasks and docs. So
+WP3 uses the messages route:
+
+- Each channel stores the cursor that fetched its last page (`channel_sync`). An incremental catch-up
+  re-reads from there to the end, at least one page. It then removes local rows Tower no longer lists,
+  but only inside the range it actually covered. Rows newer than the last fetched row, such as a send
+  acknowledged mid-catch-up, are never touched.
+- Progress is saved after each page, so an interrupted catch-up resumes.
+- Pull to refresh re-reads the whole channel and reconciles it.
+- Opening a thread fetches `?thread_id=` at user priority. Thread titles come from `/threads` (one
+  page, never used for deletion).
+- Directory (`/members`) and scope order (`/me/scope-order`) refresh with the workspace.
+- A page with rows from another channel or workspace is refused, and a cancelled catch-up never
+  reconciles.
+
+Known gap: edits or deletions older than the last page appear after a full refresh until
+foreground SSE / `/sync` deltas (WP5).
+
 Measurable budgets, enforced by tests (WP2 for the core and WP5 for the UI):
 
 | Budget | Target | Evidence |
@@ -165,7 +234,8 @@ Measurable budgets, enforced by tests (WP2 for the core and WP5 for the UI):
 | Main-actor job latency during sync storm (20k rows) | p99 ≤ 16 ms, max ≤ 50 ms | `SyncStormTests` heartbeat probe |
 | Screen read latency during storm (reader vs. writer) | p95 ≤ 25 ms | `SyncStormTests` |
 | Coalesced UI change notifications | ≤ 10 per second per observer | `ChangeCoalescerTests` |
-| Keystroke-to-render (composer) | p95 ≤ 16.7 ms at 60 Hz, no dropped characters | WP5 XCUITest + `os_signpost` |
+| Typing in the chat composer during a 20k-row storm (simulator, sample data) | no dropped characters; main-actor p99 ≤ 16 ms | WP3 `ChatFlowUITests.testTypingDuringSyncStorm`, with a no-write control run. Result: p99 4.7–10.6 ms. **Max target ≤ 50 ms not met**: 53–60 ms, comparable to the no-write control (53–70 ms), so it is attributed to keyboard/UI work, not proven sync-free. Carried to WP5 device profiling; the test's 100 ms bound is a freeze guard only |
+| Keystroke-to-render (composer) | p95 ≤ 16.7 ms at 60 Hz, no dropped characters | WP5 XCUITest + `os_signpost` (device) |
 | Hitch ratio while scrolling chat under storm | < 5 ms/s (Apple "good") | WP5 XCTOSSignpostMetric/hitch metrics |
 | Cold launch to cached workspace list | ≤ 400 ms after first frame | WP5 XCTApplicationLaunchMetric |
 

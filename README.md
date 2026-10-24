@@ -17,11 +17,21 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret), enter your Tower's
-HTTPS origin, and the app reads the public nStack descriptor. It then lists your workspaces, scopes
-and channels, stores them locally, and shows them while locked, offline or after a relaunch. Chat
-history, tasks, documents, files and inbox are scheduled packages and are labelled in the app as
-not yet available.
+Version 0.1.0 (2). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
+workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
+
+Chat is native:
+
+- Channel conversations and threads are read from the phone's database, and they catch up from Tower
+  when you open them.
+- Drafts are kept per channel and per thread, including across relaunch.
+- Mentions are picked from the workspace directory.
+- Messages are signed and sent through a durable outbox. That outbox survives locking, going offline
+  and relaunching, retries on its own, and shows unsent, retrying and rejected messages with Retry,
+  Edit and Discard.
+
+Tasks, documents, files and inbox are labelled in the app as not yet available.
 
 Security notes:
 
@@ -31,6 +41,11 @@ Security notes:
 - Only HTTPS origins are accepted, and redirects are refused.
 - `.fips` endpoints are refused rather than replaced with HTTPS.
 - Every request carries a fresh NIP-98 event over the exact URL and body bytes.
+- Chat sends carry a kind 33358 signature over the exact (trimmed) message body. The request is frozen
+  once signed and reused for every retry under the same `client_request_id`, so Tower replays instead
+  of duplicating. Messages written while locked are signed only after you unlock.
+- Sample-data mode (`-AmbulandoUITestFixture`) exists only in Debug builds. It uses a throwaway key
+  generated on the device and an in-process stand-in for Tower, and is labelled on every screen.
 
 ## Build and test
 
@@ -45,6 +60,10 @@ swift test --package-path AmbulandoCore --scratch-path build/core
 # App for the simulator
 xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Ambulando -configuration Debug \
   -destination 'platform=iOS Simulator,name=<simulator>' -derivedDataPath build/DerivedData build
+
+# Chat UI automation on the simulator (local sample data, labelled in the app; not a live Tower)
+xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Ambulando \
+  -destination 'platform=iOS Simulator,name=<simulator>' -derivedDataPath build/dd test
 
 # Opt-in live checks (public descriptor + a signed discovery call made with the public test key)
 AMBULANDO_LIVE_ORIGIN=https://<tower> swift test --package-path AmbulandoCore --scratch-path build/core --filter WhenConfigured
