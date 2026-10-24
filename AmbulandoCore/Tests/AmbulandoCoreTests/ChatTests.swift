@@ -217,7 +217,9 @@ final class OutboxTests: XCTestCase {
         try await waitFor { try await h.store.reader.outboxItem(id: item.id)?.state == .failed }
         try await h.store.writer.discardOutbox(id: item.id, restoreDraft: true)
         let draft = try await h.store.reader.draft(h.target())
-        XCTAssertEqual(draft, Draft(text: "fix @Me", mentions: [me]))
+        XCTAssertEqual(draft?.text, "fix @Me")
+        XCTAssertEqual(draft?.mentions, [me])
+        XCTAssertNotNil(draft?.updatedAt)
         let remaining = try await items(h)
         XCTAssertTrue(remaining.isEmpty)
     }

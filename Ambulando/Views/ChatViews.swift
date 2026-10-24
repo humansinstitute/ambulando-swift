@@ -485,6 +485,9 @@ final class ComposerModel {
     @ObservationIgnored private var edited = false
     @ObservationIgnored private var debounce: Task<Void, Never>?
     @ObservationIgnored private var tail: Task<Void, Never>?
+    /// Set by `send`: a draft read before the send cleared it can still arrive from the store and must not put the sent
+    /// text back. Only drafts written after the send (an Edit restore of a rejected message) are adopted.
+    @ObservationIgnored private var sentAt: Date?
 
     init(target: ChatTarget, store: LocalStore) { self.target = target; self.store = store }
 
@@ -499,6 +502,7 @@ final class ComposerModel {
     /// not sent) is adopted when the composer is empty, so the text appears where the user is looking.
     func adopt(_ draft: Draft?) {
         guard let draft, text.isEmpty, !draft.text.isEmpty else { return }
+        if let sentAt, (draft.updatedAt ?? .distantPast) <= sentAt { return }
         mentions = draft.mentions
         text = draft.text
         edited = false
@@ -538,6 +542,7 @@ final class ComposerModel {
         debounce?.cancel()
         debounce = nil
         let text = text, mentions = mentions, target = target, attachments = attachments
+        sentAt = Date()
         self.text = ""
         self.mentions = []
         self.attachments = []

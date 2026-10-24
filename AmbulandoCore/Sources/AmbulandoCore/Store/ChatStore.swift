@@ -19,7 +19,15 @@ public struct ChatTarget: Sendable, Hashable, Codable {
 public struct Draft: Sendable, Equatable {
     public let text: String
     public let mentions: [Mention]
-    public init(text: String, mentions: [Mention]) { self.text = text; self.mentions = mentions }
+    /// When the stored draft was last written (millisecond precision), so a composer can tell a draft written after
+    /// its own send (an Edit restore) from one read before it.
+    public let updatedAt: Date?
+    public init(text: String, mentions: [Mention], updatedAt: Date? = nil) { self.text = text; self.mentions = mentions; self.updatedAt = updatedAt }
+}
+
+extension StoreWriter {
+    /// Draft timestamps keep milliseconds (`now()` is second precision).
+    func draftStamp() -> String { ISO8601DateFormatter.tower.string(from: Date()) }
 }
 
 /// Outbox lifecycle. A row is deleted when Tower acknowledges it (or a synced copy with its `client_request_id` arrives).
@@ -126,7 +134,7 @@ extension StoreWriter {
             INSERT INTO drafts(key, connection_id, workspace_id, channel_id, thread_id, text, mentions, updated_at) VALUES(?,?,?,?,?,?,?,?)
             ON CONFLICT(key) DO UPDATE SET text = excluded.text, mentions = excluded.mentions, updated_at = excluded.updated_at
             """).run([.text(target.draftKey), .text(target.connectionId), .text(target.workspaceId), .text(target.channelId), target.threadId.sql,
-                      .text(draft.text), .text(JSONText.mentions(draft.mentions)), .text(now())])
+                      .text(draft.text), .text(JSONText.mentions(draft.mentions)), .text(draftStamp())])
         }
         await emit([ChangeKey(.drafts, target.workspaceId)])
     }
@@ -213,7 +221,7 @@ extension StoreWriter {
                 INSERT INTO drafts(key, connection_id, workspace_id, channel_id, thread_id, text, mentions, updated_at) VALUES(?,?,?,?,?,?,?,?)
                 ON CONFLICT(key) DO NOTHING
                 """).run([.text(item.target.draftKey), .text(item.connectionId), .text(item.workspaceId), .text(item.channelId), item.threadId.sql,
-                          .text(text), .text(JSONText.mentions(mentions)), .text(now())])
+                          .text(text), .text(JSONText.mentions(mentions)), .text(draftStamp())])
             }
             try db.prepare("DELETE FROM outbox WHERE id = ?").run([.text(id)])
         }
@@ -423,10 +431,12 @@ extension StoreReader {
     }
 
     public func draft(_ target: ChatTarget) throws -> Draft? {
-        let s = try db.prepare("SELECT text, mentions FROM drafts WHERE key = ?")
+        let s = try db.prepare("SELECT text, mentions, updated_at FROM drafts WHERE key = ?")
         try s.bind([.text(target.draftKey)])
         guard try s.step() else { return nil }
-        return Draft(text: s.text(0) ?? "", mentions: JSONText.mentions(s.text(1)))
+        let stamp = s.text(2)
+        return Draft(text: s.text(0) ?? "", mentions: JSONText.mentions(s.text(1)),
+                     updatedAt: stamp.flatMap { ISO8601DateFormatter.tower.date(from: $0) ?? ISO8601DateFormatter().date(from: $0) })
     }
 
     public func members(workspaceId: String) throws -> [MemberRecord] {
