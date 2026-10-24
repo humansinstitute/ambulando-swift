@@ -1,4 +1,5 @@
 import AmbulandoCore
+import PhotosUI
 import SwiftUI
 
 // MARK: Snapshots (plain values read off the main actor)
@@ -9,6 +10,7 @@ struct ChannelSnapshot: Sendable, Equatable {
     var pending: [OutboxItem] = []
     var names: [String: String] = [:]
     var historyComplete = false
+    var extras = MessageExtras()
 }
 
 struct ThreadSnapshot: Sendable, Equatable {
@@ -17,6 +19,21 @@ struct ThreadSnapshot: Sendable, Equatable {
     var pending: [OutboxItem] = []
     var names: [String: String] = [:]
     var archived = false
+    var extras = MessageExtras()
+}
+
+/// Reactions and unsent edits/deletes for the messages on screen.
+struct MessageExtras: Sendable, Equatable {
+    var reactions: [String: [ReactionRecord]] = [:]
+    var writes: [String: [WriteItem]] = [:]
+}
+
+private func messageExtras(_ store: LocalStore, _ workspaceId: String, connectionId: String, ids: [String]) async throws -> MessageExtras {
+    async let reactions = store.reader.reactions(workspaceId: workspaceId, targetIds: ids)
+    async let writes = store.reader.writes(connectionId: connectionId, workspaceId: workspaceId)
+    let wanted = Set(ids)
+    let relevant = try await writes.filter { [.messageEdit, .messageDelete, .reactionAdd, .reactionRemove].contains($0.kind) && wanted.contains($0.targetId ?? "") }
+    return MessageExtras(reactions: Dictionary(grouping: try await reactions, by: \.targetId), writes: Dictionary(grouping: relevant) { $0.targetId ?? "" })
 }
 
 private func names(_ store: LocalStore, _ workspaceId: String) async throws -> [String: String] {
@@ -25,7 +42,7 @@ private func names(_ store: LocalStore, _ workspaceId: String) async throws -> [
 
 private func chatMatches(_ workspaceId: String) -> @Sendable (ChangeKey) -> Bool {
     { key in
-        key.workspaceId == workspaceId && [.messages, .outbox, .members, .threads, .channels].contains(key.table)
+        key.workspaceId == workspaceId && [.messages, .outbox, .members, .threads, .channels, .reactions, .writes].contains(key.table)
             || (key.table == .outbox && key.workspaceId == nil)
     }
 }
@@ -96,7 +113,7 @@ struct ChannelView: View {
                     SyncNote(text: error, tone: .warning)
                 }
                 ForEach(snapshot.value.posts) { post in
-                    PostRow(post: post, names: snapshot.value.names, workspaceId: workspace.id)
+                    PostRow(post: post, names: snapshot.value.names, workspace: workspace, extras: snapshot.value.extras)
                 }
                 ForEach(snapshot.value.pending) { item in
                     OutboxRow(item: item, names: snapshot.value.names)
@@ -125,6 +142,7 @@ struct ChannelView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task(id: limit) { start() }
         .onAppear { model.openChannel(target.channelId, in: workspace) }
+        .onChange(of: snapshot.value.posts.map(\.id)) { _, ids in model.refreshReactions(workspace, scope: target.channelId, messageIds: ids) }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openChannel(target.channelId, in: workspace) } }
     }
 
@@ -138,8 +156,10 @@ struct ChannelView: View {
             async let pending = store.reader.outbox(target: target)
             async let sync = store.reader.channelSync(workspaceId: target.workspaceId, channelId: target.channelId)
             async let directory = names(store, target.workspaceId)
-            return ChannelSnapshot(title: try await channel?.name ?? "", posts: try await posts, pending: try await pending,
-                                   names: try await directory, historyComplete: try await sync?.complete ?? false)
+            let rows = try await posts
+            let extras = try await messageExtras(store, target.workspaceId, connectionId: target.connectionId, ids: rows.map(\.id))
+            return ChannelSnapshot(title: try await channel?.name ?? "", posts: rows, pending: try await pending,
+                                   names: try await directory, historyComplete: try await sync?.complete ?? false, extras: extras)
         }
     }
 }
@@ -162,7 +182,7 @@ struct ThreadView: View {
                 }
                 if snapshot.value.archived { SyncNote(text: "This thread is archived. Replying reopens it.") }
                 ForEach(Array(snapshot.value.messages.enumerated()), id: \.element.id) { index, message in
-                    MessageRow(message: message, names: snapshot.value.names)
+                    MessageCell(message: message, names: snapshot.value.names, workspace: workspace, extras: snapshot.value.extras)
                     if index == 0 && snapshot.value.messages.count > 1 {
                         Text("\(snapshot.value.messages.count - 1) \(snapshot.value.messages.count == 2 ? "reply" : "replies")")
                             .font(.caption.weight(.semibold)).foregroundStyle(Amb.mutedForeground)
@@ -191,7 +211,15 @@ struct ThreadView: View {
         .navigationTitle(snapshot.value.title.isEmpty ? "Thread" : snapshot.value.title)
         .navigationBarTitleDisplayMode(.inline)
         .task { start() }
-        .onAppear { if let thread = target.threadId { model.openThread(thread, channelId: target.channelId, in: workspace) } }
+        .onAppear {
+            if let thread = target.threadId {
+                model.openThread(thread, channelId: target.channelId, in: workspace)
+                model.markViewed(.thread, thread, in: workspace)
+            }
+        }
+        .onChange(of: snapshot.value.messages.map(\.id)) { _, ids in
+            if let thread = target.threadId { model.refreshReactions(workspace, scope: thread, messageIds: ids) }
+        }
     }
 
     private var isUnlocked: Bool { if case .unlocked = model.identity { true } else { false } }
@@ -207,8 +235,9 @@ struct ThreadView: View {
             let rows = try await messages
             let record = try await thread
             let title = record?.title.map(MentionCodec.plain) ?? rows.first.map { MentionCodec.plain($0.body) } ?? ""
+            let extras = try await messageExtras(store, target.workspaceId, connectionId: target.connectionId, ids: rows.map(\.id))
             return ThreadSnapshot(title: String(title.prefix(60)), messages: rows, pending: try await pending,
-                                  names: try await directory, archived: record?.archived ?? false)
+                                  names: try await directory, archived: record?.archived ?? false, extras: extras)
         }
     }
 }
@@ -218,25 +247,17 @@ struct ThreadView: View {
 struct PostRow: View {
     let post: FeedPost
     let names: [String: String]
-    let workspaceId: String
+    let workspace: WorkspaceRecord
+    let extras: MessageExtras
 
     var body: some View {
         if let thread = post.message.threadId {
-            NavigationLink(value: ChatRoute.thread(workspaceId: workspaceId, channelId: post.message.channelId, threadId: thread)) {
-                VStack(alignment: .leading, spacing: 0) {
-                    MessageRow(message: post.message, names: names)
-                    if post.replyCount > 0 {
-                        Label("\(post.replyCount) \(post.replyCount == 1 ? "reply" : "replies")", systemImage: "bubble.left.and.text.bubble.right")
-                            .font(.caption.weight(.semibold)).foregroundStyle(Amb.primary)
-                            .padding(.leading, 60).padding(.bottom, 8)
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("thread.\(post.replyCount)")
+            // Only the message opens the thread; reactions and status lines below it stay separately tappable.
+            MessageCell(message: post.message, names: names, workspace: workspace, extras: extras,
+                        route: ChatRoute.thread(workspaceId: workspace.id, channelId: post.message.channelId, threadId: thread),
+                        replyCount: post.replyCount)
         } else {
-            MessageRow(message: post.message, names: names)
+            MessageCell(message: post.message, names: names, workspace: workspace, extras: extras)
         }
     }
 }
@@ -244,6 +265,8 @@ struct PostRow: View {
 struct MessageRow: View {
     let message: MessageRecord
     let names: [String: String]
+    var bodyOverride: String?
+    var workspace: WorkspaceRecord?
 
     private var sender: String {
         message.senderNpub.flatMap { names[$0] } ?? message.senderLabel ?? message.senderNpub.map(shortNpub) ?? "Unknown"
@@ -257,7 +280,10 @@ struct MessageRow: View {
                     Text(sender).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
                     Text(ChatTime.label(message.createdAt)).font(.caption).foregroundStyle(Amb.mutedForeground)
                 }
-                MessageBody(text: message.body)
+                if !(bodyOverride ?? message.body).isEmpty { MessageBody(text: bodyOverride ?? message.body, muted: bodyOverride != nil) }
+                if let workspace {
+                    ForEach(MessageAttachment.from(messageRaw: message.raw), id: \.storageObjectId) { AttachmentView(attachment: $0, workspace: workspace) }
+                }
             }
             Spacer(minLength: 0)
         }
@@ -333,16 +359,20 @@ struct OutboxRow: View {
             Avatar(name: names[item.signerNpub] ?? "You")
             VStack(alignment: .leading, spacing: 4) {
                 Text(names[item.signerNpub] ?? "You").font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
-                MessageBody(text: item.body, muted: true)
+                if !item.body.isEmpty { MessageBody(text: item.body, muted: true) }
+                if !item.attachments.isEmpty {
+                    Label("\(item.attachments.count) \(item.attachments.count == 1 ? "photo" : "photos")" + (item.attachments.allSatisfy(\.complete) ? "" : " (uploading)"),
+                          systemImage: "photo").font(.caption).foregroundStyle(Amb.mutedForeground)
+                }
                 Label(status.text, systemImage: status.icon).font(.caption).foregroundStyle(status.tone)
                     .accessibilityIdentifier("outbox.status")
                 if item.state == .failed || item.state == .retrying {
                     HStack(spacing: 16) {
                         Button(item.state == .failed ? "Retry" : "Retry now") { retry() }.accessibilityIdentifier("outbox.retry")
                         if item.state == .failed {
-                            Button("Edit") { Task { try? await model.store?.writer.discardOutbox(id: item.id, restoreDraft: true) } }
+                            Button("Edit") { Task { try? await model.outbox?.discard(item.id, restoreDraft: true) } }
                                 .accessibilityIdentifier("outbox.edit")
-                            Button("Discard", role: .destructive) { Task { try? await model.store?.writer.discardOutbox(id: item.id, restoreDraft: false) } }
+                            Button("Discard", role: .destructive) { Task { try? await model.outbox?.discard(item.id, restoreDraft: false) } }
                         }
                     }
                     .font(.caption.weight(.semibold))
@@ -444,16 +474,20 @@ final class ComposerModel {
         chain { try? await store.writer.saveDraft(target, draft) }
     }
 
+    /// Photos chosen for the next message (already stripped and staged on the device).
+    var attachments: [PendingAttachment] = []
+
     /// Hands the composed text to the outbox (which clears the stored draft in the same transaction).
     func send(with outbox: OutboxSender, connection: ConnectionRecord, workspace: WorkspaceRecord) {
         debounce?.cancel()
         debounce = nil
-        let text = text, mentions = mentions, target = target
+        let text = text, mentions = mentions, target = target, attachments = attachments
         self.text = ""
         self.mentions = []
+        self.attachments = []
         edited = false
         chain {
-            do { try await outbox.send(text: text, mentions: mentions, target: target, connection: connection, workspace: workspace) }
+            do { try await outbox.send(text: text, mentions: mentions, target: target, connection: connection, workspace: workspace, attachments: attachments) }
             catch {
                 // The outbox write failed (for example, storage full): put the text back rather than lose it.
                 await MainActor.run { [weak self] in if self?.text.isEmpty == true { self?.mentions = mentions; self?.text = text } }
@@ -472,6 +506,7 @@ struct Composer: View {
     @State private var composer: ComposerModel?
     @State private var members = LiveQuery<[MemberRecord]>(initial: [])
     @State private var storedDraft = LiveQuery<Draft?>(initial: nil)
+    @State private var photos: [PhotosPickerItem] = []
     @FocusState private var focused: Bool
 
     private var suggestions: [MemberRecord] {
@@ -486,7 +521,16 @@ struct Composer: View {
                 MentionPicker(members: suggestions) { composer.pick(Mention(member: $0)) }
             }
             Divider().overlay(Amb.border)
+            if let composer {
+                @Bindable var composer = composer
+                ComposerAttachments(attachments: $composer.attachments, staging: model.staging)
+            }
             HStack(alignment: .bottom, spacing: 8) {
+                PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
+                    Image(systemName: "photo").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+                }
+                .accessibilityLabel("Attach photos")
+                .accessibilityIdentifier("composer.photo")
                 Button {
                     guard let composer else { return }
                     if !(composer.text.last.map { $0.isWhitespace } ?? true) { composer.text += " " }
@@ -526,6 +570,13 @@ struct Composer: View {
             }
         }
         .onChange(of: storedDraft.value) { _, draft in composer?.adopt(draft) }
+        .onChange(of: photos) { _, items in
+            guard !items.isEmpty, let staging = model.staging else { return }
+            photos = []
+            Task {
+                for item in items { if let staged = await PendingAttachment.fromPicker(item, staging: staging) { composer?.attachments.append(staged) } }
+            }
+        }
         .onDisappear { composer?.saveNow() }
         .onChange(of: scenePhase) { _, phase in if phase != .active { composer?.saveNow() } }
         .onChange(of: model.chatPath) { _, _ in composer?.saveNow() }
@@ -540,7 +591,7 @@ struct Composer: View {
 
     private var canSend: Bool {
         guard let composer else { return false }
-        return !composer.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return !composer.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composer.attachments.isEmpty
     }
 
     private func send() {

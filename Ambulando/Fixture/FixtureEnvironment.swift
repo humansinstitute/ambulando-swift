@@ -1,6 +1,7 @@
 import AmbulandoCore
 import Foundation
 import Observation
+import UIKit
 
 /// Deterministic local sample data for UI automation and demos, enabled only in Debug builds with the
 /// `-AmbulandoUITestFixture` launch argument. Every app code path (identity vault, signing, store, sync engine,
@@ -66,7 +67,8 @@ final class FixtureEnvironment {
             await identity.lock()
         }
         if !startLocked { try await identity.unlock(pin: Self.pin) }
-        if let npub = await identity.state.npub { tower.actorNpub = npub }
+        if let npub = await identity.state.npub { tower.actorNpub = npub; tower.work.actorNpub = npub; tower.labWork.actorNpub = npub }
+        tower.seedWorkIfNeeded()
         if try await store.reader.connections().isEmpty, case .unlocked = await identity.state {
             let connection = try await sync.connect(origin: try TowerOrigin(Self.origin))
             try await store.writer.setState("selected.connection", connection.id)
@@ -138,7 +140,13 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
 
     private let lock = NSLock()
     private let file: URL
+    /// Tasks, documents, files, storage, inbox and reactions (shared with the core tests).
+    let work: SampleWorkTower
+    /// The second sample workspace has no tasks, documents or files (empty lists, not errors).
+    let labWork: SampleWorkTower
     private var posted: [[String: Any]] = []
+    /// Edits and deletions of messages, by id (persisted with the posted messages).
+    private var revised: [String: [String: Any]] = [:]
     private var requests: [String: [String: Any]] = [:]
     private var _offline = false, _rejectNext = false
     private var _actor = ""
@@ -149,14 +157,19 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
 
     init(file: URL) {
         self.file = file
-        if let data = try? Data(contentsOf: file), let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] {
-            posted = rows
-            for row in rows { if let id = row["client_request_id"] as? String { requests[id] = row } }
+        work = SampleWorkTower(workspaceId: Self.studio, towerOrigin: FixtureEnvironment.origin,
+                               file: file.deletingLastPathComponent().appendingPathComponent("fixture-work.json"))
+        labWork = SampleWorkTower(workspaceId: Self.lab, towerOrigin: FixtureEnvironment.origin, objectHost: "objects-lab.sample.invalid",
+                                  file: file.deletingLastPathComponent().appendingPathComponent("fixture-work-lab.json"))
+        if let data = try? Data(contentsOf: file), let saved = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            posted = (saved["posted"] as? [[String: Any]]) ?? []
+            revised = (saved["revised"] as? [String: [String: Any]]) ?? [:]
+            for row in posted { if let id = row["client_request_id"] as? String { requests[id] = row } }
         }
     }
 
     private func persist() {
-        if let data = try? JSONSerialization.data(withJSONObject: posted) { try? data.write(to: file, options: .atomic) }
+        if let data = try? JSONSerialization.data(withJSONObject: ["posted": posted, "revised": revised]) { try? data.write(to: file, options: .atomic) }
     }
 
     private static func uuid(_ n: Int, _ prefix: String) -> String { String(format: "\(prefix)-0000-4000-8000-%012d", n) }
@@ -193,13 +206,13 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     }
 
     private func allMessages() -> [[String: Any]] {
-        (seeded + posted).sorted { (($0["created_at"] as! String), ($0["id"] as! String)) < (($1["created_at"] as! String), ($1["id"] as! String)) }
+        (seeded + posted).map { revised[$0["id"] as? String ?? ""] ?? $0 }.sorted { (($0["created_at"] as! String), ($0["id"] as! String)) < (($1["created_at"] as! String), ($1["id"] as! String)) }
     }
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         try await Task.sleep(for: .milliseconds(40))   // a little latency so states are observable
         let (status, body) = try route(request)
-        let data = try JSONSerialization.data(withJSONObject: body)
+        let data = try (body as? Data) ?? JSONSerialization.data(withJSONObject: body)
         return (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!)
     }
 
@@ -210,8 +223,14 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
                           "services": [["id": "tower", "kind": "tower", "endpoint": FixtureEnvironment.origin, "protocols": ["https", "nip-98"],
                                         "availability": ["status": "available (local fixture)"]]]])
         }
+        if request.url?.host == work.objectHost || request.url?.host == labWork.objectHost {
+            // Presigned object-store upload: never signed (SampleWorkTower records any credential that arrives).
+            if offline { throw URLError(.notConnectedToInternet) }
+            return try work.handle(request) ?? labWork.handle(request) ?? (404, ["code": "not_found"])
+        }
         guard request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Nostr ") == true else { return (401, ["code": "unauthorized"]) }
         if offline { throw URLError(.notConnectedToInternet) }
+        if let handled = try work.handle(request) ?? labWork.handle(request) { return handled }
         let base = "/api/v4/flightdeck-pg/workspaces"
         if path == base {
             return (200, ["workspaces": [workspace(Self.studio, "Studio (sample)"), workspace(Self.lab, "Lab (sample)")], "next_cursor": NSNull()])
@@ -263,6 +282,10 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             }
         case ("POST", 3, "channels") where rest[2] == "messages":
             return try post(request, workspace: w, channel: rest[1])
+        case ("GET", 2, "messages"):
+            return lock.withLock { allMessages().first { $0["id"] as? String == rest[1] }.map { (200, ["message": $0]) } ?? (404, ["code": "message_not_found"]) }
+        case ("PATCH", 2, "messages"), ("DELETE", 2, "messages"):
+            return try revise(request, id: rest[1], query: query)
         default:
             return (404, ["code": "not_found"])
         }
@@ -272,6 +295,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         let object = (try JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:]
         let body = (object["body"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let event = ((object["message_signature"] as? [String: Any])?["nostr_event"] as? [String: Any]) ?? [:]
+        let attachmentCount = (((object["metadata"] as? [String: Any])?["attachments"]) as? [Any])?.count ?? 0
+        guard !body.isEmpty || attachmentCount > 0 else { return (400, ["code": "validation_error", "details": ["fields": [["message": "body must be non-empty"]]]]) }
         guard event["kind"] as? Int == 33358, event["content"] as? String == body else {
             return (400, ["code": "validation_error", "details": ["fields": [["message": "message_signature does not match body"]]]])
         }
@@ -287,9 +312,11 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             let source: Any = object["thread_id"] == nil ? id
                 : (allMessages().first { $0["thread_id"] as? String == threadId && $0["id"] as? String == $0["thread_source_message_id"] as? String }?["id"] ?? NSNull())
             let now = ISO8601DateFormatter.fixture.string(from: Date())
+            let attachments = ((object["metadata"] as? [String: Any])?["attachments"] as? [[String: Any]]) ?? []
             let row: [String: Any] = ["id": id, "workspace_id": w, "channel_id": c, "thread_id": threadId, "thread_source_message_id": source,
                                       "body": body, "client_request_id": requestId ?? NSNull(), "record_state": "active", "row_version": 1,
-                                      "sender_npub": _actor, "created_by_actor_label": "You (sample identity)", "created_at": now, "updated_at": now]
+                                      "sender_npub": _actor, "created_by_actor_label": "You (sample identity)", "created_at": now, "updated_at": now,
+                                      "attachments": attachments, "metadata": ["attachments": attachments]]
             posted.append(row)
             if let requestId { requests[requestId] = row }
             persist()
@@ -297,6 +324,107 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             reply["thread_source_message_id"] = nil   // like Tower's create reply
             return (201, ["message": reply, "created": true, "replayed": false])
         }
+    }
+
+    /// Author-only edit (row_version and a kind 33358 revision signature with `message_id` and `revision`), and delete.
+    private func revise(_ request: URLRequest, id: String, query: [URLQueryItem]) throws -> (Int, Any) {
+        let object = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:]
+        return lock.withLock {
+            guard var row = allMessages().first(where: { $0["id"] as? String == id }), row["record_state"] as? String != "deleted" else {
+                return (404, ["code": "message_not_found"])
+            }
+            let version = row["row_version"] as? Int ?? 1
+            if request.httpMethod == "DELETE" {
+                if let q = query.first(where: { $0.name == "row_version" })?.value, Int(q) != version { return (409, ["code": "stale_row_version"]) }
+                row["record_state"] = "deleted"; row["body"] = ""; row["row_version"] = version + 1
+            } else {
+                guard row["sender_npub"] as? String == _actor else { return (403, ["code": "message_author_required"]) }
+                guard object["row_version"] as? Int == version else { return (409, ["code": "stale_row_version"]) }
+                let body = (object["body"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let event = ((object["message_signature"] as? [String: Any])?["nostr_event"] as? [String: Any]) ?? [:]
+                let tags = (event["tags"] as? [[String]]) ?? []
+                guard event["kind"] as? Int == 33358, event["content"] as? String == body, tags.contains(["message_id", id]),
+                      tags.contains(["revision", String(version + 1)]) else {
+                    return (400, ["code": "validation_error", "details": ["fields": [["message": "message_signature does not match the revision"]]]])
+                }
+                row["body"] = body; row["row_version"] = version + 1
+                row["updated_at"] = ISO8601DateFormatter.fixture.string(from: Date())
+            }
+            revised[id] = row
+            persist()
+            return (200, ["message": row])
+        }
+    }
+
+    /// Sample tasks, documents, files and inbox items, created once per fixture directory.
+    func seedWorkIfNeeded() {
+        guard !work.seeded() else { return }
+        let me = actorNpub, w = work
+        let general = Self.generalChannel, design = Self.designChannel, deploys = Self.deploysChannel
+        let a = Self.scopeAmbulando, ops = Self.scopeOps
+        let review = w.seedTask(scope: a, channel: general, title: "Review the native inbox", description: "Check read and done behave like the web inbox.",
+                                state: "review", priority: "rock", assignee: me, creator: Self.ana)
+        w.seedTask(scope: a, channel: general, title: "Write release notes for build 3", state: "in_progress", priority: "pebble", assignee: Self.rick, creator: Self.ana)
+        w.seedTask(scope: a, channel: design, title: "Passage mark spacing", description: "Keep the white backing.", state: "ready", creator: Self.rick)
+        w.seedTask(scope: a, channel: design, title: "Dark mode contrast pass", state: "new", creator: me)
+        w.seedTask(scope: ops, channel: deploys, title: "Rotate staging certificates", state: "blocked", priority: "rock", creator: Self.rick)
+        w.seedTask(scope: a, channel: general, title: "Archive old sync notes", state: "done", creator: Self.ana)
+        w.seedTaskComment(task: review, body: "Assigned to you for the phone pass.", sender: Self.ana)
+
+        let rich = Self.richDocument()
+        let plan = w.seedDoc(scope: a, channel: general, title: "Native app plan", body: rich, contentType: DocumentBody.envelopeContentType)
+        w.seedDoc(scope: a, channel: design, title: "Theme notes (Markdown)", body: Data("# Theme notes\n\nThe primary colour is **deep purple**.\n\n- Light\n- Dark".utf8),
+                  contentType: "text/markdown")
+        let folder = w.seedFolder(channel: general, scope: a, title: "Reports")
+        w.seedFile(channel: general, scope: a, name: "sync-results.txt", bytes: Data("Sync storm: 20,000 rows, no dropped keystrokes.\n".utf8), contentType: "text/plain")
+        w.seedFile(channel: general, scope: a, name: "q3-summary.csv", bytes: Data("week,tasks\n1,12\n2,9\n".utf8), contentType: "text/csv", folder: folder)
+        if let png = Self.samplePNG() { w.seedFile(channel: design, scope: a, name: "palette.png", bytes: png, contentType: "image/png") }
+
+        w.seedViewState(type: "task", resource: review, scope: a, channel: general, activity: 3, viewed: 1, attention: 3)
+        w.seedViewState(type: "document", resource: plan, scope: a, channel: general, activity: 2, viewed: 1)
+        w.seedViewState(type: "thread", resource: Self.uuid(39, "f1c7bbbb"), scope: a, channel: general, activity: 4, viewed: 2)
+        w.markSeeded()
+    }
+
+    /// A web-format document (ProseMirror authoritative) with marks, a task list, a link, a table and a node this app
+    /// does not know, so the reader and editor are exercised on real structure.
+    static func richDocument() -> Data {
+        func t(_ s: String, _ marks: [String] = []) -> JSONValue {
+            var pairs: [(String, JSONValue)] = [("type", .string("text")), ("text", .string(s))]
+            if !marks.isEmpty { pairs.append(("marks", .array(marks.map { .object([("type", .string($0))]) }))) }
+            return .object(pairs)
+        }
+        func block(_ type: String, _ id: String, _ content: [JSONValue], attrs: [(String, JSONValue)] = []) -> JSONValue {
+            .object([("type", .string(type)), ("attrs", .object([("fdBlockId", .string(id))] + attrs)), ("content", .array(content))])
+        }
+        func para(_ content: [JSONValue]) -> JSONValue { .object([("type", .string("paragraph")), ("content", .array(content))]) }
+        let link = JSONValue.object([("type", .string("text")), ("text", .string("web inbox")),
+                                     ("marks", .array([.object([("type", .string("link")), ("attrs", .object([("href", .string("https://example.invalid/inbox"))]))])]))])
+        let task: (Bool, String) -> JSONValue = { checked, label in
+            .object([("type", .string("taskItem")), ("attrs", .object([("checked", .bool(checked))])), ("content", .array([para([t(label)])]))])
+        }
+        let cell: (String) -> JSONValue = { .object([("type", .string("tableCell")), ("content", .array([para([t($0)])]))]) }
+        let state = JSONValue.object([("type", .string("doc")), ("content", .array([
+            block("heading", "pm_plan_h1", [t("Native app plan")], attrs: [("level", .int(1))]),
+            block("paragraph", "pm_plan_p1", [t("Every screen reads from "), t("local storage", ["bold"]), t(", and sync runs "), t("off the main thread", ["italic"]), t(".")]),
+            block("paragraph", "pm_plan_p2", [t("Compare with the "), link, t(" before release.")]),
+            block("taskList", "pm_plan_tl", [task(true, "Chat and outbox"), task(false, "Tasks, docs, files and inbox")]),
+            block("table", "pm_plan_tb", [.object([("type", .string("tableRow")), ("content", .array([cell("Surface"), cell("State")]))]),
+                                          .object([("type", .string("tableRow")), ("content", .array([cell("Docs"), cell("Native")]))])]),
+            .object([("type", .string("fdCalloutWidget")), ("attrs", .object([("fdBlockId", .string("pm_plan_w1")), ("tone", .string("info"))]))]),
+            block("paragraph", "pm_plan_p3", [t("Edit this paragraph on the phone.")]),
+        ]))])
+        let model = JSONValue.object(ProseMirrorMarkdown.contentModelFields(state))
+        return JSONValue.object([("format", .string(DocumentBody.envelopeFormat)), ("content_model", model)]).serialized()
+    }
+
+    static func samplePNG() -> Data? {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 96, height: 64))
+        let image = renderer.image { context in
+            UIColor(red: 0.17, green: 0.11, blue: 0.24, alpha: 1).setFill(); context.fill(CGRect(x: 0, y: 0, width: 48, height: 64))
+            UIColor(red: 0.75, green: 0.30, blue: 0.05, alpha: 1).setFill(); context.fill(CGRect(x: 48, y: 0, width: 48, height: 64))
+        }
+        return image.pngData()
     }
 
     private func workspace(_ id: String, _ label: String) -> [String: Any] {

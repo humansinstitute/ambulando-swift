@@ -7,26 +7,36 @@ struct WorkspaceShell: View {
     @SceneStorage("shell.tab") private var tab = Tab.chat
     @State private var showSettings = false
     @State private var showUnlock = false
+    @State private var inboxPath: [WorkRoute] = []
+    @State private var tasksPath: [WorkRoute] = []
+    @State private var docsPath: [WorkRoute] = []
+    @State private var filesPath: [WorkRoute] = []
 
     enum Tab: String { case inbox, chat, tasks, docs, files }
 
     var body: some View {
         TabView(selection: $tab) {
-            surface(.inbox) { PlannedSurfaceView(title: "Inbox", systemImage: "tray",
-                                                 detail: "Mentions, assigned tasks and unread conversations will collect here, read from local storage.") }
-                .tabItem { Label("Inbox", systemImage: "tray") }.tag(Tab.inbox)
+            WorkStack(showSettings: $showSettings, path: $inboxPath, banner: { banners }) {
+                workspaceSurface { InboxView(workspace: $0, store: $1) }
+            }
+            .tabItem { Label("Inbox", systemImage: "tray") }.tag(Tab.inbox)
             ChatStack(showSettings: $showSettings) { banners }
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }.tag(Tab.chat)
-            surface(.tasks) { PlannedSurfaceView(title: "Tasks", systemImage: "checklist",
-                                                 detail: "Task lists, board columns, state changes and comments.") }
-                .tabItem { Label("Tasks", systemImage: "checklist") }.tag(Tab.tasks)
-            surface(.docs) { PlannedSurfaceView(title: "Documents", systemImage: "doc.text",
-                                                detail: "Markdown reading, editing and comments.") }
-                .tabItem { Label("Docs", systemImage: "doc.text") }.tag(Tab.docs)
-            surface(.files) { PlannedSurfaceView(title: "Files", systemImage: "folder",
-                                                 detail: "Folders, previews, downloads and uploads.") }
-                .tabItem { Label("Files", systemImage: "folder") }.tag(Tab.files)
+            WorkStack(showSettings: $showSettings, path: $tasksPath, banner: { banners }) {
+                workspaceSurface { TasksView(workspace: $0, store: $1) }
+            }
+            .tabItem { Label("Tasks", systemImage: "checklist") }.tag(Tab.tasks)
+            WorkStack(showSettings: $showSettings, path: $docsPath, banner: { banners }) {
+                workspaceSurface { DocumentsView(workspace: $0, store: $1) }
+            }
+            .tabItem { Label("Docs", systemImage: "doc.text") }.tag(Tab.docs)
+            WorkStack(showSettings: $showSettings, path: $filesPath, banner: { banners }) {
+                workspaceSurface { FilesView(workspace: $0, store: $1) }
+            }
+            .tabItem { Label("Files", systemImage: "folder") }.tag(Tab.files)
         }
+        // A workspace switch starts every work tab at its root (routes carry their workspace anyway).
+        .onChange(of: model.selectedWorkspace?.id) { _, _ in inboxPath = []; tasksPath = []; docsPath = []; filesPath = [] }
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showUnlock) {
             NavigationStack {
@@ -45,27 +55,33 @@ struct WorkspaceShell: View {
         IdentityBanner { showUnlock = true }
     }
 
-    private func surface<Content: View>(_ tab: Tab, @ViewBuilder content: () -> Content) -> some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                banners
-                content()
-            }
-            .background(Amb.background)
-            .toolbarItems(showSettings: $showSettings)
+    /// A tab's root for the selected workspace; a fresh view (and observer) per workspace, so no rows cross over.
+    @ViewBuilder private func workspaceSurface<Content: View>(@ViewBuilder _ content: @escaping (WorkspaceRecord, LocalStore) -> Content) -> some View {
+        if let workspace = model.selectedWorkspace, let store = model.store {
+            content(workspace, store).id(workspace.id)
+        } else {
+            ContentUnavailableView("No workspace", systemImage: "square.stack.3d.up.slash",
+                                   description: Text(model.workspaces.loaded ? "No workspaces for this identity yet." : "Loading saved workspaces…"))
         }
     }
 }
 
 private struct ShellToolbar: ViewModifier {
+    @Environment(AppModel.self) private var model
     @Binding var showSettings: Bool
+    @State private var searching = false
     func body(content: Content) -> some View {
         content
+            .sheet(isPresented: $searching) {
+                if let workspace = model.selectedWorkspace, let store = model.store { SearchView(workspace: workspace, store: store) }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { WorkspaceMenu() }
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 12) {
                         SyncIndicator()
+                        Button { searching = true } label: { Image(systemName: "magnifyingglass") }
+                            .accessibilityLabel("Search").accessibilityIdentifier("search")
                         Button { showSettings = true } label: { Image(systemName: "person.crop.circle") }
                             .accessibilityLabel("Settings")
                             .accessibilityIdentifier("settings")
@@ -146,21 +162,5 @@ struct IdentityBanner: View {
             Button(action: action) { Notice(tone: .warning, text: "No identity on this iPhone. Tap to import one and sync.") }
                 .buttonStyle(.plain).padding(.horizontal, 16).padding(.vertical, 8)
         }
-    }
-}
-
-/// Honest placeholder for a surface that is not in this build yet (see docs/parity-matrix.md).
-struct PlannedSurfaceView: View {
-    let title: String
-    let systemImage: String
-    let detail: String
-    var body: some View {
-        ContentUnavailableView {
-            Label(title, systemImage: systemImage)
-        } description: {
-            Text("\(title) is not available in this build yet. It is coming in a later update.\n\(detail)")
-        }
-        .foregroundStyle(Amb.mutedForeground)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

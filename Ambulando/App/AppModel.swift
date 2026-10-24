@@ -16,6 +16,21 @@ enum ChatRoute: Hashable, Codable {
     }
 }
 
+/// A record opened from the inbox, search or another tab. Like chat routes, it carries its workspace.
+enum WorkRoute: Hashable {
+    case task(workspaceId: String, taskId: String)
+    case doc(workspaceId: String, docId: String)
+    case file(workspaceId: String, fileId: String)
+    case thread(workspaceId: String, channelId: String, threadId: String)
+    case channel(workspaceId: String, channelId: String)
+
+    var workspaceId: String {
+        switch self {
+        case .task(let w, _), .doc(let w, _), .file(let w, _), .thread(let w, _, _), .channel(let w, _): w
+        }
+    }
+}
+
 /// App-wide state on the main actor. It owns no network or database work itself: it forwards
 /// intents to `WorkspaceSync`/`OutboxSender` via `SyncEngine` (sole network owner) and reads the store via `LiveQuery`.
 @MainActor
@@ -37,6 +52,12 @@ final class AppModel {
     @ObservationIgnored private(set) var store: LocalStore?
     @ObservationIgnored private(set) var sync: WorkspaceSync?
     @ObservationIgnored private(set) var outbox: OutboxSender?
+    @ObservationIgnored private(set) var writes: WriteSender?
+    @ObservationIgnored private(set) var saver: DocumentSaver?
+    /// Privacy-stripped images and files waiting to upload (Application Support, excluded from backup).
+    @ObservationIgnored private(set) var staging: URL?
+    /// Downloaded file and attachment content (Caches: the system may purge it; it is re-downloaded on demand).
+    @ObservationIgnored private(set) var fileCache: FileCache?
     @ObservationIgnored private var statusTask: Task<Void, Never>?
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
     @ObservationIgnored private var restoringPath = false
@@ -56,8 +77,10 @@ final class AppModel {
             let secrets = fixture?.secrets ?? KeychainVaultSecretStore()
             let (store, identity) = try await Task.detached(priority: .userInitiated) {
                 let store = try LocalStore(directory: directory.appendingPathComponent("Store", isDirectory: true))
-                // Nothing is in flight at launch; an interrupted send is queued again (Tower replays by client_request_id).
+                // Nothing is in flight at launch; an interrupted send is queued again (Tower replays by client_request_id),
+                // and an interrupted write is reconciled before it is sent again.
                 try await store.writer.resetInterruptedSends()
+                try await store.writer.resetInterruptedWrites()
                 return (store, IdentityService(vaultURL: directory.appendingPathComponent("Identity/vault.json"), secrets: secrets))
             }.value
             let transport: HTTPTransport = fixture?.tower ?? URLSessionTransport()
@@ -65,7 +88,18 @@ final class AppModel {
             let sync = WorkspaceSync(store: store, engine: engine, identity: identity, transport: transport)
             self.store = store
             self.sync = sync
-            self.outbox = OutboxSender(store: store, engine: engine, identity: identity, transport: transport)
+            let staging = directory.appendingPathComponent("Staging", isDirectory: true)
+            try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            var excluded = URLResourceValues()
+            excluded.isExcludedFromBackup = true
+            var stagingURL = staging
+            try? stagingURL.setResourceValues(excluded)
+            self.staging = staging
+            self.fileCache = FileCache(root: fixture.map { $0.directory.appendingPathComponent("FileCache", isDirectory: true) }
+                ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("AmbulandoFiles", isDirectory: true))
+            self.outbox = OutboxSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging)
+            self.writes = WriteSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging)
+            self.saver = DocumentSaver(store: store, identity: identity, transport: transport)
             self.fixture = fixture
             if let fixture { try await fixture.prepare(identity: identity, sync: sync, store: store) }
             self.identity = await identity.state
@@ -128,6 +162,7 @@ final class AppModel {
     func lock() async {
         guard let sync else { return }
         await sync.engine.cancelAll()
+        await saver?.forgetAll()
         identity = await sync.identity.lock()
     }
 
@@ -166,6 +201,7 @@ final class AppModel {
         guard let sync, let store, let connection else { return }
         await sync.engine.cancelAll()
         do {
+            for workspace in workspaces.value { fileCache?.purge(workspaceId: workspace.id) }
             try await store.writer.removeConnection(id: connection.id)
             try await store.writer.setState("selected.connection", nil)
             workspaces.stop()
@@ -201,9 +237,95 @@ final class AppModel {
 
     // MARK: Chat
 
+    /// Resumes everything waiting to be sent: chat messages and other writes.
     func kickOutbox(force: Bool = false) {
-        guard let outbox, let connection, case .unlocked = identity else { return }
-        Task { await outbox.kick(connection, force: force) }
+        guard let outbox, let writes, let connection, case .unlocked = identity else { return }
+        Task {
+            await outbox.kick(connection, force: force)
+            await writes.kick(connection, force: force)
+        }
+    }
+
+    // MARK: Tasks, documents, files, inbox
+
+    var isUnlocked: Bool { if case .unlocked = identity { true } else { false } }
+
+    private func withWorkspace(_ workspace: WorkspaceRecord, _ body: @escaping @Sendable (WorkspaceSync, ConnectionRecord) async -> Void) {
+        guard let sync, let connection, isUnlocked, workspace.id == selectedWorkspace?.id else { return }
+        Task { await body(sync, connection) }
+    }
+
+    func openTasks(_ workspace: WorkspaceRecord, scopeId: String?, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshTasks(c, workspace, scopeId: scopeId, priority: .visible, force: force) }
+    }
+
+    func openTask(_ taskId: String, in workspace: WorkspaceRecord, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshTask(c, workspace, taskId: taskId, force: force) }
+    }
+
+    func openDocs(_ workspace: WorkspaceRecord, scopeId: String?, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshDocs(c, workspace, scopeId: scopeId, priority: .visible, force: force) }
+    }
+
+    func openDoc(_ docId: String, in workspace: WorkspaceRecord, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshDoc(c, workspace, docId: docId, force: force) }
+    }
+
+    func openFiles(_ workspace: WorkspaceRecord, scopeId: String?, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshFiles(c, workspace, scopeId: scopeId, priority: .visible, force: force) }
+    }
+
+    func openInbox(_ workspace: WorkspaceRecord, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshInbox(c, workspace, priority: .visible, force: force) }
+    }
+
+    func download(_ file: FileRecord, in workspace: WorkspaceRecord) {
+        guard let cache = fileCache else { return }
+        withWorkspace(workspace) { sync, c in await sync.download(c, workspace, file: file, cache: cache) }
+    }
+
+    func downloadAttachment(_ objectId: String, in workspace: WorkspaceRecord) {
+        guard let cache = fileCache else { return }
+        withWorkspace(workspace) { sync, c in await sync.downloadAttachment(c, workspace, objectId: objectId, cache: cache) }
+    }
+
+    func refreshReactions(_ workspace: WorkspaceRecord, scope: String, messageIds: [String]) {
+        withWorkspace(workspace) { sync, c in await sync.refreshReactions(c, workspace, scope: scope, messageIds: messageIds) }
+    }
+
+    /// Queues a write for the selected workspace. Returns false when there is no connection to bind it to.
+    @discardableResult
+    func submit(_ intent: WriteIntent, in workspace: WorkspaceRecord) -> Bool {
+        guard let writes, let connection, workspace.id == selectedWorkspace?.id else { return false }
+        Task {
+            do { try await writes.submit(intent, connection: connection, workspace: workspace) }
+            catch { notice = error.localizedDescription }
+        }
+        return true
+    }
+
+    /// Opening a task, document or thread marks it read when Tower reports it unread.
+    func markViewed(_ type: ViewStateRecord.ResourceType, _ id: String, in workspace: WorkspaceRecord) {
+        guard let store else { return }
+        Task {
+            guard let state = try? await store.reader.viewState(workspaceId: workspace.id, type: type, id: id), state.unread || state.needsAttention else { return }
+            markRead([state], in: workspace)
+        }
+    }
+
+    /// Marks records read: on this iPhone at once, and on Tower through the durable write queue.
+    func markRead(_ resources: [ViewStateRecord], in workspace: WorkspaceRecord) {
+        let unread = resources.filter { $0.unread || $0.needsAttention }
+        guard !unread.isEmpty, let store, let writes, let connection, workspace.id == selectedWorkspace?.id else { return }
+        Task {
+            try? await store.writer.markViewedLocally(workspaceId: workspace.id, unread.map { ($0.resourceType, $0.resourceId, $0.activityVersion) })
+            for chunk in stride(from: 0, to: unread.count, by: 500).map({ Array(unread[$0..<min($0 + 500, unread.count)]) }) {
+                let list: [[String: any Sendable]] = chunk.map { ["resource_type": $0.resourceType.rawValue, "resource_id": $0.resourceId,
+                                                                   "viewed_activity_version": $0.activityVersion] }
+                _ = try? await writes.submit(WriteIntent(kind: .viewMark, targetId: chunk.count == 1 ? chunk[0].resourceId : nil, payload: ["resources": list]),
+                                             connection: connection, workspace: workspace)
+            }
+        }
     }
 
     /// Screen-driven catch-up for the open channel (visible priority, ahead of background work).
