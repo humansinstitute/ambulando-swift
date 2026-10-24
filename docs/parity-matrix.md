@@ -5,14 +5,17 @@ package (WP) delivers each one, and which will stay web content or out of scope.
 It is updated at every package handoff. The Status column states only what has
 evidence behind it.
 
-Status values:
+Status values (this file is updated only after validation evidence exists):
 
 - **Delivered:** implemented and tested. The "Evidence" column says whether that
   means unit tests, the simulator or a live backend.
 - **Planned:** scheduled in the named package and not started.
-- **Web:** the content is a web document by nature. Where offered it opens in a
-  labelled web view, and it is not counted as native parity.
-- **Deferred:** outside the first native release, with the reason given.
+- **Web content:** the record itself is an HTML document (for example an HTML
+  artefact or a WApp's own UI). It opens in a labelled web view, the surrounding
+  navigation stays native, and it is not counted as native parity.
+- **Proposed later package / proposed deferral:** this is the worker's proposed
+  scope, not a decision Pete has approved. These items are not excluded
+  permanently, and none is treated as web by default.
 - **Unsupported:** needs a platform or server capability that does not exist.
 
 | Web feature (sol) | Native surface | Pkg | Status | Evidence / note |
@@ -40,13 +43,15 @@ Status values:
 | Foreground live updates (SSE) | Foreground-only stream, cursor recovery | WP5 | Planned | No suspended SSE |
 | Retry, conflict, offline writes | Outbox backoff, row_version guards | WP3/WP5 | Planned | Row-version upsert guard delivered in WP2 |
 | Performance instrumentation | Signposts, main-actor probe, storm budget tests | WP2 → WP5 | Core storm budget delivered (host + simulator) | UI hitch, keystroke and launch metrics in WP5 |
-| Context tree (outline) | Native outline | — | Deferred | After WP4; visual graph is web |
-| Canvas, naplets, Excalidraw boards | — | — | Web | Web documents by nature |
-| HTML artefacts | Labelled web view | — | Web | |
-| WApps / Toolbox, pipeline viewer | — | — | Web | |
-| Agents / Autopilot sessions view | Read-only list | — | Deferred | Needs Autopilot connection contract review |
-| Workrooms, reports, jobs, opportunities | — | — | Deferred | Low mobile priority; revisit after WP4 |
-| Daily scope, audio notes | — | — | Deferred | |
-| Hosted workspace signup, billing, legal | — | — | Deferred | Web onboarding stays authoritative |
+| Context tree (outline and visual) | Native outline, then native graph | Later package | Proposed later package | Not dismissed as web; needs its own native slice after WP4 |
+| Canvas and naplets | Native canvas surface | Later package | Proposed later package | Canvas layout and naplets (tasks, docs, chat) can be native; only embedded HTML naplet content is web |
+| Excalidraw boards | Native viewer or labelled web view | Later package | Proposed later package | Needs a decision between native rendering of the saved scene and a labelled web view |
+| HTML artefacts | Labelled web view | Later package | Web content | The artefact itself is an HTML document; the surrounding navigation stays native |
+| WApps / Toolbox | Native list, labelled web view for each WApp | Later package | Proposed later package | WApp UIs are web documents that their publishers own |
+| Pipeline viewer | Native read-only view | Later package | Proposed later package | |
+| Agents / Autopilot sessions view | Native read-only list | Later package | Proposed later package | Needs review of the Autopilot connection contract |
+| Workrooms, reports, jobs, opportunities | — | Later package | Proposed deferral | Awaiting Pete's prioritisation |
+| Daily scope, audio notes | — | Later package | Proposed deferral | Awaiting Pete's prioritisation |
+| Hosted workspace signup, billing, legal | — | Later package | Proposed deferral | Web onboarding stays authoritative until decided otherwise |
 | Push notifications | — | — | Unsupported | Tower has Web Push (VAPID) only; APNs needs separate server work |
 | FIPS transport | — | — | Unsupported natively | WMapp-shell capability; native-ip is HTTPS-only and never silently falls back |

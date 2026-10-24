@@ -7,8 +7,13 @@ inbox are native screens drawing from a local database. It reuses the existing
 Tower HTTPS + NIP-98 contracts. It adds no backend routes and changes no shared
 schema.
 
-This document records the source inventory (WP1) and the native architecture
-that later packages build on. The feature-by-feature status is in
+This document records the source inventory (WP1) and the **target** native
+architecture that later packages build on. Implementation status: WP2 delivers
+the identity vault, signing, HTTPS transport, the SQLite store, the sync engine,
+the descriptor → workspace → scope → channel read path, and the core storm
+budget tests. Everything else described here, including chat, the outbox,
+drafts, SSE, background refresh and UI hitch metrics, is target design for
+WP3–WP6 until the parity matrix records evidence for it. The feature-by-feature status is in
 [parity-matrix.md](parity-matrix.md); package order and acceptance are in
 [work-packages.md](work-packages.md).
 
@@ -184,7 +189,8 @@ SQLite WAL checkpoints are shared, so these targets are measured, not assumed.
   `https`/`nip-98` and no FIPS service. FIPS is a WMapp-shell capability, so
   native-ip does not offer it. If a FIPS-only endpoint is selected, the app
   refuses it rather than falling back to HTTPS.
-- **Intrinsically web content**: HTML artefacts, Canvas/naplets, Excalidraw
-  boards, WApps/Toolbox and the pipeline viewer are web documents by nature.
-  Where offered, they are opened in an explicitly labelled web view and are not
-  counted as native parity.
+- **Web content**: only records that are themselves HTML documents, such as
+  HTML artefacts and WApps' own UIs, open in an explicitly labelled web view, and
+  they are not counted as native parity. Canvas, naplets, Excalidraw, the context
+  tree, agents and the pipeline viewer are *proposed later native packages*,
+  not exclusions. Their scope awaits Pete's prioritisation.
