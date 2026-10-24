@@ -91,8 +91,17 @@ final class AppModel {
 
     func markCachedListShown() {
         guard launchToCachedListMs == nil, let firstFrame else { return }
-        launchToCachedListMs = (ContinuousClock.now - firstFrame).milliseconds
+        let ms = (ContinuousClock.now - firstFrame).milliseconds
+        launchToCachedListMs = ms
         if let launchInterval { Self.signposter.endInterval("launch-to-cached-list", launchInterval) }
+        // Sample-data mode keeps a short history so device runs can be read back without UI automation.
+        if fixture != nil, let store {
+            Task {
+                let previous = (try? await store.reader.state("fixture.launch-ms")) ?? nil
+                let history = ((previous ?? "").split(separator: ",").suffix(9).map(String.init) + [String(format: "%.0f", ms)]).joined(separator: ",")
+                try? await store.writer.setState("fixture.launch-ms", history)
+            }
+        }
     }
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
     @ObservationIgnored private var restoringPath = false
