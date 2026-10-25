@@ -128,6 +128,34 @@ public struct DocumentBody: Sendable, Equatable {
         }
     }
 
+    /// Node types of the web document schema (sol `createFlightDeckTiptapExtensions`).
+    public static let schemaNodeTypes: Set<String> = [
+        "doc", "text", "paragraph", "heading", "blockquote", "codeBlock", "horizontalRule", "hardBreak",
+        "bulletList", "orderedList", "listItem", "taskList", "taskItem", "table", "tableRow", "tableHeader", "tableCell",
+        "image", "fdStorageImage", "fdStorageFile", "fdUploadPlaceholder", "fdWikiLink",
+    ]
+
+    /// Checks a ProseMirror document coming back from the editor page before it is drafted or saved: a `doc` whose
+    /// content is a list of nodes, none of the page's kept-content stand-ins left, and no node type that is neither in
+    /// the web schema nor already in the stored document (`original`). Anything else means content was being rewritten.
+    public static func checkEdited(_ state: JSONValue, original: JSONValue?) throws {
+        guard state["type"]?.stringValue == "doc", state["content"]?.arrayValue != nil else { throw DocumentEditError.integrity }
+        var allowed = schemaNodeTypes
+        if let original { allowed.formUnion(nodeTypes(original)) }
+        let found = nodeTypes(state)
+        guard found.isDisjoint(with: ["fdKeptBlock", "fdKeptInline"]), found.isSubset(of: allowed) else { throw DocumentEditError.integrity }
+    }
+
+    static func nodeTypes(_ node: JSONValue) -> Set<String> {
+        var out: Set<String> = []
+        func walk(_ n: JSONValue) {
+            if let type = n["type"]?.stringValue { out.insert(type) }
+            for child in n["content"]?.arrayValue ?? [] { walk(child) }
+        }
+        walk(node)
+        return out
+    }
+
     private var outgoingContentType: String {
         representation == .envelope ? Self.envelopeContentType : (contentType.isEmpty ? Self.envelopeContentType : contentType)
     }
@@ -149,9 +177,10 @@ public struct DocumentBody: Sendable, Equatable {
 }
 
 public enum DocumentEditError: LocalizedError, Equatable, Sendable {
-    case unsupported, invalidPath
+    case unsupported, invalidPath, integrity
     public var errorDescription: String? {
         switch self {
+        case .integrity: "The editor returned a document that would lose content, so it was not kept. Your last good draft is unchanged."
         case .unsupported: "This document cannot be edited in this app without losing content."
         case .invalidPath: "That part of the document changed; reopen the editor."
         }

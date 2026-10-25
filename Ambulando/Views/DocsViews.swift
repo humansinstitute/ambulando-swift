@@ -153,18 +153,24 @@ struct DocumentSnapshot: Sendable, Equatable {
     var choice = ScopeChoice()
 }
 
+/// A document as a white page on a faint lavender surround, with comments beside it (Mac) or below it (iPhone/iPad).
+/// Edit turns the page itself into the editor on the Mac; the iPhone and iPad open the same editor full screen.
 struct DocumentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
     let docId: String
     let workspace: WorkspaceRecord
     let store: LocalStore
     @State private var snapshot = LiveQuery<DocumentSnapshot>(initial: DocumentSnapshot())
-    @State private var editing = false
+    @State private var editor: DocEditorModel?
+    @State private var editingFullScreen = false
     @State private var comment = ""
     @State private var anchor: DocumentAnchor?
     @State private var replyTo: CommentRecord?
     @State private var revealed: DocumentAnchor?
     @State private var revealRevision = 0
+
+    private var canEdit: Bool { snapshot.value.editable || snapshot.value.draft != nil }
 
     var body: some View {
         readerLayout
@@ -173,38 +179,76 @@ struct DocumentView: View {
         .inlineTitle()
         .toolbar {
             ToolbarItem(placement: .trailingBar) {
-                Button(snapshot.value.draft == nil ? "Edit" : "Continue") { editing = true }
-                    .disabled(!snapshot.value.editable && snapshot.value.draft == nil)
-                    .accessibilityIdentifier("doc.edit")
+                if editor == nil {
+                    Button(snapshot.value.draft == nil ? "Edit" : "Continue editing") { beginEditing() }
+                        .disabled(!canEdit)
+                        .accessibilityIdentifier("doc.edit")
+                }
             }
         }
-        .coverSheet(isPresented: $editing) {
-            if let doc = snapshot.value.doc { DocumentEditorView(doc: doc, workspace: workspace, store: store) }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $editingFullScreen, onDismiss: { editor = nil }) {
+            if let editor { DocumentEditorScreen(editor: editor, onFinish: { editingFullScreen = false }) }
         }
+        #endif
         .refreshable { model.openDoc(docId, in: workspace, force: true) }
         .task { start() }
         .onAppear { model.openDoc(docId, in: workspace); model.markViewed(.document, docId, in: workspace) }
+        .onChange(of: snapshot.value.doc?.id) { _, _ in takeEditRequest() }
+        .onChange(of: model.docEditRequest) { _, _ in takeEditRequest() }
+        #if os(macOS)
+        .onDisappear { if let editor { Task { _ = await editor.persistDraft(state: .editing); editor.close() } } }
+        .onChange(of: scenePhase) { _, phase in if phase != .active, let editor { Task { _ = await editor.persistDraft(state: .editing) } } }
+        #endif
+    }
+
+    /// A canvas document's Edit opens this screen with Edit already on.
+    private func takeEditRequest() {
+        guard model.docEditRequest == docId, snapshot.value.doc != nil else { return }
+        model.docEditRequest = nil
+        if canEdit && editor == nil { beginEditing() }
+    }
+
+    private func beginEditing() {
+        guard editor == nil, let doc = snapshot.value.doc, let connection = model.connection else { return }
+        let created = DocEditorModel(doc: doc, workspace: workspace, store: store, connection: connection, app: model)
+        editor = created
+        Task {
+            await created.load()
+            created.holdLease()
+        }
+        #if os(iOS)
+        editingFullScreen = true
+        #endif
     }
 
     @ViewBuilder private var readerLayout: some View {
         #if os(macOS)
         GeometryReader { geometry in
             HStack(alignment: .top, spacing: 0) {
-                ScrollViewReader { scroll in
-                    ScrollView { paper.padding(20) }
-                        .onChange(of: revealRevision) { _, _ in
-                            if let value = revealed, let result = DocumentAnchors.resolve(value, in: snapshot.value.spans) {
-                                withAnimation { scroll.scrollTo(result.span.path.first ?? 0, anchor: .center) }
-                            }
+                Group {
+                    if let editor {
+                        DocumentEditingPage(editor: editor, onFinish: { self.editor = nil })
+                    } else {
+                        ScrollViewReader { scroll in
+                            ScrollView { paper.padding(.horizontal, 28).padding(.vertical, 24).frame(maxWidth: .infinity) }
+                                .onChange(of: revealRevision) { _, _ in
+                                    if let value = revealed, let result = DocumentAnchors.resolve(value, in: snapshot.value.spans) {
+                                        withAnimation { scroll.scrollTo(result.span.path.first ?? 0, anchor: .center) }
+                                    }
+                                }
                         }
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Amb.paperSurround)
                 Divider()
                 VStack(spacing: 0) {
                     ScrollView { docComments.frame(maxWidth: .infinity, alignment: .leading).padding(12) }
                     Divider()
                     composer
                 }
-                .frame(width: min(320, max(240, geometry.size.width * 0.32)))
+                .frame(width: min(340, max(250, geometry.size.width * 0.3)))
                 .background(Amb.card)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("doc.commentColumn")
@@ -212,40 +256,43 @@ struct DocumentView: View {
         }
         .background(Amb.background)
         #else
-        ScrollView { VStack(alignment: .leading, spacing: 14) { paper; Divider(); docComments }.padding(16).tabletReadingWidth() }
-            .safeAreaInset(edge: .bottom) { composer.tabletReadingWidth() }
-            .background(Amb.background)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                paper
+                docComments.padding(.horizontal, 4)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 16).tabletReadingWidth()
+        }
+        .safeAreaInset(edge: .bottom) { composer.tabletReadingWidth() }
+        .background(Amb.paperSurround)
         #endif
     }
 
     private var paper: some View {
-            VStack(alignment: .leading, spacing: 14) {
-                if let doc = snapshot.value.doc {
-                    Text(doc.title).font(Amb.editorial).foregroundStyle(Amb.foreground).accessibilityIdentifier("doc.title")
-                    Text([snapshot.value.choice.scopeName(doc.scopeId), snapshot.value.choice.channelName(doc.channelId).map { "#\($0)" }, ChatTime.label(doc.updatedAt)]
-                        .compactMap { $0 }.joined(separator: " · ")).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
-                }
-                if let draft = snapshot.value.draft {
-                    Button { editing = true } label: {
-                        Notice(tone: draft.state == .recovery || draft.state == .conflict ? .warning : .info,
-                               text: draft.lastError ?? "You have unsaved edits on this \(Device.name). Tap to continue editing.")
-                    }
-                    .buttonStyle(.plain).accessibilityIdentifier("doc.draftBanner")
-                }
-                if let reason = snapshot.value.readOnlyReason { Notice(tone: .info, text: reason) }
-                if snapshot.value.hasBody {
-                    documentBlocks
-                } else if snapshot.loaded {
-                    SyncNote(text: model.syncError(forKey: WorkspaceSync.docKey(workspace.id, docId))
-                             ?? (model.isUnlocked ? "Loading document…" : "This document is not saved on this \(Device.name) yet. Unlock to load it."))
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            if let doc = snapshot.value.doc {
+                Text(doc.title).font(Amb.editorial).foregroundStyle(Amb.paperInk).accessibilityIdentifier("doc.title")
+                Text([snapshot.value.choice.scopeName(doc.scopeId), snapshot.value.choice.channelName(doc.channelId).map { "#\($0)" }, ChatTime.label(doc.updatedAt)]
+                    .compactMap { $0 }.joined(separator: " · ")).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             }
-            .padding(24)
-            .frame(maxWidth: 800, alignment: .leading)
-            .background(Color.white)
-            .environment(\.colorScheme, .light)
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("doc.paper")
+            if let draft = snapshot.value.draft {
+                Button { beginEditing() } label: {
+                    Notice(tone: draft.state == .recovery || draft.state == .conflict ? .warning : .info,
+                           text: draft.lastError ?? "You have unsaved edits on this \(Device.name). Continue editing to save or discard them.")
+                }
+                .buttonStyle(.plain).accessibilityIdentifier("doc.draftBanner")
+            }
+            if let reason = snapshot.value.readOnlyReason { Notice(tone: .info, text: reason) }
+            if snapshot.value.hasBody {
+                documentBlocks
+            } else if snapshot.loaded {
+                SyncNote(text: model.syncError(forKey: WorkspaceSync.docKey(workspace.id, docId))
+                         ?? (model.isUnlocked ? "Loading document…" : "This document is not saved on this \(Device.name) yet. Unlock to load it."))
+            }
+        }
+        .modifier(DocumentPaper())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("doc.paper")
     }
 
     private var documentBlocks: some View {
@@ -361,323 +408,283 @@ struct DocumentView: View {
     }
 }
 
-// MARK: Editor
-
-/// Editor state on the main actor holds only the text being typed. Applying edits to the document JSON, encoding the
-/// body and writing the durable draft happen in detached tasks, so typing never waits for them.
-@MainActor
-@Observable
-final class DocEditorModel {
-    enum Mode: Equatable { case blocks, markdown, unavailable(String) }
-
-    private(set) var mode: Mode = .unavailable("Loading…")
-    private(set) var blocks: [EditableBlock] = []
-    var texts: [String: String] = [:] { didSet { scheduleDraft() } }
-    var markdown = "" { didSet { if markdown != oldValue { scheduleDraft() } } }
-    var title = "" { didSet { if title != oldValue { scheduleDraft() } } }
-    private(set) var status: String?
-    private(set) var statusTone: Notice.Tone = .info
-    private(set) var saving = false
-    private(set) var leaseState = "Checking the edit lease…"
-    private(set) var dirty = false
-
-    @ObservationIgnored let doc: DocRecord
-    @ObservationIgnored let workspace: WorkspaceRecord
-    @ObservationIgnored let store: LocalStore
-    @ObservationIgnored let connection: ConnectionRecord
-    @ObservationIgnored private var body: DocumentBody?
-    @ObservationIgnored private var state: JSONValue?
-    @ObservationIgnored private var base: (rowVersion: Int, sha: String, object: String)?
-    @ObservationIgnored private var debounce: Task<Void, Never>?
-    @ObservationIgnored private var renew: Task<Void, Never>?
-    @ObservationIgnored private var loading = true
-
-    init(doc: DocRecord, workspace: WorkspaceRecord, store: LocalStore, connection: ConnectionRecord) {
-        self.doc = doc; self.workspace = workspace; self.store = store; self.connection = connection
-    }
-
-    var draftKey: String { DocDraft.key(connectionId: connection.id, workspaceId: workspace.id, docId: doc.id) }
-
-    /// A saved draft wins over the cached body: unsaved work is never replaced by a newer download.
-    func load() async {
-        let store = store, w = workspace.id, d = doc.id, key = draftKey
-        let draft = try? await store.reader.docDraft(key: key)
-        let cached = try? await store.reader.docBody(workspaceId: w, docId: d)
-        let source: (Data, String)? = draft.map { ($0.body, $0.contentType) } ?? cached.map { ($0.bytes, $0.contentType) }
-        guard let source else { mode = .unavailable("This document's text is not on this \(Device.name) yet. Go back, unlock and open it again."); return }
-        let decoded = await Task.detached { DocumentBody(bytes: source.0, contentType: source.1) }.value
-        body = decoded
-        if let draft { base = (draft.baseRowVersion, draft.baseSha256, draft.baseStorageObjectId); dirty = true; status = draft.lastError }
-        else if let cached { base = (cached.docRowVersion, cached.sha256, cached.storageObjectId) }
-        title = draft?.title ?? doc.title
-        switch decoded.editing {
-        case .proseMirror:
-            state = decoded.editorState
-            blocks = state.map(DocumentEditor.blocks) ?? []
-            texts = Dictionary(uniqueKeysWithValues: blocks.map { ($0.id, $0.text) })
-            mode = .blocks
-        case .markdown, .markdownModel:
-            markdown = decoded.markdown
-            mode = .markdown
-        case .readOnly(let reason):
-            mode = .unavailable(reason)
-        }
-        loading = false
-    }
-
-    // MARK: Lease
-
-    func holdLease(saver: DocumentSaver?, unlocked: Bool) {
-        guard let saver, unlocked else { leaseState = "Editing on this \(Device.name). Unlock to save."; return }
-        let connection = connection, workspace = workspace, id = doc.id
-        renew?.cancel()
-        renew = Task { [weak self] in
-            do {
-                try await saver.acquire(connection, workspace, docId: id)
-                self?.leaseState = "You are editing (lease held)."
-            } catch {
-                self?.leaseState = (error as? LocalizedError)?.errorDescription ?? "Could not take the edit lease; your edits stay on this \(Device.name)."
-                return
-            }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
-                guard !Task.isCancelled else { return }
-                do { try await saver.renew(connection, workspace, docId: id) }
-                catch { self?.leaseState = "The edit lease expired; it is taken again when you save."; return }
-            }
-        }
-    }
-
-    func releaseLease(saver: DocumentSaver?) {
-        renew?.cancel()
-        guard let saver else { return }
-        let connection = connection, workspace = workspace, id = doc.id
-        Task.detached { await saver.release(connection, workspace, docId: id) }
-    }
-
-    // MARK: Structure edits (flush typed text first so paths stay valid)
-
-    func toggleTask(_ block: EditableBlock) { restructure { try DocumentEditor.toggleTask($0, containing: block.path) } }
-    func insertAfter(_ block: EditableBlock) { restructure { try DocumentEditor.insertParagraph($0, after: block.path) } }
-    func remove(_ block: EditableBlock) { restructure { try DocumentEditor.removeBlock($0, path: block.path) } }
-    func appendParagraph() { restructure { DocumentEditor.appendParagraph($0) } }
-
-    private func restructure(_ edit: @escaping @Sendable (JSONValue) throws -> JSONValue) {
-        guard var next = state else { return }
-        do {
-            next = try applyTexts(next)
-            next = try edit(next)
-        } catch { status = error.localizedDescription; statusTone = .warning; return }
-        state = next
-        blocks = DocumentEditor.blocks(next)
-        texts = Dictionary(uniqueKeysWithValues: blocks.map { ($0.id, $0.text) })
-        dirty = true
-    }
-
-    private func applyTexts(_ start: JSONValue) throws -> JSONValue {
-        var current = start
-        for block in blocks {
-            if let text = texts[block.id], text != block.text { current = try DocumentEditor.setText(current, path: block.path, text: text) }
-        }
-        return current
-    }
-
-    // MARK: Draft persistence
-
-    private func scheduleDraft() {
-        guard !loading else { return }
-        dirty = true
-        debounce?.cancel()
-        debounce = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            _ = await self?.persistDraft(state: .editing)
-        }
-    }
-
-    /// Encodes the current edit (off the main actor) and stores it as the durable draft.
-    @discardableResult
-    func persistDraft(state draftState: DocDraft.State) async -> DocDraft? {
-        guard let body, let base, dirty else { return nil }
-        let blocks = blocks, texts = texts, markdown = markdown, mode = mode, current = state, title = title
-        let identity = (connection.id, workspace.id, doc.id)
-        let encoded: (Data, String)? = await Task.detached {
-            do {
-                if mode == .markdown { let r = try body.encoded(markdown: markdown); return (r.bytes, r.contentType) }
-                guard var next = current else { return nil }
-                for block in blocks { if let text = texts[block.id], text != block.text { next = try DocumentEditor.setText(next, path: block.path, text: text) } }
-                let r = try body.encoded(editorState: next)
-                return (r.bytes, r.contentType)
-            } catch { return nil }
-        }.value
-        guard let encoded else { status = "This edit could not be encoded without loss, so it was not saved."; statusTone = .error; return nil }
-        let draft = DocDraft(connectionId: identity.0, workspaceId: identity.1, docId: identity.2, title: title.isEmpty ? doc.title : title,
-                             body: encoded.0, contentType: encoded.1, baseRowVersion: base.rowVersion, baseSha256: base.sha,
-                             baseStorageObjectId: base.object, state: draftState)
-        try? await store.writer.saveDocDraft(draft)
-        return draft
-    }
-
-    func save(saver: DocumentSaver?) async -> Bool {
-        guard let saver else { return false }
-        guard !UploadToken.contains(in: markdown), !texts.values.contains(where: { UploadToken.contains(in: $0) }) else {
-            status = ComposerUploadError.unresolved.localizedDescription; statusTone = .warning; return false
-        }
-        debounce?.cancel()
-        saving = true
-        defer { saving = false }
-        guard let draft = await persistDraft(state: .editing) else {
-            if !dirty { status = "No changes to save."; statusTone = .info }
-            return !dirty
-        }
-        let result = await saver.save(draft, connection: connection, workspace: workspace)
-        switch result {
-        case .saved(_, let body):
-            dirty = false
-            base = (body.docRowVersion, body.sha256, body.storageObjectId)
-            status = "Saved."; statusTone = .success
-            return true
-        case .recovery(_, let message), .leaseHeld(let message), .notSaved(let message):
-            status = message; statusTone = .warning
-            return false
-        }
-    }
-
-    /// Drops the local draft (the user chose the latest version over their unsaved edit).
-    func discardDraft() async {
-        debounce?.cancel()
-        try? await store.writer.deleteDocDraft(key: draftKey, workspaceId: workspace.id)
-        dirty = false
-    }
-
-    var draftText: String {
-        if mode == .markdown { return markdown }
-        return blocks.map { texts[$0.id] ?? $0.text }.joined(separator: "\n\n")
+/// The white page: generous margins, dark ink in both appearances, centred on the lavender surround.
+struct DocumentPaper: ViewModifier {
+    var fill = false
+    func body(content: Content) -> some View {
+        content
+            #if os(macOS)
+            .padding(.horizontal, 56).padding(.vertical, 44)
+            #else
+            .padding(.horizontal, 22).padding(.vertical, 24)
+            #endif
+            .frame(maxWidth: .infinity, maxHeight: fill ? .infinity : nil, alignment: .topLeading)
+            .background(Color.white, in: RoundedRectangle(cornerRadius: 4))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(PlatformColor(hex: 0xE4DFF0)), lineWidth: 1))
+            .shadow(color: Color(PlatformColor(hex: 0x2B1B3C)).opacity(0.06), radius: 10, y: 2)
+            .environment(\.colorScheme, .light)
+            .frame(maxWidth: 860)
     }
 }
 
-struct DocumentEditorView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
+// MARK: Editor
+
+/// Mac: the document page turned into the editor, in place (formatting bar above the page, Save and Cancel beside it).
+struct DocumentEditingPage: View {
+    let editor: DocEditorModel
+    let onFinish: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            DocumentEditBar(editor: editor, onFinish: onFinish)
+                .padding(.horizontal, 20).padding(.vertical, 8)
+            DocumentEditSurface(editor: editor)
+                .modifier(DocumentPaper(fill: true))
+                .padding(.horizontal, 28).padding(.bottom, 20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+/// iPhone and iPad: the same editor full screen, on the same page and surround.
+struct DocumentEditorScreen: View {
     @Environment(\.scenePhase) private var scenePhase
-    let doc: DocRecord
-    let workspace: WorkspaceRecord
-    let store: LocalStore
-    @State private var editor: DocEditorModel?
-    @State private var confirmDiscard = false
-    @FocusState private var focused: String?
+    let editor: DocEditorModel
+    let onFinish: () -> Void
 
     var body: some View {
         NavigationStack {
-            Group {
-                if let editor { content(editor) } else { ProgressView() }
+            VStack(spacing: 0) {
+                DocumentFormatBar(editor: editor)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                DocumentEditSurface(editor: editor)
+                    .modifier(DocumentPaper(fill: true))
+                    .padding(.horizontal, 10).padding(.bottom, 8)
+                    .tabletReadingWidth()
             }
-            .background(Amb.background)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Amb.paperSurround)
             .navigationTitle("Edit")
             .inlineTitle()
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { Task { _ = await editor?.persistDraft(state: .editing); dismiss() } }.accessibilityIdentifier("editor.close")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { if await editor?.save(saver: model.saver) == true { dismiss() } } }
-                        .disabled(editor?.saving ?? true || !model.isUnlocked)
-                        .accessibilityIdentifier("editor.save")
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { focused = nil }
-                }
-            }
-            .confirmationDialog("Discard your unsaved edits?", isPresented: $confirmDiscard, titleVisibility: .visible) {
-                Button("Discard edits", role: .destructive) { Task { await editor?.discardDraft(); dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { DocumentCancelButton(editor: editor, onFinish: onFinish) }
+                ToolbarItem(placement: .confirmationAction) { DocumentSaveButton(editor: editor, onFinish: onFinish) }
             }
         }
-        .task {
-            guard editor == nil, let connection = model.connection else { return }
-            let created = DocEditorModel(doc: doc, workspace: workspace, store: store, connection: connection)
-            editor = created
-            await created.load()
-            created.holdLease(saver: model.saver, unlocked: model.isUnlocked)
+        .onChange(of: scenePhase) { _, phase in if phase != .active { Task { _ = await editor.persistDraft(state: .editing) } } }
+    }
+}
+
+/// Formatting on the left; save status, Cancel and Save on the right.
+struct DocumentEditBar: View {
+    let editor: DocEditorModel
+    let onFinish: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            DocumentFormatBar(editor: editor)
+            Spacer(minLength: 8)
+            DocumentCancelButton(editor: editor, onFinish: onFinish).buttonStyle(.bordered)
+            DocumentSaveButton(editor: editor, onFinish: onFinish).buttonStyle(.borderedProminent)
         }
-        .onDisappear { editor?.releaseLease(saver: model.saver) }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { Task { _ = await editor?.persistDraft(state: .editing) } } }
+        .controlSize(.regular)
+    }
+}
+
+struct DocumentSaveButton: View {
+    @Environment(AppModel.self) private var model
+    let editor: DocEditorModel
+    let onFinish: () -> Void
+
+    var body: some View {
+        Button("Save") {
+            Task { if await editor.save() { editor.close(); onFinish() } }
+        }
+        .keyboardShortcut("s", modifiers: .command)
+        .disabled(editor.saving || !model.isUnlocked || !editor.pageReady)
+        .font(.amb(.body).weight(.semibold))
+        .accessibilityIdentifier("editor.save")
+    }
+}
+
+/// Cancel: without changes it just closes; with changes it asks whether to keep the draft on this device or discard it.
+struct DocumentCancelButton: View {
+    let editor: DocEditorModel
+    let onFinish: () -> Void
+    @State private var asking = false
+
+    var body: some View {
+        Button("Cancel") {
+            if editor.dirty { asking = true } else { editor.close(); onFinish() }
+        }
+        .keyboardShortcut(.cancelAction)
+        .font(.amb(.body))
+        .accessibilityIdentifier("editor.close")
+        .confirmationDialog("You have unsaved edits", isPresented: $asking, titleVisibility: .visible) {
+            Button("Keep draft on this \(Device.name)") {
+                Task { _ = await editor.persistDraft(state: .editing); editor.close(); onFinish() }
+            }
+            .accessibilityIdentifier("editor.keepDraft")
+            Button("Discard edits", role: .destructive) {
+                Task { await editor.discardDraft(); editor.close(); onFinish() }
+            }
+            .accessibilityIdentifier("editor.discard")
+        } message: {
+            Text("A kept draft stays on this \(Device.name) and is not sent until you save it.")
+        }
+    }
+}
+
+/// The formatting toolbar: block style, inline marks, link, lists, quote, code, rule, undo and redo. It acts on the
+/// page's selection and shows what is active there.
+struct DocumentFormatBar: View {
+    let editor: DocEditorModel
+    @State private var linking = false
+    @State private var href = ""
+
+    var body: some View {
+        let f = editor.formatting
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                Menu {
+                    Button("Text") { editor.command("paragraph") }
+                    Button("Heading 1") { editor.command("heading", ["level": "1"]) }
+                    Button("Heading 2") { editor.command("heading", ["level": "2"]) }
+                    Button("Heading 3") { editor.command("heading", ["level": "3"]) }
+                } label: {
+                    Text(f.heading > 0 ? "Heading \(f.heading)" : "Text").font(.amb(.callout).weight(.medium)).frame(minWidth: 70, alignment: .leading)
+                }
+                .menuStyle(.button).fixedSize()
+                .accessibilityLabel("Text style").accessibilityIdentifier("editor.format.style")
+                divider
+                tool("bold", "Bold", f.bold, "bold")
+                tool("italic", "Italic", f.italic, "italic")
+                tool("strikethrough", "Strikethrough", f.strike, "strike")
+                tool("chevron.left.forwardslash.chevron.right", "Inline code", f.code, "code")
+                Button { href = f.link ?? ""; linking = true } label: { icon("link", active: f.link != nil) }
+                    .help("Link").accessibilityLabel("Link").accessibilityIdentifier("editor.format.link")
+                divider
+                tool("list.bullet", "Bulleted list", f.bulletList, "bulletList")
+                tool("list.number", "Numbered list", f.orderedList, "orderedList")
+                tool("checklist", "Task list", f.taskList, "taskList")
+                tool("text.quote", "Quote", f.blockquote, "blockquote")
+                tool("curlybraces", "Code block", f.codeBlock, "codeBlock")
+                tool("minus", "Divider", false, "horizontalRule")
+                divider
+                tool("arrow.uturn.backward", "Undo", false, "undo").disabled(!f.canUndo)
+                tool("arrow.uturn.forward", "Redo", false, "redo").disabled(!f.canRedo)
+            }
+            .buttonStyle(.borderless)
+            .disabled(!editor.pageReady)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("editor.toolbar")
+        .alert("Link", isPresented: $linking) {
+            TextField("https://", text: $href).accessibilityIdentifier("editor.link.field")
+            Button("Apply") { applyLink() }
+            if editor.formatting.link != nil { Button("Remove link", role: .destructive) { editor.command("link", ["href": ""]) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Links open outside the editor.")
+        }
     }
 
-    @ViewBuilder private func content(_ editor: DocEditorModel) -> some View {
-        @Bindable var editor = editor
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                TextField("Title", text: $editor.title, axis: .vertical).font(Amb.editorial).accessibilityIdentifier("editor.title")
-                Text(editor.leaseState).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("editor.lease")
-                if let status = editor.status {
-                    Notice(tone: editor.statusTone, text: status).accessibilityIdentifier("editor.status")
-                    if editor.statusTone == .warning {
-                        HStack(spacing: 16) {
-                            Button("Copy my text") { Pasteboard.copy(editor.draftText) }
-                            Button("Discard my edits", role: .destructive) { confirmDiscard = true }.accessibilityIdentifier("editor.discard")
-                        }
-                        .font(.amb(.footnote).weight(.semibold))
+    private var divider: some View { Divider().frame(height: 18).padding(.horizontal, 4) }
+
+    private func icon(_ symbol: String, active: Bool) -> some View {
+        Image(systemName: symbol)
+            .font(.amb(.body).weight(active ? .bold : .regular))
+            .frame(width: 30, height: 28)
+            .foregroundStyle(active ? Amb.primaryForeground : Amb.foreground)
+            .background(active ? Amb.primary : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+            .contentShape(Rectangle())
+    }
+
+    private func tool(_ symbol: String, _ label: String, _ active: Bool, _ command: String) -> some View {
+        Button { editor.command(command) } label: { icon(symbol, active: active) }
+            .help(label)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(active ? .isSelected : [])
+            .accessibilityIdentifier("editor.format.\(command)")
+    }
+
+    /// Only web and mail links (the web Link extension's own rule); anything else is not applied.
+    private func applyLink() {
+        var value = href.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.isEmpty { editor.command("link", ["href": ""]); return }
+        if !value.contains(":") { value = "https://" + value }
+        guard let url = URL(string: value), ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") else { return }
+        editor.command("link", ["href": value])
+    }
+}
+
+/// Title, lease and save status, pasted uploads, and the editor page, on the white page.
+struct DocumentEditSurface: View {
+    @Environment(AppModel.self) private var model
+    @Bindable var editor: DocEditorModel
+    @State private var confirmDiscard = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Title", text: $editor.title, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(Amb.editorial)
+                .foregroundStyle(Amb.paperInk)
+                .accessibilityIdentifier("editor.title")
+            HStack(spacing: 6) {
+                Circle().fill(editor.leaseState.contains("lease held") ? Color.green : Amb.mutedForeground).frame(width: 7, height: 7)
+                Text(editor.leaseState).accessibilityIdentifier("editor.lease")
+                if editor.dirty { Text("· Unsaved changes").accessibilityIdentifier("editor.dirty") }
+            }
+            .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+            if let status = editor.status {
+                Notice(tone: editor.statusTone, text: status).accessibilityIdentifier("editor.status")
+                if editor.statusTone == .warning || editor.statusTone == .error {
+                    HStack(spacing: 16) {
+                        Button("Copy my text") { Pasteboard.copy(editor.draftText) }
+                        Button("Discard my edits", role: .destructive) { confirmDiscard = true }.accessibilityIdentifier("editor.discardEdits")
                     }
-                }
-                switch editor.mode {
-                case .blocks:
-                    ForEach(editor.blocks) { block in blockEditor(block, editor: editor) }
-                    Button { editor.appendParagraph() } label: { Label("Add paragraph", systemImage: "plus") }
-                        .font(.amb(.footnote).weight(.semibold)).padding(.top, 4).accessibilityIdentifier("editor.addParagraph")
-                case .markdown:
-                    Text("Markdown").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
-                    ContentTextEntry(text: $editor.markdown, placeholder: "Document text", workspace: workspace, field: "doc-body-\(doc.id)", multilineEditor: true).font(.amb(.body).monospaced()).frame(minHeight: 320)
-                        .scrollContentBackground(.hidden).padding(8).background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-                        .focused($focused, equals: "markdown").accessibilityIdentifier("editor.markdown")
-                case .unavailable(let reason):
-                    Notice(tone: .info, text: reason)
+                    .font(.amb(.footnote).weight(.semibold))
+                    .buttonStyle(.borderless)
                 }
             }
-            .padding(16)
-        }
-        .scrollDismissesKeyboard(.interactively)
-    }
-
-    @ViewBuilder private func blockEditor(_ block: EditableBlock, editor: DocEditorModel) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if let checked = block.taskChecked {
-                Button { editor.toggleTask(block) } label: { Image(systemName: checked ? "checkmark.square.fill" : "square") }
-                    .buttonStyle(.borderless).accessibilityLabel(checked ? "Completed item" : "Open item")
-            } else if block.container == "listItem" {
-                Text("•").foregroundStyle(Amb.mutedForeground)
-            } else if block.container == "blockquote" {
-                Rectangle().fill(Amb.border).frame(width: 3, height: 18)
+            if let uploads = model.uploads {
+                ComposerPastedUploads(uploads: uploads, target: editor.uploadTarget, text: editor.uploadText)
             }
-            ContentTextEntry(text: Binding(get: { editor.texts[block.id] ?? block.text }, set: { editor.texts[block.id] = $0 }), placeholder: placeholder(block), workspace: workspace, field: "doc-\(doc.id)-\(block.id)")
-                .font(font(block))
-                .focused($focused, equals: block.id)
-                .accessibilityIdentifier("editor.block")
-            if block.rich {
-                Image(systemName: "textformat").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
-                    .accessibilityLabel("Formatting in this block is kept")
+            switch editor.mode {
+            case .loading:
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .rich, .markdown:
+                if BoardEditorBundle.available {
+                    DocumentEditorWebView(editor: editor)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .accessibilityLabel("Document text")
+                } else {
+                    Notice(tone: .error, text: "The document editor is missing from this build.")
+                }
+            case .unavailable(let reason):
+                Notice(tone: .info, text: reason)
             }
         }
-        .padding(.vertical, 4).padding(.leading, block.container == "tableCell" ? 12 : 0)
-        .contextMenu {
-            Button { editor.insertAfter(block) } label: { Label("Insert paragraph below", systemImage: "text.insert") }
-            Button(role: .destructive) { editor.remove(block) } label: { Label("Delete block", systemImage: "trash") }
+        .onChange(of: model.syncStatus) { _, _ in editor.deliverImages() }
+        .onChange(of: TextScale.shared.factor, initial: true) { _, _ in editor.page?.setStyle(DocumentEditorStyle.sizes()) }
+        .onChange(of: editor.pageReady) { _, _ in editor.page?.setStyle(DocumentEditorStyle.sizes()) }
+        .confirmationDialog("Discard your unsaved edits?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+            Button("Discard edits", role: .destructive) { Task { await editor.discardDraft() } }
         }
     }
+}
 
-    private func placeholder(_ block: EditableBlock) -> String {
-        switch block.type {
-        case "heading": "Heading"
-        case "codeBlock": "Code"
-        default: "Text"
-        }
-    }
-
-    private func font(_ block: EditableBlock) -> Font {
-        switch block.type {
-        case "heading": (block.level ?? 1) <= 1 ? .amb(.title2).weight(.bold) : .amb(.title3).weight(.semibold)
-        case "codeBlock": Amb.code
-        default: .amb(.body)
-        }
+/// Text sizes for the editor page, the same as the reader's at the app's text size.
+enum DocumentEditorStyle {
+    @MainActor static func sizes() -> [String: CGFloat] {
+        #if os(macOS)
+        let scale = TextScale.shared
+        return ["body": scale.pointSize(.body), "h1": scale.pointSize(.title2), "h2": scale.pointSize(.title3),
+                "h3": scale.pointSize(.headline), "code": scale.pointSize(.footnote)]
+        #else
+        func size(_ style: UIFont.TextStyle) -> CGFloat { UIFont.preferredFont(forTextStyle: style).pointSize }
+        return ["body": size(.body), "h1": size(.title2), "h2": size(.title3), "h3": size(.headline), "code": size(.footnote)]
+        #endif
     }
 }

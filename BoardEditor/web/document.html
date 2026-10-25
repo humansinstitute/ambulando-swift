@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <!-- Documents are data: nothing is fetched beyond this bundle (no connect, frames or forms); stored images arrive
+       from the app as data URLs. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; worker-src 'none'; frame-src 'none'; object-src 'none'; media-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>Document editor · Ambulando</title>
+  <link rel="stylesheet" href="./document.css">
+</head>
+<body>
+  <div id="document-root" data-document-editor-state="booting"></div>
+  <script type="module" src="./document.js"></script>
+</body>
+</html>

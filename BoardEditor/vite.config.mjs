@@ -1,4 +1,5 @@
-// Builds the native apps' board editor page (web/main.js + the vendored sol editor in web/sol) into dist/.
+// Builds the native apps' editor pages into dist/: the board editor (index.html, web/main.js + the vendored sol board
+// editor in web/sol) and the document editor (document.html, web/document.js + the vendored sol document editor).
 // Run through scripts/build-board-editor.sh (Xcode runs it for the app targets).
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -37,5 +38,6 @@ export default {
     target: 'es2022',
     modulePreload: false,
     chunkSizeWarningLimit: 8000,
+    rollupOptions: { input: { index: path.join(here, 'web', 'index.html'), document: path.join(here, 'web', 'document.html') } },
   },
 };

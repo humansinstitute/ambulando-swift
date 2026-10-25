@@ -31,6 +31,10 @@ enum Amb {
     /// Selected row (sol `.sidebar-scope-channel-row.active`, `.reaction-pill-active`): muted fill, primary text.
     static let selectedFill = muted
     static let selectedForeground = primary
+    /// Around a document's white page: a faint lavender in light mode, a dark plum in dark mode (the page stays white).
+    static let paperSurround = dynamic(0xF4F1FA, 0x1C1729)
+    /// Ink on the white document page in both appearances.
+    static let paperInk = Color(PlatformColor(hex: 0x10162B))
     static let brandOrange = Color(PlatformColor(hex: 0xBF4D0D))
     static let brandNavy = Color(PlatformColor(hex: 0x10162B))
 

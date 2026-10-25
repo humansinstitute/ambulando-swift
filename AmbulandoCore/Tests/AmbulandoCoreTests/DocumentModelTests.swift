@@ -214,4 +214,19 @@ final class DocumentModelTests: XCTestCase {
         guard case .paragraph(let p) = md[1] else { return XCTFail("paragraph") }
         XCTAssertTrue(p.contains { $0.bold && $0.text == "bold" })
     }
+
+    /// The editor page's document comes back through this guard before it is drafted: kept stand-ins or node types
+    /// the schema and the stored document do not have are refused; the stored document's own unknown types are fine.
+    func testEditedDocumentIntegrityGuard() throws {
+        let custom = JSONValue.object([("type", .string("customWidget"))])
+        let original = JSONValue.object([("type", .string("doc")), ("content", .array([para("b1", [text("Hi")]), custom]))])
+        XCTAssertNoThrow(try DocumentBody.checkEdited(original, original: original))
+        let image = JSONValue.object([("type", .string("fdStorageImage")), ("attrs", .object([("objectId", .string("x"))]))])
+        XCTAssertNoThrow(try DocumentBody.checkEdited(.object([("type", .string("doc")), ("content", .array([image]))]), original: original))
+        let kept = JSONValue.object([("type", .string("fdKeptBlock")), ("attrs", .object([("json", .string("{}"))]))])
+        XCTAssertThrowsError(try DocumentBody.checkEdited(.object([("type", .string("doc")), ("content", .array([kept]))]), original: original))
+        let invented = JSONValue.object([("type", .string("somethingElse"))])
+        XCTAssertThrowsError(try DocumentBody.checkEdited(.object([("type", .string("doc")), ("content", .array([invented]))]), original: original))
+        XCTAssertThrowsError(try DocumentBody.checkEdited(.object([("type", .string("paragraph"))]), original: original))
+    }
 }

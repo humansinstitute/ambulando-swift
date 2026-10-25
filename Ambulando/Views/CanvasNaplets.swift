@@ -148,7 +148,7 @@ struct DocNapletSnapshot: Sendable, Equatable {
     var comments = 0
 }
 
-/// A document on the canvas, rendered natively, with its comments and an Edit entry into the normal editor.
+/// A document on the canvas, rendered natively on white, with entries into its document screen (comments, or Edit).
 struct DocNapletBody: View {
     @Environment(AppModel.self) private var model
     @Environment(\.pushRoute) private var pushRoute
@@ -157,7 +157,6 @@ struct DocNapletBody: View {
     let store: LocalStore
     let interactive: Bool
     @State private var snapshot = LiveQuery<DocNapletSnapshot>(initial: DocNapletSnapshot())
-    @State private var editing = false
 
     var body: some View {
         let value = snapshot.value
@@ -168,7 +167,11 @@ struct DocNapletBody: View {
                 }
                 .accessibilityIdentifier("naplet.doc.comments")
                 Spacer()
-                Button(value.hasDraft ? "Continue editing" : "Edit") { editing = true }
+                // The document screen opens with Edit on: the same page editor as every other way into a document.
+                Button(value.hasDraft ? "Continue editing" : "Edit") {
+                    model.docEditRequest = docId
+                    pushRoute(.doc(workspaceId: workspace.id, docId: docId))
+                }
                     .disabled(!value.editable && !value.hasDraft)
                     .accessibilityIdentifier("naplet.doc.edit")
             }
@@ -193,9 +196,6 @@ struct DocNapletBody: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("naplet.document")
-        .coverSheet(isPresented: $editing) {
-            if let doc = snapshot.value.doc { DocumentEditorView(doc: doc, workspace: workspace, store: store) }
-        }
         .task {
             let w = workspace.id, id = docId, store = store, connection = model.connection?.id ?? ""
             snapshot.start(store: store, matches: { $0.workspaceId == w && [.docs, .docBodies, .docDrafts, .comments].contains($0.table) }) {

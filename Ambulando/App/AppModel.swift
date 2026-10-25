@@ -132,6 +132,8 @@ final class AppModel {
     /// Bumped when a sidebar choice opens Deck; Deck then shows its Inbox card.
     var deckInboxRequests = 0
     var notice: String?
+    /// A document whose screen should open straight into Edit (a canvas document's Edit on the Mac).
+    var docEditRequest: String?
     /// Set when the app runs on deterministic local sample data (UI automation); never a live Tower.
     private(set) var fixture: FixtureEnvironment?
 
