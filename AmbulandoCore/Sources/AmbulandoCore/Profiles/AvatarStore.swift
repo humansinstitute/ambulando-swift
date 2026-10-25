@@ -98,7 +98,9 @@ final class AvatarRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendab
 /// Everything here runs off the main actor: downloads (at most `maxConcurrent` at once, one per URL), validation and
 /// decoding. A failed URL is not asked for again for a while.
 public actor AvatarStore {
-    public static let maxBytes = 2 * 1024 * 1024
+    /// Largest download accepted (bytes, 5 MiB). Public profile pictures are often full-size photos over 2 MB; the pixel bound
+    /// and the thumbnail decode keep memory small whatever the file size.
+    public static let maxBytes = 5 * 1024 * 1024
     /// Largest source image accepted (pixels); bigger images are refused before decoding.
     public static let maxSourcePixels = 40_000_000
     public static let thumbnailPixels = 192

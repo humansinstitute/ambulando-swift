@@ -26,6 +26,9 @@ architecture that later packages build on. Implementation status:
   schema v5 and adds chat separators (§4.8).
 - Build 11 adds explicit Paste of images and files into channel and thread composers as workspace storage links
   (§4.1, "Pasted images and files"). No schema change.
+- Build 12 names people from their public Nostr profile first, as the web does, loads Blossom avatars through checked
+  redirects (≤ 5 MiB), and adds the full-screen in-app browser with native NIP-07 signing (§4.9). No schema change; new
+  `app_state` key `browser.sites.v1` and a separate browser website data store.
 - Device validation and packaging are WP6, as is anything else here without evidence in the parity matrix.
 
 The feature-by-feature status is in [parity-matrix.md](parity-matrix.md); package order and
@@ -439,9 +442,9 @@ directory refresh). No Tower route or schema was added.
 - **Avatars.** `AvatarStore` fetches an HTTPS picture only if `AvatarURLPolicy` accepts it (no credentials, no IP literal
   or local host name, ≤ 2,048 characters), through an ephemeral session with no Authorization header, cookies, credential
   store or HTTP cache; at most 3 redirects, each re-checked by `AvatarURLPolicy` (build 12: Blossom servers redirect
-  every picture to their CDN); ≤ 2 MB (stream cut at the limit), `image/*`, known still-image types, ≤ 40 MP. The
-  first frame is decoded as an ImageIO thumbnail (≤ 192 px, never the full bitmap) and re-encoded as PNG, which drops
-  metadata. Files are named by the URL's SHA-256 under a versioned directory (`AmbulandoAvatars/v1`, other versions
+  every picture to their CDN); ≤ 5 MiB (build 12, was 2 MB: public photos are often larger; stream cut at the limit),
+  `image/*`, known still-image types, ≤ 40 MP. The first frame is decoded as an ImageIO thumbnail (≤ 192 px, never the
+  full bitmap) and re-encoded as PNG, which drops metadata. Files are named by the URL's SHA-256 under a versioned directory (`AmbulandoAvatars/v1`, other versions
   deleted), bounded to 400 files / 16 MB; a changed picture is a new URL and file. At most 3 downloads run at once and a
   URL is fetched once however many rows ask; failures back off (6 h for a bad image, 5 min for network trouble).
   `AvatarCenter` keeps decoded thumbnails in an `NSCache`, so a row draws a known avatar synchronously; anything else

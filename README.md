@@ -149,7 +149,8 @@ Names and the in-app browser (build 12):
 
 - **Names like the web app.** People are named from their public Nostr profile first, then the workspace name, then a
   short npub, everywhere: chat, the @-mention list (now with pictures), task assignees, documents and the sidebar.
-  Pictures hosted on Blossom servers (such as Primal's), which always redirect to a CDN, now load.
+  Pictures hosted on Blossom servers (such as Primal's), which always redirect to a CDN, now load, and pictures up to
+  5 MB (was 2 MB) are shown.
 - **Browser.** Web links in Ambulando open full-screen as tabs, and the globe button at the top of every screen opens
   the browser or a new tab (it shows how many are open). **Ambulando** at the top left goes back to exactly where you
   were, draft included; tabs keep their pages and back/forward history while the app runs. Pages are HTTPS only;
@@ -168,7 +169,7 @@ Security notes:
 - Public profiles are read, never written, from the web app's three public relays (relay.primal.net, nos.lol,
   purplepag.es) for the people your workspace shows, and each is checked against its author's signature. Pictures are
   fetched from the HTTPS address in the profile without any login, cookie or Tower data, refusing local addresses,
-  large files (over 2 MB) and non-images. Up to three redirects are followed, each to an address that passes the same
+  large files (over 5 MB) and non-images. Up to three redirects are followed, each to an address that passes the same
   check (Blossom servers redirect every picture to their CDN). The relays and picture hosts can see your network address, as with the web
   app. Settings › Nostr profiles turns both off.
 - `.fips` endpoints are refused rather than replaced with HTTPS.

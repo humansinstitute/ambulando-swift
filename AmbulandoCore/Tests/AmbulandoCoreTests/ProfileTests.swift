@@ -562,6 +562,27 @@ final class AvatarStoreTests: XCTestCase {
         XCTAssertThrowsError(try AvatarStore.thumbnailPNG(samplePNG(width: 100, height: 100), maxPixels: 64, maxSourcePixels: 5000))
     }
 
+    func testPicturesOverTwoMegabytesUpToTheFiveMebibyteCapAreAccepted() async throws {
+        XCTAssertEqual(AvatarStore.maxBytes, 5 * 1024 * 1024)
+        let transport = StubAvatarTransport()
+        let large = URL(string: "https://img.example.com/large.png")!
+        let atCap = URL(string: "https://img.example.com/cap.png")!
+        let over = URL(string: "https://img.example.com/over.png")!
+        // A real 2.17 MB profile photo was refused by the old 2 MB cap. Trailing bytes pad a small PNG to each size.
+        transport.answer(large, samplePNG() + Data(count: 2_170_000))
+        transport.answer(atCap, samplePNG() + Data(count: AvatarStore.maxBytes - samplePNG().count))
+        transport.answer(over, samplePNG() + Data(count: AvatarStore.maxBytes + 1 - samplePNG().count))
+        let store = AvatarStore(directory: temporaryDirectory(), transport: transport)
+        let largeFile = await store.thumbnail(for: large)
+        let atCapFile = await store.thumbnail(for: atCap)
+        let overFile = await store.thumbnail(for: over)
+        XCTAssertNotNil(largeFile)
+        XCTAssertNotNil(atCapFile)
+        XCTAssertNil(overFile)
+        let thumbnail = try XCTUnwrap(largeFile.flatMap { try? Data(contentsOf: $0) })
+        XCTAssertLessThan(thumbnail.count, 64 * 1024, "the stored file is the small re-encoded thumbnail")
+    }
+
     func testOfflineFailureIsRetriedSoonAndRefusedURLsAreNeverFetched() async throws {
         let transport = StubAvatarTransport()
         transport.answer(url, samplePNG())
