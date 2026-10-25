@@ -96,6 +96,9 @@ struct FocusThreadAction: Sendable {
 
 extension EnvironmentValues {
     @Entry var focusThread: FocusThreadAction? = nil
+    /// The view is behind the focused thread on the Mac. AppKit views (the composer) read it to leave accessibility too,
+    /// since SwiftUI's `accessibilityHidden` does not reach into them.
+    @Entry var behindModal = false
 }
 
 /// The thread title as the open `ThreadView` reads it, for the focused view's header.
@@ -121,13 +124,14 @@ private struct ThreadFocusPresenter: ViewModifier {
         let focused = model.focusedThread != nil
         #if os(iOS)
         content
+            .background(BackgroundAccessibility(hidden: focused))
             .fullScreenCover(isPresented: Binding(get: { model.focusedThread != nil }, set: { if !$0 { model.focusedThread = nil } })) {
                 ThreadFocusContainer().environment(model)
             }
             .modifier(ThreadFocusLifecycle())
-            .accessibilityHidden(focused)
         #else
         content
+            .environment(\.behindModal, focused)
             // The app behind stays exactly as it is, only out of reach: no clicks, keyboard or VoiceOver.
             .allowsHitTesting(!focused)
             .accessibilityHidden(focused)
@@ -136,6 +140,39 @@ private struct ThreadFocusPresenter: ViewModifier {
         #endif
     }
 }
+
+#if os(iOS)
+/// Takes the whole app behind the cover (the window's root view) out of VoiceOver while the thread is open. SwiftUI's
+/// `accessibilityHidden` stops at UIKit containers (navigation stacks, split views, text and web views), so it would
+/// leave most of the app behind reachable.
+private struct BackgroundAccessibility: UIViewRepresentable {
+    let hidden: Bool
+
+    final class Coordinator { weak var root: UIView? }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        let hidden = hidden, coordinator = context.coordinator
+        // The probe has a window only once it is on screen.
+        DispatchQueue.main.async {
+            guard let root = view.window?.rootViewController?.view ?? coordinator.root else { return }
+            coordinator.root = root
+            if root.accessibilityElementsHidden != hidden { root.accessibilityElementsHidden = hidden }
+        }
+    }
+
+    /// Locking replaces the shell with the thread still open: give the app back to VoiceOver.
+    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) {
+        coordinator.root?.accessibilityElementsHidden = false
+    }
+}
+#endif
 
 /// The open thread belongs to one workspace and identity: switching workspace or removing the identity closes it. Locking
 /// replaces the whole shell, so the thread is hidden with it and comes back on unlock.
@@ -146,7 +183,9 @@ private struct ThreadFocusLifecycle: ViewModifier {
             .onChange(of: model.selectedWorkspace?.id) { _, id in
                 if let focus = model.focusedThread, focus.workspaceId != id { model.focusedThread = nil }
             }
-            .onChange(of: model.identity) { _, identity in if identity == .none { model.focusedThread = nil } }
+            .onChange(of: model.identity) { _, identity in
+                if identity == .none { model.focusedThread = nil; ReadingPositions.shared.removeAll() }
+            }
     }
 }
 

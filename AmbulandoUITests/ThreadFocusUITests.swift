@@ -150,6 +150,54 @@ final class ThreadFocusUITests: XCTestCase {
         XCTAssertEqual(search.value as? String, "Inbox counts", "the Inbox search is kept")
     }
 
+    /// Closing and reopening a thread returns to the message the reader was on, not the newest; a thread left at its newest
+    /// message reopens at the newest. While the thread is open only its own composer is reachable.
+    func testReopenKeepsReadingPositionAndHidesTheAppBehind() {
+        let app = launch(reset: true)
+        openGeneralThread(app, replies: 3)
+        let panel = focus(app)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "composer.field").count, 1,
+                       "the channel composer behind the thread is hidden from accessibility")
+        let root = panel.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND identifier != 'thread.focus.title'", "Ship it")).firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 10))
+        let reply = composer(in: panel)
+        reply.tap()
+        // Tall replies until the first message has scrolled away, then more: the reopened thread has no keyboard, so its
+        // list is taller than now (the iPad's card holds many more than the iPhone).
+        var sent = 0, extra = 0
+        while sent < 40 && extra < 6 {
+            sent += 1
+            if !root.isHittable { extra += 1 }
+            reply.typeText("Filler reply #\(sent)#" + String(repeating: "\nmore", count: 5))
+            app.buttons["composer.send"].firstMatch.tap()
+        }
+        let newest = panel.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Filler reply #\(sent)#")).firstMatch
+        XCTAssertTrue(newest.waitForExistence(timeout: 10))
+        sleep(1)
+        XCTAssertFalse(root.isHittable, "the thread is longer than the screen")
+        let list = panel.scrollViews.firstMatch
+        for _ in 0..<8 where !(root.exists && root.isHittable) { list.swipeDown() }
+        XCTAssertTrue(root.isHittable, "scrolled up to the first message")
+        XCTAssertFalse(newest.isHittable)
+        capture(app, "thread-focus-scrolled-up")
+        close(app)
+
+        openGeneralThread(app, replies: 3 + sent)
+        XCTAssertTrue(root.waitForExistence(timeout: 10))
+        sleep(1)
+        XCTAssertTrue(root.isHittable, "reopening returns to the first message")
+        XCTAssertFalse(newest.isHittable, "not to the newest")
+        capture(app, "thread-focus-reopened-at-position")
+
+        for _ in 0..<8 where !(newest.exists && newest.isHittable) { list.swipeUp() }
+        XCTAssertTrue(newest.isHittable)
+        close(app)
+        openGeneralThread(app, replies: 3 + sent)
+        XCTAssertTrue(newest.waitForExistence(timeout: 10))
+        sleep(1)
+        XCTAssertTrue(newest.isHittable, "a thread left at its newest message reopens at the newest")
+    }
+
     /// A thread left open in one workspace never shows in another.
     func testWorkspaceSwitchShowsNoForeignThread() {
         let app = launch(reset: true)

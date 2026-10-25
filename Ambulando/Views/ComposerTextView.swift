@@ -239,6 +239,8 @@ struct ComposerTextView: NSViewRepresentable {
         view.isAutomaticSpellingCorrectionEnabled = !plainKeyboard
         view.isAutomaticQuoteSubstitutionEnabled = !plainKeyboard
         view.isAutomaticDashSubstitutionEnabled = !plainKeyboard
+        let exposed = !context.environment.behindModal
+        if view.isAccessibilityElement() != exposed { view.setAccessibilityElement(exposed) }
         let isFirst = view.window?.firstResponder === view
         if focused, !isFirst {
             DispatchQueue.main.async { view.window?.makeFirstResponder(view) }

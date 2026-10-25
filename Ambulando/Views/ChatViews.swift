@@ -67,6 +67,34 @@ private struct NewestSentinel: View {
     }
 }
 
+/// Where the reader left each conversation, so closing and reopening it returns to the same message rather than the
+/// newest. Kept for the app session, per connection, workspace and thread; a thread left at its newest message is not
+/// kept and reopens at the newest.
+@MainActor final class ReadingPositions {
+    static let shared = ReadingPositions()
+    private var anchors: [String: String] = [:]
+
+    private static func key(_ target: ChatTarget) -> String? {
+        target.threadId.map { "\(target.connectionId):\(target.workspaceId):\($0)" }
+    }
+
+    func anchor(for target: ChatTarget) -> String? { Self.key(target).flatMap { anchors[$0] } }
+
+    /// Records the first message on screen, or forgets the thread when the reader was at the newest message.
+    func record(_ target: ChatTarget, firstVisible: String?) {
+        guard let key = Self.key(target) else { return }
+        anchors[key] = firstVisible
+    }
+
+    func removeAll() { anchors.removeAll() }
+}
+
+/// The rows currently on screen. A plain reference so scrolling never re-renders the list.
+private final class VisibleRows {
+    private(set) var ids = Set<String>()
+    func set(_ id: String, _ visible: Bool) { if visible { ids.insert(id) } else { ids.remove(id) } }
+}
+
 /// Keeps the newest message in view when the user sends one, or when one arrives while they are already at the
 /// bottom. Reading older messages is never interrupted.
 private struct FollowLatest: ViewModifier {
@@ -75,6 +103,8 @@ private struct FollowLatest: ViewModifier {
     /// Whether the end of the list is on screen, reported by `NewestSentinel` (scroll geometry is unreliable here:
     /// LazyVStack revises its size estimates while the newest rows stay visible).
     let nearBottom: Bool
+    /// A message to open at (top of the screen) instead of the newest: where the reader left a reopened thread.
+    var resumeAt: String? = nil
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var lastPending = 0
     @State private var positioned = false
@@ -107,7 +137,12 @@ private struct FollowLatest: ViewModifier {
     private func positionInitially(_ id: String?) {
         guard !positioned, id != nil else { return }
         positioned = true
-        Task { @MainActor in position.scrollTo(edge: .bottom) }
+        if let resumeAt {
+            lastPending = pendingCount
+            Task { @MainActor in position.scrollTo(id: resumeAt, anchor: .top) }
+        } else {
+            Task { @MainActor in position.scrollTo(edge: .bottom) }
+        }
     }
 }
 
@@ -267,6 +302,16 @@ struct ThreadView: View {
     let store: LocalStore
     @State private var snapshot = LiveQuery<ThreadSnapshot>(initial: ThreadSnapshot())
     @State private var atNewest = true
+    @State private var visibleRows = VisibleRows()
+    /// Where the reader left this thread last time it was open (nil: open at the newest message).
+    @State private var resumeAt: String?
+
+    init(target: ChatTarget, workspace: WorkspaceRecord, store: LocalStore) {
+        self.target = target
+        self.workspace = workspace
+        self.store = store
+        _resumeAt = State(initialValue: ReadingPositions.shared.anchor(for: target))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -281,6 +326,7 @@ struct ThreadView: View {
                         MessageCell(message: message, people: snapshot.value.people, workspace: workspace, extras: snapshot.value.extras)
                         if index == 0 && snapshot.value.messages.count > 1 { RepliesRule(count: snapshot.value.messages.count - 1) }
                     }
+                    .onScrollVisibilityChange(threshold: 0.3) { [visibleRows] in visibleRows.set(message.id, $0) }
                 }
                 ForEach(snapshot.value.pending) { item in
                     VStack(spacing: 0) {
@@ -300,7 +346,8 @@ struct ThreadView: View {
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .modifier(FollowLatest(lastId: snapshot.value.pending.last?.id ?? snapshot.value.messages.last?.id,
-                               pendingCount: snapshot.value.pending.count, nearBottom: atNewest))
+                               pendingCount: snapshot.value.pending.count, nearBottom: atNewest,
+                               resumeAt: resumeAt.flatMap { id in snapshot.value.messages.contains { $0.id == id } ? id : nil }))
         .scrollDismissesKeyboard(.interactively)
         .refreshable { if let thread = target.threadId { model.openThread(thread, channelId: target.channelId, in: workspace) } }
             Composer(target: target, workspace: workspace, store: store, placeholder: "Reply")
@@ -320,6 +367,10 @@ struct ThreadView: View {
         }
         .onChange(of: snapshot.value.messages.map(\.id)) { _, ids in
             if let thread = target.threadId { model.refreshReactions(workspace, scope: thread, messageIds: ids) }
+        }
+        .onDisappear {
+            let first = atNewest ? nil : snapshot.value.messages.first { visibleRows.ids.contains($0.id) }?.id
+            ReadingPositions.shared.record(target, firstVisible: first)
         }
     }
 
