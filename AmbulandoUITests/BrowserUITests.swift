@@ -37,7 +37,7 @@ final class BrowserUITests: XCTestCase {
         let open = app.buttons["browser.open"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 5))
         open.tap()
-        XCTAssertTrue(app.otherElements["browser.start"].waitForExistence(timeout: 10) || app.staticTexts["Enter an address above"].exists)
+        XCTAssertTrue(app.otherElements["browser.start"].waitForExistence(timeout: 10) || app.staticTexts["Enter an address below"].exists)
         let address = app.textFields["browser.address"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap()
@@ -84,6 +84,64 @@ final class BrowserUITests: XCTestCase {
         XCTAssertTrue(home.waitForExistence(timeout: 5))
         home.tap()
         XCTAssertTrue(app.navigationBars["#general"].waitForExistence(timeout: 10))
+    }
+
+    /// All browser chrome is one compact bar at the bottom: Ambulando, back, forward, address, tabs and the menu sit
+    /// in the lower part of the screen with nothing above the page; reload and new tab are in the menu; editing the
+    /// address keeps the field above the keyboard; Ambulando returns to the same channel.
+    func testBrowserControlsAreOneBottomBar() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-AmbulandoUITestFixture", "-appearance", "light", "-AmbulandoFixtureReset"]
+        app.launch()
+        let general = app.buttons["channel.general"]
+        XCTAssertTrue(general.waitForExistence(timeout: 15))
+        general.tap()
+        XCTAssertTrue(app.navigationBars["#general"].waitForExistence(timeout: 10))
+        let open = app.buttons["browser.open"].firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 5))
+        open.tap()
+
+        let address = app.textFields["browser.address"]
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        address.tap()
+        address.typeText("browser.sample.invalid\n")
+        XCTAssertTrue(webText(app, "window.nostr: ready").waitForExistence(timeout: 15))
+
+        let screen = app.windows.firstMatch.frame
+        let controls = ["browser.return", "browser.back", "browser.forward", "browser.tabs", "browser.menu"].map { app.buttons[$0] }
+        let bar = controls + [address]
+        for control in bar {
+            XCTAssertTrue(control.exists, "\(control) is in the bar")
+            XCTAssertGreaterThan(control.frame.midY, screen.maxY * 0.8, "\(control) sits at the bottom")
+        }
+        let rows = Set(bar.map { Int($0.frame.midY.rounded()) })
+        XCTAssertLessThanOrEqual((rows.max() ?? 0) - (rows.min() ?? 0), 4, "one row, not two bars")
+        for control in controls { XCTAssertGreaterThanOrEqual(control.frame.height, 44, "\(control) has a 44pt target") }
+        let page = app.webViews.firstMatch.frame
+        // Only the status bar and the sample-data banner are above the page; every control is below it.
+        XCTAssertLessThan(page.minY, screen.maxY * 0.15, "no toolbar above the page")
+        for control in bar { XCTAssertGreaterThanOrEqual(control.frame.minY, page.maxY - 1, "\(control) is below the page") }
+        XCTAssertFalse(app.buttons["browser.reload"].exists, "reload is in the menu, not a separate button")
+        capture(app, "browser-bottom-bar")
+
+        app.buttons["browser.menu"].tap()
+        XCTAssertTrue(app.buttons["Reload"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["New tab"].exists)
+        capture(app, "browser-menu")
+        app.buttons["Reload"].tap()
+        XCTAssertTrue(webText(app, "window.nostr: ready").waitForExistence(timeout: 15), "reload from the menu")
+
+        // Editing the address: the field stays above the keyboard and the bar gives it the width.
+        address.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(address.frame.maxY, app.keyboards.firstMatch.frame.minY + 1, "address above the keyboard")
+        XCTAssertFalse(app.buttons["browser.return"].exists)
+        capture(app, "browser-address-editing")
+        app.buttons["browser.address.cancel"].tap()
+        XCTAssertTrue(app.buttons["browser.return"].waitForExistence(timeout: 5))
+
+        app.buttons["browser.return"].tap()
+        XCTAssertTrue(app.navigationBars["#general"].waitForExistence(timeout: 10), "Ambulando returns to the same channel")
     }
 
     /// Deck → Hello and Links → Apps opens the WApp as a browser tab with `window.nostr`; **Ambulando** returns to the

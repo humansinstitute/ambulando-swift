@@ -2,8 +2,8 @@ import AmbulandoCore
 import SwiftUI
 import WebKit
 
-/// The full-screen browser. The top-left **Ambulando** button always returns to the app exactly as it was; the tab
-/// button lists Ambulando and every open tab.
+/// The full-screen browser. All chrome is one compact bar at the bottom: **Ambulando** (always returns to the app
+/// exactly as it was), back, forward, the site/address field, the tab switcher and an overflow menu for everything else.
 struct BrowserView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openURL) private var openURL
@@ -15,16 +15,7 @@ struct BrowserView: View {
     var body: some View {
         @Bindable var browser = browser
         VStack(spacing: 0) {
-            topBar
             FixtureBanner()
-            if let tab = browser.selected {
-                if tab.loading { ProgressView(value: tab.progress).progressViewStyle(.linear).tint(Amb.primary).frame(height: 2) }
-                if let refusal = tab.refusal { notice(refusal, systemImage: "exclamationmark.triangle").accessibilityIdentifier("browser.refusal") }
-            }
-            if browser.locked {
-                notice("Ambulando is locked. Websites cannot use your Nostr key until you unlock.", systemImage: "lock")
-                    .accessibilityIdentifier("browser.locked")
-            }
             ZStack {
                 if let tab = browser.selected {
                     WebViewHost(webView: tab.webView).id(tab.id)
@@ -32,6 +23,11 @@ struct BrowserView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let refusal = browser.selected?.refusal { notice(refusal, systemImage: "exclamationmark.triangle").accessibilityIdentifier("browser.refusal") }
+            if browser.locked {
+                notice("Ambulando is locked. Websites cannot use your Nostr key until you unlock.", systemImage: "lock")
+                    .accessibilityIdentifier("browser.locked")
+            }
             bottomBar
         }
         .background(Amb.background)
@@ -57,50 +53,82 @@ struct BrowserView: View {
         } message: { dialog in Text(dialog.message) }
     }
 
-    private var topBar: some View {
-        HStack(spacing: 8) {
-            Button { browser.presented = false } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "chevron.backward").font(.body.weight(.semibold))
-                    Text("Ambulando").font(.subheadline.weight(.semibold))
+    /// The only browser chrome. While the address is being edited the bar gives the field the full width, plus Cancel.
+    private var bottomBar: some View {
+        HStack(spacing: 2) {
+            if !editing {
+                Button { browser.presented = false } label: {
+                    Image("PassageMark").resizable().scaledToFit().frame(width: 22, height: 22).barTarget()
                 }
+                .accessibilityLabel("Back to Ambulando")
+                .accessibilityIdentifier("browser.return")
+                Button { browser.selected?.webView.goBack() } label: { Image(systemName: "chevron.left").barTarget() }
+                    .disabled(!(browser.selected?.canGoBack ?? false)).accessibilityLabel("Back").accessibilityIdentifier("browser.back")
+                Button { browser.selected?.webView.goForward() } label: { Image(systemName: "chevron.right").barTarget() }
+                    .disabled(!(browser.selected?.canGoForward ?? false)).accessibilityLabel("Forward").accessibilityIdentifier("browser.forward")
             }
-            .accessibilityLabel("Back to Ambulando")
-            .accessibilityIdentifier("browser.return")
-            HStack(spacing: 6) {
-                Image(systemName: browser.selected?.origin != nil ? "lock.fill" : "globe").font(.caption).foregroundStyle(Amb.mutedForeground)
-                TextField("Search or enter address", text: $address)
-                    .focused($editing)
-                    .urlEntry()
-                    .autocorrectionDisabled()
-                    .submitLabel(.go)
-                    .font(.subheadline)
-                    .onSubmit {
-                        guard let tab = browser.selected else { return }
-                        if browser.go(address, in: tab) { editing = false }
-                    }
-                    .onChange(of: editing) { _, on in
-                        address = on ? (browser.selected?.url.flatMap { $0.scheme == "about" ? nil : $0.absoluteString } ?? "") : hostLabel
-                    }
-                    .accessibilityIdentifier("browser.address")
+            addressField
+            if editing {
+                Button("Cancel") { editing = false }.font(.subheadline).padding(.leading, 8).frame(minHeight: 44)
+                    .accessibilityIdentifier("browser.address.cancel")
+            } else {
+                Button { browser.showingTabs = true } label: {
+                    Text("\(browser.tabs.count)").font(.caption.weight(.bold)).frame(minWidth: 20, minHeight: 20)
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Amb.foreground, lineWidth: 1.5))
+                        .barTarget()
+                }
+                .accessibilityLabel("\(browser.tabs.count) open \(browser.tabs.count == 1 ? "tab" : "tabs")")
+                .accessibilityIdentifier("browser.tabs")
+                menu
             }
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(Amb.muted, in: RoundedRectangle(cornerRadius: 10))
-            Button { browser.showingTabs = true } label: {
-                Text("\(browser.tabs.count)").font(.caption.weight(.bold)).frame(minWidth: 22, minHeight: 22)
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Amb.foreground, lineWidth: 1.5))
-            }
-            .accessibilityLabel("\(browser.tabs.count) open \(browser.tabs.count == 1 ? "tab" : "tabs")")
-            .accessibilityIdentifier("browser.tabs")
-            menu
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Amb.card)
-        .overlay(alignment: .bottom) { Rectangle().fill(Amb.border).frame(height: 0.5) }
+        .font(.body.weight(.medium))
+        .tabletReadingWidth()
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        .background(Amb.card.ignoresSafeArea(edges: .bottom))
+        .overlay(alignment: .top) {
+            if let tab = browser.selected, tab.loading {
+                ProgressView(value: tab.progress).progressViewStyle(.linear).tint(Amb.primary).frame(height: 2)
+            } else {
+                Rectangle().fill(Amb.border).frame(height: 0.5)
+            }
+        }
     }
 
+    private var addressField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: browser.selected?.origin != nil ? "lock.fill" : "globe").font(.caption).foregroundStyle(Amb.mutedForeground)
+            TextField("Search or enter address", text: $address)
+                .focused($editing)
+                .urlEntry()
+                .autocorrectionDisabled()
+                .submitLabel(.go)
+                .font(.subheadline)
+                .onSubmit {
+                    guard let tab = browser.selected else { return }
+                    if browser.go(address, in: tab) { editing = false }
+                }
+                .onChange(of: editing) { _, on in
+                    address = on ? (browser.selected?.url.flatMap { $0.scheme == "about" ? nil : $0.absoluteString } ?? "") : hostLabel
+                }
+                .accessibilityIdentifier("browser.address")
+        }
+        .padding(.horizontal, 10)
+        .frame(minHeight: 36)
+        .background(Amb.muted, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 4)
+    }
+
+    /// Everything that is not used on every page: reload, new tab, share, site permission, close and clear.
     private var menu: some View {
         Menu {
+            if let tab = browser.selected {
+                if tab.loading {
+                    Button { tab.webView.stopLoading() } label: { Label("Stop loading", systemImage: "xmark") }
+                } else if let url = tab.url, !tab.isBlank {
+                    Button { browser.reload(url, in: tab) } label: { Label("Reload", systemImage: "arrow.clockwise") }
+                }
+            }
             Button { browser.open(nil) } label: { Label("New tab", systemImage: "plus.square.on.square") }
             if let tab = browser.selected {
                 if let url = tab.url, url.scheme == "https" {
@@ -116,40 +144,16 @@ struct BrowserView: View {
             }
             Button(role: .destructive) { Task { await browser.clearBrowsingData() } } label: { Label("Clear browsing data", systemImage: "trash") }
         } label: {
-            Image(systemName: "ellipsis.circle").font(.body)
+            Image(systemName: "ellipsis.circle").barTarget()
         }
         .accessibilityLabel("Browser menu")
         .accessibilityIdentifier("browser.menu")
     }
 
-    private var bottomBar: some View {
-        HStack {
-            Button { browser.selected?.webView.goBack() } label: { Image(systemName: "chevron.left") }
-                .disabled(!(browser.selected?.canGoBack ?? false)).accessibilityLabel("Back").accessibilityIdentifier("browser.back")
-            Spacer()
-            Button { browser.selected?.webView.goForward() } label: { Image(systemName: "chevron.right") }
-                .disabled(!(browser.selected?.canGoForward ?? false)).accessibilityLabel("Forward").accessibilityIdentifier("browser.forward")
-            Spacer()
-            Button {
-                guard let tab = browser.selected else { return }
-                if tab.loading { tab.webView.stopLoading() } else if let url = tab.url, !tab.isBlank { browser.reload(url, in: tab) }
-            } label: { Image(systemName: browser.selected?.loading == true ? "xmark" : "arrow.clockwise") }
-                .accessibilityLabel(browser.selected?.loading == true ? "Stop" : "Reload").accessibilityIdentifier("browser.reload")
-            Spacer()
-            Button { browser.presented = false } label: { Image("PassageMark").resizable().scaledToFit().frame(width: 24, height: 24) }
-                .accessibilityLabel("Back to Ambulando").accessibilityIdentifier("browser.home")
-        }
-        .font(.title3)
-        .tabletReadingWidth()
-        .padding(.horizontal, 28).padding(.vertical, 10)
-        .background(Amb.card)
-        .overlay(alignment: .top) { Rectangle().fill(Amb.border).frame(height: 0.5) }
-    }
-
     private var startPage: some View {
         VStack(spacing: 10) {
             Image(systemName: "globe").font(.largeTitle).foregroundStyle(Amb.mutedForeground)
-            Text("Enter an address above").font(.headline).foregroundStyle(Amb.foreground)
+            Text("Enter an address below").font(.headline).foregroundStyle(Amb.foreground)
             Text("Pages open here with your Nostr key available through window.nostr. Each site asks before it can see your key, and every signature asks you first.")
                 .font(.footnote).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
         }
@@ -173,6 +177,11 @@ struct BrowserView: View {
     }
 
     private func syncAddress() { address = editing ? address : hostLabel }
+}
+
+private extension View {
+    /// A 44-point touch target for an icon in the browser bar.
+    func barTarget() -> some View { frame(minWidth: 44, minHeight: 44).contentShape(Rectangle()) }
 }
 
 extension BrowserModel {
