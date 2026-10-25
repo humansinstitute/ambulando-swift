@@ -299,9 +299,17 @@ public actor BoardController {
         guard let meta else { return }
         do {
             let draft = drafts.load(fileId)
-            let baseId = draft?.baseVersionId ?? meta.versionId
-            let baseNumber = draft != nil ? draft!.baseVersionNumber : meta.versionNumber
-            let scene = try await readVersion(baseId, sha256: baseId == meta.versionId ? meta.sha256 : nil)
+            // A stored canvas snapshot can lag behind a save (this device's or another's): without a draft, open
+            // Tower's current version. The projection is used when the version list cannot be read.
+            var head = (id: meta.versionId, number: meta.versionNumber, sha256: meta.sha256)
+            if draft == nil, let listed = try? await transport.versions(), let id = listed.currentVersionId,
+               let row = listed.versions.first(where: { $0.id == id }) {
+                head = (id, row.number, row.sha256.isEmpty ? (id == meta.versionId ? meta.sha256 : "") : row.sha256)
+                emit { $0.versions = listed.versions; $0.latestVersionId = id; $0.latestVersionNumber = row.number }
+            }
+            let baseId = draft?.baseVersionId ?? head.id
+            let baseNumber = draft != nil ? draft!.baseVersionNumber : head.number
+            let scene = try await readVersion(baseId, sha256: baseId == head.id && !head.sha256.isEmpty ? head.sha256 : nil)
             let fingerprint = BoardScene.fingerprint(scene)
             base = (baseId, baseNumber, scene, fingerprint)
             var dirty = false

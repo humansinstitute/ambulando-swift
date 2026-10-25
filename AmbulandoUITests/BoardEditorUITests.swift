@@ -7,9 +7,9 @@ import XCTest
 final class BoardEditorUITests: XCTestCase {
     override func setUp() async throws { continueAfterFailure = false }
 
-    private func launch(reset: Bool) -> XCUIApplication {
+    private func launch(reset: Bool, extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-AmbulandoUITestFixture"] + (reset ? ["-AmbulandoFixtureReset"] : [])
+        app.launchArguments = ["-AmbulandoUITestFixture"] + (reset ? ["-AmbulandoFixtureReset"] : []) + extra
         app.launch()
         XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 20))
         return app
@@ -87,5 +87,41 @@ final class BoardEditorUITests: XCTestCase {
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'v2'")).firstMatch.waitForExistence(timeout: 10), "history lists v2")
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'v1'")).firstMatch.exists, "and v1")
         capture(app, "board-reopened-history")
+    }
+
+    /// Someone else saves first: Save keeps the draft and says so; Merge rebases it onto their version; Save then
+    /// publishes both changes.
+    func testSaveAfterSomeoneElseSavedKeepsTheDraftAndMerges() {
+        let app = launch(reset: true, extra: ["-AmbulandoFixtureBoardConflict"])
+        openLaunchBoard(app)
+        let header = app.descendants(matching: .any)["naplet.Architecture sketch"].firstMatch
+        XCTAssertTrue(header.waitForExistence(timeout: 15))
+        header.tap()
+        app.buttons["board.expand"].firstMatch.tap()
+        let rectangle = tool(app, "Rectangle")
+        XCTAssertTrue(rectangle.waitForExistence(timeout: 30))
+        XCTAssertTrue(waitForStatus(app, "== 'v1'"))
+        rectangle.tap()
+        let web = app.webViews.firstMatch
+        web.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.45))
+            .press(forDuration: 0.1, thenDragTo: web.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.6)))
+        XCTAssertTrue(waitForStatus(app, "BEGINSWITH 'Unsaved'"))
+        let save = app.webViews.buttons["Save"].firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 10))
+        save.tap()
+        let merge = app.buttons["board.merge"].firstMatch
+        XCTAssertTrue(merge.waitForExistence(timeout: 20), "a stale save offers Merge")
+        XCTAssertTrue(waitForStatus(app, "CONTAINS 'newer v2'"), "the draft is kept, based on v1")
+        capture(app, "board-conflict")
+        merge.tap()
+        XCTAssertTrue(waitForStatus(app, "== 'Unsaved · v2'"), "merged onto v2, still unsaved for review")
+        capture(app, "board-merged")
+        XCTAssertTrue(save.waitForExistence(timeout: 10))
+        save.tap()
+        // The sample's "someone else" shape is deliberately sparse; Excalidraw completes its fields on the first tap
+        // (as the web editor does), which can leave a small new draft on top of v3. Version 3 itself is the evidence.
+        XCTAssertTrue(app.staticTexts["Saved version 3."].waitForExistence(timeout: 20), "both changes saved as v3")
+        XCTAssertTrue(waitForStatus(app, "ENDSWITH 'v3'"))
+        capture(app, "board-after-merge-save")
     }
 }

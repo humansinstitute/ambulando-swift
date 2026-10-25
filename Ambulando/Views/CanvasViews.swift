@@ -238,7 +238,7 @@ struct CanvasBoardView: View {
     /// One item at its saved (or just dragged) frame, scaled to the viewport.
     @ViewBuilder private func napletView(_ naplet: CanvasNaplet, _ value: CanvasBoardSnapshot, _ vp: CanvasViewport, live: Bool) -> some View {
         if case .excalidraw(let ref) = naplet.content {
-            placed(BoardNapletWindow(naplet: naplet, reference: ref, workspace: workspace, preview: value.boards[naplet.id], selected: selected == naplet.id,
+            placed(BoardNapletWindow(naplet: naplet, reference: ref, workspace: workspace, canvasId: canvasId, preview: value.boards[naplet.id], selected: selected == naplet.id,
                                      live: live, layoutEditing: editing, onSelect: { selected = naplet.id }, onExpand: { open(naplet) }), naplet, vp)
                 .gesture(editGesture(naplet, vp, resize: false), including: movable(naplet) ? .all : .subviews)
                 .task(id: naplet.id) { requestBoardIfNeeded(naplet, value) }
@@ -755,6 +755,6 @@ struct BoardSceneView: View {
 
     private func attach(_ reference: BoardReference?, _ title: String) {
         guard let reference else { return }
-        session = model.boardSession(reference, title: title, in: workspace)
+        session = model.boardSession(reference, title: title, in: workspace, canvasId: canvasId)
     }
 }

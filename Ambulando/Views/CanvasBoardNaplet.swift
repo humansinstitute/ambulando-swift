@@ -10,6 +10,7 @@ struct BoardNapletWindow: View {
     let naplet: CanvasNaplet
     let reference: BoardReference
     let workspace: WorkspaceRecord
+    let canvasId: String
     let preview: PreparedBoard?
     let selected: Bool
     /// Run the embedded editor (on screen, large enough, within the live budget).
@@ -48,7 +49,7 @@ struct BoardNapletWindow: View {
         .clipShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
         .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(selected ? Amb.primary : Amb.border, lineWidth: selected ? 3 : 1))
         .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
-        .task(id: reference) { session = model.boardSession(reference, title: naplet.title, in: workspace) }
+        .task(id: reference) { session = model.boardSession(reference, title: naplet.title, in: workspace, canvasId: canvasId) }
     }
 
     private func hasNotices(_ state: BoardState) -> Bool {

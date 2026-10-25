@@ -12,6 +12,10 @@ final class BoardSession {
     @ObservationIgnored let controller: BoardController
     private(set) var state = BoardState()
     var title: String
+    /// Canvases showing this board; their snapshots are read again after a save (sol `refreshBoardsSnapshot`), so the
+    /// stored projection, and the board on reopen, carry the new version.
+    @ObservationIgnored var canvasIds: Set<String> = []
+    @ObservationIgnored var afterSave: (Set<String>) -> Void = { _ in }
 
     init(key: String, fileId: String, title: String, controller: BoardController) {
         self.key = key
@@ -30,7 +34,10 @@ final class BoardSession {
         Task { await controller.sync(reference, title: title) }
     }
 
-    func save(summary: String = "") { let c = controller; Task { await c.save(summary: summary) } }
+    func save(summary: String = "") {
+        let c = controller
+        Task { if await c.save(summary: summary) { afterSave(canvasIds) } }
+    }
     func mergeLatest() { let c = controller; Task { await c.mergeLatest() } }
     func discardAndLoadLatest() { let c = controller; Task { await c.loadLatest(force: true) } }
     func loadVersions() { let c = controller; Task { await c.loadVersions() } }
@@ -69,7 +76,7 @@ final class BoardRegistry {
 extension AppModel {
     /// The shared session for a board shown on a canvas, bound to the selected workspace and this connection. Nil when
     /// no workspace is open (locked devices still get a read-only session if the identity can read).
-    func boardSession(_ reference: BoardReference, title: String, in workspace: WorkspaceRecord) -> BoardSession? {
+    func boardSession(_ reference: BoardReference, title: String, in workspace: WorkspaceRecord, canvasId: String) -> BoardSession? {
         guard let sync, let connection, workspace.id == selectedWorkspace?.id else { return nil }
         let key = [connection.id, workspace.id, reference.fileId].joined(separator: ":")
         guard let transport = try? sync.boardTransport(connection, workspace, fileId: reference.fileId, title: title) else { return nil }
@@ -79,11 +86,13 @@ extension AppModel {
                 .appendingPathComponent(connection.id, isDirectory: true).appendingPathComponent(workspace.id, isDirectory: true))
             let controller = BoardController(fileId: file, title: title, author: signer, transport: transport, drafts: drafts, onState: { _ in })
             let session = BoardSession(key: key, fileId: file, title: title, controller: controller)
+            session.afterSave = { [weak self] canvases in for id in canvases { self?.openCanvas(workspace, canvasId: id, force: true) } }
             Task { [weak session] in
                 await controller.setOnState { state in Task { @MainActor in session?.apply(state) } }
             }
             return session
         }
+        session.canvasIds.insert(canvasId)
         session.sync(reference, title: title)
         return session
     }

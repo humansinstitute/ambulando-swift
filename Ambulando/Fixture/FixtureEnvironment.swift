@@ -306,6 +306,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         // Pins and references resolve against the sample tasks, documents and channels the other routes serve.
         let work = work
         boards.objectBytes = { id in work.completedObjectBytes(id) }
+        boards.externalSaveBeforeNextPublish = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureBoardConflict")
         surfaces.recordLookup = { id in
             if let t = work.task(id) { return ["title": t["title"] ?? "", "channel_id": t["channel_id"] ?? NSNull(), "scope_id": t["scope_id"] ?? NSNull()] }
             if let d = work.doc(id) { return ["title": d["title"] ?? "", "channel_id": d["channel_id"] ?? NSNull(), "scope_id": d["scope_id"] ?? NSNull()] }

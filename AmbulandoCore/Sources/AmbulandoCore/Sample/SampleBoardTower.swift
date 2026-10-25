@@ -18,6 +18,8 @@ public final class SampleBoardTower: @unchecked Sendable {
     public var objectBytes: (@Sendable (String) -> Data?)?
     private var boards: [String: [String: Any]] = [:]
     public private(set) var log: [String] = []
+    /// Someone else saves (a new rectangle) just before this device's next save, which then meets a stale base.
+    public var externalSaveBeforeNextPublish = false
 
     public init(workspaceId: String, file: URL? = nil) {
         self.workspaceId = workspaceId.lowercased()
@@ -99,6 +101,15 @@ public final class SampleBoardTower: @unchecked Sendable {
             case ("POST", 2):
                 guard boards[fileId]?["can_write"] as? Bool == true else { return (403, ["code": "permission_denied"]) }
                 let o = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+                if externalSaveBeforeNextPublish, let bytes = (versions(fileId).last?["bytes"] as? String).flatMap({ Data(base64Encoded: $0) }),
+                   var scene = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] {
+                    externalSaveBeforeNextPublish = false
+                    let other: [String: Any] = ["id": "external-\(UUID().uuidString.prefix(8))", "type": "rectangle", "version": 1, "versionNonce": 1, "x": -400, "y": -300,
+                                                "width": 160, "height": 90, "angle": 0, "strokeColor": "#e03131", "backgroundColor": "transparent", "fillStyle": "solid",
+                                                "strokeWidth": 2, "roughness": 1, "opacity": 100, "isDeleted": false, "seed": 7, "groupIds": [], "boundElements": NSNull()]
+                    scene["elements"] = ((scene["elements"] as? [Any]) ?? []) + [other]
+                    if let changed = try? JSONSerialization.data(withJSONObject: scene) { _ = append(fileId, bytes: changed, author: "external", summary: "external") }
+                }
                 guard let current = versions(fileId).last else { return (404, ["code": "file_not_found"]) }
                 guard o["base_version_id"] as? String == current["id"] as? String else {
                     return (409, ["code": "stale_base_version", "error": "stale_base_version", "current_version": public_(current)])
