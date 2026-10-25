@@ -477,6 +477,7 @@ final class AppModel {
         identity = await sync.identity.lock()   // also revokes the background credential (fail-closed marker + Keychain delete)
         canReadWhileLocked = await sync.identity.canReadWhileLocked
         backgroundRevocationIncomplete = await sync.identity.revocationIncomplete
+        boards.lock(canReadWhileLocked: canReadWhileLocked)
     }
 
     /// Removes only this app's sealed identity and cancels sync. Cached workspace data stays until disconnect.
@@ -486,6 +487,7 @@ final class AppModel {
         await sync.engine.cancelAll()
         do { identity = try await sync.identity.remove() } catch { notice = error.localizedDescription }
         canReadWhileLocked = false
+        boards.lock(canReadWhileLocked: false)
         await setBackgroundPreference(false)
     }
 
@@ -520,6 +522,7 @@ final class AppModel {
         await sync.engine.cancelAll()
         // Disconnecting ends the trusted-device session; the next launch asks for the PIN.
         do { try await sync.identity.endSession() } catch { notice = error.localizedDescription }
+        boards.removeAll(deletingDraftsOf: connection.id)
         do {
             for workspace in workspaces.value { fileCache?.purge(workspaceId: workspace.id) }
             try await store.writer.removeConnection(id: connection.id)

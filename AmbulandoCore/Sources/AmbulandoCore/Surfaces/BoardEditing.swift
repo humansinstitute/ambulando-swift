@@ -80,6 +80,16 @@ extension TowerAPI {
         return bytes
     }
 
+    /// Renames a board File (metadata only: no new version). Tower must confirm the exact name.
+    public func renameBoardFile(workspaceId: String, appNpub: String, fileId: String, name: String) async throws -> String {
+        let path = try Self.base(workspaceId) + "/files/" + Self.uuid(fileId)
+        let o = try object(try await client.request(method: "PATCH", path: path, appNpub: appNpub, jsonBody: try rawJSON(["display_name": name])), "board rename")
+        guard let file = o["file"] as? [String: Any], lowerUUID(file["id"] as? String) == fileId.lowercased(), file["display_name"] as? String == name else {
+            throw TowerError.malformed("board rename")
+        }
+        return name
+    }
+
     /// Publishes `bytes` as the board's next version, against `baseVersionId`.
     public func createBoardVersion(workspaceId: String, appNpub: String, fileId: String, baseVersionId: String, bytes: Data, title: String,
                                    summary: String) async throws -> BoardVersion {
@@ -152,6 +162,8 @@ public struct BoardState: Sendable, Equatable {
     public var versions: [BoardVersion] = []
     public var versionsLoading = false
     public var conflicts = 0
+    /// The board's name after a rename here (the canvas shows Tower's on its next snapshot).
+    public var title = ""
     /// Increases with every change, so a screen receiving states across actor hops keeps the newest.
     public var revision = 0
     public init() {}
@@ -196,12 +208,15 @@ public actor BoardController {
         public var publish: @Sendable (_ baseVersionId: String, _ bytes: Data, _ summary: String) async throws -> BoardVersion
         /// Whether a signer is available now (a locked identity can read but not save).
         public var canSign: @Sendable () async -> Bool
+        /// Renames the board File.
+        public var rename: @Sendable (_ name: String) async throws -> String
 
         public init(versions: @escaping @Sendable () async throws -> (currentVersionId: String?, versions: [BoardVersion]),
                     read: @escaping @Sendable (String, String?) async throws -> Data,
                     publish: @escaping @Sendable (String, Data, String) async throws -> BoardVersion,
-                    canSign: @escaping @Sendable () async -> Bool) {
-            self.versions = versions; self.read = read; self.publish = publish; self.canSign = canSign
+                    canSign: @escaping @Sendable () async -> Bool,
+                    rename: @escaping @Sendable (String) async throws -> String = { _ in throw BoardEditError.failed("Renaming is not available.") }) {
+            self.versions = versions; self.read = read; self.publish = publish; self.canSign = canSign; self.rename = rename
         }
     }
 
@@ -621,6 +636,33 @@ public actor BoardController {
     }
 
     public func clearMessages() { emit { $0.error = ""; $0.notice = "" } }
+
+    /// Renames the board (sol `renameBoard`): 1–200 characters, only with write access and an unlocked signer.
+    @discardableResult
+    public func rename(_ name: String) async -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= BoardScene.maxTitle else { emit { $0.error = "Enter a board name of 1–200 characters." }; return false }
+        guard state.canWrite, await transport.canSign() else { emit { $0.error = "You cannot rename this board." }; return false }
+        do {
+            title = try await transport.rename(trimmed)
+            emit { $0.title = trimmed; $0.notice = "Renamed to “\(trimmed)”."; $0.error = "" }
+            return true
+        } catch {
+            if case .unavailable = BoardEditError.from(error) { emit { $0.error = "You cannot rename this board." } }
+            else { emit { $0.error = "The board could not be renamed. \(error.localizedDescription)" } }
+            return false
+        }
+    }
+
+    /// Lock without background reading: the scene leaves memory and every editor is cleared. The draft stays on disk
+    /// (protected) and is restored by the next `sync` after unlocking.
+    public func suspend() {
+        loading?.cancel(); loading = nil
+        base = nil; working = nil; viewing = nil
+        cache.removeAll()
+        emit { $0.status = .loading; $0.canWrite = false; $0.versions = [] }
+        for session in sessions.values { session.send(Self.message(["type": "clear"])) }
+    }
 }
 
 extension WorkspaceSync {
@@ -636,6 +678,10 @@ extension WorkspaceSync {
                 do { try await identity.requireSigner(npub: signer) } catch { throw BoardEditError.locked }
                 return try await api.createBoardVersion(workspaceId: w, appNpub: app, fileId: fileId, baseVersionId: base, bytes: bytes, title: title, summary: summary)
             },
-            canSign: { (try? await identity.requireSigner(npub: signer)) != nil })
+            canSign: { (try? await identity.requireSigner(npub: signer)) != nil },
+            rename: { name in
+                do { try await identity.requireSigner(npub: signer) } catch { throw BoardEditError.locked }
+                return try await api.renameBoardFile(workspaceId: w, appNpub: app, fileId: fileId, name: name)
+            })
     }
 }

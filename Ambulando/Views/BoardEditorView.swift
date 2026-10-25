@@ -232,13 +232,15 @@ struct BoardEditorPanel: View {
         let state = session.state
         ZStack {
             Color.white
-            if BoardEditorBundle.available {
+            if BoardEditorBundle.available && model.canRead {
                 BoardEditorWebView(session: session, interactive: interactive && state.status == .ready, dark: colorScheme == .dark,
                                    saveAction: state.saveAction, onLink: { url in model.browser.launch(url) })
                     .opacity(state.status == .ready ? 1 : 0)
             }
             switch state.status {
-            case .loading: ProgressView("Loading board…")
+            case .loading:
+                if model.canRead { ProgressView("Loading board…") }
+                else { EmptyNote(title: "Board locked", systemImage: "lock", detail: "Unlock to open this board.") }
             case .denied: EmptyNote(title: "Board unavailable", systemImage: "lock", detail: state.error)
             case .error: EmptyNote(title: "Board cannot be shown", systemImage: "exclamationmark.triangle", detail: state.error)
             case .ready:
@@ -249,6 +251,8 @@ struct BoardEditorPanel: View {
             }
         }
         .onChange(of: model.isUnlocked) { _, _ in session.refreshSigner() }
+        // Reading again after a lock without background reading (the scene was cleared from memory).
+        .onChange(of: model.canRead) { _, readable in if readable { session.resume() } }
     }
 }
 
@@ -298,6 +302,8 @@ struct BoardMenu: View {
     let session: BoardSession
     @State private var saveNote = false
     @State private var note = ""
+    @State private var renaming = false
+    @State private var name = ""
 
     var body: some View {
         let state = session.state
@@ -322,6 +328,10 @@ struct BoardMenu: View {
                 }
             }
             if !state.dirty, state.viewingVersionId.isEmpty { Button("Reload latest") { session.discardAndLoadLatest() } }
+            if state.canWrite {
+                Button { name = session.title; renaming = true } label: { Label("Rename board…", systemImage: "pencil") }
+                    .accessibilityIdentifier("board.rename")
+            }
         } label: {
             Image(systemName: "gearshape")
         }
@@ -331,6 +341,11 @@ struct BoardMenu: View {
             TextField("What changed (optional)", text: $note)
             Button("Cancel", role: .cancel) {}
             Button("Save") { session.save(summary: note) }
+        }
+        .alert("Rename board", isPresented: $renaming) {
+            TextField("Board name", text: $name)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") { session.rename(name) }.accessibilityIdentifier("board.rename.save")
         }
     }
 }

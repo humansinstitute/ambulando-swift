@@ -25,7 +25,7 @@ struct NapletWindow<Body: View, Accessory: View>: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: NapletCard.icon(naplet.content)).foregroundStyle(Amb.primary)
-                Text(naplet.title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                Text(naplet.title).font(.amb(.subheadline).weight(.semibold)).lineLimit(1)
                 Spacer(minLength: 4)
                 accessory()
                 if let onExpand {
@@ -101,7 +101,7 @@ struct ChatNapletBody: View {
                     Composer(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: thread.channelId, threadId: thread.id),
                              workspace: workspace, store: store, placeholder: "Reply to thread…")
                 } else {
-                    Text("Select to reply").font(.caption).foregroundStyle(Amb.mutedForeground).padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Select to reply").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(8).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -172,13 +172,13 @@ struct DocNapletBody: View {
                     .disabled(!value.editable && !value.hasDraft)
                     .accessibilityIdentifier("naplet.doc.edit")
             }
-            .buttonStyle(.bordered).controlSize(.small).font(.caption)
+            .buttonStyle(.bordered).controlSize(.small).font(.amb(.caption))
             .padding(.horizontal, 10).padding(.vertical, 6)
             .disabled(!interactive)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    if let doc = value.doc { Text(doc.title).font(.headline).foregroundStyle(Amb.foreground) }
+                    if let doc = value.doc { Text(doc.title).font(.amb(.headline)).foregroundStyle(Amb.foreground) }
                     if value.hasBody {
                         RichBlocksView(blocks: value.blocks, style: .document, workspace: workspace)
                     } else if snapshot.loaded {
@@ -289,16 +289,16 @@ struct HTMLNapletBody: View {
     var body: some View {
         VStack(spacing: 0) {
             Label("Sandboxed HTML · no network or signing", systemImage: "lock.shield")
-                .font(.caption2).foregroundStyle(Amb.warning)
+                .font(.amb(.caption2)).foregroundStyle(Amb.warning)
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Amb.warningBackground)
             if let html, live {
                 SandboxedHTMLView(html: html, interactive: interactive).accessibilityIdentifier("naplet.html")
             } else if let failure {
-                Text(failure).font(.caption).foregroundStyle(Amb.mutedForeground).padding(10)
+                Text(failure).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(10)
             } else if html != nil {
-                Text("Zoom in or select to run this artefact.").font(.caption).foregroundStyle(Amb.mutedForeground).padding(10)
+                Text("Zoom in or select to run this artefact.").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(10)
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -349,7 +349,7 @@ struct TaskTreeNapletBody: View {
         let current = view ?? TaskTreeView(savedLayout: naplet.savedLayout, napletId: naplet.id)
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Text("#\(channelTitle ?? "channel")").font(.caption.weight(.semibold)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                Text("#\(channelTitle ?? "channel")").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
                 Spacer()
                 if loading { ProgressView().controlSize(.mini) }
                 if canCreate { Button("New task") { begin(.root) }.accessibilityIdentifier("tree.new") }
@@ -358,16 +358,16 @@ struct TaskTreeNapletBody: View {
                     Button { reload(current) } label: { Image(systemName: "arrow.clockwise") }.accessibilityLabel("Refresh tree")
                 }
             }
-            .buttonStyle(.bordered).controlSize(.small).font(.caption)
+            .buttonStyle(.bordered).controlSize(.small).font(.amb(.caption))
             .padding(.horizontal, 10).padding(.vertical, 6)
             .disabled(!interactive || busy)
-            if let note { Text(note).font(.caption2).foregroundStyle(Amb.warning).padding(.horizontal, 10).frame(maxWidth: .infinity, alignment: .leading) }
+            if let note { Text(note).font(.amb(.caption2)).foregroundStyle(Amb.warning).padding(.horizontal, 10).frame(maxWidth: .infinity, alignment: .leading) }
             Divider()
             if current.rootTaskId == nil {
                 VStack(spacing: 6) {
-                    Text("Start a tree").font(.subheadline.weight(.semibold))
+                    Text("Start a tree").font(.amb(.subheadline).weight(.semibold))
                     Text(canCreate ? "Create a base task, or choose an existing task, to lay out its children and next tasks." : "Choose an existing task to show its tree.")
-                        .font(.caption).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
+                        .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
                 }
                 .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -418,9 +418,9 @@ struct TaskTreeNapletBody: View {
         return ZStack(alignment: .topLeading) {
             Button { pushRoute(.task(workspaceId: workspace.id, taskId: node.id)) } label: {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(node.title).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(2).multilineTextAlignment(.leading)
-                    Text(TaskState(rawValue: node.state)?.label ?? node.state).font(.caption).foregroundStyle(Amb.mutedForeground)
-                    if node.channelId != channelId { Text(node.channelTitle.map { "#\($0)" } ?? "Other channel").font(.caption2).foregroundStyle(Amb.mutedForeground) }
+                    Text(node.title).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(2).multilineTextAlignment(.leading)
+                    Text(TaskState(rawValue: node.state)?.label ?? node.state).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                    if node.channelId != channelId { Text(node.channelTitle.map { "#\($0)" } ?? "Other channel").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground) }
                 }
                 .padding(10)
                 .frame(width: Self.cell.nodeWidth, height: Self.cell.nodeHeight, alignment: .topLeading)
@@ -436,11 +436,11 @@ struct TaskTreeNapletBody: View {
                     .accessibilityLabel(current.collapsed.contains(node.id) ? "Expand" : "Collapse")
             }
             if canCreate {
-                Button { begin(.child(node)) } label: { Image(systemName: "plus.circle.fill").font(.title3) }
+                Button { begin(.child(node)) } label: { Image(systemName: "plus.circle.fill").font(.amb(.title3)) }
                     .buttonStyle(.borderless)
                     .offset(x: Self.cell.nodeWidth / 2 - 12, y: Self.cell.nodeHeight + 6)
                     .accessibilityLabel("Add a sub task to \(node.title)").accessibilityIdentifier("tree.child.\(node.title)")
-                Button { begin(.successor(node)) } label: { Image(systemName: "plus.circle.fill").font(.title3) }
+                Button { begin(.successor(node)) } label: { Image(systemName: "plus.circle.fill").font(.amb(.title3)) }
                     .buttonStyle(.borderless)
                     .offset(x: Self.cell.nodeWidth + 8, y: Self.cell.nodeHeight / 2 - 12)
                     .accessibilityLabel("Add a next task after \(node.title)").accessibilityIdentifier("tree.next.\(node.title)")
@@ -460,7 +460,7 @@ struct TaskTreeNapletBody: View {
 
     private func entryBar(_ entry: Entry) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(entryLabel(entry)).font(.caption2).foregroundStyle(Amb.mutedForeground)
+            Text(entryLabel(entry)).font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
             HStack(spacing: 6) {
                 TextField("Task title", text: $title).textFieldStyle(.roundedBorder).onSubmit { submit(entry) }
                     .accessibilityIdentifier("tree.entry")
@@ -563,6 +563,7 @@ struct TaskTreeNapletBody: View {
                     Task { await save(next); reload(next) }
                 }
                 .accessibilityIdentifier("tree.choose.\(task.title)")
+                .appRowTextSize()
             }
             .overlay { if choices.isEmpty { ProgressView() } }
             .navigationTitle("Choose a task")

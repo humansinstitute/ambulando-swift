@@ -124,4 +124,45 @@ final class BoardEditorUITests: XCTestCase {
         XCTAssertTrue(waitForStatus(app, "ENDSWITH 'v3'"))
         capture(app, "board-after-merge-save")
     }
+
+    /// An unsaved drawing survives the app being killed: the draft is restored on the device, based on the version it
+    /// started from. The board can also be renamed from its window.
+    func testUnsavedDraftSurvivesKillAndBoardRenames() {
+        var app = launch(reset: true)
+        openLaunchBoard(app)
+        XCTAssertTrue(app.descendants(matching: .any)["naplet.Architecture sketch"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons["board.expand"].firstMatch.tap()
+        let rectangle = tool(app, "Rectangle")
+        XCTAssertTrue(rectangle.waitForExistence(timeout: 30))
+        XCTAssertTrue(waitForStatus(app, "== 'v1'"))
+        rectangle.tap()
+        let web = app.webViews.firstMatch
+        web.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.45))
+            .press(forDuration: 0.1, thenDragTo: web.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.6)))
+        XCTAssertTrue(waitForStatus(app, "== 'Unsaved · v1'"))
+        app.terminate()   // no Save
+
+        app = launch(reset: false)
+        openLaunchBoard(app)
+        XCTAssertTrue(app.descendants(matching: .any)["naplet.Architecture sketch"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons["board.expand"].firstMatch.tap()
+        XCTAssertTrue(tool(app, "Rectangle").waitForExistence(timeout: 30))
+        XCTAssertTrue(waitForStatus(app, "== 'Unsaved · v1'"), "the draft came back after the app was killed")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Unsaved draft restored'")).firstMatch.waitForExistence(timeout: 10))
+        capture(app, "board-draft-restored")
+
+        app.buttons["board.menu"].firstMatch.tap()
+        let rename = app.buttons["board.rename"].firstMatch
+        XCTAssertTrue(rename.waitForExistence(timeout: 10))
+        rename.tap()
+        let alert = app.alerts["Rename board"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 10))
+        let field = alert.textFields.firstMatch
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 40) + "Native architecture")
+        alert.buttons["Rename"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Renamed to'")).firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(app.navigationBars.staticTexts["Native architecture"].waitForExistence(timeout: 15), "the board's title follows Tower")
+        capture(app, "board-renamed")
+    }
 }

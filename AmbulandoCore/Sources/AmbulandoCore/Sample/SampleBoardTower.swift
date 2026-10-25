@@ -5,6 +5,7 @@ import Foundation
 ///
 /// - `GET  /files/:f/versions` (newest first, with `current_version_id`)
 /// - `GET  /files/:f/versions/:v/object`
+/// - `PATCH /files/:f` with `display_name` (rename; the canvas shows the new name)
 /// - `POST /files/:f/versions` with `base_version_id` and a completed `storage_object_id` (409 `stale_base_version`
 ///   unless the base is the current version; 403 without write access)
 ///
@@ -81,7 +82,7 @@ public final class SampleBoardTower: @unchecked Sendable {
         let base = "/api/v4/flightdeck-pg/workspaces/\(workspaceId)/files/"
         guard url.path.hasPrefix(base) else { return nil }
         let p = url.path.dropFirst(base.count).split(separator: "/").map(String.init)
-        guard p.count >= 2, p[1] == "versions" else { return nil }
+        guard p.count >= 2 && p[1] == "versions" || p.count == 1 && request.httpMethod == "PATCH" else { return nil }
         let fileId = p[0].lowercased()
         guard lock.withLock({ boards[fileId] != nil }) else { return nil }
         let body = request.httpBody ?? Data()
@@ -90,6 +91,13 @@ public final class SampleBoardTower: @unchecked Sendable {
         return lock.withLock {
             log.append("\(method) \(url.path)")
             switch (method, p.count) {
+            case ("PATCH", 1):
+                guard boards[fileId]?["can_write"] as? Bool == true else { return (403, ["code": "permission_denied"]) }
+                let o = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+                guard let name = (o["display_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return (400, ["code": "validation_error"]) }
+                boards[fileId]?["title"] = name
+                persist()
+                return (200, ["file": ["id": fileId, "display_name": name]])
             case ("GET", 2):
                 let rows = versions(fileId)
                 return (200, ["file_id": fileId, "current_version_id": rows.last?["id"] ?? NSNull(), "versions": rows.reversed().map(public_)])
@@ -136,6 +144,7 @@ public final class SampleBoardTower: @unchecked Sendable {
                       let content = projection(id.lowercased()) else { return n }
                 var out = n
                 out["content"] = content
+                if let title = boards[id.lowercased()]?["title"] as? String { out["title"] = title }
                 return out
             }
         }

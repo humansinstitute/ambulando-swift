@@ -150,4 +150,47 @@ import Testing
         #expect(message?["author_npub"] as? String == Self.author && message?["body"] as? String == "Why here?")
         #expect(await writable.current.dirty)
     }
+
+    /// Lock without background reading clears every editor and the scene in memory; the unsaved draft stays on disk and
+    /// is restored when the board loads again after unlocking.
+    @Test func suspendClearsEditorsAndResumeRestoresTheDraft() async throws {
+        let store = Store(Self.sceneJSON([Self.element("a", version: 1)]))
+        let outbox = Outbox(), local = drafts()
+        let board = controller(store, drafts: local, outbox: outbox)
+        await board.attach("s1", send: outbox.send)
+        await board.sync(reference(store), title: "Plan")
+        await board.receive("s1", change([Self.element("a", version: 2, extra: ["x": 42])]))
+        #expect(await board.current.dirty)
+
+        await board.suspend()
+        #expect(outbox.last("clear") != nil, "the editor page is cleared")
+        let suspended = await board.current
+        #expect(suspended.status == .loading && !suspended.canWrite)
+        await board.receive("s1", change([Self.element("a", version: 9)]))
+        #expect(local.load("a1b2c3d4-0000-4000-8000-000000000001") != nil, "the draft stays on disk")
+
+        await board.sync(reference(store), title: "Plan")
+        let resumed = await board.current
+        #expect(resumed.status == .ready && resumed.dirty && resumed.save == .unsaved)
+        await board.receive("s1", #"{"type":"ready"}"#)
+        let element = BoardScene.elements(try #require(outbox.last("load")?["scene"] as? [String: Any])).first
+        #expect(element?["x"] as? Int == 42, "the draft before the lock, not the edit sent while suspended")
+    }
+
+    @Test func renameNeedsWriteAccessAndConfirmsTheName() async throws {
+        let store = Store(Self.sceneJSON([Self.element("a", version: 1)]))
+        let outbox = Outbox()
+        var transport = store.transport()
+        transport.rename = { name in name }
+        let board = BoardController(fileId: "a1b2c3d4-0000-4000-8000-000000000001", title: "Plan", author: Self.author, transport: transport,
+                                    drafts: drafts(), onState: { _ in })
+        await board.sync(reference(store, canWrite: false), title: "Plan")
+        #expect(await board.rename("New name") == false)
+        await board.sync(reference(store, canWrite: true), title: "Plan")
+        #expect(await board.rename("  ") == false)
+        #expect(await board.rename("New name"))
+        #expect(await board.current.title == "New name")
+        _ = outbox
+    }
 }
+

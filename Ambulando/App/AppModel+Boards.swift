@@ -12,6 +12,8 @@ final class BoardSession {
     @ObservationIgnored let controller: BoardController
     private(set) var state = BoardState()
     var title: String
+    /// The last projection synced, to load the board again after a lock.
+    @ObservationIgnored private var reference: BoardReference?
     /// Canvases showing this board; their snapshots are read again after a save (sol `refreshBoardsSnapshot`), so the
     /// stored projection, and the board on reopen, carry the new version.
     @ObservationIgnored var canvasIds: Set<String> = []
@@ -29,7 +31,8 @@ final class BoardSession {
 
     /// Snapshot projection of the board (its current version and whether this viewer may write).
     func sync(_ reference: BoardReference, title: String) {
-        self.title = title
+        self.reference = reference
+        self.title = state.title.isEmpty ? title : state.title
         let controller = controller
         Task { await controller.sync(reference, title: title) }
     }
@@ -46,6 +49,14 @@ final class BoardSession {
     func restoreViewed() { let c = controller; Task { await c.restoreViewedVersion() } }
     func clearMessages() { let c = controller; Task { await c.clearMessages() } }
     func refreshSigner() { let c = controller; Task { await c.refreshSigner() } }
+    func suspend() { let c = controller; Task { await c.suspend() } }
+    /// After unlocking: the board loads again (with any draft kept on disk).
+    func resume() { if let reference { sync(reference, title: title) } }
+
+    func rename(_ name: String) {
+        let c = controller
+        Task { if await c.rename(name) { title = name.trimmingCharacters(in: .whitespacesAndNewlines); afterSave(canvasIds) } }
+    }
 }
 
 /// Board sessions of the current connection and workspace (bounded; boards no editor shows are dropped first).
@@ -70,7 +81,21 @@ final class BoardRegistry {
         return created
     }
 
-    func removeAll() { sessions = [:]; order = [] }
+    /// Lock: with background reading boards stay readable (not writable); without, every scene leaves memory.
+    func lock(canReadWhileLocked: Bool) {
+        for session in sessions.values { if canReadWhileLocked { session.refreshSigner() } else { session.suspend() } }
+    }
+
+    /// Disconnect: sessions end and this connection's unsaved board drafts are deleted.
+    func removeAll(deletingDraftsOf connectionId: String? = nil) {
+        for session in sessions.values { session.suspend() }
+        sessions = [:]; order = []
+        if let connectionId { try? FileManager.default.removeItem(at: Self.draftsDirectory(connectionId)) }
+    }
+
+    static func draftsDirectory(_ connectionId: String) -> URL {
+        AppModel.dataDirectory.appendingPathComponent("board-drafts", isDirectory: true).appendingPathComponent(connectionId, isDirectory: true)
+    }
 }
 
 extension AppModel {
@@ -82,8 +107,7 @@ extension AppModel {
         guard let transport = try? sync.boardTransport(connection, workspace, fileId: reference.fileId, title: title) else { return nil }
         let session = boards.session(key) {
             let file = reference.fileId, signer = connection.signerNpub
-            let drafts = BoardDraftStore(directory: Self.dataDirectory.appendingPathComponent("board-drafts", isDirectory: true)
-                .appendingPathComponent(connection.id, isDirectory: true).appendingPathComponent(workspace.id, isDirectory: true))
+            let drafts = BoardDraftStore(directory: BoardRegistry.draftsDirectory(connection.id).appendingPathComponent(workspace.id, isDirectory: true))
             let controller = BoardController(fileId: file, title: title, author: signer, transport: transport, drafts: drafts, onState: { _ in })
             let session = BoardSession(key: key, fileId: file, title: title, controller: controller)
             session.afterSave = { [weak self] canvases in for id in canvases { self?.openCanvas(workspace, canvasId: id, force: true) } }

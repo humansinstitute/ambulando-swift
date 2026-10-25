@@ -59,7 +59,7 @@ struct BoardNapletWindow: View {
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: "scribble.variable").foregroundStyle(Amb.primary)
-            Text(naplet.title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+            Text(naplet.title).font(.amb(.subheadline).weight(.semibold)).lineLimit(1)
             Spacer(minLength: 4)
             if let session {
                 BoardStatusPill(state: session.state)
@@ -83,10 +83,10 @@ struct BoardNapletWindow: View {
         if let preview, preview.state == .ready {
             ExcalidrawCanvas(board: preview).background(Color.white)
         } else if case .failed(let reason)? = preview?.state {
-            Text(reason).font(.system(size: 13)).foregroundStyle(Amb.mutedForeground).padding(10)
+            Text(reason).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).padding(10)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
-            VStack(spacing: 6) { ProgressView(); Text("Version \(reference.versionNumber)").font(.system(size: 11)).foregroundStyle(Amb.mutedForeground) }
+            VStack(spacing: 6) { ProgressView(); Text("Version \(reference.versionNumber)").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground) }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
