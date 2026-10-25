@@ -22,7 +22,11 @@ struct AmbulandoCommands: Commands {
                 .keyboardShortcut("t")
                 .disabled(!ready)
         }
-        SidebarCommands()
+        CommandGroup(after: .sidebar) {
+            Button(ui.sidebarVisible ? "Hide Sidebar" : "Show Sidebar") { ui.sidebarVisible.toggle() }
+                .keyboardShortcut("s", modifiers: [.command, .control])
+                .disabled(!ready)
+        }
         CommandMenu("Go") {
             ForEach(Array(AppMode.visible(agents: showAgents, context: showContext).enumerated()), id: \.element) { index, section in
                 Button(section.title) { model.show(section) }

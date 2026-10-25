@@ -123,7 +123,7 @@ struct LabelledWebView: View {
     let label: String
     @State private var external: URL?
     @State private var loading = true
-    @Environment(\.openURL) private var openURL
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         VStack(spacing: 0) {
@@ -142,7 +142,7 @@ struct LabelledWebView: View {
         }
         .navigationTitle(title)
         .confirmationDialog("This link leaves \(title).", isPresented: Binding(get: { external != nil }, set: { if !$0 { external = nil } }), titleVisibility: .visible) {
-            if let url = external { Button("Open \(url.host ?? "link") in a browser tab") { openURL(url); external = nil } }
+            if let url = external { Button("Open \(url.host ?? "link") in a browser tab") { model.browser.launch(url); external = nil } }
             Button("Stay here", role: .cancel) { external = nil }
         } message: {
             Text("It opens in a separate browser tab, outside \(title).")

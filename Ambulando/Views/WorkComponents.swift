@@ -212,3 +212,17 @@ struct ListHeaderBar<Content: View>: View {
             .background(Amb.background)
     }
 }
+
+/// Explicit stack pushes keep Mac list rows inside their section's NavigationStack when embedded in a split view.
+struct WorkRecordLink<Label: View>: View {
+    @Environment(\.pushRoute) private var pushRoute
+    let route: WorkRoute
+    @ViewBuilder let label: () -> Label
+    var body: some View {
+        #if os(macOS)
+        Button { pushRoute(route) } label: { label().frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain)
+        #else
+        NavigationLink(value: route, label: label)
+        #endif
+    }
+}

@@ -68,6 +68,7 @@ public actor DocumentSaver {
 
     public func save(_ draft: DocDraft, connection: ConnectionRecord, workspace: WorkspaceRecord) async -> DocSaveResult {
         guard draft.connectionId == connection.id, draft.workspaceId == workspace.id else { return .notSaved("This draft belongs to another workspace.") }
+        guard !UploadToken.contains(in: String(decoding: draft.body, as: UTF8.self)) else { return .notSaved(ComposerUploadError.unresolved.localizedDescription) }
         do {
             try await store.writer.saveDocDraft(draft.with(state: .saving))
             let api = try await api(connection)

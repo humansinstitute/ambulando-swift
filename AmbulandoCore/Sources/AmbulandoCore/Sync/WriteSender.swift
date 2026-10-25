@@ -39,6 +39,8 @@ public struct WriteSender: Sendable {
     @discardableResult
     public func submit(_ intent: WriteIntent, connection: ConnectionRecord, workspace: WorkspaceRecord, id: String = UUID().uuidString.lowercased()) async throws -> WriteItem {
         guard workspace.id != "", connection.id != "" else { throw TowerError.unsafePath }
+        let payload = try JSONSerialization.data(withJSONObject: intent.payload)
+        guard !UploadToken.contains(in: String(decoding: payload, as: UTF8.self)) else { throw ComposerUploadError.unresolved }
         let item = try await store.writer.enqueueWrite(id: id, connection: connection, workspace: workspace, intent: intent)
         await kick(connection)
         return item
@@ -210,7 +212,10 @@ public struct WriteSender: Sendable {
                 if let mine = existing.first(where: { $0.clientRecordId == item.id }) { return .done(ack(comments: [mine])) }
             }
             var metadata: [String: Any] = ["client_record_id": item.id]
-            if !isTask { metadata["comment_status"] = "open" }
+            if !isTask {
+                metadata.merge(p["metadata"] as? [String: Any] ?? [:]) { current, _ in current }
+                metadata["comment_status"] = "open"
+            }
             var body: [String: Any] = ["body": text, "metadata": metadata]
             if let reply = p["parent_comment_id"] as? String { body["parent_comment_id"] = reply }
             let r = try await send("POST", base + (isTask ? "/tasks/" : "/docs/") + TowerAPI.uuid(parent) + "/comments", body)

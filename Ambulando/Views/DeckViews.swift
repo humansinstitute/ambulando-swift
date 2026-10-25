@@ -19,6 +19,9 @@ struct DeckView: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        MacDeckDashboard(workspace: workspace, store: store).navigationTitle("Deck")
+        #else
         let cards = cards
         VStack(spacing: 0) {
             ScrollView(.horizontal) {
@@ -50,6 +53,7 @@ struct DeckView: View {
         .onChange(of: model.deckInboxRequests) { _, _ in withAnimation(.snappy) { card = .inbox } }
         // The last pin removed while Pinned items is shown: Inbox takes its place, as on the web.
         .onChange(of: cards) { _, now in if let card, !now.contains(card) { self.card = .inbox } }
+        #endif
     }
 
     @ViewBuilder private func page(_ card: DeckCard) -> some View {
@@ -700,3 +704,136 @@ struct DeckHelloCard: View {
         return scope.name
     }
 }
+
+#if os(macOS)
+/// Desktop Deck keeps the web's regions visible together. Every card retains its native store query and actions.
+private struct MacDeckDashboard: View {
+    @Environment(AppModel.self) private var model
+    let workspace: WorkspaceRecord
+    let store: LocalStore
+    var body: some View {
+        GeometryReader { geometry in
+            if geometry.size.width >= 850 {
+                VStack(spacing: 16) {
+                    MacDeckWelcome(workspace: workspace, store: store, compact: false).frame(height: 170)
+                    HSplitView {
+                        DeckInboxCard(workspace: workspace, store: store, active: model.mode == .deck)
+                            .desktopDeckPanel().frame(minWidth: 400, maxWidth: .infinity)
+                        VStack(spacing: 16) {
+                            DeckPinnedCard(workspace: workspace).desktopDeckPanel()
+                            DeckCanvasCard(workspace: workspace, store: store).desktopDeckPanel()
+                        }.frame(minWidth: 280, idealWidth: 360, maxWidth: 500)
+                    }
+                }.padding(16)
+            } else {
+                ScrollView {
+                    VStack(spacing: 16) {
+                        MacDeckWelcome(workspace: workspace, store: store, compact: true).frame(height: 260)
+                        DeckInboxCard(workspace: workspace, store: store, active: model.mode == .deck).desktopDeckPanel().frame(height: 440)
+                        DeckPinnedCard(workspace: workspace).desktopDeckPanel().frame(height: 250)
+                        DeckCanvasCard(workspace: workspace, store: store).desktopDeckPanel().frame(height: 280)
+                    }.padding(12)
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("deck.desktop")
+    }
+}
+
+private extension View {
+    func desktopDeckPanel() -> some View {
+        background(Amb.card, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Amb.border, lineWidth: 1))
+    }
+}
+
+private struct MacDeckLaunchers: Equatable, Sendable {
+    var name: String?
+    var apps: [PersonalWappRecord] = []
+    var agents: [PersonalAgentLauncher] = []
+    var names: [String: String] = [:]
+}
+
+private struct MacDeckWelcome: View {
+    @Environment(AppModel.self) private var model
+    let workspace: WorkspaceRecord
+    let store: LocalStore
+    let compact: Bool
+    @State private var snapshot = LiveQuery<MacDeckLaunchers>(initial: MacDeckLaunchers())
+
+    var body: some View {
+        Group {
+            if compact {
+                VStack(alignment: .leading, spacing: 12) { welcome; HStack(alignment: .top, spacing: 12) { apps; agents } }
+            } else {
+                HStack(alignment: .top, spacing: 20) { welcome.frame(maxWidth: .infinity, alignment: .leading); apps; agents }
+            }
+        }
+        .task(id: workspace.id) { start() }
+    }
+    private var welcome: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Welcome \(snapshot.value.name ?? "back"),\nwhere will we focus today?")
+                .font(.title2.weight(.bold)).foregroundStyle(Amb.foreground)
+            let nav = model.navigation.value
+            Text([workspace.label, nav.scope(model.context.scopeId)?.name, nav.channel(model.context.channelId).map(nav.label)].compactMap { $0 }.joined(separator: " / "))
+                .font(.subheadline).foregroundStyle(Amb.mutedForeground)
+        }.accessibilityIdentifier("deck.welcome")
+    }
+    private var apps: some View {
+        launcherPanel("Apps") {
+            ForEach(snapshot.value.apps) { app in
+                if let url = app.safeLaunchURL {
+                    Button { model.browser.launch(url) } label: {
+                        Label(app.title, systemImage: "app.dashed").lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                    }.buttonStyle(.plain).modifier(DeckRowStyle()).accessibilityIdentifier("deck.app.\(app.title)")
+                }
+            }
+            if snapshot.loaded && snapshot.value.apps.isEmpty { DeckNote(text: "No apps configured.") }
+        }
+    }
+    private var agents: some View {
+        launcherPanel("My Agents") {
+            ForEach(snapshot.value.agents) { agent in
+                Button { if let url = agent.safeURL { model.browser.launch(url) } } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(snapshot.value.names[agent.npub] ?? shortNpub(agent.npub), systemImage: "sparkles").lineLimit(1)
+                        Text(agent.safeURL == nil ? "Secure launch URL unavailable" : "Dive deeper in Autopilot").font(.caption).foregroundStyle(Amb.mutedForeground)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }.buttonStyle(.plain).disabled(agent.safeURL == nil).modifier(DeckRowStyle())
+                    .accessibilityIdentifier("deck.agent.\(agent.npub)")
+            }
+            if snapshot.loaded && snapshot.value.agents.isEmpty {
+                let error = model.syncError(forKey: WorkspaceSync.personalAgentsKey(model.connection?.id ?? "", workspace.id))
+                DeckNote(text: error == nil ? "No personal agents configured." : "Could not load personal agents.")
+                if error != nil {
+                    Button("Retry") {
+                        if let sync = model.sync, let connection = model.connection { Task { await sync.refreshPersonalAgentLaunchers(connection, workspace, force: true) } }
+                    }.accessibilityIdentifier("deck.agents.retry")
+                }
+            }
+        }
+    }
+    private func launcherPanel<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased()).font(.caption.weight(.bold)).foregroundStyle(Amb.mutedForeground)
+            ScrollView { VStack(alignment: .leading, spacing: 6, content: content) }
+        }.frame(maxWidth: compact ? .infinity : 250, maxHeight: .infinity, alignment: .topLeading)
+    }
+    private func start() {
+        let w = workspace.id, store = store, connection = model.connection?.id ?? "", me = model.connection?.signerNpub
+        let key = WorkspaceSync.personalAgentsKey(connection, w)
+        snapshot.start(store: store, matches: { $0.table == .appState || ($0.workspaceId == w && [.toolbox, .members].contains($0.table)) || $0.table == .profiles }) {
+            async let apps = store.reader.personalWapps(connectionId: connection, workspaceId: w)
+            async let members = store.reader.members(workspaceId: w)
+            let saved = try await store.reader.state(key)
+            let agents = saved.flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode([PersonalAgentLauncher].self, from: $0) } ?? []
+            let names = try await directoryNames(store, w)
+            return MacDeckLaunchers(name: try await members.first { $0.npub == me }?.label, apps: try await apps, agents: agents, names: names)
+        }
+        model.openToolbox(workspace)
+        if let sync = model.sync, let connection = model.connection { Task { await sync.refreshPersonalAgentLaunchers(connection, workspace) } }
+    }
+}
+#endif

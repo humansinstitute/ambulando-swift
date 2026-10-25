@@ -136,10 +136,10 @@ struct NewChannelSheet: View {
                             .accessibilityIdentifier("newChannel.name")
                     }
                     Section("Description (optional)") {
-                        TextField("What's this channel about?", text: $description).accessibilityIdentifier("newChannel.description")
+                        WorkspaceContentTextEntry(text: $description, placeholder: "What's this channel about?", field: "new-channel-description-\(scope.id)").accessibilityIdentifier("newChannel.description")
                     }
                     Section {
-                        TextField("Context agents get in this channel", text: $prompt, axis: .vertical).lineLimit(2...6)
+                        WorkspaceContentTextEntry(text: $prompt, placeholder: "Context agents get in this channel", field: "channel-context-\(scope.id)").lineLimit(2...6)
                             .accessibilityIdentifier("newChannel.prompt")
                     } header: { Text("Channel context prompt (optional)") }
                 }
@@ -253,7 +253,7 @@ struct ChannelSettingsSheet: View {
                     .accessibilityIdentifier("channelSettings.move")
                 } header: { Text("Order in \(nav.scope(channel.scopeId)?.name ?? "scope")") }
                 Section {
-                    TextField("Context agents get in this channel", text: $prompt, axis: .vertical).lineLimit(2...8)
+                    WorkspaceContentTextEntry(text: $prompt, placeholder: "Context agents get in this channel", field: "channel-context-\(channel.id)").lineLimit(2...8)
                         .accessibilityIdentifier("channelSettings.prompt")
                     Button("Save context prompt") {
                         run("Saving…", done: "Channel context settings saved.") { m, c, w in _ = try await m.saveContextPrompt(c, w, channel: channel, prompt: prompt) }
@@ -417,7 +417,7 @@ struct ScopeEditView: View {
                 TextField("Scope name", text: $name).disabled(!canManage).accessibilityIdentifier("scopeEdit.name")
             }
             Section("Description (optional)") {
-                TextField("What this scope is for", text: $description, axis: .vertical).lineLimit(2...6).disabled(!canManage)
+                WorkspaceContentTextEntry(text: $description, placeholder: "What this scope is for", field: "scope-description-\(scope?.id ?? "new")").lineLimit(2...6).disabled(!canManage)
                     .accessibilityIdentifier("scopeEdit.description")
             }
             if !canManage {

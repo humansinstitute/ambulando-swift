@@ -73,7 +73,14 @@ final class BrowserModel {
 
     private(set) var tabs: [BrowserTab] = []
     var selectedId: UUID?
-    var presented = false
+    var presented = false {
+        didSet {
+            if oldValue && !presented {
+                for tab in tabs { broker?.tabClosed(tab.id) }
+                dialog?.reply(false); dialog = nil
+            }
+        }
+    }
     var showingTabs = false
     /// An address for another app (mail, phone, wallet...) waiting for the user to confirm the hand-off.
     var pendingExternal: URL?
@@ -218,8 +225,11 @@ final class BrowserModel {
     /// Links tapped in Ambulando (messages, documents, the Toolbox): HTTPS opens a tab; other apps' schemes and
     /// anything else go to iOS as before.
     func handleLink(_ url: URL) -> OpenURLAction.Result {
-        guard BrowserURLPolicy.decide(url, mainFrame: true) == .load else { return .systemAction }
-        open(url)
+        switch BrowserURLPolicy.decide(url, mainFrame: true) {
+        case .load: open(url)
+        case .external: return .systemAction
+        case .refuse(let reason): show(); selected?.refusal = reason
+        }
         return .handled
     }
 
@@ -325,7 +335,7 @@ final class BrowserScriptHandler: NSObject, WKScriptMessageHandlerWithReply {
     init(model: BrowserModel) { self.model = model }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) async -> (Any?, String?) {
-        guard let model, let broker = model.broker, let webView = message.webView, let tab = model.tab(for: webView) else {
+        guard let model, model.presented, let broker = model.broker, let webView = message.webView, let tab = model.tab(for: webView) else {
             return (nil, NIP07Error.closed.message)
         }
         guard message.frameInfo.isMainFrame else { return (nil, NIP07Error.invalid("only the top page may use window.nostr").message) }
@@ -337,8 +347,8 @@ final class BrowserScriptHandler: NSObject, WKScriptMessageHandlerWithReply {
         }
         let document = tab.documentId
         let result = await broker.handle(method: method, params: body["params"],
-                                         context: NIP07Context(tabId: tab.id, documentId: document, origin: origin)) { [weak tab, weak webView] in
-            guard let tab, let webView, !tab.closed, tab.webView === webView else { return false }
+                                         context: NIP07Context(tabId: tab.id, documentId: document, origin: origin)) { [weak model, weak tab, weak webView] in
+            guard let model, model.presented, let tab, let webView, !tab.closed, tab.webView === webView else { return false }
             return tab.documentId == document && tab.origin == origin
         }
         switch result {
@@ -392,7 +402,14 @@ final class BrowserWebDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
             case .refuse(let why): model.tab(for: webView)?.refusal = why; return nil
             }
         }
-        return model.addTab(configuration: configuration).webView
+        let tab = model.addTab(configuration: configuration)
+        #if DEBUG
+        if let url = action.request.url, let sample = model.samplePage, url.host == sample.url.host {
+            model.load(url, in: tab)
+            return nil
+        }
+        #endif
+        return tab.webView
     }
 
     func webViewDidClose(_ webView: WKWebView) {

@@ -16,6 +16,9 @@ extension FixtureEnvironment {
     <p id="nostr">window.nostr: missing</p>
     <button id="connect" onclick="connect()">Connect</button>
     <button id="sign" onclick="sign()">Sign note</button>
+    <button onclick="setTimeout(connect, 1800)">Connect after delay</button>
+    <p><a href="https://browser.sample.invalid/new-tab" target="_blank">Open target blank</a></p>
+    <button onclick="window.open('https://browser.sample.invalid/popup')">Open popup</button>
     <p id="result">Nothing yet</p>
     <script>
       const out = (text) => { document.getElementById('result').textContent = text; };

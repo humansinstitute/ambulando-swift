@@ -59,11 +59,15 @@ public enum UploadToken {
     public static func make(_ kind: Kind, id: String) -> String { "[ Uploading \(kind.rawValue) \(id)... ]" }
 
     /// Any upload placeholder, including the web's numbered and plain forms (sol `containsInlineImageUploadToken`).
-    private static let any = try! NSRegularExpression(pattern: #"\[ Uploading (?:image|file)(?: [A-Za-z0-9-]+)?\.\.\. \]"#)
-    private static let identified = try! NSRegularExpression(pattern: #"\[ Uploading (image|file) ([A-Za-z0-9-]+)\.\.\. \]"#)
+    private static let any = try! NSRegularExpression(pattern: #"\[ Uploading (?:image|file)(?: [A-Za-z0-9-]+)?(?:\.\.\.|…) \]"#)
+    private static let identified = try! NSRegularExpression(pattern: #"\[ Uploading (image|file) ([A-Za-z0-9-]+)(?:\.\.\.|…) \]"#)
 
     public static func contains(in text: String) -> Bool {
         any.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil
+    }
+
+    public static func contains(token: String, in text: String) -> Bool {
+        text.contains(token) || text.contains(token.replacingOccurrences(of: "...", with: "…"))
     }
 
     /// Upload ids of the placeholders in `text`, in order.
@@ -81,7 +85,10 @@ public enum ComposerText {
     /// (inside the token it moves to the end of the replacement). Nil when the token is not there.
     public static func replacing(_ token: String, with replacement: String, in text: String, selection: NSRange?) -> (text: String, selection: NSRange?)? {
         let ns = text as NSString
-        let found = ns.range(of: token)
+        var found = ns.range(of: token)
+        if found.location == NSNotFound, UploadToken.contains(in: token) {
+            found = ns.range(of: token.replacingOccurrences(of: "...", with: "…"))
+        }
         guard found.location != NSNotFound else { return nil }
         let next = ns.replacingCharacters(in: found, with: replacement)
         let delta = (replacement as NSString).length - found.length

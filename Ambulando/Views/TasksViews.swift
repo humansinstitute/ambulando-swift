@@ -315,7 +315,7 @@ struct TaskDetailView: View {
     private var comments: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Comments").font(.headline).foregroundStyle(Amb.itemHeading)
-            ForEach(snapshot.value.comments) { c in CommentRow(comment: c, names: snapshot.value.names, me: model.identity.npub) }
+            ForEach(snapshot.value.comments) { c in CommentRow(comment: c, names: snapshot.value.names, me: model.identity.npub, workspace: workspace) }
             ForEach(snapshot.value.pendingComments) { item in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.string("body") ?? "").font(.body).foregroundStyle(Amb.mutedForeground)
@@ -331,7 +331,7 @@ struct TaskDetailView: View {
 
     private var commentComposer: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            TextField("Add a comment", text: $comment, axis: .vertical)
+            ContentTextEntry(text: $comment, placeholder: "Add a comment", workspace: workspace, field: "task-comment-\(taskId)")
                 .lineLimit(1...5).focused($commentFocused)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -394,6 +394,7 @@ struct CommentRow: View {
     let comment: CommentRecord
     let names: [String: String]
     let me: String?
+    var workspace: WorkspaceRecord? = nil
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Avatar(name: displayName(comment.senderNpub, names, me: me))
@@ -403,7 +404,7 @@ struct CommentRow: View {
                     Text(ChatTime.label(comment.createdAt)).font(.caption).foregroundStyle(Amb.mutedForeground)
                     if comment.status == "resolved" { Label("Resolved", systemImage: "checkmark.circle").font(.caption).foregroundStyle(Amb.success) }
                 }
-                MessageBody(text: comment.body)
+                MessageBody(text: comment.body, workspace: workspace)
             }
         }
         .accessibilityElement(children: .combine)
@@ -434,7 +435,7 @@ struct TaskCreateSheet: View {
         NavigationStack {
             Form {
                 TextField("Title", text: $title).accessibilityIdentifier("newtask.title")
-                TextField("Description", text: $detail, axis: .vertical).lineLimit(3...8)
+                ContentTextEntry(text: $detail, placeholder: "Description", workspace: workspace, field: "new-task-description").lineLimit(3...8)
                 Picker("Channel", selection: $channelId) {
                     ForEach(channels) { Text("#\($0.name) · \(choice.scopeName($0.scopeId) ?? "")").tag(Optional($0.id)) }
                 }
@@ -485,7 +486,7 @@ struct TaskEditSheet: View {
         NavigationStack {
             Form {
                 Section("Title") { TextField("Title", text: $title, axis: .vertical).lineLimit(1...4).accessibilityIdentifier("edittask.title") }
-                Section("Description") { TextEditor(text: $detail).frame(minHeight: 160).accessibilityIdentifier("edittask.description") }
+                Section("Description") { ContentTextEntry(text: $detail, placeholder: "Description", workspace: workspace, field: "task-description-\(row.task.id)", multilineEditor: true).frame(minHeight: 160).accessibilityIdentifier("edittask.description") }
             }
             .navigationTitle("Edit task")
             .inlineTitle()

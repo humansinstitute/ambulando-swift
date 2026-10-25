@@ -16,7 +16,7 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (1) |
+| Version | 0.1.0 (2) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
@@ -29,7 +29,7 @@ the screens is shared:
 
 `scripts/mac-install.sh --package` writes `dist/Ambulando-mac-<version>-<build>.zip` and a `.sha256` file next to it.
 
-1. Copy the ZIP to the Mac (AirDrop or Files). Check it: `shasum -a 256 Ambulando-mac-0.1.0-1.zip` must match the
+1. Copy the ZIP to the Mac (AirDrop or Files). Check it: `shasum -a 256 Ambulando-mac-0.1.0-2.zip` must match the
    `.sha256` file.
 2. Double-click the ZIP and drag **Ambulando** into **Applications**.
 3. The app is signed with a Developer ID certificate but **not notarized**. Gatekeeper assessment rejects this release
@@ -91,8 +91,9 @@ each time, so after each rebuild macOS asks once for the login password to let A
 
 ## Desktop layout and commands
 
-- One main window (minimum 900 × 600) with a sidebar: the sections, then Home, Unread & Active, scopes and channels and
-  the workspace switcher (the iPhone drawer's content). The window toolbar has sync status, Search, Browser and Settings.
+- One main window (minimum 900 × 600) with Home, Unread & Active, scopes, channels and the workspace switcher in a
+  resizable sidebar. Deck, Chat, Tasks, Docs, Files, optional Agents/Context and Toolbox sit horizontally above main
+  content and remain visible on record screens. The window toolbar has sync status, Search, Browser and Settings.
 - The in-app browser (with `window.nostr`) is its own window; **Back to Ambulando** or closing it ends the browsing
   presentation, and websites can then no longer ask for signatures.
 - Chat composer: Return sends, Shift-Return or Option-Return starts a new line. Paste or drop images and files into it,
@@ -102,7 +103,7 @@ each time, so after each rebuild macOS asks once for the login password to let A
 
 | Shortcut | Action |
 | --- | --- |
-| ⌘1 … ⌘8 | Sections, in sidebar order (Deck, Chat, Tasks, Docs, Files, [Agents], [Context], Toolbox) |
+| ⌘1 … ⌘8 | Sections, in top-bar order (Deck, Chat, Tasks, Docs, Files, [Agents], [Context], Toolbox) |
 | ⌘[ | Back one screen in the current section |
 | ⇧⌘H | Home (all workspace activity) |
 | ⌘F | Search saved messages, tasks, documents and files |
@@ -143,3 +144,36 @@ xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Amb
   -destination 'platform=macOS' -derivedDataPath build/ddmac build
 open -n build/ddmac/Build/Products/Debug/Ambulando.app --args -AmbulandoUITestFixture
 ```
+
+## Documents and content paste (Mac build 2)
+
+Documents use white paper and dark text independently of the window theme. Comments and replies stay in a separate
+right column with their own scroll area and a pinned composer. Select text in a native paragraph or heading and use
+its **+** control to quote and comment. A thread's **Locate text** restores the highlight; deleted or ambiguous text
+is labelled **Original selection unavailable**. Rich documents store the web's UTF-16 ProseMirror positions and quote
+in comment metadata, with the source row version. Markdown selections use line/quote metadata instead of inventing
+ProseMirror offsets. Existing rich structure, images, formatting and unknown JSON nodes remain intact.
+
+Selection is within one native text block; dragging across separate paragraphs is not supported. Complex cells with
+multiple paragraphs or inline objects can retain the standard rich renderer without a selection-comment control.
+Unknown nodes remain visibly preserved rather than acquiring misleading anchors. A moved quote is located only when
+it has a single unambiguous match.
+
+Explicit image/file paste uses workspace storage in chat/thread composers, message editing, task comments, task
+create/edit descriptions, document comments/replies, document creation/body/block editors, channel descriptions and
+context prompts, and scope descriptions. Content fields use a bounded native text viewport, with visible upload state,
+Remove and Retry. Paste inserts at the selection/caret; Send/Create/Save remains a separate action. Unresolved upload
+placeholders cannot be committed. Document inserts become real rich image/file nodes. Names, titles, search/filter,
+URLs, identity/PIN and other scalar settings retain ordinary text input. Text paste follows the native text path.
+
+Ordinary rich-text links inherit the app's browser route. Toolbox, Deck and Context app launchers use the same signed
+browser. Sandboxed HTML naplets have no signing bridge; a link leaves them only through the explicit browser-tab
+handoff. Public-key/signature consent, origin/frame checks and lock/closed-window rejection remain in the shared
+browser broker. **Open in Safari** remains an explicit browser-menu choice.
+
+
+Mac Deck is a spatial dashboard: welcome/context and Apps/My Agents above an inbox with pins and canvases alongside.
+At narrow widths the same panels stack vertically, with no horizontal swipe carousel. My Agents reads the existing
+Tower actor-owned `/me/autopilot-agents` settings and opens configured secure URLs in the signed browser; it does not
+add direct Autopilot session control. Its cached list is scoped to the connection and workspace, with an explicit Retry
+when loading fails.

@@ -12,16 +12,27 @@ struct MacWorkspaceShell: View {
     @SceneStorage("shell.tab") private var storedMode = AppMode.chat.rawValue
     @AppStorage(AppMode.agentsPreference) private var showAgents = false
     @AppStorage(AppMode.contextPreference) private var showContext = false
-    @State private var columns = NavigationSplitViewVisibility.all
 
     var body: some View {
         @Bindable var ui = ui
-        NavigationSplitView(columnVisibility: $columns) {
-            MacSidebar(sections: AppMode.visible(agents: showAgents, context: showContext))
-                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 380)
-        } detail: {
-            sectionView(model.mode)
-                .environment(\.openMention, OpenMentionAction { kind, id in model.openRecord(kind: kind, id: id) })
+        HSplitView {
+            if ui.sidebarVisible {
+                MacSidebar().frame(minWidth: 240, idealWidth: 280, maxWidth: 380)
+            }
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    Button { ui.sidebarVisible.toggle() } label: { Image(systemName: "sidebar.left") }
+                        .buttonStyle(.plain).padding(10)
+                        .accessibilityLabel(ui.sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
+                        .accessibilityIdentifier("sidebar.toggle")
+                    MacSectionBar(sections: AppMode.visible(agents: showAgents, context: showContext))
+                }.background(Amb.card)
+                Divider()
+                sectionView(model.mode)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(minWidth: 580, maxWidth: .infinity, maxHeight: .infinity)
+            .environment(\.openMention, OpenMentionAction { kind, id in model.openRecord(kind: kind, id: id) })
         }
         // HTTPS links open as tabs in the browser window; record mentions open the record in its section.
         .environment(\.openURL, OpenURLAction { model.browser.handleLink($0) })
@@ -30,7 +41,7 @@ struct MacWorkspaceShell: View {
         // The context bar's "open navigation" on the Mac reveals the sidebar column.
         .onChange(of: model.sidebarOpen) { _, open in
             guard open else { return }
-            columns = .all
+            ui.sidebarVisible = true
             model.sidebarOpen = false
         }
         .onAppear {
@@ -116,48 +127,33 @@ struct MacWorkspaceShell: View {
     }
 }
 
-/// The sidebar column: the sections (the iPhone's bottom bar), then Home, Unread & Active, the scopes with their channels
-/// and the workspace switcher, exactly as in the iPhone drawer.
+/// Workspace navigation stays in the sidebar; product sections sit above every detail surface.
 struct MacSidebar: View {
+    var body: some View { SidebarContent().background(Amb.card) }
+}
+
+struct MacSectionBar: View {
     @Environment(AppModel.self) private var model
     let sections: [AppMode]
-
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 1) {
-                ForEach(Array(sections.enumerated()), id: \.element) { index, section in
-                    let active = model.mode == section
+        ScrollView(.horizontal) {
+            HStack(spacing: 4) {
+                ForEach(sections, id: \.self) { section in
                     Button {
-                        if active { model.popToRoot(section) } else { model.show(section) }
+                        if model.mode == section { model.popToRoot(section) } else { model.show(section) }
                     } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: section.systemImage).frame(width: 20)
-                                .foregroundStyle(active ? Amb.primary : Amb.mutedForeground)
-                            Text(section.title).font(.body.weight(active ? .semibold : .regular))
-                                .foregroundStyle(active ? Amb.selectedForeground : Amb.foreground)
-                            Spacer(minLength: 0)
-                            if index < 9 {
-                                Text("⌘\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(Amb.mutedForeground.opacity(0.7))
-                                    .accessibilityHidden(true)
-                            }
-                        }
-                        .padding(.horizontal, 10).frame(minHeight: 28)
-                        .background(active ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-                        .contentShape(Rectangle())
+                        Label(section.title, systemImage: section.systemImage)
+                            .font(.subheadline.weight(model.mode == section ? .semibold : .regular))
+                            .padding(.horizontal, 10).padding(.vertical, 8)
+                            .background(model.mode == section ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(section.title)
-                    .accessibilityAddTraits(active ? [.isSelected, .isButton] : .isButton)
+                    .accessibilityAddTraits(model.mode == section ? [.isSelected, .isButton] : .isButton)
                     .accessibilityIdentifier("section.\(section.rawValue)")
                 }
-            }
-            .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Sections")
-            .accessibilityIdentifier("section.bar")
-            Divider().overlay(Amb.border)
-            SidebarContent()
+            }.padding(8)
         }
-        .background(Amb.card)
+        .scrollIndicators(.hidden).background(Amb.card)
+        .accessibilityElement(children: .contain).accessibilityLabel("Sections").accessibilityIdentifier("section.bar")
     }
 }

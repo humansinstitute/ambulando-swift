@@ -263,7 +263,7 @@ public final class SampleSurfaceTower: @unchecked Sendable {
         switch first {
         case "canvases", "workspace-agents", "agent-activities", "personal-wapps", "record-sync": return true
         case "scopes": return p.count >= 4 && p[2] == "context"
-        case "me": return p.count >= 2 && p[1] == "pins"
+        case "me": return p.count >= 2 && ["pins", "autopilot-agents"].contains(p[1])
         case "files": return p.count == 5 && p[2] == "versions" && p[4] == "object"
         default: return false
         }
@@ -357,6 +357,9 @@ public final class SampleSurfaceTower: @unchecked Sendable {
             let rows = table("activities").values.filter { $0["channel_id"] as? String == channel }
                 .sorted { ($0["created_at"] as! String) > ($1["created_at"] as! String) }
             return paged(rows, key: "agent_activities", query: query)
+        case ("GET", 2, "me") where p[1] == "autopilot-agents":
+            let rows = table("agents").values.sorted { ($0["sort_order"] as! Int) < ($1["sort_order"] as! Int) }
+            return (200, ["settings": ["row_version": 1, "autopilot_agents": rows.map { ["agent_npub": $0["agent_npub"] ?? "", "url": "https://browser.sample.invalid/agents"] }]])
         // Toolbox
         case ("GET", 1, "personal-wapps"):
             let rows = table("wapps").values.sorted { ($0["sort_order"] as! Int) < ($1["sort_order"] as! Int) }

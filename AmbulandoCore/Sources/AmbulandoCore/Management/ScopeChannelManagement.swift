@@ -67,8 +67,10 @@ public struct ScopeChannelManager: Sendable {
     /// Creates a named channel in `scopeId` (optional description and channel context prompt, as the web form).
     public func createChannel(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, scopeId: String, name: String,
                               description: String?, contextPrompt: String?) async throws -> ChannelRecord {
+        guard !UploadToken.contains(in: description ?? "") else { throw ComposerUploadError.unresolved }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ManagementError.invalid("Channel name is required.") }
+        guard !UploadToken.contains(in: contextPrompt ?? "") else { throw ComposerUploadError.unresolved }
         var body: [String: Any] = ["name": trimmed, "kind": "channel",
                                    "metadata": AgentChatConfig.write([:], contextPrompt: contextPrompt ?? "")]
         if let description = description?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty { body["description"] = description }
@@ -101,6 +103,7 @@ public struct ScopeChannelManager: Sendable {
 
     /// Saves the channel context prompt in the channel's `agent_chat` metadata, keeping every other metadata key.
     public func saveContextPrompt(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, channel: ChannelRecord, prompt: String) async throws -> ChannelRecord {
+        guard !UploadToken.contains(in: prompt) else { throw ComposerUploadError.unresolved }
         let metadata = AgentChatConfig.write(channel.metadata, contextPrompt: prompt)
         let object = try await send(connection, workspace, method: "PATCH", path: try base(workspace) + "/channels/" + TowerAPI.uuid(channel.id),
                                     body: ["metadata": metadata], operation: .manageChannel)
@@ -149,6 +152,7 @@ public struct ScopeChannelManager: Sendable {
     /// channel-create on it.
     public func createScope(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, name: String,
                             description: String?) async throws -> ScopeRecord {
+        guard !UploadToken.contains(in: description ?? "") else { throw ComposerUploadError.unresolved }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ManagementError.invalid("Scope name is required.") }
         var body: [String: Any] = ["name": trimmed, "kind": "project"]
@@ -161,6 +165,7 @@ public struct ScopeChannelManager: Sendable {
 
     /// Renames a scope or changes its description.
     public func updateScope(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, scopeId: String, name: String, description: String?) async throws {
+        guard !UploadToken.contains(in: description ?? "") else { throw ComposerUploadError.unresolved }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ManagementError.invalid("Scope name is required.") }
         let body: [String: Any] = ["name": trimmed, "description": description.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? NSNull()]

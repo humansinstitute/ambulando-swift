@@ -768,6 +768,11 @@ final class AppModel {
     @discardableResult
     func submit(_ intent: WriteIntent, in workspace: WorkspaceRecord) -> Bool {
         guard let writes, let connection, workspace.id == selectedWorkspace?.id else { return false }
+        if let data = try? JSONSerialization.data(withJSONObject: intent.payload),
+           UploadToken.contains(in: String(decoding: data, as: UTF8.self)) {
+            notice = ComposerUploadError.unresolved.localizedDescription
+            return false
+        }
         Task {
             do { try await writes.submit(intent, connection: connection, workspace: workspace) }
             catch { notice = error.localizedDescription }

@@ -174,6 +174,7 @@ struct ComposerTextView: NSViewRepresentable {
     let plainKeyboard: Bool
     let onPasteItems: ([NSItemProvider]) -> [String]
     var onSubmit: (() -> Void)? = nil
+    var fixedHeight: CGFloat? = nil
 
     static let maxLines: CGFloat = 6
 
@@ -190,6 +191,7 @@ struct ComposerTextView: NSViewRepresentable {
         view.insertionPointColor = NSColor(Amb.primary)
         view.drawsBackground = false
         view.isRichText = false
+        view.isAutomaticTextReplacementEnabled = false
         view.allowsUndo = true
         view.textContainerInset = .zero
         view.textContainer?.lineFragmentPadding = 0
@@ -210,6 +212,11 @@ struct ComposerTextView: NSViewRepresentable {
         context.coordinator.parent = self
         view.onPasteItems = onPasteItems
         view.onSubmit = onSubmit
+        view.onFocusChange = { focused in
+            DispatchQueue.main.async {
+                if context.coordinator.parent.focused != focused { context.coordinator.parent.focused = focused }
+            }
+        }
         view.placeholder = placeholder
         // As on the iPhone: only a change made outside typing (a mention, a finished upload, a restored draft) is
         // written back, so an update that arrives mid-keystroke never drops a character.
@@ -234,15 +241,15 @@ struct ComposerTextView: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView scroll: NSScrollView, context: Context) -> CGSize? {
-        guard let width = proposal.width, width.isFinite, width > 0, let view = scroll.documentView as? NSTextView,
-              let container = view.textContainer, let layout = view.layoutManager else { return nil }
+        guard let width = proposal.width, width.isFinite, width > 0, let view = scroll.documentView as? NSTextView else { return nil }
+        if let fixedHeight { return CGSize(width: width, height: fixedHeight) }
         let font = view.font ?? .preferredFont(forTextStyle: .body)
-        let line = layout.defaultLineHeight(for: font)
-        container.containerSize = CGSize(width: width, height: .greatestFiniteMagnitude)
-        layout.ensureLayout(for: container)
-        let fitted = layout.usedRect(for: container).height
-        let cap = ceil(line * Self.maxLines)
-        return CGSize(width: width, height: min(max(ceil(fitted), ceil(line)), cap))
+        let line = font.ascender - font.descender + font.leading
+        // Measure a detached string. Mutating the live text container during SwiftUI's speculative layout proposals
+        // makes AppKit resize the text view and can cause an endless layout cycle when upload status appears.
+        let measured = NSAttributedString(string: view.string.isEmpty ? " " : view.string, attributes: [.font: font])
+            .boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading]).height
+        return CGSize(width: width, height: min(max(ceil(measured), ceil(line)), ceil(line * Self.maxLines)))
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -284,6 +291,21 @@ struct ComposerTextView: NSViewRepresentable {
 final class PasteAwareTextView: NSTextView {
     var onPasteItems: (([NSItemProvider]) -> [String])?
     var onSubmit: (() -> Void)?
+    var onFocusChange: ((Bool) -> Void)?
+    override func setAccessibilityFocused(_ focused: Bool) {
+        if focused { window?.makeKeyAndOrderFront(nil); window?.makeFirstResponder(self) }
+        else { super.setAccessibilityFocused(false) }
+    }
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { onFocusChange?(true) }
+        return accepted
+    }
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if accepted { onFocusChange?(false) }
+        return accepted
+    }
     var placeholder = "" {
         didSet {
             guard placeholder != oldValue else { return }
@@ -326,8 +348,37 @@ final class PasteAwareTextView: NSTextView {
         return true
     }
 
+    // AppKit disables Paste for an image-only clipboard in a plain-text NSTextView before dispatching paste(_:).
+    // Keep the action available without inspecting the clipboard; the explicit action decides attachment vs text.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "v", isEditable, window?.firstResponder === self {
+            paste(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if let action = menuItem.action, [#selector(paste(_:)), #selector(pasteAsPlainText(_:)), #selector(pasteAsRichText(_:))].contains(action), isEditable, onPasteItems != nil { return true }
+        return super.validateMenuItem(menuItem)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), isEditable, onPasteItems != nil { return true }
+        return super.validateUserInterfaceItem(item)
+    }
+
     override func paste(_ sender: Any?) {
         if !insertUploads(from: .general) { super.paste(sender) }
+    }
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        if !insertUploads(from: .general) { super.pasteAsPlainText(sender) }
+    }
+
+    override func pasteAsRichText(_ sender: Any?) {
+        if !insertUploads(from: .general) { super.pasteAsRichText(sender) }
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {

@@ -816,7 +816,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
                      layout: ["x": 900, "y": 80, "width": 240, "height": 180, "z": 5], content: ["body": "not for this viewer"])
         s.seedNaplet(canvas: launch, sourceType: "html", sourceId: UUID().uuidString.lowercased(), title: "Status page",
                      layout: ["x": 900, "y": 300, "width": 260, "height": 200, "z": 6],
-                     content: ["html": "<h1>Status</h1><p>All green.</p>", "version_number": 1])
+                     content: ["html": "<h1>Status</h1><p>All green.</p><p id='bridge'></p><script>document.getElementById('bridge').textContent = 'Sandbox nostr: ' + typeof window.nostr;</script><a href='https://browser.sample.invalid/naplet' target='_blank'>Open signed browser</a>", "version_number": 1])
         s.seedElement(canvas: launch, kind: "text", layout: ["x": 40, "y": 20, "width": 400, "height": 40, "z": 7], data: ["text": "Build 7 launch", "fontSize": 28])
         s.seedElement(canvas: launch, kind: "arrow", layout: ["x": 400, "y": 200, "width": 40, "height": 10, "z": 8], data: ["start": [0, 5], "end": [40, 5]])
         s.seedElement(canvas: launch, kind: "rectangle", layout: ["x": 20, "y": 60, "width": 860, "height": 640, "z": 0], data: [:])
@@ -871,7 +871,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         }
         func para(_ content: [JSONValue]) -> JSONValue { .object([("type", .string("paragraph")), ("content", .array(content))]) }
         let link = JSONValue.object([("type", .string("text")), ("text", .string("web inbox")),
-                                     ("marks", .array([.object([("type", .string("link")), ("attrs", .object([("href", .string("https://example.invalid/inbox"))]))])]))])
+                                     ("marks", .array([.object([("type", .string("link")), ("attrs", .object([("href", .string("https://browser.sample.invalid/document"))]))])]))])
         let task: (Bool, String) -> JSONValue = { checked, label in
             .object([("type", .string("taskItem")), ("attrs", .object([("checked", .bool(checked))])), ("content", .array([para([t(label)])]))])
         }

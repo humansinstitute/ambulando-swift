@@ -338,7 +338,23 @@ public enum DocumentEditor {
         var out: [JSONValue] = []
         for (index, line) in cleaned.components(separatedBy: "\n").enumerated() {
             if index > 0 { out.append(.object([("type", .string("hardBreak"))])) }
-            if !line.isEmpty { out.append(textNode(line)) }
+            if !line.isEmpty {
+                // Newly inserted storage Markdown is a real inline object in ProseMirror, preserving surrounding marks
+                // and every untouched/unknown node. Code blocks retain literal source text.
+                let pattern = try! NSRegularExpression(pattern: #"(!?)\[([^\]\n]*)\]\(storage://([A-Fa-f0-9-]{36})\)"#)
+                let ns = line as NSString
+                var cursor = 0
+                for match in pattern.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
+                    let id = ns.substring(with: match.range(at: 3))
+                    guard UUID(uuidString: id) != nil else { continue }
+                    if match.range.location > cursor { out.append(textNode(ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))) }
+                    let image = ns.substring(with: match.range(at: 1)) == "!"
+                    out.append(.object([("type", .string(image ? "fdStorageImage" : "fdStorageFile")),
+                                        ("attrs", .object([("objectId", .string(id)), (image ? "alt" : "label", .string(ns.substring(with: match.range(at: 2))))]))]))
+                    cursor = NSMaxRange(match.range)
+                }
+                if cursor < ns.length { out.append(textNode(ns.substring(from: cursor))) }
+            }
         }
         return out
     }

@@ -26,6 +26,10 @@ final class ComposerUploadTests: XCTestCase {
 
         let token = UploadToken.make(.image, id: "abc-1")
         XCTAssertEqual(token, "[ Uploading image abc-1... ]")
+        let smartToken = token.replacingOccurrences(of: "...", with: "…")
+        XCTAssertTrue(UploadToken.contains(in: smartToken))
+        XCTAssertEqual(UploadToken.ids(in: smartToken).first?.id, "abc-1")
+        XCTAssertEqual(ComposerText.replacing(token, with: "uploaded", in: smartToken, selection: nil)?.text, "uploaded")
         XCTAssertTrue(UploadToken.contains(in: "x \(token) y"))
         XCTAssertTrue(UploadToken.contains(in: "[ Uploading image 3... ]"), "the web's numbered form")
         XCTAssertTrue(UploadToken.contains(in: "[ Uploading file... ]"), "the web's plain form")

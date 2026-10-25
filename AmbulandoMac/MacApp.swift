@@ -59,6 +59,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 @Observable
 final class MacUI {
+    var sidebarVisible = true
     var showSettings = false
     var showSearch = false
     var showUnlock = false

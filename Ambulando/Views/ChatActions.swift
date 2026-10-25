@@ -171,7 +171,7 @@ struct MessageEditSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Message", text: $text, axis: .vertical).lineLimit(3...12).accessibilityIdentifier("editmessage.field")
+                ContentTextEntry(text: $text, placeholder: "Message", workspace: workspace, field: "edit-message-\(message.id)").lineLimit(3...12).accessibilityIdentifier("editmessage.field")
                 Text("Edits are signed with your identity and replace the message for everyone.").font(.footnote).foregroundStyle(Amb.mutedForeground)
             }
             .navigationTitle("Edit message")
@@ -277,7 +277,7 @@ struct ComposerPastedUploads: View {
     let text: String
 
     var body: some View {
-        let shown = uploads.uploads(for: target).filter { text.contains($0.token) }
+        let shown = uploads.uploads(for: target).filter { UploadToken.contains(token: $0.token, in: text) }
         let notice = uploads.notice(for: target)
         if !shown.isEmpty || notice != nil {
             VStack(alignment: .leading, spacing: 6) {

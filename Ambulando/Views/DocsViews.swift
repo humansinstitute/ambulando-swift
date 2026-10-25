@@ -35,7 +35,7 @@ struct DocumentsView: View {
                 }
             }
             ForEach(visible) { doc in
-                NavigationLink(value: WorkRoute.doc(workspaceId: workspace.id, docId: doc.id)) {
+                WorkRecordLink(route: WorkRoute.doc(workspaceId: workspace.id, docId: doc.id)) {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
                             Image(systemName: "doc.text").foregroundStyle(Amb.primary)
@@ -105,7 +105,7 @@ struct DocumentCreateSheet: View {
                 Picker("Channel", selection: $channelId) {
                     ForEach(choice.channels(in: context)) { Text("#\($0.name)").tag(Optional($0.id)) }
                 }
-                Section("Text") { TextEditor(text: $text).frame(minHeight: 160).accessibilityIdentifier("newdoc.text") }
+                Section("Text") { ContentTextEntry(text: $text, placeholder: "Document text", workspace: workspace, field: "newdoc", multilineEditor: true).frame(minHeight: 160).accessibilityIdentifier("newdoc.text") }
                 if let error { Text(error).foregroundStyle(Amb.destructive) }
             }
             .navigationTitle("New document")
@@ -124,6 +124,7 @@ struct DocumentCreateSheet: View {
     /// The body is built in the web format and staged on the device; the write queue uploads it and creates the record.
     private func create() {
         guard let channelId, let staging = model.staging else { return }
+        guard !UploadToken.contains(in: text) else { error = ComposerUploadError.unresolved.localizedDescription; return }
         let created = DocumentBody.newDocument(text: text)
         let name = UUID().uuidString.lowercased() + ".document.json"
         do {
@@ -141,6 +142,7 @@ struct DocumentCreateSheet: View {
 struct DocumentSnapshot: Sendable, Equatable {
     var doc: DocRecord?
     var blocks: [RenderBlock] = []
+    var spans: [DocumentTextSpan] = []
     var hasBody = false
     var editable = false
     var readOnlyReason: String?
@@ -159,39 +161,13 @@ struct DocumentView: View {
     @State private var snapshot = LiveQuery<DocumentSnapshot>(initial: DocumentSnapshot())
     @State private var editing = false
     @State private var comment = ""
+    @State private var anchor: DocumentAnchor?
+    @State private var replyTo: CommentRecord?
+    @State private var revealed: DocumentAnchor?
+    @State private var revealRevision = 0
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                if let doc = snapshot.value.doc {
-                    Text(doc.title).font(Amb.editorial).foregroundStyle(Amb.foreground).accessibilityIdentifier("doc.title")
-                    Text([snapshot.value.choice.scopeName(doc.scopeId), snapshot.value.choice.channelName(doc.channelId).map { "#\($0)" }, ChatTime.label(doc.updatedAt)]
-                        .compactMap { $0 }.joined(separator: " · ")).font(.footnote).foregroundStyle(Amb.mutedForeground)
-                }
-                if let draft = snapshot.value.draft {
-                    Button { editing = true } label: {
-                        Notice(tone: draft.state == .recovery || draft.state == .conflict ? .warning : .info,
-                               text: draft.lastError ?? "You have unsaved edits on this \(Device.name). Tap to continue editing.")
-                    }
-                    .buttonStyle(.plain).accessibilityIdentifier("doc.draftBanner")
-                }
-                if let reason = snapshot.value.readOnlyReason { Notice(tone: .info, text: reason) }
-                if snapshot.value.hasBody {
-                    RichBlocksView(blocks: snapshot.value.blocks, style: .document, workspace: workspace)
-                        .accessibilityElement(children: .contain).accessibilityIdentifier("doc.body")
-                } else if snapshot.loaded {
-                    SyncNote(text: model.syncError(forKey: WorkspaceSync.docKey(workspace.id, docId))
-                             ?? (model.isUnlocked ? "Loading document…" : "This document is not saved on this \(Device.name) yet. Unlock to load it."))
-                }
-                Divider()
-                docComments
-            }
-            .padding(16)
-            .tabletReadingWidth()
-        }
-        .scrollDismissesKeyboard(.interactively)
-        .safeAreaInset(edge: .bottom) { composer.tabletReadingWidth() }
-        .background(Amb.background)
+        readerLayout
         .fixtureLabel()
         .navigationTitle("Document")
         .inlineTitle()
@@ -210,11 +186,96 @@ struct DocumentView: View {
         .onAppear { model.openDoc(docId, in: workspace); model.markViewed(.document, docId, in: workspace) }
     }
 
+    @ViewBuilder private var readerLayout: some View {
+        #if os(macOS)
+        GeometryReader { geometry in
+            HStack(alignment: .top, spacing: 0) {
+                ScrollViewReader { scroll in
+                    ScrollView { paper.padding(20) }
+                        .onChange(of: revealRevision) { _, _ in
+                            if let value = revealed, let result = DocumentAnchors.resolve(value, in: snapshot.value.spans) {
+                                withAnimation { scroll.scrollTo(result.span.path.first ?? 0, anchor: .center) }
+                            }
+                        }
+                }
+                Divider()
+                VStack(spacing: 0) {
+                    ScrollView { docComments.frame(maxWidth: .infinity, alignment: .leading).padding(12) }
+                    Divider()
+                    composer
+                }
+                .frame(width: min(320, max(240, geometry.size.width * 0.32)))
+                .background(Amb.card)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("doc.commentColumn")
+            }
+        }
+        .background(Amb.background)
+        #else
+        ScrollView { VStack(alignment: .leading, spacing: 14) { paper; Divider(); docComments }.padding(16).tabletReadingWidth() }
+            .safeAreaInset(edge: .bottom) { composer.tabletReadingWidth() }
+            .background(Amb.background)
+        #endif
+    }
+
+    private var paper: some View {
+            VStack(alignment: .leading, spacing: 14) {
+                if let doc = snapshot.value.doc {
+                    Text(doc.title).font(Amb.editorial).foregroundStyle(Amb.foreground).accessibilityIdentifier("doc.title")
+                    Text([snapshot.value.choice.scopeName(doc.scopeId), snapshot.value.choice.channelName(doc.channelId).map { "#\($0)" }, ChatTime.label(doc.updatedAt)]
+                        .compactMap { $0 }.joined(separator: " · ")).font(.footnote).foregroundStyle(Amb.mutedForeground)
+                }
+                if let draft = snapshot.value.draft {
+                    Button { editing = true } label: {
+                        Notice(tone: draft.state == .recovery || draft.state == .conflict ? .warning : .info,
+                               text: draft.lastError ?? "You have unsaved edits on this \(Device.name). Tap to continue editing.")
+                    }
+                    .buttonStyle(.plain).accessibilityIdentifier("doc.draftBanner")
+                }
+                if let reason = snapshot.value.readOnlyReason { Notice(tone: .info, text: reason) }
+                if snapshot.value.hasBody {
+                    documentBlocks
+                } else if snapshot.loaded {
+                    SyncNote(text: model.syncError(forKey: WorkspaceSync.docKey(workspace.id, docId))
+                             ?? (model.isUnlocked ? "Loading document…" : "This document is not saved on this \(Device.name) yet. Unlock to load it."))
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 800, alignment: .leading)
+            .background(Color.white)
+            .environment(\.colorScheme, .light)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("doc.paper")
+    }
+
+    private var documentBlocks: some View {
+        RichBlocksView(blocks: snapshot.value.blocks, style: .document, workspace: workspace)
+            .accessibilityElement(children: .contain).accessibilityIdentifier("doc.body")
+            #if os(macOS)
+            .environment(\.documentSelection, DocumentSelectionContext(spans: snapshot.value.spans, version: snapshot.value.doc?.rowVersion, selected: revealed, begin: { selected in
+                anchor = selected; revealed = selected; revealRevision += 1; replyTo = nil
+            }))
+            #endif
+    }
+
     private var docComments: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Comments").font(.headline).foregroundStyle(Amb.itemHeading)
-            ForEach(snapshot.value.comments) { c in
-                CommentRow(comment: c, names: snapshot.value.names, me: model.identity.npub)
+            ForEach(snapshot.value.comments.filter { $0.parentCommentId == nil }) { c in
+                VStack(alignment: .leading, spacing: 8) {
+                    if let quote = c.anchorQuote, !quote.isEmpty {
+                        Button {
+                            if let found = c.documentAnchor { revealed = found; revealRevision += 1 }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("“\(quote)”").lineLimit(4)
+                                if c.documentAnchor.flatMap({ DocumentAnchors.resolve($0, in: snapshot.value.spans) }) == nil {
+                                    Text("Original selection unavailable").font(.caption)
+                                } else { Label("Locate text", systemImage: "text.magnifyingglass").font(.caption) }
+                            }
+                        }.buttonStyle(.plain).foregroundStyle(Amb.primary)
+                    }
+                CommentRow(comment: c, names: snapshot.value.names, me: model.identity.npub, workspace: workspace)
                     .contextMenu {
                         let resolved = c.status == "resolved"
                         Button(resolved ? "Reopen" : "Resolve") {
@@ -222,6 +283,12 @@ struct DocumentView: View {
                                                      payload: ["doc_id": docId, "status": resolved ? "open" : "resolved", "row_version": c.rowVersion]), in: workspace)
                         }
                     }
+                    ForEach(snapshot.value.comments.filter { $0.parentCommentId == c.id }) { reply in
+                        CommentRow(comment: reply, names: snapshot.value.names, me: model.identity.npub, workspace: workspace).padding(.leading, 14)
+                    }
+                    Button("Reply") { replyTo = c; anchor = c.documentAnchor }.font(.caption)
+                }
+                .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: 8))
             }
             ForEach(snapshot.value.pendingComments) { item in
                 VStack(alignment: .leading, spacing: 4) {
@@ -236,8 +303,17 @@ struct DocumentView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Comment on this document", text: $comment, axis: .vertical)
+        VStack(alignment: .leading, spacing: 8) {
+            if anchor != nil || replyTo != nil {
+                HStack(alignment: .top) {
+                    Text(replyTo.map { "Replying to \(displayName($0.senderNpub, snapshot.value.names, me: model.identity.npub))" } ?? "Selected text")
+                    Spacer()
+                    Button { anchor = nil; replyTo = nil; revealed = nil } label: { Image(systemName: "xmark.circle") }
+                }.font(.caption)
+                if let anchor { Text("“\(anchor.quote)”").font(.footnote).lineLimit(4).foregroundStyle(Amb.primary) }
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+            ContentTextEntry(text: $comment, placeholder: replyTo == nil ? "Comment on this document" : "Reply", workspace: workspace, field: "doc-comment-\(docId)-\(replyTo?.id ?? "root")")
                 .lineLimit(1...5)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -245,11 +321,15 @@ struct DocumentView: View {
             Button {
                 let text = comment.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { return }
-                if model.submit(WriteIntent(kind: .docComment, targetId: docId, payload: ["body": text]), in: workspace) { comment = "" }
+                var payload: [String: any Sendable] = ["body": text]
+                if let anchor { payload["metadata"] = anchor.metadata }
+                if let replyTo { payload["parent_comment_id"] = replyTo.id }
+                if model.submit(WriteIntent(kind: .docComment, targetId: docId, payload: payload), in: workspace) { comment = ""; anchor = nil; replyTo = nil }
             } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)) }
                 .disabled(comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send comment").accessibilityIdentifier("doccomment.send")
         }
+            }
         .padding(.horizontal, 10).padding(.vertical, 8)
         .background(Amb.card)
     }
@@ -272,6 +352,7 @@ struct DocumentView: View {
                 let decoded = DocumentBody(bytes: body.bytes, contentType: body.contentType)
                 snapshot.hasBody = true
                 snapshot.blocks = DocumentRender.blocks(decoded)
+                snapshot.spans = decoded.editorState.map(DocumentAnchors.spans) ?? DocumentAnchors.markdownSpans(decoded.markdown, blocks: snapshot.blocks)
                 snapshot.editable = decoded.isEditable
                 if case .readOnly(let reason) = decoded.editing { snapshot.readOnlyReason = reason + " Open it on the web to edit." }
             }
@@ -439,6 +520,9 @@ final class DocEditorModel {
 
     func save(saver: DocumentSaver?) async -> Bool {
         guard let saver else { return false }
+        guard !UploadToken.contains(in: markdown), !texts.values.contains(where: { UploadToken.contains(in: $0) }) else {
+            status = ComposerUploadError.unresolved.localizedDescription; statusTone = .warning; return false
+        }
         debounce?.cancel()
         saving = true
         defer { saving = false }
@@ -543,7 +627,7 @@ struct DocumentEditorView: View {
                         .font(.footnote.weight(.semibold)).padding(.top, 4).accessibilityIdentifier("editor.addParagraph")
                 case .markdown:
                     Text("Markdown").font(.caption.weight(.semibold)).foregroundStyle(Amb.mutedForeground)
-                    TextEditor(text: $editor.markdown).font(.body.monospaced()).frame(minHeight: 320)
+                    ContentTextEntry(text: $editor.markdown, placeholder: "Document text", workspace: workspace, field: "doc-body-\(doc.id)", multilineEditor: true).font(.body.monospaced()).frame(minHeight: 320)
                         .scrollContentBackground(.hidden).padding(8).background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                         .focused($focused, equals: "markdown").accessibilityIdentifier("editor.markdown")
                 case .unavailable(let reason):
@@ -565,7 +649,7 @@ struct DocumentEditorView: View {
             } else if block.container == "blockquote" {
                 Rectangle().fill(Amb.border).frame(width: 3, height: 18)
             }
-            TextField(placeholder(block), text: Binding(get: { editor.texts[block.id] ?? block.text }, set: { editor.texts[block.id] = $0 }), axis: .vertical)
+            ContentTextEntry(text: Binding(get: { editor.texts[block.id] ?? block.text }, set: { editor.texts[block.id] = $0 }), placeholder: placeholder(block), workspace: workspace, field: "doc-\(doc.id)-\(block.id)")
                 .font(font(block))
                 .focused($focused, equals: block.id)
                 .accessibilityIdentifier("editor.block")

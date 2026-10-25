@@ -36,6 +36,8 @@ private struct RichContext {
     var style: RichStyle
     var muted: Bool
     var workspace: WorkspaceRecord?
+    var path: [Int] = []
+    func child(_ indices: Int...) -> RichContext { var next = self; next.path += indices; return next }
 }
 
 // MARK: Blocks
@@ -48,17 +50,20 @@ struct RichBlocksView: View {
     var muted = false
     var workspace: WorkspaceRecord?
     @Environment(\.openMention) private var openMention
+    @Environment(\.openURL) private var parentOpenURL
 
     var body: some View {
         VStack(alignment: .leading, spacing: style == .chat ? 8 : 12) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                RichBlockView(block: block, context: RichContext(style: style, muted: muted, workspace: workspace))
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                RichBlockView(block: block, context: RichContext(style: style, muted: muted, workspace: workspace, path: [index])).id(index)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .environment(\.openURL, OpenURLAction { url in
             if let target = RichLinks.mentionTarget(url) { openMention(kind: target.kind, id: target.id); return .handled }
-            return RichLinks.isSafeWeb(url) ? .systemAction : .discarded
+            guard RichLinks.isSafeWeb(url) else { return .discarded }
+            parentOpenURL(url)
+            return .handled
         })
     }
 }
@@ -67,24 +72,40 @@ private struct RichBlockView: View {
     let block: RenderBlock
     let context: RichContext
 
+    #if os(macOS)
+    @Environment(\.documentSelection) private var selection
+    #endif
+
     private var ink: Color { context.muted ? Amb.mutedForeground : Amb.foreground }
 
     var body: some View {
         switch block {
         case .heading(let level, let runs):
-            Text(InlineText.attributed(runs)).font(headingFont(level)).foregroundStyle(context.muted ? Amb.mutedForeground : Amb.itemHeading)
-                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                .accessibilityAddTraits(.isHeader)
+            #if os(macOS)
+            if let selection, let span = selection.spans.first(where: { $0.path == context.path }), span.text == runs.map(\.text).joined() {
+                DocumentSelectableText(runs: runs, span: span, selection: selection, heading: level)
+            } else {
+                Text(InlineText.attributed(runs)).font(headingFont(level)).foregroundStyle(ink).textSelection(.enabled)
+            }
+            #else
+            Text(InlineText.attributed(runs)).font(headingFont(level)).foregroundStyle(ink).textSelection(.enabled)
+            #endif
         case .paragraph(let runs):
+            #if os(macOS)
+            if let selection, let span = selection.spans.first(where: { $0.path == context.path }), span.text == runs.map(\.text).joined() {
+                DocumentSelectableText(runs: runs, span: span, selection: selection)
+            } else { ParagraphView(runs: runs, context: context) }
+            #else
             ParagraphView(runs: runs, context: context)
+            #endif
         case .code(let language, let text):
-            CodeBlockView(language: language, text: text)
+            CodeBlockView(language: language, text: text, path: context.path)
         case .quote(let blocks):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1.5).fill(Amb.border).frame(width: 3)
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(blocks.enumerated()), id: \.offset) {
-                        RichBlockView(block: $0.element, context: RichContext(style: context.style, muted: true, workspace: context.workspace))
+                        RichBlockView(block: $0.element, context: context.child($0.offset))
                     }
                 }
             }
@@ -104,14 +125,14 @@ private struct RichBlockView: View {
                         }
                         .frame(minWidth: ordered ? 22 : 14, alignment: .trailing)
                         VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(item.blocks.enumerated()), id: \.offset) { RichBlockView(block: $0.element, context: context) }
+                            ForEach(Array(item.blocks.enumerated()), id: \.offset) { RichBlockView(block: $0.element, context: context.child(index, $0.offset)) }
                         }
                     }
                 }
             }
             .padding(.leading, 4)
         case .table(let rows):
-            TableBlockView(rows: rows)
+            TableBlockView(rows: rows, path: context.path)
         case .image(let alt, let source):
             RichImage(source: source, alt: alt, workspace: context.workspace)
         case .rule:
@@ -191,6 +212,10 @@ private struct ParagraphView: View {
 private struct CodeBlockView: View {
     let language: String
     let text: String
+    var path: [Int] = []
+    #if os(macOS)
+    @Environment(\.documentSelection) private var selection
+    #endif
     @State private var copied = false
 
     var body: some View {
@@ -213,14 +238,26 @@ private struct CodeBlockView: View {
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(RichPalette.codeToolbar)
             ScrollView(.horizontal) {
+                #if os(macOS)
+                if let selection, let span = selection.spans.first(where: { $0.path == path }) {
+                    DocumentSelectableText(runs: [InlineRun(text: text)], span: span, selection: selection).frame(minWidth: 240).padding(10)
+                } else {
+                    Text(verbatim: text).font(Amb.code).foregroundStyle(RichPalette.codeForeground).textSelection(.enabled).padding(10)
+                }
+                #else
                 Text(verbatim: text).font(Amb.code).foregroundStyle(RichPalette.codeForeground)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: true)
                     .padding(.horizontal, 12).padding(.vertical, 10)
+                #endif
             }
             .scrollIndicators(.automatic)
             // Text inside a horizontal scroller is not reliably exposed to VoiceOver; the scroller itself reads the code.
+            #if os(macOS)
+            .accessibilityElement(children: .contain)
+            #else
             .accessibilityElement(children: .ignore)
+            #endif
             .accessibilityLabel(text)
             .accessibilityAddTraits(.isStaticText)
             .accessibilityIdentifier("rich.code.text")
@@ -236,14 +273,19 @@ private struct CodeBlockView: View {
 /// GFM table in its own horizontal scroller with cell borders and a card-coloured header.
 private struct TableBlockView: View {
     let rows: [[[InlineRun]]]
+    var path: [Int] = []
+    #if os(macOS)
+    @Environment(\.documentSelection) private var selection
+    #endif
 
     var body: some View {
         ScrollView(.horizontal) {
             Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { r, row in
                     GridRow {
-                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-                            Text(InlineText.attributed(cell))
+                        ForEach(Array(row.enumerated()), id: \.offset) { c, cell in
+                            cellView(cell, row: r, column: c)
+                                /* native selection and the normal rich fallback share table sizing */
                                 .font(r == 0 ? .subheadline.weight(.semibold) : .subheadline)
                                 .foregroundStyle(Amb.foreground)
                                 .textSelection(.enabled)
@@ -260,10 +302,24 @@ private struct TableBlockView: View {
             .padding(1)
         }
         // Read row by row ("Surface, State. Chat, Markdown.").
+        #if os(macOS)
+        .accessibilityElement(children: .contain)
+        #else
         .accessibilityElement(children: .ignore)
+        #endif
         .accessibilityLabel(Self.spoken(rows))
         .accessibilityAddTraits(.isStaticText)
         .accessibilityIdentifier("rich.table")
+    }
+
+    @ViewBuilder private func cellView(_ runs: [InlineRun], row: Int, column: Int) -> some View {
+        #if os(macOS)
+        if let selection, let span = selection.spans.first(where: { $0.path == path + [row, column, 0] }), span.text == runs.map(\.text).joined() {
+            DocumentSelectableText(runs: runs, span: span, selection: selection).frame(minWidth: 80)
+        } else { Text(InlineText.attributed(runs)) }
+        #else
+        Text(InlineText.attributed(runs))
+        #endif
     }
 
     static func spoken(_ rows: [[[InlineRun]]]) -> String {
