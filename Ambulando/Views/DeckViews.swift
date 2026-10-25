@@ -264,7 +264,7 @@ struct DeckInboxCard: View {
 
     @ViewBuilder private func row(_ item: DeckActivity.Item, labels: [String: String]) -> some View {
         HStack(alignment: .top, spacing: 8) {
-            NavigationLink(value: route(item)) {
+            ThreadRouteLink(route: route(item)) {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: DeckInbox.icon(item.kind)).font(.amb(.subheadline)).foregroundStyle(item.isUnread ? Amb.brandOrange : Amb.primary)
                         .frame(width: 20).padding(.top, 2)
@@ -493,7 +493,7 @@ struct DeckPinnedCard: View {
         let w = workspace.id, id = item.pin.resourceId
         switch item.pin.resourceType {
         case .channel: Button { model.openInChat(channelId: id) } label: { label() }.buttonStyle(.plain)
-        case .thread: NavigationLink(value: WorkRoute.threadById(workspaceId: w, threadId: id)) { label() }.buttonStyle(.plain)
+        case .thread: ThreadRouteLink(route: WorkRoute.threadById(workspaceId: w, threadId: id)) { label() }.buttonStyle(.plain)
         case .task: NavigationLink(value: WorkRoute.task(workspaceId: w, taskId: id)) { label() }.buttonStyle(.plain)
         case .document: NavigationLink(value: WorkRoute.doc(workspaceId: w, docId: id)) { label() }.buttonStyle(.plain)
         }

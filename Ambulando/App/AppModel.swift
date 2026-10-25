@@ -74,9 +74,23 @@ final class AppModel {
     /// Navigation inside the Chat tab for the selected workspace; persisted per connection and workspace.
     var chatPath: [ChatRoute] = [] {
         didSet {
+            // Conversations open in the focused thread view, never on the Chat stack (a link, a restored older path).
+            if let focus = chatPath.lazy.compactMap(ThreadFocus.init).last {
+                chatPath.removeAll { ThreadFocus($0) != nil }
+                focusThread(focus)
+            }
             guard chatPath != oldValue else { return }
             if !restoringPath { pathEdits &+= 1 }
             persistChatPath()
+        }
+    }
+    /// The conversation shown in the focused thread view over the current section (see `ThreadFocus`); persisted per
+    /// connection and workspace so relaunch reopens it. Sync never sets it.
+    var focusedThread: ThreadFocus? {
+        didSet {
+            guard focusedThread != oldValue, !restoringPath else { return }
+            pathEdits &+= 1
+            persistThreadFocus()
         }
     }
     /// Bumped by every context or Chat path change that is not a restore, so a restore that started earlier (a slow
@@ -420,7 +434,7 @@ final class AppModel {
             navigation.stop()
             pins.stop()
             context = .home
-            restoringPath = true; chatPath = []; restoringPath = false
+            restoringPath = true; chatPath = []; focusedThread = nil; restoringPath = false
             resetSectionPaths()
             membership = nil; membershipWorkspaceId = nil
             canvasViewports = [:]
@@ -523,7 +537,7 @@ final class AppModel {
             await avatars?.clear()
             resetSectionPaths()
             membership = nil; membershipWorkspaceId = nil
-            restoringPath = true; chatPath = []; restoringPath = false
+            restoringPath = true; chatPath = []; focusedThread = nil; restoringPath = false
         } catch { notice = error.localizedDescription }
     }
 
@@ -542,7 +556,7 @@ final class AppModel {
     private func showWorkspace(_ id: String, persist: Bool) {
         guard let store, let connection else { return }
         selectedWorkspaceId = id
-        restoringPath = true; chatPath = []; restoringPath = false
+        restoringPath = true; chatPath = []; focusedThread = nil; restoringPath = false
         context = .home
         navigation.stop()
         pins.stop()
@@ -839,11 +853,26 @@ final class AppModel {
         Task { try? await store.writer.setState(key, encoded) }
     }
 
+    private var threadFocusKey: String? {
+        guard let connection, let workspace = selectedWorkspaceId ?? selectedWorkspace?.id else { return nil }
+        return "thread-focus:\(connection.id):\(workspace)"
+    }
+
+    private func persistThreadFocus() {
+        guard !restoringPath, let store, let key = threadFocusKey else { return }
+        let encoded = focusedThread.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) }
+        Task { try? await store.writer.setState(key, encoded) }
+    }
+
     private func restoreChatPath() async {
-        guard let store, let key = chatPathKey else { return }
+        guard let store, let key = chatPathKey, let focusKey = threadFocusKey else { return }
         let edits = (contextEdits, pathEdits)
         let stored = (try? await store.reader.state(key)).flatMap { $0 }
         let routes = stored.flatMap { try? JSONDecoder().decode([ChatRoute].self, from: Data($0.utf8)) } ?? []
+        // The focused thread is restored over whatever section and context were open, in any channel the store still has.
+        var focus = (try? await store.reader.state(focusKey)).flatMap { $0 }.flatMap { try? JSONDecoder().decode(ThreadFocus.self, from: Data($0.utf8)) }
+        if let saved = focus, let channelId = saved.channelId,
+           (try? await store.reader.channel(workspaceId: saved.workspaceId, id: channelId)) == nil { focus = nil }
         guard key == chatPathKey else { return }   // the workspace changed while reading
         guard edits == (contextEdits, pathEdits) else { return }   // the user navigated while reading
         let workspace = selectedWorkspaceId ?? selectedWorkspace?.id
@@ -859,7 +888,9 @@ final class AppModel {
         }
         guard key == chatPathKey, expected == (contextEdits, pathEdits) else { return }
         restoringPath = true
+        // A thread in an older saved path opens focused (see `chatPath`); a saved focused thread takes precedence.
         chatPath = mine.filter { if case .thread(_, let channelId, _) = $0 { channelId == context.channelId } else { false } }
+        if let focus, focus.workspaceId == workspace { focusedThread = focus }
         restoringPath = false
     }
 
@@ -936,22 +967,20 @@ final class AppModel {
         }
     }
 
-    /// A mentioned conversation: its channel becomes the context and the thread opens on top of it in Chat.
+    /// A mentioned conversation opens focused over the current screen; the section and context behind it stay as they are.
     func openThreadMention(_ threadId: String) {
         guard let store, let workspace = selectedWorkspaceId else { return }
         Task {
             guard let thread = try? await store.reader.thread(workspaceId: workspace, id: threadId),
-                  let channel = try? await store.reader.channel(workspaceId: workspace, id: thread.channelId), workspace == selectedWorkspaceId else { return }
-            setContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id), resetChat: true)
-            mode = .chat
-            chatPath = [.thread(workspaceId: workspace, channelId: channel.id, threadId: thread.id)]
+                  (try? await store.reader.channel(workspaceId: workspace, id: thread.channelId)) != nil, workspace == selectedWorkspaceId else { return }
+            focusThread(ThreadFocus(workspaceId: workspace, channelId: thread.channelId, threadId: thread.id))
         }
     }
 
     private func setContext(_ next: WorkContext, resetChat: Bool) {
         contextEdits &+= 1
         context = next
-        if resetChat { chatPath = [] }
+        if resetChat { chatPath = []; focusedThread = nil }
         guard let store, let key = contextKey else { return }
         let encoded = next.encoded()
         Task { try? await store.writer.setState(key, encoded) }

@@ -128,7 +128,7 @@ final class ProfilesUITests: XCTestCase {
         XCTAssertTrue(rule.waitForExistence(timeout: 10))
         XCTAssertEqual(rule.label, "3 replies")
         capture(app, "chat-thread-replies-rule-light")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["thread.focus.close"].firstMatch.tap()
 
         // Sending now adds today's label under older history.
         let field = app.textFields["composer.field"].exists ? app.textFields["composer.field"] : app.textViews["composer.field"]

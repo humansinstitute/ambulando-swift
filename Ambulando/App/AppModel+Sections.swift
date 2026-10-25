@@ -142,7 +142,8 @@ extension AppModel {
         case "channel":
             adoptContext(for: .channel(workspaceId: workspace, channelId: record)); mode = .chat
         case "thread":
-            openThreadById(record)
+            // Focused over the current screen; the view fetches the conversation when it is not stored yet.
+            focusThread(ThreadFocus(workspaceId: workspace, channelId: nil, threadId: record))
         default:
             return
         }
@@ -156,7 +157,7 @@ extension AppModel {
         guard let scope else { openRecord(kind: "channel", id: channelId); return }
         selectContext(WorkContext(scopeId: scope, channelId: channelId))
         mode = .chat
-        if let threadId { chatPath = [.thread(workspaceId: workspace, channelId: channelId, threadId: threadId)] }
+        if let threadId { focusThread(ThreadFocus(workspaceId: workspace, channelId: channelId, threadId: threadId)) }
     }
 
     // MARK: Scope and channel management

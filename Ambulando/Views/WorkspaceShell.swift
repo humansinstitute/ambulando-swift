@@ -29,7 +29,7 @@ struct WorkspaceShell: View {
                     if opened.contains(section) || section == model.mode {
                         // Hidden in UIKit (not just transparent): an inactive section keeps its state but is out of
                         // the accessibility tree and hit testing.
-                        SectionHost(active: section == model.mode) {
+                        SectionHost(active: section == model.mode, obscured: model.focusedThread != nil) {
                             sectionView(section)
                                 .environment(model)
                                 .environment(\.tabletNavigation, tablet)
@@ -62,7 +62,8 @@ struct WorkspaceShell: View {
         // HTTPS links anywhere in the app open as in-app browser tabs; the browser covers the app without changing it,
         // so returning finds the same section, channel and draft.
         .environment(\.openURL, OpenURLAction { model.browser.handleLink($0) })
-        .fullScreenCover(isPresented: Binding(get: { model.browser.presented }, set: { model.browser.presented = $0 })) {
+        // While a thread is focused, its own cover presents the browser above it.
+        .fullScreenCover(isPresented: Binding(get: { model.browser.presented && model.focusedThread == nil }, set: { model.browser.presented = $0 })) {
             BrowserView().environment(model)
         }
         // Record mentions in messages and documents open the record in its section and follow its context.
@@ -155,6 +156,8 @@ struct WorkspaceShell: View {
 /// left inactive sections in the accessibility tree.
 struct SectionHost<Content: View>: UIViewControllerRepresentable {
     let active: Bool
+    /// Covered by the focused thread view: kept on screen (dimmed behind it) but out of VoiceOver's reach.
+    var obscured = false
     @ViewBuilder let content: () -> Content
 
     final class Container: UIViewController {
@@ -176,25 +179,28 @@ struct SectionHost<Content: View>: UIViewControllerRepresentable {
             host.didMove(toParent: self)
         }
 
-        func show(_ active: Bool) {
-            guard host.view.isHidden == active else { return }
-            host.view.isHidden = !active
-            host.view.accessibilityElementsHidden = !active
-            view.isUserInteractionEnabled = active
+        func show(_ active: Bool, obscured: Bool) {
+            if host.view.isHidden == active {
+                host.view.isHidden = !active
+                view.isUserInteractionEnabled = active
+            }
+            let hidden = !active || obscured
+            if host.view.accessibilityElementsHidden != hidden { host.view.accessibilityElementsHidden = hidden }
+            if view.accessibilityElementsHidden != obscured { view.accessibilityElementsHidden = obscured }
         }
     }
 
     func makeUIViewController(context: Context) -> Container {
         let container = Container(content())
         container.loadViewIfNeeded()
-        container.show(active)
+        container.show(active, obscured: obscured)
         return container
     }
 
     /// Only visibility changes here. The root view is set once: the section observes the model itself, so rebuilding
     /// it on every shell update would re-render every open section (measured: typing stalls of 118–126 ms).
     func updateUIViewController(_ container: Container, context: Context) {
-        container.show(active)
+        container.show(active, obscured: obscured)
     }
 }
 
@@ -202,7 +208,8 @@ struct SectionHost<Content: View>: UIViewControllerRepresentable {
 
 /// A section's navigation stack. Records opened inside Deck, Agents, Context and Toolbox (and mentions inside them)
 /// are pushed here, so Back returns to the same card, outline or board position; the record still follows its own
-/// context only when opened from a workspace-wide list.
+/// context only when opened from a workspace-wide list. Conversations never join the path: they open in the focused
+/// thread view over the section (see `ThreadFocus`).
 struct SectionStack<Root: View, Banner: View>: View {
     @Environment(AppModel.self) private var model
     let section: AppMode
@@ -213,9 +220,10 @@ struct SectionStack<Root: View, Banner: View>: View {
     @ViewBuilder let root: () -> Root
 
     var body: some View {
-        WorkStack(showSettings: $showSettings, path: $path, contextBar: contextBar, banner: banner, root: root)
-            .environment(\.pushRoute, PushRouteAction { path.append($0) })
-            .modifier(LocalMentions(enabled: [.deck, .agents, .context, .toolbox].contains(section), path: $path))
+        let routed = Binding(get: { path }, set: { path = model.absorbingThreads($0) })
+        WorkStack(showSettings: $showSettings, path: routed, contextBar: contextBar, banner: banner, root: root)
+            .environment(\.pushRoute, PushRouteAction { routed.wrappedValue.append($0) })
+            .modifier(LocalMentions(enabled: [.deck, .agents, .context, .toolbox].contains(section), path: routed))
     }
 }
 
@@ -294,10 +302,17 @@ private struct ShellToolbar: ViewModifier {
     #endif
     @Binding var showSettings: Bool
     @State private var searching = false
+    /// A conversation chosen in Search, focused once the sheet has gone (one presentation at a time on iOS).
+    @State private var searchedThread: ThreadFocus?
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: $searching) {
-                if let workspace = model.selectedWorkspace, let store = model.store { SearchView(workspace: workspace, store: store) }
+            .sheet(isPresented: $searching, onDismiss: {
+                if let focus = searchedThread { searchedThread = nil; model.focusThread(focus) }
+            }) {
+                if let workspace = model.selectedWorkspace, let store = model.store {
+                    SearchView(workspace: workspace, store: store)
+                        .environment(\.focusThread, FocusThreadAction { searchedThread = $0; searching = false })
+                }
             }
             .toolbar {
                 #if os(iOS)

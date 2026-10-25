@@ -222,7 +222,7 @@ struct WorkRecordLink<Label: View>: View {
         #if os(macOS)
         Button { pushRoute(route) } label: { label().frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()) }.buttonStyle(.plain)
         #else
-        NavigationLink(value: route, label: label)
+        ThreadRouteLink(route: route, label: label)
         #endif
     }
 }

@@ -310,6 +310,7 @@ struct ThreadView: View {
         .fixtureLabel()
         .navigationTitle(snapshot.value.title.isEmpty ? "Thread" : snapshot.value.title)
         .inlineTitle()
+        .preference(key: ThreadTitleKey.self, value: snapshot.value.title)
         .task { start() }
         .onAppear {
             if let thread = target.threadId {
@@ -834,7 +835,7 @@ struct MentionPicker: View {
 enum ChannelPane: String { case messages, threads }
 
 /// A channel's conversations with replies, newest activity first: title (or the root's text), who started it, the
-/// latest reply and how many replies. Opening one pushes the thread on the Chat stack with the channel behind it.
+/// latest reply and how many replies. Opening one shows the thread focused over the channel (see `ThreadFocus`).
 struct ChannelThreadsView: View {
     @Environment(AppModel.self) private var model
     let target: ChatTarget
@@ -845,7 +846,7 @@ struct ChannelThreadsView: View {
     var body: some View {
         List {
             ForEach(snapshot.value.threads) { thread in
-                NavigationLink(value: ChatRoute.thread(workspaceId: workspace.id, channelId: target.channelId, threadId: thread.id)) {
+                ThreadRouteLink(route: ChatRoute.thread(workspaceId: workspace.id, channelId: target.channelId, threadId: thread.id)) {
                     ThreadSummaryRow(thread: thread, people: snapshot.value.people, unread: snapshot.value.unread.contains(thread.id))
                 }
                 .accessibilityIdentifier("threadlist.item")

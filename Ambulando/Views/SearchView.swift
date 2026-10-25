@@ -5,6 +5,7 @@ import SwiftUI
 struct SearchView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.focusThread) private var focusThread
     let workspace: WorkspaceRecord
     let store: LocalStore
     @State private var query = ""
@@ -19,7 +20,12 @@ struct SearchView: View {
                 ForEach(groups, id: \.0) { title, rows in
                     Section(title) {
                         ForEach(rows) { hit in
-                            if let route = route(hit) {
+                            if let route = route(hit), let focus = ThreadFocus(route) {
+                                // Conversations open focused over the app, as from every other place.
+                                Button { open(focus) } label: { row(hit).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle()) }
+                                    .buttonStyle(.plain)
+                                    .accessibilityIdentifier("search.hit")
+                            } else if let route = route(hit) {
                                 NavigationLink(value: route) { row(hit) }.accessibilityIdentifier("search.hit")
                             } else {
                                 row(hit)
@@ -79,6 +85,10 @@ struct SearchView: View {
             if let channel = hit.channelId, let thread = hit.threadId { .thread(workspaceId: workspace.id, channelId: channel, threadId: thread) }
             else { hit.channelId.map { .channel(workspaceId: workspace.id, channelId: $0) } }
         }
+    }
+
+    private func open(_ focus: ThreadFocus) {
+        if let focusThread { focusThread(focus) } else { model.focusThread(focus); dismiss() }
     }
 
     /// Debounced; a slower earlier query never replaces a newer one.

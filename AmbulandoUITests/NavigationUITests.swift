@@ -99,8 +99,8 @@ final class NavigationUITests: XCTestCase {
         item.tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Ship it")).firstMatch.waitForExistence(timeout: 10))
         capture(app, "nav-thread-open")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(item.waitForExistence(timeout: 10), "back returns to the channel's thread list")
+        app.buttons["thread.focus.close"].firstMatch.tap()
+        XCTAssertTrue(item.waitForExistence(timeout: 10), "closing returns to the channel's thread list")
         pane.buttons["Messages"].tap()
         XCTAssertTrue(app.buttons["thread.3"].firstMatch.waitForExistence(timeout: 10), "thread roots show their replies in the message list")
     }

@@ -35,7 +35,7 @@ struct MessageCell: View {
         VStack(alignment: .leading, spacing: 0) {
             Group {
                 if let route {
-                    NavigationLink(value: route) {
+                    ThreadRouteLink(route: route) {
                         VStack(alignment: .leading, spacing: 0) {
                             if let title = distinctTitle {
                                 Label(title, systemImage: "text.bubble")

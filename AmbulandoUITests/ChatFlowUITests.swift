@@ -108,12 +108,14 @@ final class ChatFlowUITests: XCTestCase {
         for _ in 0..<5 where !(thread.exists && thread.isHittable) { app.scrollViews.firstMatch.swipeDown() }
         thread.tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Ship it")).firstMatch.waitForExistence(timeout: 10))
-        let reply = field(app)
+        // The thread opens focused over the channel; its own composer is inside the focused view.
+        let reply = app.descendants(matching: .any)["thread.focus"].firstMatch.textViews["composer.field"].firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 10))
         reply.tap()
         reply.typeText("Reply from native")
-        app.buttons["composer.send"].tap()
+        app.descendants(matching: .any)["thread.focus"].firstMatch.buttons["composer.send"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Reply from native")).firstMatch.waitForExistence(timeout: 10))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["thread.focus.close"].firstMatch.tap()   // threads open focused over the channel
         XCTAssertTrue(app.buttons["thread.4"].firstMatch.waitForExistence(timeout: 10), "reply count updates in the channel")
     }
 

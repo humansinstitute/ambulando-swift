@@ -11,31 +11,40 @@ extension EnvironmentValues {
     @Entry var pushRoute = PushRouteAction { _ in }
 }
 
-/// Pin / unpin toolbar button for a record screen. Shows the user's latest intent while the write is queued, and a
-/// failed pin (for example a record the viewer can no longer read) with Retry and Discard.
+/// Pin / unpin toolbar button for a record screen (see `PinToggleButton`).
 struct PinToolbarModifier: ViewModifier {
+    let type: PinRecord.ResourceType
+    let id: String
+    let workspace: WorkspaceRecord
+
+    func body(content: Content) -> some View {
+        content.toolbar {
+            ToolbarItem(placement: .primaryAction) { PinToggleButton(type: type, id: id, workspace: workspace) }
+        }
+    }
+}
+
+/// Pin / unpin button. Shows the user's latest intent while the write is queued, and a failed pin (for example a record
+/// the viewer can no longer read) with Retry and Discard.
+struct PinToggleButton: View {
     @Environment(AppModel.self) private var model
     let type: PinRecord.ResourceType
     let id: String
     let workspace: WorkspaceRecord
     @State private var showFailure = false
 
-    func body(content: Content) -> some View {
+    var body: some View {
         let snapshot = model.pins.value
         let pinned = snapshot.isPinned(type, id)
         let failure = snapshot.failure(type, id)
-        content.toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    if failure != nil { showFailure = true } else { model.setPinned(!pinned, type: type, id: id, in: workspace) }
-                } label: {
-                    Image(systemName: failure != nil ? "pin.slash.fill" : pinned ? "pin.fill" : "pin")
-                        .foregroundStyle(failure != nil ? Amb.warning : Amb.primary)
-                }
-                .accessibilityLabel(failure != nil ? "Pin not saved" : pinned ? "Unpin" : "Pin")
-                .accessibilityIdentifier("pin.toggle")
-            }
+        Button {
+            if failure != nil { showFailure = true } else { model.setPinned(!pinned, type: type, id: id, in: workspace) }
+        } label: {
+            Image(systemName: failure != nil ? "pin.slash.fill" : pinned ? "pin.fill" : "pin")
+                .foregroundStyle(failure != nil ? Amb.warning : Amb.primary)
         }
+        .accessibilityLabel(failure != nil ? "Pin not saved" : pinned ? "Unpin" : "Pin")
+        .accessibilityIdentifier("pin.toggle")
         .confirmationDialog(failure?.lastError ?? "Pin not saved", isPresented: $showFailure, titleVisibility: .visible) {
             if let failure, let store = model.store {
                 Button("Retry") { Task { try? await store.writer.retryWrite(id: failure.id, force: true); model.kickOutbox(force: true) } }

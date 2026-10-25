@@ -242,7 +242,7 @@ final class WorkFlowUITests: XCTestCase {
         app.buttons["message.delete"].tap()
         app.buttons["Delete"].tap()
         XCTAssertTrue(waitGone(edited), "deleted for everyone")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["thread.focus.close"].firstMatch.tap()
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Native edit test'")).firstMatch.waitForExistence(timeout: 3),
                        "gone from the channel too")
         app.showChannels()   // back to the channel list (search lives in the shell toolbar)
