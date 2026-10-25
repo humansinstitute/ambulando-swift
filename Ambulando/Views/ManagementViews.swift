@@ -150,7 +150,7 @@ struct NewChannelSheet: View {
             .interactiveDismissDisabled(phase.isWorking)
             .task {
                 guard isDirect, let store = model.store, let w = model.selectedWorkspace?.id else { return }
-                members = (try? await store.reader.members(workspaceId: w)) ?? []
+                members = (try? await store.reader.directoryMembers(workspaceId: w)) ?? []
             }
         }
     }

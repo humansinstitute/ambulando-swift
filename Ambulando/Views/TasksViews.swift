@@ -172,7 +172,7 @@ struct TasksView: View {
 
     private func start() {
         let w = workspace.id, context = context, store = store, connection = model.connection?.id ?? ""
-        snapshot.start(store: store, matches: { $0.workspaceId == w && [.tasks, .writes, .members, .channels, .scopes].contains($0.table) }) {
+        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.tasks, .writes, .members, .channels, .scopes].contains($0.table)) || $0.table == .profiles }) {
             async let tasks = store.reader.tasks(workspaceId: w, context: context, limit: 500)
             async let writes = store.reader.writes(connectionId: connection, workspaceId: w)
             async let choice = scopeChoice(store, w)
@@ -372,11 +372,11 @@ struct TaskDetailView: View {
 
     private func start() {
         let w = workspace.id, id = taskId, store = store, connection = model.connection?.id ?? ""
-        snapshot.start(store: store, matches: { $0.workspaceId == w && [.tasks, .comments, .writes, .members, .channels].contains($0.table) }) {
+        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.tasks, .comments, .writes, .members, .channels].contains($0.table)) || $0.table == .profiles }) {
             async let task = store.reader.task(workspaceId: w, id: id)
             async let comments = store.reader.comments(workspaceId: w, parent: .task, parentId: id)
             async let writes = store.reader.writes(connectionId: connection, workspaceId: w, targetId: id)
-            async let members = store.reader.members(workspaceId: w)
+            async let members = store.reader.directoryMembers(workspaceId: w)
             async let choice = scopeChoice(store, w)
             let pending = try await writes
             let directory = try await members
@@ -455,7 +455,7 @@ struct TaskCreateSheet: View {
             }
             .task {
                 channelId = channelId ?? context.channelId ?? channels.first?.id
-                members = (try? await store.reader.members(workspaceId: workspace.id)) ?? []
+                members = (try? await store.reader.directoryMembers(workspaceId: workspace.id)) ?? []
             }
         }
     }

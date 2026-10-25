@@ -949,13 +949,14 @@ final class AppModel {
         let viewer = connection.signerNpub
         navigation.start(store: store, matches: { key in
             ([.scopes, .channels, .viewStates, .members].contains(key.table) && key.workspaceId == workspaceId) || key.table == .appState
+                || key.table == .profiles
         }) {
             async let scopes = store.reader.scopes(workspaceId: workspaceId)
             async let channels = store.reader.channels(workspaceId: workspaceId)
             async let order = store.reader.state(orderKey)
             async let collapsed = store.reader.state(collapsedKey)
             async let unread = store.reader.unreadChannelIds(workspaceId: workspaceId)
-            async let members = store.reader.members(workspaceId: workspaceId)
+            async let members = store.reader.directoryMembers(workspaceId: workspaceId)
             let groups = SidebarNavigation.groups(scopes: try await scopes, channels: try await channels, personalOrder: ScopeOrdering.decode(try await order))
             let names = Dictionary(try await members.map { ($0.npub, $0.label) }, uniquingKeysWith: { a, _ in a })
             var labels: [String: String] = [:]

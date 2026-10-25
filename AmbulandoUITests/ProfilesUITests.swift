@@ -54,20 +54,28 @@ final class ProfilesUITests: XCTestCase {
         let app = launch()
         let profileButton = app.buttons["settings"].firstMatch
         XCTAssertTrue(profileButton.waitForExistence(timeout: 10))
-        XCTAssertTrue(waitFor(profileButton, "value == %@", "You (sample identity)"), "the profile button names the signed-in person")
+        XCTAssertTrue(waitFor(profileButton, "value == %@", "Sample Explorer"), "the profile button names the signed-in person from the public profile")
         openSettings(app)
         let header = app.descendants(matching: .any)["profile.header"]
         XCTAssertTrue(header.waitForExistence(timeout: 10))
-        XCTAssertTrue(waitFor(header, "label CONTAINS %@", "Public profile: Sample Explorer"), header.label)
-        XCTAssertTrue(header.label.contains("Your name in this workspace"), header.label)
+        XCTAssertTrue(waitFor(header, "label CONTAINS %@", "Sample Explorer"), header.label)
+        XCTAssertTrue(header.label.contains("From your public Nostr profile"), header.label)
         capture(app, "profile-menu-light")
         closeSettings(app)
 
-        // #design: Bea has no workspace name, so her public profile names her; Ana keeps her workspace name.
+        // #design: as on the web, the public profile names people first (Bea has no workspace name; Ana has one).
         openChannel(app, "design")
         XCTAssertTrue(text(app, containing: "Bea Ortiz").waitForExistence(timeout: 15), "named from the public profile")
-        XCTAssertTrue(text(app, containing: "Ana").exists)
-        XCTAssertFalse(text(app, containing: "Ana Lima").exists, "the workspace name wins over the public profile")
+        XCTAssertTrue(text(app, containing: "Ana Lima").waitForExistence(timeout: 10), "the public profile wins over the workspace name")
+
+        // The mention picker offers the same names (not npubs) for members Tower has no name for.
+        let mention = app.buttons["composer.mention"]
+        XCTAssertTrue(mention.waitForExistence(timeout: 10))
+        mention.tap()
+        XCTAssertTrue(app.buttons["mention.Bea Ortiz"].waitForExistence(timeout: 10), "mention picker uses the public profile name")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "mention.npub1")).firstMatch.exists)
+        capture(app, "mention-picker-names")
+        app.buttons["composer.hideKeyboard"].firstMatch.tap()
         capture(app, "chat-authors-design-light")
 
         // #deploys: someone with neither shows the short npub.

@@ -255,7 +255,7 @@ struct DocumentView: View {
 
     private func start() {
         let w = workspace.id, id = docId, store = store, connection = model.connection?.id ?? ""
-        snapshot.start(store: store, matches: { $0.workspaceId == w && [.docs, .docBodies, .docDrafts, .comments, .writes, .members, .channels].contains($0.table) }) {
+        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.docs, .docBodies, .docDrafts, .comments, .writes, .members, .channels].contains($0.table)) || $0.table == .profiles }) {
             async let doc = store.reader.doc(workspaceId: w, id: id)
             async let cached = store.reader.docBody(workspaceId: w, docId: id)
             async let draft = store.reader.docDraft(key: DocDraft.key(connectionId: connection, workspaceId: w, docId: id))

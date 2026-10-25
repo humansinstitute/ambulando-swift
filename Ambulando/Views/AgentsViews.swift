@@ -116,11 +116,11 @@ struct AgentsView: View {
         let ids = channelIds
         // Every channel of the context is read (the first batch first, the rest in the background).
         let read: [String]? = model.context.isHome ? nil : ids
-        snapshot.start(store: store, matches: { $0.workspaceId == w && [.agents, .channels, .members].contains($0.table) }) {
+        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.agents, .channels, .members].contains($0.table)) || $0.table == .profiles }) {
             async let agents = store.reader.workspaceAgents(workspaceId: w)
             async let activity = store.reader.agentActivities(workspaceId: w, channelIds: read)
             async let channels = store.reader.channels(workspaceId: w)
-            async let members = store.reader.members(workspaceId: w)
+            async let members = store.reader.directoryMembers(workspaceId: w)
             let names = Dictionary(try await members.map { ($0.npub, $0.label) }, uniquingKeysWith: { a, _ in a })
             let agentList = try await agents
             var labels = names

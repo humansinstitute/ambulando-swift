@@ -646,21 +646,21 @@ struct Composer: View {
     let store: LocalStore
     let placeholder: String
     @State private var composer: ComposerModel?
-    @State private var members = LiveQuery<[MemberRecord]>(initial: [])
+    @State private var members = LiveQuery<[MentionCandidate]>(initial: [])
     @State private var storedDraft = LiveQuery<Draft?>(initial: nil)
     @State private var photos: [PhotosPickerItem] = []
     @State private var focused = false
 
-    private var suggestions: [MemberRecord] {
+    private var suggestions: [MentionCandidate] {
         guard let composer, let query = MentionCodec.activeQuery(in: composer.text) else { return [] }
         let q = query.lowercased()
-        return Array(members.value.filter { q.isEmpty || $0.label.lowercased().contains(q) }.prefix(6))
+        return Array(members.value.filter { q.isEmpty || $0.member.label.lowercased().contains(q) }.prefix(6))
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if !suggestions.isEmpty, let composer {
-                MentionPicker(members: suggestions) { composer.pick(Mention(member: $0)) }
+                MentionPicker(members: suggestions) { composer.pick(Mention(member: $0.member)) }
             }
             Divider().overlay(Amb.border)
             if let composer {
@@ -718,8 +718,11 @@ struct Composer: View {
             // After the draft is back: finished uploads land in it and interrupted ones can be retried.
             model.uploads?.attach(composerModel)
             let workspaceId = target.workspaceId
-            members.start(store: store, matches: { $0.table == .members && $0.workspaceId == workspaceId }) {
-                try await store.reader.members(workspaceId: workspaceId)
+            members.start(store: store, matches: { ($0.table == .members && $0.workspaceId == workspaceId) || $0.table == .profiles }) {
+                async let people = store.reader.people(workspaceId: workspaceId)
+                let members = try await store.reader.directoryMembers(workspaceId: workspaceId)
+                let directory = try await people
+                return members.map { MentionCandidate(member: $0, person: directory.person($0.npub)) }
             }
             let target = target
             storedDraft.start(store: store, matches: { $0.table == .drafts && $0.workspaceId == workspaceId }) {
@@ -769,16 +772,24 @@ struct Composer: View {
     }
 }
 
+/// A member offered in the mention picker: the directory entry (its `label` is the shown name) and how they look.
+struct MentionCandidate: Identifiable, Equatable, Sendable {
+    let member: MemberRecord
+    let person: PersonDisplay
+    var id: String { member.npub }
+}
+
 struct MentionPicker: View {
-    let members: [MemberRecord]
-    let pick: (MemberRecord) -> Void
+    let members: [MentionCandidate]
+    let pick: (MentionCandidate) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(members) { member in
-                Button { pick(member) } label: {
+            ForEach(members) { candidate in
+                let member = candidate.member
+                Button { pick(candidate) } label: {
                     HStack(spacing: 10) {
-                        Avatar(name: member.label)
+                        PersonAvatar(person: candidate.person)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(member.label).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
                             Text(member.mentionType == .agent ? "Agent" : "Person").font(.caption).foregroundStyle(Amb.mutedForeground)

@@ -46,7 +46,11 @@ public struct RelayProfileSource: ProfileSource {
     let timeout: Duration
     let session: URLSession
 
-    public init(relays: [URL] = RelayProfileSource.relays, timeout: Duration = .seconds(4)) {
+    /// Per relay, including the WebSocket handshake: relay.primal.net's handshake alone was measured at up to 3.3 s,
+    /// so a 4 s budget often left only one relay answering.
+    public static let defaultTimeout: Duration = .seconds(8)
+
+    public init(relays: [URL] = RelayProfileSource.relays, timeout: Duration = RelayProfileSource.defaultTimeout) {
         self.relays = relays.filter { $0.scheme == "wss" && $0.user == nil && $0.password == nil }
         self.timeout = timeout
         let config = URLSessionConfiguration.ephemeral

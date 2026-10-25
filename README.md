@@ -120,8 +120,8 @@ Theme, names and avatars, chat separators (build 10):
   card colour), and selected things are dark purple: a chosen channel or scope in the sidebar is bold purple on a light
   fill, and the Messages/Threads switch is solid purple. Dark mode keeps the navy and lavender palette.
 - **Names and avatars.** Chat authors, the thread list, the profile button (top right) and Settings show a name and an
-  avatar for each person. A name set in the workspace comes first; otherwise the person's public Nostr profile names
-  them, and someone with neither shows a short npub. Avatars come from the public profile (or, for an agent, from
+  avatar for each person. As on the web, the person's public Nostr profile names them first (build 12; build 10 put the
+  workspace name first); otherwise the name set in the workspace, and someone with neither shows a short npub. Avatars come from the public profile (or, for an agent, from
   Tower); without a usable picture the initials are shown. Everything is saved on the iPhone and shown at once,
   offline too, and refreshed in the background (profiles daily, pictures when they change). Settings › Profile shows
   where your name comes from and your public profile name. Settings › Nostr profiles can turn the lookups off (saved
@@ -153,8 +153,9 @@ Security notes:
 - Only HTTPS origins are accepted, and redirects are refused.
 - Public profiles are read, never written, from the web app's three public relays (relay.primal.net, nos.lol,
   purplepag.es) for the people your workspace shows, and each is checked against its author's signature. Pictures are
-  fetched from the HTTPS address in the profile without any login, cookie or Tower data, refusing redirects, local
-  addresses, large files and non-images. The relays and picture hosts can see your network address, as with the web
+  fetched from the HTTPS address in the profile without any login, cookie or Tower data, refusing local addresses,
+  large files (over 2 MB) and non-images. Up to three redirects are followed, each to an address that passes the same
+  check (Blossom servers redirect every picture to their CDN). The relays and picture hosts can see your network address, as with the web
   app. Settings › Nostr profiles turns both off.
 - `.fips` endpoints are refused rather than replaced with HTTPS.
 - Every request carries a fresh NIP-98 event over the exact URL and body bytes.

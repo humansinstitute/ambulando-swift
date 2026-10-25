@@ -162,4 +162,31 @@ extension StoreReader {
         let profiles = try connectionId.map { try self.profiles(connectionId: $0) } ?? []
         return PeopleDirectory(members: members, agents: agents, profiles: profiles)
     }
+
+    /// `people(connectionId:workspaceId:)` for the connection the workspace belongs to (screens that only know the
+    /// workspace: task and document names, pickers, sidebar labels).
+    public func people(workspaceId: String) throws -> PeopleDirectory {
+        let s = try db.prepare("SELECT connection_id FROM workspaces WHERE workspace_id = ?")
+        try s.bind([.text(workspaceId)])
+        let connectionId = try s.step() ? s.text(0) : nil
+        return try people(connectionId: connectionId, workspaceId: workspaceId)
+    }
+
+    /// The workspace's members with `displayName` set to the name the app shows (public profile first, see
+    /// `PeopleDirectory`), sorted by it: for pickers, mention suggestions and name maps, which read `label`.
+    public func directoryMembers(workspaceId: String) throws -> [MemberRecord] {
+        let people = try people(workspaceId: workspaceId)
+        return try members(workspaceId: workspaceId).map { member in
+            let person = people.person(member.npub)
+            return MemberRecord(workspaceId: member.workspaceId, actorId: member.actorId, npub: member.npub, kind: member.kind,
+                                displayName: person.nameSource == .npub ? nil : person.name)
+        }
+        .sorted { a, b in
+            switch a.label.localizedCaseInsensitiveCompare(b.label) {
+            case .orderedAscending: true
+            case .orderedDescending: false
+            case .orderedSame: a.npub < b.npub
+            }
+        }
+    }
 }

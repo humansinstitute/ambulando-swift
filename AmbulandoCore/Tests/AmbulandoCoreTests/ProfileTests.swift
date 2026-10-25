@@ -145,32 +145,56 @@ final class PeopleDirectoryTests: XCTestCase {
     let rick = NostrKeys.npub(publicKeyHex: String(repeating: "b2", count: 32))!
     let bea = NostrKeys.npub(publicKeyHex: String(repeating: "c3", count: 32))!
     let stranger = NostrKeys.npub(publicKeyHex: String(repeating: "d4", count: 32))!
+    let cal = NostrKeys.npub(publicKeyHex: String(repeating: "e5", count: 32))!
 
     private func profile(_ npub: String, display: String? = nil, name: String? = nil, picture: String? = nil, at: Int = 1) -> ProfileRecord {
         ProfileRecord(pubkey: NostrKeys.publicKeyHex(npub: npub)!, npub: npub, displayName: display, name: name, picture: picture,
                       eventId: String(repeating: "0", count: 64), eventCreatedAt: at, status: .found, checkedAt: Date())
     }
 
-    func testWorkspaceNameThenAgentThenMessageLabelThenProfileThenNpub() {
+    /// sol `getSenderName` order: public profile, then Tower's member or agent name, then the message label, then the
+    /// short npub. Build 10 put Tower first, so members Tower had no name for showed as npubs in the mention picker.
+    func testProfileThenWorkspaceThenAgentThenMessageLabelThenNpub() {
         let members = [MemberRecord(workspaceId: w, actorId: "a", npub: ana, kind: "human", displayName: "Ana (Studio)"),
-                       MemberRecord(workspaceId: w, actorId: "b", npub: bea, kind: "human", displayName: nil)]
+                       MemberRecord(workspaceId: w, actorId: "b", npub: bea, kind: "human", displayName: nil),
+                       MemberRecord(workspaceId: w, actorId: "c", npub: cal, kind: "human", displayName: "Cal Tower")]
         let directory = PeopleDirectory(members: members, agents: [rick: .init(name: "Rick", avatarURL: "https://agents.example.com/rick.png")],
                                         profiles: [profile(ana, display: "Ana Nostr", picture: "https://img.example.com/ana.png"),
                                                    profile(rick, display: "Rick Nostr", picture: "https://img.example.com/rick-public.png"),
                                                    profile(bea, display: nil, name: "bea")])
-        XCTAssertEqual(directory.person(ana).name, "Ana (Studio)")
-        XCTAssertEqual(directory.person(ana).nameSource, .workspace)
+        XCTAssertEqual(directory.person(ana).name, "Ana Nostr")
+        XCTAssertEqual(directory.person(ana).nameSource, .nostr)
         XCTAssertEqual(directory.person(ana).avatarURL?.absoluteString, "https://img.example.com/ana.png")
-        XCTAssertEqual(directory.person(ana, senderLabel: "Old label").name, "Ana (Studio)", "Tower's directory name wins over a message label")
-        XCTAssertEqual(directory.person(rick).name, "Rick")
+        XCTAssertEqual(directory.person(ana, senderLabel: "Old label").name, "Ana Nostr", "a message label never hides the public name")
+        XCTAssertEqual(directory.person(rick).name, "Rick Nostr")
         XCTAssertEqual(directory.person(rick).avatarURL?.absoluteString, "https://agents.example.com/rick.png", "Tower agent avatar before the profile")
-        XCTAssertEqual(directory.person(bea).name, "bea")
+        XCTAssertEqual(directory.person(bea).name, "bea", "Tower has no name: the public profile names the member")
         XCTAssertEqual(directory.person(bea).nameSource, .nostr)
-        XCTAssertEqual(directory.person(bea, senderLabel: "Bea K").name, "Bea K", "Tower's message label before the public profile")
+        XCTAssertEqual(directory.names[bea], "bea", "name maps (pickers, tasks, docs) see the profile name too")
+        XCTAssertEqual(directory.person(cal).name, "Cal Tower")
+        XCTAssertEqual(directory.person(cal).nameSource, .workspace)
+        XCTAssertEqual(directory.person(stranger, senderLabel: "Stranger K").name, "Stranger K")
         XCTAssertEqual(directory.person(stranger).name, shortLabel(stranger))
         XCTAssertEqual(directory.person(stranger).initials, "NP")
         XCTAssertNil(directory.person(stranger).avatarURL)
         XCTAssertEqual(directory.person(nil, senderLabel: "System").name, "System")
+    }
+
+    /// Tower setup placeholders and names that are only a key never count as a name.
+    func testPlaceholderAndKeyNamesAreSkipped() {
+        let members = [MemberRecord(workspaceId: w, actorId: "a", npub: ana, kind: "human", displayName: "Workspace Creator"),
+                       MemberRecord(workspaceId: w, actorId: "b", npub: bea, kind: "human", displayName: shortLabel(bea)),
+                       MemberRecord(workspaceId: w, actorId: "c", npub: cal, kind: "human", displayName: cal)]
+        let directory = PeopleDirectory(members: members, agents: [:], profiles: [profile(bea, display: "Bea")])
+        XCTAssertEqual(directory.person(ana).name, shortLabel(ana))
+        XCTAssertEqual(directory.person(ana).nameSource, .npub)
+        XCTAssertEqual(directory.person(bea).name, "Bea")
+        XCTAssertEqual(directory.person(cal).name, shortLabel(cal))
+        XCTAssertEqual(directory.person(cal, senderLabel: String(repeating: "ab", count: 32)).name, shortLabel(cal))
+        XCTAssertEqual(directory.person(cal, senderLabel: "Cal").name, "Cal")
+        XCTAssertNil(PersonNamePolicy.usable("Flight Deck PG Creator"))
+        XCTAssertNil(PersonNamePolicy.usable("npub1abcd…wxyz"))
+        XCTAssertEqual(PersonNamePolicy.usable("npub fan club"), "npub fan club")
     }
 
     func testProfilesNeverAddMembersAndBrokenPicturesFallBack() {
@@ -620,8 +644,9 @@ final class AvatarStoreTests: XCTestCase {
         XCTAssertLessThanOrEqual(files.count, AvatarStore.maxFiles)
     }
 
-    /// The production transport sends no credentials or cookies, keeps no cache and does not follow redirects.
-    func testProductionTransportSendsNoCredentialsAndRefusesRedirects() async throws {
+    /// The production transport sends no credentials or cookies, keeps no cache, and follows only a few redirects to
+    /// addresses the avatar policy accepts (Blossom servers redirect every picture to their CDN).
+    func testProductionTransportSendsNoCredentialsAndFollowsOnlySafeRedirects() async throws {
         let transport = URLSessionAvatarTransport(protocolClasses: [RecordingAvatarProtocol.self])
         let config = transport.session.configuration
         XCTAssertFalse(config.httpShouldSetCookies)
@@ -643,6 +668,25 @@ final class AvatarStoreTests: XCTestCase {
             XCTAssertEqual(status, 302)
         }
         XCTAssertFalse(RecordingAvatarProtocol.requests.contains { $0.url?.host == "10.0.0.1" })
+        // blossom.primal.net style: a redirect to a public HTTPS CDN is followed, without credentials.
+        let (cdnData, cdnResponse) = try await transport.fetch(URL(string: "https://img.example.com/cdn.png")!, maxBytes: 1024 * 1024)
+        XCTAssertEqual(cdnResponse.statusCode, 200)
+        XCTAssertEqual(cdnResponse.url?.host, "cdn.example.com")
+        XCTAssertFalse(cdnData.isEmpty)
+        let cdnRequest = try XCTUnwrapValue(RecordingAvatarProtocol.requests.last { $0.url?.host == "cdn.example.com" })
+        XCTAssertNil(cdnRequest.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(cdnRequest.value(forHTTPHeaderField: "Cookie"))
+        // Plain HTTP and endless redirects are not followed.
+        for name in ["http.png", "loop.png"] {
+            do {
+                _ = try await transport.fetch(URL(string: "https://img.example.com/\(name)")!, maxBytes: 1024 * 1024)
+                XCTFail("\(name) must not be followed to the end")
+            } catch AvatarError.httpStatus(let status) {
+                XCTAssertEqual(status, 302)
+            }
+        }
+        XCTAssertFalse(RecordingAvatarProtocol.requests.contains { $0.url?.scheme == "http" })
+        XCTAssertLessThanOrEqual(RecordingAvatarProtocol.requests.filter { $0.url?.lastPathComponent == "loop.png" }.count, AvatarRedirects.maxRedirects + 1)
         do {
             _ = try await transport.fetch(URL(string: "https://img.example.com/big.png")!, maxBytes: 1000)
             XCTFail("an oversized body must be refused")
@@ -650,7 +694,8 @@ final class AvatarStoreTests: XCTestCase {
     }
 }
 
-/// URLProtocol stand-in: records requests and answers `ok`, `redirect` (to a local address) and `big`.
+/// URLProtocol stand-in: records requests and answers `ok`, redirects (to a local address, a public CDN, plain HTTP,
+/// itself) and `big`.
 final class RecordingAvatarProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) private static var recorded: [URLRequest] = []
     private static let lock = NSLock()
@@ -663,10 +708,13 @@ final class RecordingAvatarProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         Self.lock.withLock { Self.recorded.append(request) }
         let url = request.url!
+        let redirects = ["redirect.png": "https://10.0.0.1/x.png", "cdn.png": "https://cdn.example.com/x.png",
+                         "http.png": "http://cdn.example.com/x.png", "loop.png": "https://img.example.com/loop.png"]
         switch url.lastPathComponent {
-        case "redirect.png":
-            let response = HTTPURLResponse(url: url, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: ["Location": "https://10.0.0.1/x.png"])!
-            var next = URLRequest(url: URL(string: "https://10.0.0.1/x.png")!)
+        case let name where url.host != "cdn.example.com" && redirects[name] != nil:
+            let location = redirects[name]!
+            let response = HTTPURLResponse(url: url, statusCode: 302, httpVersion: "HTTP/1.1", headerFields: ["Location": location])!
+            var next = URLRequest(url: URL(string: location)!)
             next.httpMethod = "GET"
             client?.urlProtocol(self, wasRedirectedTo: next, redirectResponse: response)
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

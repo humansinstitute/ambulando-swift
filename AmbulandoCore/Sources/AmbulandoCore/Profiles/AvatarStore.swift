@@ -13,8 +13,10 @@ public enum AvatarError: Error, Equatable {
 }
 
 /// Avatar requests go to whatever host a profile names, so they carry nothing that identifies the user to it beyond
-/// the request itself: no Authorization header, no cookies (neither sent nor stored), no shared HTTP cache, and no
-/// redirects (a redirect could lead to a local address the URL policy refused).
+/// the request itself: no Authorization header, no cookies (neither sent nor stored) and no shared HTTP cache.
+/// Redirects are followed only a few times and only to an address the avatar URL policy accepts (Blossom servers such
+/// as blossom.primal.net answer every picture with a redirect to their CDN); anything else, such as a local address,
+/// ends the request.
 public final class URLSessionAvatarTransport: AvatarTransport {
     let session: URLSession
 
@@ -34,7 +36,7 @@ public final class URLSessionAvatarTransport: AvatarTransport {
         config.timeoutIntervalForResource = timeout * 2
         config.waitsForConnectivity = false
         config.httpMaximumConnectionsPerHost = 2
-        session = URLSession(configuration: config, delegate: RefuseRedirects(), delegateQueue: nil)
+        session = URLSession(configuration: config, delegate: AvatarRedirects(), delegateQueue: nil)
     }
 
     public func fetch(_ url: URL, maxBytes: Int) async throws -> (Data, HTTPURLResponse) {
@@ -53,6 +55,40 @@ public final class URLSessionAvatarTransport: AvatarTransport {
             if data.count > maxBytes { bytes.task.cancel(); throw AvatarError.tooLarge }
         }
         return (data, http)
+    }
+}
+
+/// Follows at most `maxRedirects` redirects per request, each to an address `AvatarURLPolicy` accepts, without
+/// credentials or cookies.
+final class AvatarRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let maxRedirects = 3
+    private let lock = NSLock()
+    private var counts: [Int: Int] = [:]
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(Self.follow(request, redirectNumber: nextCount(task.taskIdentifier)))
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        lock.lock(); counts[task.taskIdentifier] = nil; lock.unlock()
+    }
+
+    private func nextCount(_ id: Int) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        let next = (counts[id] ?? 0) + 1
+        counts[id] = next
+        return next
+    }
+
+    /// The request to follow, or nil to stop at the redirect (which then fails as a non-200 answer).
+    static func follow(_ request: URLRequest, redirectNumber: Int) -> URLRequest? {
+        guard redirectNumber <= maxRedirects, let url = request.url, let allowed = AvatarURLPolicy.validate(url.absoluteString) else { return nil }
+        var next = URLRequest(url: allowed)
+        next.httpMethod = "GET"
+        next.httpShouldHandleCookies = false
+        next.setValue("image/*", forHTTPHeaderField: "Accept")
+        return next
     }
 }
 

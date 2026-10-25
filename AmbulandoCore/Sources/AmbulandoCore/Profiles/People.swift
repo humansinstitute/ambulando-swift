@@ -126,6 +126,25 @@ public struct PersonDisplay: Sendable, Equatable, Hashable {
     public static func unknown(_ npub: String) -> PersonDisplay { PersonDisplay(npub: npub, name: shortLabel(npub), avatarURL: nil, nameSource: .npub) }
 }
 
+/// Whether a name from Tower or a profile can be shown as a person's name. Tower fills some actors with a setup
+/// placeholder ("Workspace Creator", ...) and some clients store the key itself as the name; neither may hide a real
+/// public profile name, so both count as no name.
+public enum PersonNamePolicy {
+    /// Tower `flightdeck-pg-authorization.ts` `setupActorDisplayNames` plus the names its upsert treats as replaceable.
+    static let placeholders: Set<String> = ["workspace creator", "flight deck pg creator", "flight deck pg workspace owner",
+                                            "flight deck pg smoke viewer", "flight deck pg collaborator"]
+
+    public static func usable(_ value: String?) -> String? {
+        guard let name = NostrProfileContent.clean(value, limit: NostrProfileContent.maxNameLength) else { return nil }
+        let lower = name.lowercased()
+        if placeholders.contains(lower) { return nil }
+        // A full or shortened npub ("npub1abc…xyz", "npub1abc...xyz") or a 64-character hex key.
+        if lower.hasPrefix("npub1"), !lower.contains(" ") { return nil }
+        if lower.count == 64, lower.allSatisfy(\.isHexDigit) { return nil }
+        return name
+    }
+}
+
 /// Initials as sol `utils/naming.js getInitials`: first letters of the first two words, otherwise the first two
 /// characters, upper-cased; `?` for an empty label.
 public enum PersonInitials {
@@ -144,9 +163,10 @@ public enum PersonInitials {
 /// Everything the app knows about the people of one workspace, resolved once per screen load (off the main actor).
 ///
 /// Membership comes only from Tower (`members`, `workspace_agents`); a public profile decorates a person the client
-/// already sees, never adds one. Name order: the workspace's own name for the member (Tower `display_name`), the
-/// agent's name, the name Tower attached to the message, then the public profile (`display_name`, then `name`), then the
-/// short npub. Avatar: an agent's Tower `avatar_url`, then the profile picture, else initials.
+/// already sees, never adds one. Name order follows sol `getSenderName`: the public profile (`display_name`, then
+/// `name`), then the workspace's own name for the member (Tower `display_name`), the agent's name, the name Tower
+/// attached to the message, then the short npub. Tower names that are setup placeholders or just a key are skipped
+/// (`PersonNamePolicy`). Avatar: an agent's Tower `avatar_url`, then the profile picture, else initials.
 public struct PeopleDirectory: Sendable, Equatable {
     public struct AgentInfo: Sendable, Equatable {
         public let name: String
@@ -164,7 +184,7 @@ public struct PeopleDirectory: Sendable, Equatable {
         var memberName: [String: String] = [:]
         for m in members {
             memberNpubs.insert(m.npub)
-            if let name = NostrProfileContent.clean(m.displayName, limit: NostrProfileContent.maxNameLength) { memberName[m.npub] = name }
+            if let name = PersonNamePolicy.usable(m.displayName) { memberName[m.npub] = name }
         }
         let everyone = Set(members.map(\.npub)).union(agents.keys).union(profileByNpub.keys).union(extra)
         for npub in everyone {
@@ -172,23 +192,22 @@ public struct PeopleDirectory: Sendable, Equatable {
             let agent = agents[npub]
             let avatar = agent?.avatarURL.flatMap(AvatarURLPolicy.validate) ?? profile?.picture.flatMap(AvatarURLPolicy.validate)
             let (name, source): (String, PersonDisplay.NameSource) =
-                if let name = memberName[npub] { (name, .workspace) }
-                else if let name = agent.flatMap({ NostrProfileContent.clean($0.name, limit: NostrProfileContent.maxNameLength) }) { (name, .agent) }
-                else if let name = profile?.preferredName { (name, .nostr) }
+                if let name = profile?.preferredName.flatMap(PersonNamePolicy.usable) { (name, .nostr) }
+                else if let name = memberName[npub] { (name, .workspace) }
+                else if let name = agent.flatMap({ PersonNamePolicy.usable($0.name) }) { (name, .agent) }
                 else { (shortLabel(npub), .npub) }
             resolved[npub] = PersonDisplay(npub: npub, name: name, avatarURL: avatar, nameSource: source)
         }
     }
 
     /// The person for `npub`. `senderLabel` is the name Tower attached to a message (`created_by_actor_label`); it is
-    /// used only when the workspace directory has no name of its own.
+    /// used only when neither the public profile nor the workspace directory names the person.
     public func person(_ npub: String?, senderLabel: String? = nil) -> PersonDisplay {
         guard let npub, !npub.isEmpty else {
-            return PersonDisplay(npub: "", name: senderLabel.flatMap { NostrProfileContent.clean($0, limit: 120) } ?? "Unknown", avatarURL: nil, nameSource: .message)
+            return PersonDisplay(npub: "", name: PersonNamePolicy.usable(senderLabel) ?? "Unknown", avatarURL: nil, nameSource: .message)
         }
         let base = resolved[npub] ?? .unknown(npub)
-        guard base.nameSource == .nostr || base.nameSource == .npub,
-              let label = NostrProfileContent.clean(senderLabel, limit: NostrProfileContent.maxNameLength) else { return base }
+        guard base.nameSource == .npub, let label = PersonNamePolicy.usable(senderLabel) else { return base }
         return PersonDisplay(npub: npub, name: label, avatarURL: base.avatarURL, nameSource: .message)
     }
 

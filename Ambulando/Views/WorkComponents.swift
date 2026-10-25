@@ -50,9 +50,9 @@ struct ScopeMenu: View {
     }
 }
 
-/// Names for npubs from the local directory.
+/// Names for npubs from the local directory and cached public profiles (`PeopleDirectory`).
 func directoryNames(_ store: LocalStore, _ workspaceId: String) async throws -> [String: String] {
-    Dictionary(try await store.reader.members(workspaceId: workspaceId).map { ($0.npub, $0.label) }, uniquingKeysWith: { a, _ in a })
+    try await store.reader.people(workspaceId: workspaceId).names
 }
 
 func displayName(_ npub: String?, _ names: [String: String], me: String?) -> String {
