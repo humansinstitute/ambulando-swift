@@ -123,6 +123,14 @@ public final class SampleWorkTower: @unchecked Sendable {
         return id
     }
 
+    /// The uploaded bytes of a completed storage object (other sample routes that take a `storage_object_id`).
+    public func completedObjectBytes(_ id: String) -> Data? {
+        lock.withLock {
+            guard let row = table("objects")[id], row["completed_at"] is String, let b64 = row["bytes"] as? String else { return nil }
+            return Data(base64Encoded: b64)
+        }
+    }
+
     /// A stored object on its own (an image referenced from a document or message as `storage://<id>`).
     @discardableResult
     public func seedObject(_ bytes: Data, contentType: String, name: String) -> String {

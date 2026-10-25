@@ -1,0 +1,22 @@
+.board-discussion { position:absolute; inset:0; pointer-events:none; z-index:6; font:14px/1.4 system-ui,sans-serif; color:#202124; }
+.board-discussion button,.board-discussion input,.board-discussion textarea { font:inherit; }
+.board-discussion button { cursor:pointer; border:1px solid #b8bdc7; border-radius:7px; padding:6px 9px; background:#fff; color:#202124; }
+.board-discussion button:focus-visible,.board-discussion textarea:focus-visible { outline:2px solid #2f6fde; outline-offset:2px; }
+.board-discussion button:disabled { opacity:.6; cursor:default; }
+.board-discussion-toggle { position:absolute; left:12px; bottom:48px; pointer-events:auto; box-shadow:0 1px 5px #0002; }
+.board-comment-place { position:absolute; inset:0; cursor:crosshair; pointer-events:auto; background:#2f6fde08; touch-action:none; }
+.board-comment-place span { position:absolute; top:70px; left:12px; padding:8px; background:#fff; border-radius:6px; }
+.board-comment-pin { position:absolute; pointer-events:auto; transform:translate(-50%,-50%); width:30px; height:30px; padding:0!important; border-radius:50%!important; background:#2f6fde!important; color:white!important; box-shadow:0 1px 5px #0005; }
+.board-comment-pin.resolved { background:#52645b!important; }
+.board-comment-panel { pointer-events:auto; position:absolute; right:8px; top:64px; bottom:8px; width:min(330px, calc(100% - 16px)); overflow:auto; box-sizing:border-box; padding:12px; background:#fff; border:1px solid #aeb4c0; border-radius:10px; box-shadow:0 2px 16px #0003; }
+.board-comment-panel header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.board-comment-panel label { display:block; margin:10px 0; }
+.board-comment-help,.board-comment-panel small { color:#525966; }
+.board-comment-card { margin:6px 0; }
+.board-comment-card button { text-align:left; overflow-wrap:anywhere; width:100%; }
+.board-comment-card button[aria-pressed=true] { border-color:#2f6fde; }
+.board-comment-thread { border-top:1px solid #ddd; margin-top:12px; padding-top:8px; }
+.board-comment-thread h3 { margin:4px 0; font-size:15px; }
+.board-comment-messages article { margin:12px 0; }
+.board-comment-messages p { margin:4px 0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.board-comment-panel textarea { display:block; box-sizing:border-box; width:100%; min-height:80px; margin:10px 0; resize:vertical; }

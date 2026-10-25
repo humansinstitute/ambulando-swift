@@ -13,3 +13,6 @@ xcuserdata/
 
 # Packaged Mac app (scripts/mac-install.sh --package)
 dist/
+
+# Board editor dependencies (BoardEditor/package.json, bun.lock)
+BoardEditor/node_modules/

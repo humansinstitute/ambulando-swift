@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <!-- Board content is data: nothing is fetched beyond this bundle (no connect, frames or forms). -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self' blob:; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'">
+  <title>Board editor · Ambulando</title>
+  <style>
+    html, body, #board-root { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+    /* Board primary action in Excalidraw's top-right slot (sol canvas-board.html). */
+    .wingman-board-action { flex: none; height: var(--lg-button-size, 2.25rem); padding: 0 .9rem; border: 1px solid var(--default-border-color, #d6d6d6); border-radius: var(--border-radius-lg, .5rem); background: var(--island-bg-color, #fff); color: var(--text-primary-color, #1b1b1f); box-shadow: var(--shadow-island, 0 1px 4px #0000001f); font: 600 .875rem/1 system-ui, sans-serif; white-space: nowrap; cursor: pointer; pointer-events: auto; }
+    .wingman-board-action.primary { border-color: #2f6fde; background: #2f6fde; color: #fff; }
+    .wingman-board-action:disabled { opacity: .72; cursor: default; }
+    .wingman-board-action-phone { position: absolute; z-index: 5; }
+    .wingman-board-action:focus-visible { outline: 2px solid #2f6fde; outline-offset: 2px; }
+  </style>
+</head>
+<body>
+  <div id="board-root" data-board-editor-state="booting"></div>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

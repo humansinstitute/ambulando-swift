@@ -30,6 +30,8 @@ public struct BoardReference: Sendable, Equatable, Hashable {
     public let sha256: String
     public let sizeBytes: Int
     public let updatedAt: String?
+    /// Tower's `file.write` decision for this viewer on the board's channel (the editor is read-only without it).
+    public var canWrite: Bool = false
 }
 
 public struct CanvasNaplet: Sendable, Equatable, Identifiable {
@@ -196,7 +198,8 @@ public struct CanvasScene: Sendable, Equatable {
                 return CanvasNaplet(id: id, layout: layout, title: title, sourceType: type, content: .unknown(type: "excalidraw (incomplete metadata)"), rowVersion: version, savedLayout: saved)
             }
             parsed = .excalidraw(BoardReference(fileId: file, versionId: versionId, versionNumber: flexibleInt(content["current_version_number"]) ?? 0,
-                                                sha256: sha, sizeBytes: flexibleInt(content["size_bytes"]) ?? 0, updatedAt: content["updated_at"] as? String))
+                                                sha256: sha, sizeBytes: flexibleInt(content["size_bytes"]) ?? 0, updatedAt: content["updated_at"] as? String,
+                                                canWrite: content["can_write"] as? Bool == true))
         case "canvas":
             guard let sourceId else { return nil }
             parsed = .canvas(canvasId: sourceId)

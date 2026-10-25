@@ -268,6 +268,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     /// Context Tree, canvases, boards, agents, Toolbox and pins (shared with the core tests); the lab workspace has none.
     let surfaces: SampleSurfaceTower
     let labSurfaces: SampleSurfaceTower
+    /// Board File versions (list, read, save with a stale-base check) and their canvas projection.
+    let boards: SampleBoardTower
     private var posted: [[String: Any]] = []
     /// Edits and deletions of messages, by id (persisted with the posted messages).
     private var revised: [String: [String: Any]] = [:]
@@ -300,8 +302,10 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
                                   file: file.deletingLastPathComponent().appendingPathComponent("fixture-work-lab.json"))
         surfaces = SampleSurfaceTower(workspaceId: Self.studio, file: file.deletingLastPathComponent().appendingPathComponent("fixture-surfaces.json"))
         labSurfaces = SampleSurfaceTower(workspaceId: Self.lab, file: file.deletingLastPathComponent().appendingPathComponent("fixture-surfaces-lab.json"))
+        boards = SampleBoardTower(workspaceId: Self.studio, file: file.deletingLastPathComponent().appendingPathComponent("fixture-boards.json"))
         // Pins and references resolve against the sample tasks, documents and channels the other routes serve.
         let work = work
+        boards.objectBytes = { id in work.completedObjectBytes(id) }
         surfaces.recordLookup = { id in
             if let t = work.task(id) { return ["title": t["title"] ?? "", "channel_id": t["channel_id"] ?? NSNull(), "scope_id": t["scope_id"] ?? NSNull()] }
             if let d = work.doc(id) { return ["title": d["title"] ?? "", "channel_id": d["channel_id"] ?? NSNull(), "scope_id": d["scope_id"] ?? NSNull()] }
@@ -389,7 +393,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         guard request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Nostr ") == true else { return (401, ["code": "unauthorized"]) }
         if offline { throw URLError(.notConnectedToInternet) }
         // Surface routes first: their ownership is exact (board versions live under `/files/:f/versions/:v/object`).
-        if let handled = try surfaces.handle(request) ?? labSurfaces.handle(request) ?? work.handle(request) ?? labWork.handle(request) { return handled }
+        if let handled = try boards.handle(request) ?? surfaces.handle(request) ?? labSurfaces.handle(request) ?? work.handle(request) ?? labWork.handle(request) {
+            return boards.project(handled, for: request)
+        }
         let base = "/api/v4/flightdeck-pg/workspaces"
         if path == base {
             return (200, ["workspaces": [workspace(Self.studio, "Studio (sample)"), workspace(Self.lab, "Lab (sample)")], "next_cursor": NSNull()])
@@ -810,6 +816,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
                                             ["id": Self.uuid(101, "f1c7aaaa"), "author": "Ana", "body": "Retry kept the same request id", "created_at": Self.time(101)]]])
         let board = Self.sampleBoard()
         let projection = s.seedBoardVersion(fileId: Self.boardFile, versionId: Self.boardVersion, versionNumber: 2, bytes: board)
+        boards.seed(fileId: Self.boardFile, bytes: board, canWrite: true, author: Self.ana)
         s.seedNaplet(canvas: launch, sourceType: "excalidraw", sourceId: Self.boardFile, title: "Architecture sketch",
                      layout: ["x": 440, "y": 380, "width": 420, "height": 300, "z": 4], content: projection)
         s.seedNaplet(canvas: launch, sourceType: "document", sourceId: Self.lockedFile, title: "Budget",

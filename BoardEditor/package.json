@@ -1,0 +1,15 @@
+{
+  "name": "ambulando-native-board-editor",
+  "private": true,
+  "description": "Excalidraw board editor page bundled into the native Ambulando apps (see README.md).",
+  "type": "module",
+  "scripts": { "build": "vite build --config vite.config.mjs" },
+  "dependencies": {
+    "@excalidraw/excalidraw": "0.18.1",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "vite": "6.4.1"
+  }
+}

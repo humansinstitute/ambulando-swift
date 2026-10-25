@@ -107,6 +107,8 @@ final class AppModel {
     let pins = LiveQuery<PinsSnapshot>(initial: PinsSnapshot())
     /// Viewer-local board positions by canvas, so returning to a board keeps where it was (never written to Tower).
     @ObservationIgnored var canvasViewports: [String: CanvasViewport] = [:]
+    /// Excalidraw board sessions (drafts, saves) shared by the inline and full-screen editors.
+    @ObservationIgnored let boards = BoardRegistry()
     /// The current section (bottom bar). Opening a record from Search or a mention may switch it.
     var mode: AppMode = .chat {
         didSet { if mode != oldValue, lockedView != mode { lockedView = nil } }

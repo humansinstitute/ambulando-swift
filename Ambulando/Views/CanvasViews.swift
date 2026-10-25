@@ -5,8 +5,9 @@ import SwiftUI
 // over the canvas drawing elements. Pan and zoom are viewer-local and never written back; a naplet is selected with a
 // tap and opened in its native screen. Locked naplets show only their frame. Where Tower reports `can_manage`, canvases
 // can be created and renamed and items added, moved, resized and removed (`CanvasEditor`); each change is one confirmed
-// request with Tower's version check, and the board shows the item where it was dragged until Tower answers. Drawing
-// elements and Excalidraw board contents are not edited on this device yet.
+// request with Tower's version check, and the board shows the item where it was dragged until Tower answers. Excalidraw
+// boards are edited in the embedded web editor (`BoardNapletWindow`, `BoardEditorPanel`). Canvas drawing elements are
+// not edited on this device yet.
 
 struct CanvasListView: View {
     @Environment(AppModel.self) private var model
@@ -134,15 +135,19 @@ struct CanvasBoardView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { selected = nil }
                 CanvasElementsLayer(elements: value.scene.elements, transform: transform(vp))
-                ForEach(visible(value.scene.naplets, vp, proxy.size)) { naplet in
-                    napletView(naplet, value, vp)
+                let shownNaplets = visible(value.scene.naplets, vp, proxy.size)
+                let live = liveBoards(shownNaplets, vp)
+                ForEach(shownNaplets) { naplet in
+                    napletView(naplet, value, vp, live: live.contains(naplet.id))
                 }
                 if let id = selected, let naplet = value.scene.naplets.first(where: { $0.id == id }), movable(naplet) {
                     resizeHandle(naplet, vp)
                 }
             }
             .clipped()
-            .gesture(panAndZoom(vp))
+            // A selected live board takes its own touches (drawing, Excalidraw's pan and zoom); the canvas pans again
+            // once the board is deselected.
+            .gesture(panAndZoom(vp), including: boardActive(value) ? .subviews : .all)
             .onChange(of: viewport) { _, next in if let next { model.canvasViewports[canvasId] = next } }
             .onAppear { boardSize = proxy.size }
             .onChange(of: proxy.size) { _, size in boardSize = size }
@@ -231,14 +236,29 @@ struct CanvasBoardView: View {
     }
 
     /// One item at its saved (or just dragged) frame, scaled to the viewport.
-    private func napletView(_ naplet: CanvasNaplet, _ value: CanvasBoardSnapshot, _ vp: CanvasViewport) -> some View {
+    @ViewBuilder private func napletView(_ naplet: CanvasNaplet, _ value: CanvasBoardSnapshot, _ vp: CanvasViewport, live: Bool) -> some View {
+        if case .excalidraw(let ref) = naplet.content {
+            placed(BoardNapletWindow(naplet: naplet, reference: ref, workspace: workspace, preview: value.boards[naplet.id], selected: selected == naplet.id,
+                                     live: live, layoutEditing: editing, onSelect: { selected = naplet.id }, onExpand: { open(naplet) }), naplet, vp)
+                .gesture(editGesture(naplet, vp, resize: false), including: movable(naplet) ? .all : .subviews)
+                .task(id: naplet.id) { requestBoardIfNeeded(naplet, value) }
+        } else {
+            cardView(naplet, value, vp)
+        }
+    }
+
+    /// Positions an item's view at its frame on the board.
+    private func placed(_ view: some View, _ naplet: CanvasNaplet, _ vp: CanvasViewport) -> some View {
         let layout = shown(naplet)
-        let card = NapletCard(naplet: naplet, board: value.boards[naplet.id], selected: selected == naplet.id)
+        return view
             .frame(width: layout.width, height: layout.height)
             .scaleEffect(vp.scale, anchor: .topLeading)
             .frame(width: layout.width * vp.scale, height: layout.height * vp.scale, alignment: .topLeading)
             .offset(x: vp.x + layout.x * vp.scale, y: vp.y + layout.y * vp.scale)
-        return card
+    }
+
+    private func cardView(_ naplet: CanvasNaplet, _ value: CanvasBoardSnapshot, _ vp: CanvasViewport) -> some View {
+        placed(NapletCard(naplet: naplet, board: value.boards[naplet.id], selected: selected == naplet.id), naplet, vp)
             .gesture(editGesture(naplet, vp, resize: false), including: movable(naplet) ? .all : .subviews)
             .onTapGesture(count: 2) { open(naplet) }
             .onTapGesture { selected = naplet.id }
@@ -255,6 +275,29 @@ struct CanvasBoardView: View {
     private func requestBoardIfNeeded(_ naplet: CanvasNaplet, _ value: CanvasBoardSnapshot) {
         guard case .excalidraw(let ref) = naplet.content, value.boards[naplet.id]?.state == .notStored else { return }
         model.openBoard(ref, in: workspace)
+    }
+
+    // MARK: Live boards
+
+    /// At most this many embedded board editors run at once (each is a web view); the rest show the native preview.
+    static let liveBoardLimit = 3
+    /// Boards smaller than this on screen show the preview (zoom in, select or expand to edit).
+    static let liveBoardMinWidth = 150.0
+
+    /// The board naplets that run the embedded editor: the selected one first, then the largest on screen.
+    private func liveBoards(_ naplets: [CanvasNaplet], _ vp: CanvasViewport) -> Set<String> {
+        let boards = naplets.filter { if case .excalidraw = $0.content { true } else { false } }
+        let ranked = boards.sorted { a, b in
+            if (a.id == selected) != (b.id == selected) { return a.id == selected }
+            return a.layout.width * a.layout.height > b.layout.width * b.layout.height
+        }
+        return Set(ranked.filter { $0.id == selected || $0.layout.width * vp.scale >= Self.liveBoardMinWidth }.prefix(Self.liveBoardLimit).map(\.id))
+    }
+
+    /// A selected board that is not being moved takes the touches inside its window.
+    private func boardActive(_ value: CanvasBoardSnapshot) -> Bool {
+        guard !editing, let id = selected, let naplet = value.scene.naplets.first(where: { $0.id == id }), case .excalidraw = naplet.content else { return false }
+        return true
     }
 
     // MARK: Geometry
@@ -655,7 +698,9 @@ struct NapletCard: View {
     }
 }
 
-/// An Excalidraw board full screen: pan and zoom over the native drawing, with the exact list of what is not drawn.
+/// An Excalidraw board full screen in the embedded editor: Excalidraw's toolbar, drawing, library, images and comments,
+/// with the board's save status and version history in the navigation bar. Read-only when Tower does not grant
+/// `file.write`, while viewing an older version, or while the identity is locked.
 struct BoardSceneView: View {
     @Environment(AppModel.self) private var model
     let canvasId: String
@@ -663,83 +708,53 @@ struct BoardSceneView: View {
     let workspace: WorkspaceRecord
     let store: LocalStore
     @State private var board = LiveQuery<BoardSnapshot>(initial: BoardSnapshot())
-    @State private var scale: CGFloat = 1
-    @State private var offset: CGSize = .zero
-    @State private var start: (CGFloat, CGSize)?
+    @State private var session: BoardSession?
 
     struct BoardSnapshot: Sendable, Equatable {
         var title = "Board"
         var reference: BoardReference?
-        var prepared = PreparedBoard()
+        var loaded = false
     }
 
     var body: some View {
         let value = board.value
         VStack(spacing: 0) {
-            notices(value)
-            GeometryReader { proxy in
-                let fit = ExcalidrawCanvas.fit(value.prepared.scene, in: proxy.size)
-                ExcalidrawCanvas(board: value.prepared,
-                                 transform: fit.concatenating(CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: offset.width, ty: offset.height)))
-                    .background(Color.white)
-                    .gesture(SimultaneousGesture(
-                        DragGesture().onChanged { v in
-                            let s = start ?? (scale, offset); if start == nil { start = s }
-                            offset = CGSize(width: s.1.width + v.translation.width, height: s.1.height + v.translation.height)
-                        }.onEnded { _ in start = nil },
-                        MagnifyGesture().onChanged { v in
-                            let s = start ?? (scale, offset); if start == nil { start = s }
-                            scale = min(8, max(0.2, s.0 * v.magnification))
-                        }.onEnded { _ in start = nil }))
-                    .accessibilityLabel("Excalidraw board \(value.title), \(value.prepared.scene.elements.count) drawn elements")
-                    .accessibilityIdentifier("board.canvas")
+            if let session {
+                BoardNotices(session: session).padding(.horizontal, 12).padding(.vertical, 4)
+                BoardEditorPanel(session: session)
+            } else if value.loaded {
+                EmptyNote(title: "Board unavailable", systemImage: "lock",
+                          detail: model.canRead ? "This board is no longer on this canvas." : "Unlock to load it.")
+            } else {
+                ProgressView("Loading board…").frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .navigationTitle(value.title)
         .inlineTitle()
-        .onChange(of: value.reference) { _, ref in if let ref, value.prepared.state == .notStored { model.openBoard(ref, in: workspace) } }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { withAnimation(.snappy) { scale = 1; offset = .zero } } label: { Image(systemName: "arrow.up.left.and.down.right.magnifyingglass") }
-                    .accessibilityLabel("Fit board")
+            ToolbarItemGroup(placement: .primaryAction) {
+                if let session {
+                    BoardStatusPill(state: session.state)
+                    BoardMenu(session: session)
+                }
             }
         }
         .fixtureLabel()
+        .onChange(of: value.reference) { _, ref in attach(ref, value.title) }
         .task {
             let w = workspace.id, canvas = canvasId, naplet = napletId, store = store
-            board.start(store: store, matches: { $0.workspaceId == w && [.canvases, .boards].contains($0.table) }) {
+            board.start(store: store, matches: { $0.workspaceId == w && $0.table == .canvases }) {
                 guard let snapshot = try await store.reader.canvasSnapshot(workspaceId: w, canvasId: canvas),
                       let n = try CanvasScene.parse(snapshot.bytes).naplets.first(where: { $0.id == naplet }),
-                      case .excalidraw(let ref) = n.content else { return BoardSnapshot() }
-                return BoardSnapshot(title: n.title, reference: ref,
-                                     prepared: try PreparedBoard.prepare(try await store.reader.boardScene(workspaceId: w, fileId: ref.fileId), expected: ref))
+                      case .excalidraw(let ref) = n.content else { return BoardSnapshot(loaded: true) }
+                return BoardSnapshot(title: n.title, reference: ref, loaded: true)
             }
+            attach(board.value.reference, board.value.title)
         }
     }
 
-    @ViewBuilder private func notices(_ value: BoardSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            switch value.prepared.state {
-            case .ready:
-                if let ref = value.reference {
-                    Text("Version \(ref.versionNumber)" + (ref.updatedAt.map { " · " + ChatTime.label($0) } ?? "") + " · read only on \(Device.name)")
-                        .font(.caption).foregroundStyle(Amb.mutedForeground)
-                }
-                if !value.prepared.scene.unsupportedSummary.isEmpty {
-                    Notice(tone: .info, text: "Not drawn on \(Device.name): " + value.prepared.scene.unsupportedSummary.joined(separator: ", ") + ".")
-                        .accessibilityIdentifier("board.unsupported")
-                }
-                if !value.prepared.scene.approximations.isEmpty {
-                    Text(value.prepared.scene.approximations.joined(separator: " ")).font(.caption2).foregroundStyle(Amb.mutedForeground)
-                        .accessibilityIdentifier("board.approximations")
-                }
-            case .failed(let reason):
-                Notice(tone: .warning, text: reason)
-            case .notStored:
-                Notice(tone: .info, text: model.canRead ? "Loading this board…" : "This board is not on this \(Device.name) yet. Unlock to load it.")
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private func attach(_ reference: BoardReference?, _ title: String) {
+        guard let reference else { return }
+        session = model.boardSession(reference, title: title, in: workspace)
     }
 }
