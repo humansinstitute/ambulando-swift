@@ -15,10 +15,17 @@ struct MacWorkspaceShell: View {
 
     var body: some View {
         @Bindable var ui = ui
+        // Keep split-view membership and the detail hosting view stable while the sidebar is hidden.
+        // Removing/reinserting a child during a resize churns AppKit's constraint hierarchy and the live naplets.
         HSplitView {
-            if ui.sidebarVisible {
-                MacSidebar().frame(minWidth: 240, idealWidth: 280, maxWidth: 380)
-            }
+            MacSidebar()
+                .frame(minWidth: ui.sidebarVisible ? 240 : 0,
+                       idealWidth: ui.sidebarVisible ? 280 : 0,
+                       maxWidth: ui.sidebarVisible ? 380 : 0)
+                .clipped()
+                .opacity(ui.sidebarVisible ? 1 : 0)
+                .allowsHitTesting(ui.sidebarVisible)
+                .accessibilityHidden(!ui.sidebarVisible)
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
                     Button { ui.sidebarVisible.toggle() } label: { Image(systemName: "sidebar.left") }

@@ -16,7 +16,7 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (5) |
+| Version | 0.1.0 (7) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
@@ -29,7 +29,7 @@ the screens is shared:
 
 `scripts/mac-install.sh --package` writes `dist/Ambulando-mac-<version>-<build>.zip` and a `.sha256` file next to it.
 
-1. Copy the ZIP to the Mac (AirDrop or Files). Check it: `shasum -a 256 Ambulando-mac-0.1.0-5.zip` must match the
+1. Copy the ZIP to the Mac (AirDrop or Files). Check it: `shasum -a 256 Ambulando-mac-0.1.0-7.zip` must match the
    `.sha256` file.
 2. Double-click the ZIP and drag **Ambulando** into **Applications**.
 3. The app is signed with a Developer ID certificate but **not notarized**. Gatekeeper assessment rejects this release
@@ -83,9 +83,9 @@ signing identity, the built version and build, the app it replaces, the installe
 Applications, and which copy is running after it opens. A successful run ends with:
 
 ```text
-==> Installed /Applications/Ambulando.app: Ambulando 0.1.0 (build 5)
-==> Running: /Applications/Ambulando.app, Ambulando 0.1.0 (build 5)
-    In Ambulando, Settings > About should show Version 0.1.0 and Build 5.
+==> Installed /Applications/Ambulando.app: Ambulando 0.1.0 (build 7)
+==> Running: /Applications/Ambulando.app, Ambulando 0.1.0 (build 7)
+    In Ambulando, Settings > About should show Version 0.1.0 and Build 7.
 ```
 
 If any step fails, it prints why (xcodebuild's errors and failed commands, the end of the build log, codesign's
@@ -255,3 +255,47 @@ Developer ID and **not notarized**.
   shortcuts act in the main window and its sheets; in the Browser window use the View menu.
   The iPhone and iPad keep Dynamic Type.
 - Channel settings, Settings and New channel/scope use grouped, scrolling forms sized to fit the smallest window.
+
+
+## Layout regression checks
+
+Mac build 7 retains both `HSplitView` children when the sidebar is hidden. The sidebar becomes zero-width,
+noninteractive and hidden from accessibility; showing it restores its resizable width range. This avoids rebuilding
+the detail hosting hierarchy during a toggle. Canvas layout, selections and drafts remain in the existing views.
+
+The Mac composer measures a detached prefix only until the six-line viewport is full, and caches up to eight width
+results for the current text, font and line limit. It does not resize the live text container during measurement.
+This keeps a long pasted report from being fully typeset for every speculative SwiftUI layout proposal.
+
+Run the AppKit measurement regression check on a Mac:
+
+```sh
+swiftc -parse-as-library Ambulando/Views/MacComposerMeasurement.swift \
+  scripts/tests/mac-composer-measurement.swift -o /tmp/mac-composer-check
+/tmp/mac-composer-check
+```
+
+For automated UI checks, launch a separate Debug sample-data app and run:
+
+```sh
+swift scripts/tests/mac-sidebar-regression.swift <fixture-pid>
+```
+
+The script refuses apps without the sample-data banner. It checks repeated Canvas navigation toggles/resizes,
+other sections, and long composer draft readback without sending. It uses accessibility actions, not physical
+mouse/keyboard input, and leaves a sample draft in Chat.
+
+For further UI validation, use an isolated Debug sample-data app (never reset an everyday app's identity or store):
+
+1. Open Deck → Launch board. Repeatedly hide/show the sidebar and resize between 900 × 600 and 1440 × 900.
+   Check the same board, selected naplet, viewport, editor draft and toolbar remain available.
+2. Repeat with a conversation naplet selected and while its composer contains a long multiline draft.
+3. In Chat, enter a large multiline report and a long unbroken line; resize and toggle navigation, then edit, select,
+   delete and type again. Check the composer stays at most six lines and the draft remains intact without sending.
+4. Repeat navigation toggles in Tasks, Docs, Files, Toolbox and Deck, including document comments/editing.
+5. Check deactivate/reactivate and window close/reopen. Real sleep/wake and authenticated Tower checks must be
+   reported separately from fixture or simulated lifecycle checks.
+
+The reported build 5 exception did not include its reason string. Sidebar hierarchy changes are a plausible trigger,
+not a proven explanation of that historical exception. The separate long-message hang report directly identified
+full-draft composer measurement on the main thread.

@@ -253,17 +253,15 @@ struct ComposerTextView: NSViewRepresentable {
         guard let width = proposal.width, width.isFinite, width > 0, let view = scroll.documentView as? NSTextView else { return nil }
         if let fixedHeight { return CGSize(width: width, height: fixedHeight) }
         let font = view.font ?? .preferredFont(forTextStyle: .body)
-        let line = font.ascender - font.descender + font.leading
-        // Measure a detached string. Mutating the live text container during SwiftUI's speculative layout proposals
-        // makes AppKit resize the text view and can cause an endless layout cycle when upload status appears.
-        let measured = NSAttributedString(string: view.string.isEmpty ? " " : view.string, attributes: [.font: font])
-            .boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading]).height
-        return CGSize(width: width, height: min(max(ceil(measured), ceil(line)), ceil(line * Self.maxLines)))
+        return CGSize(width: width, height: context.coordinator.measurement.height(
+            text: text, font: font, width: width, maxLines: Int(Self.maxLines)))
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
+        let measurement = MacComposerMeasurement()
         var parent: ComposerTextView
         var reported: String
         var reporting = false
