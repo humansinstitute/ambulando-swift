@@ -234,6 +234,7 @@ export function markdownFromEditor(edited, session, normalized) {
   if (!blocks) return prosemirrorToFlightDeckContentModel(edited).content;
   const index = new Map();
   (normalized.content || []).forEach((node, i) => {
+    if (i >= blocks.length) return;
     const k = key(node);
     if (!index.has(k)) index.set(k, []);
     index.get(k).push(i);

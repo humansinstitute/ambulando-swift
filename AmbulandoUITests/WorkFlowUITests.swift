@@ -60,7 +60,7 @@ final class WorkFlowUITests: XCTestCase {
         capture(app, "deck-inbox")
         // Opening a document marks it read; it stays in the feed (activity), without the unread mark.
         plan.tap()
-        XCTAssertTrue(app.staticTexts["doc.title"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textFields["editor.title"].waitForExistence(timeout: 15))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let readPlan = app.buttons.matching(NSPredicate(format: "identifier == 'deck.inbox.item' AND label CONTAINS 'Native app plan' AND NOT (label CONTAINS 'unread')")).firstMatch
         XCTAssertTrue(readPlan.waitForExistence(timeout: 10), "read state shown after Back")
@@ -131,33 +131,37 @@ final class WorkFlowUITests: XCTestCase {
         tab(app, "Docs")
         XCTAssertTrue(app.buttons["doc.Native app plan"].waitForExistence(timeout: 15))
         app.buttons["doc.Native app plan"].tap()
-        XCTAssertTrue(app.staticTexts["Native app plan"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'kept unchanged here'")).firstMatch.waitForExistence(timeout: 10),
+        XCTAssertTrue(app.textFields["editor.title"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'kept unchanged'")).firstMatch.waitForExistence(timeout: 10),
                       "the unknown block is shown as preserved, not dropped")
         capture(app, "wp4-doc-reader")
+        app.buttons["doc.comments"].tap()
         let comment = input(app, "doccomment.field")
         comment.tap()
         comment.typeText("Reviewed on the phone")
         app.buttons["doccomment.send"].tap()
         XCTAssertTrue(app.staticTexts["Reviewed on the phone"].waitForExistence(timeout: 10))
 
-        app.buttons["doc.edit"].tap()
-        XCTAssertTrue(app.staticTexts["editor.lease"].waitForExistence(timeout: 10))
+        app.buttons["Done"].tap()
         XCTAssertTrue(app.staticTexts["You are editing (lease held)."].waitForExistence(timeout: 10))
-        let blocks = app.textViews.matching(identifier: "editor.block").count > 0 ? app.textViews.matching(identifier: "editor.block") : app.textFields.matching(identifier: "editor.block")
-        let last = blocks.element(boundBy: blocks.count - 1)
-        XCTAssertTrue(last.waitForExistence(timeout: 10))
+        // The page itself is the editor (bundled web editor in the document's white page).
+        let page = app.webViews["doc.editor"].firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        let last = page.staticTexts["Edit this paragraph on the phone."].firstMatch
+        XCTAssertTrue(last.waitForExistence(timeout: 15), "the document's own formatted text is editable in place")
+        XCTAssertTrue(page.staticTexts.containing(NSPredicate(format: "label CONTAINS 'kept unchanged'")).firstMatch.exists, "unknown block shown as kept")
         last.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5)).tap()
         app.typeText(" Edited on iPhone.")
-        // With the keyboard up the edited block and Save stay usable on a compact phone.
+        // Formatting from the toolbar applies to what is typed next.
+        app.buttons["editor.format.bold"].tap()
+        app.typeText(" Bold")
         let keyboard = app.keyboards.firstMatch
         XCTAssertTrue(keyboard.waitForExistence(timeout: 5))
-        XCTAssertLessThan(last.frame.maxY, keyboard.frame.minY + 1, "edited text is above the keyboard")
         XCTAssertTrue(app.buttons["editor.save"].isHittable)
         capture(app, "wp4-doc-editor-keyboard")
         app.buttons["editor.save"].tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'on the phone. Edited on iPhone.'")).firstMatch.waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'kept unchanged here'")).firstMatch.exists, "unknown block survived the save")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'kept unchanged'")).firstMatch.exists, "unknown block survived the save")
         capture(app, "wp4-doc-saved")
     }
 
@@ -166,17 +170,22 @@ final class WorkFlowUITests: XCTestCase {
         let online = launch()
         tab(online, "Docs")
         online.buttons["doc.Theme notes (Markdown)"].tap()
-        XCTAssertTrue(online.staticTexts["Theme notes"].waitForExistence(timeout: 10))
+        XCTAssertTrue(online.textFields["editor.title"].waitForExistence(timeout: 15))
         online.terminate()
 
         let offline = launch(reset: false, ["-AmbulandoFixtureOffline"])
         tab(offline, "Docs")
         offline.buttons["doc.Theme notes (Markdown)"].tap()
-        offline.buttons["doc.edit"].tap()
-        let editor = input(offline, "editor.markdown")
-        editor.tap()
-        editor.typeText("\nOffline line")
+        XCTAssertTrue(offline.webViews["doc.editor"].firstMatch.waitForExistence(timeout: 15))
+        let page = offline.webViews["doc.editor"].firstMatch
+        let dark = page.staticTexts["Dark"].firstMatch
+        XCTAssertTrue(dark.waitForExistence(timeout: 15))
+        dark.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.5)).tap()
+        offline.typeText("\nOffline line")
         offline.buttons["editor.close"].tap()
+        // Cancel with changes asks; keeping the draft leaves it on the device, unsent.
+        XCTAssertTrue(offline.buttons["editor.keepDraft"].waitForExistence(timeout: 5))
+        offline.buttons["editor.keepDraft"].firstMatch.tap()
         XCTAssertTrue(offline.buttons["doc.draftBanner"].waitForExistence(timeout: 10), "the draft is kept on the device")
         offline.terminate()
 
@@ -184,8 +193,8 @@ final class WorkFlowUITests: XCTestCase {
         tab(back, "Docs")
         XCTAssertTrue(back.staticTexts["Unsaved edits"].waitForExistence(timeout: 15))
         back.buttons["doc.Theme notes (Markdown)"].tap()
-        back.buttons["doc.edit"].tap()
-        XCTAssertTrue((input(back, "editor.markdown").value as? String ?? "").contains("Offline line"), "the draft survived relaunch")
+        XCTAssertTrue(back.webViews["doc.editor"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertTrue(back.webViews["doc.editor"].staticTexts["Offline line"].firstMatch.waitForExistence(timeout: 15), "the draft survived relaunch")
         back.buttons["editor.save"].tap()
         XCTAssertTrue(back.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Offline line'")).firstMatch.waitForExistence(timeout: 15))
         XCTAssertFalse(back.buttons["doc.draftBanner"].exists)

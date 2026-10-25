@@ -4,7 +4,7 @@ public enum DocSaveResult: Sendable, Equatable {
     /// Tower made this the canonical body; the draft is gone and `doc` is the new base.
     case saved(DocRecord, DocBodyRecord)
     /// The document moved on since the edit began. Tower kept the submission as a recovery version
-    /// (`document_recovery_created`) and the draft stays on this iPhone.
+    /// (`document_recovery_created`) and the draft stays on this device.
     case recovery(id: String?, message: String)
     /// Someone else holds the edit lease.
     case leaseHeld(String)
@@ -103,12 +103,12 @@ public actor DocumentSaver {
             }
             if reply.status == 409, code == "document_recovery_created" {
                 let recovery = (object?["recovery"] as? [String: Any])?["id"] as? String
-                let message = "The document changed before your save. Tower kept your version as a recovery copy, and your draft stays on this iPhone."
+                let message = "The document changed before your save. Tower kept your version as a recovery copy, and your draft stays on this device."
                 try await store.writer.saveDocDraft(draft.with(state: .recovery, error: message, recoveryId: recovery))
                 return .recovery(id: recovery, message: message)
             }
             if reply.status == 409, code == "stale_row_version" {
-                let message = "The document changed before your save. Your draft stays on this iPhone."
+                let message = "The document changed before your save. Your draft stays on this device."
                 try await store.writer.saveDocDraft(draft.with(state: .conflict, error: message))
                 return .recovery(id: nil, message: message)
             }

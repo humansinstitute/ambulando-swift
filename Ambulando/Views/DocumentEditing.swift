@@ -21,12 +21,15 @@ final class DocEditorModel: UploadTokenHost {
     /// The page's latest document (rich: JSON text; Markdown: text). Empty until the first edit.
     private(set) var content = ""
     var formatting = DocumentFormatting()
+    var selection: DocumentAnchor?
     private(set) var status: String?
     private(set) var statusTone: Notice.Tone = .info
     private(set) var saving = false
     private(set) var leaseState = "Checking the edit lease…"
     private(set) var dirty = false
     private(set) var pageReady = false
+    /// Upload placeholders this session put into the page; the page's next change event may not have arrived yet.
+    private(set) var insertedTokens: [String] = []
 
     @ObservationIgnored let doc: DocRecord
     @ObservationIgnored let workspace: WorkspaceRecord
@@ -42,6 +45,8 @@ final class DocEditorModel: UploadTokenHost {
     @ObservationIgnored private var renew: Task<Void, Never>?
     @ObservationIgnored private var loading = true
     @ObservationIgnored private var waitingImages: Set<String> = []
+    @ObservationIgnored private var downloadsRequested: Set<String> = []
+    @ObservationIgnored private var imagePoll: Task<Void, Never>?
 
     init(doc: DocRecord, workspace: WorkspaceRecord, store: LocalStore, connection: ConnectionRecord, app: AppModel) {
         self.doc = doc; self.workspace = workspace; self.store = store; self.connection = connection; self.app = app
@@ -72,18 +77,17 @@ final class DocEditorModel: UploadTokenHost {
             original = decoded.editorState
             let state = decoded.editorState ?? .object([("type", .string("doc")), ("content", .array([]))])
             if draft != nil { content = state.serializedString() }
-            payload = JSONValue.object([("mode", .string("rich")), ("state", state)]).serializedString()
+            payload = Self.payload([("mode", .string("rich")), ("state", state)])
             mode = .rich
         case .markdown, .markdownModel:
             if draft != nil { content = decoded.markdown }
-            payload = JSONValue.object([("mode", .string("markdown")), ("markdown", .string(decoded.markdown))]).serializedString()
+            payload = Self.payload([("mode", .string("markdown")), ("markdown", .string(decoded.markdown))])
             mode = .markdown
         case .readOnly(let reason):
             mode = .unavailable(reason)
         }
         loading = false
         if let payload { page?.load(payload) }
-        if let uploads = app?.uploads { uploads.attach(self) }
     }
 
     // MARK: Page
@@ -95,12 +99,23 @@ final class DocEditorModel: UploadTokenHost {
     func pageLoaded(ok: Bool, message: String?) {
         pageReady = ok
         if !ok { setStatus(message.map { "The editor could not open this document: \($0)" } ?? "The editor could not open this document.", .error) }
-        else { page?.focus() }
+        else {
+            #if os(macOS)
+            page?.focus()
+            #endif
+            // Uploads for this document (also ones that finished while it was closed) apply once the page has it.
+            app?.uploads?.attach(self)
+            #if DEBUG
+            if app?.fixture != nil, ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDocBridgeProbe") { page?.probeBridge() }
+            #endif
+        }
     }
 
     func pageChanged(_ next: String) {
         guard !loading, next != content else { return }
         content = next
+        // A placeholder the page has reported is tracked through `content` from then on (deleting it removes it).
+        insertedTokens.removeAll { UploadToken.contains(token: $0, in: next) }
         markDirty()
     }
 
@@ -114,19 +129,25 @@ final class DocEditorModel: UploadTokenHost {
             switch mode {
             case .rich:
                 if let state = try? JSONValue.parse(Data(content.utf8)) {
-                    payload = JSONValue.object([("mode", .string("rich")), ("state", state)]).serializedString()
+                    payload = Self.payload([("mode", .string("rich")), ("state", state)])
                 }
             case .markdown:
-                payload = JSONValue.object([("mode", .string("markdown")), ("markdown", .string(content))]).serializedString()
+                payload = Self.payload([("mode", .string("markdown")), ("markdown", .string(content))])
             default: break
             }
         } else if body.editing == .proseMirror, let state = body.editorState {
-            payload = JSONValue.object([("mode", .string("rich")), ("state", state)]).serializedString()
+            payload = Self.payload([("mode", .string("rich")), ("state", state)])
         }
         if let payload { page?.load(payload) }
     }
 
     private func setStatus(_ text: String?, _ tone: Notice.Tone) { status = text; statusTone = tone }
+
+    /// The page's `load` message: the document plus the paste limits of the upload pipeline.
+    static func payload(_ fields: [(String, JSONValue)]) -> String {
+        let limits = JSONValue.object([("maxFileBytes", .int(ComposerUploads.maxBytes)), ("maxFiles", .int(ComposerUploads.maxItemsPerPaste))])
+        return JSONValue.object(fields + [("limits", limits)]).serializedString()
+    }
 
     // MARK: Lease
 
@@ -155,6 +176,7 @@ final class DocEditorModel: UploadTokenHost {
     func close() {
         debounce?.cancel()
         renew?.cancel()
+        imagePoll?.cancel()
         app?.uploads?.detach(self)
         guard let saver = app?.saver else { return }
         let connection = connection, workspace = workspace, id = doc.id
@@ -164,6 +186,24 @@ final class DocEditorModel: UploadTokenHost {
     // MARK: Formatting
 
     func command(_ name: String, _ args: [String: String] = [:]) { page?.command(name, args) }
+
+    /// Capture before comments take focus; save first so the anchor refers to canonical content.
+    func commentAnchor(_ selected: DocumentAnchor) async -> DocumentAnchor? {
+        if let now = await page?.snapshot() { pageChanged(now) }
+        if dirty, !(await save()) { return nil }
+        guard let cached = try? await store.reader.docBody(workspaceId: workspace.id, docId: doc.id) else { return nil }
+        let body = DocumentBody(bytes: cached.bytes, contentType: cached.contentType)
+        if let state = body.editorState, DocumentAnchors.selectedText(selected, in: state) == selected.quote {
+            return DocumentAnchor(quote: selected.quote, from: selected.from, to: selected.to, version: cached.docRowVersion)
+        }
+        let spans = body.editorState.map(DocumentAnchors.spans)
+            ?? DocumentAnchors.markdownSpans(body.markdown, blocks: DocumentRender.blocks(body))
+        guard let resolved = DocumentAnchors.resolve(selected, in: spans) else {
+            setStatus("That selection cannot be located in the saved document. Select a passage within a paragraph and try again.", .warning)
+            return nil
+        }
+        return resolved.span.anchor(resolved.range, version: cached.docRowVersion)
+    }
 
     // MARK: Draft persistence
 
@@ -180,6 +220,7 @@ final class DocEditorModel: UploadTokenHost {
     /// Encodes the current edit (off the main actor) and stores it as the durable draft.
     @discardableResult
     func persistDraft(state draftState: DocDraft.State) async -> DocDraft? {
+        if pageReady, let now = await page?.snapshot(), now != content { content = now; dirty = true }
         guard let body, let base, dirty else { return nil }
         let mode = mode, content = content, original = original, title = title
         let identity = (connection.id, workspace.id, doc.id)
@@ -223,7 +264,7 @@ final class DocEditorModel: UploadTokenHost {
             content = now
             dirty = true
         }
-        guard !UploadToken.contains(in: content) else { setStatus(ComposerUploadError.unresolved.localizedDescription, .warning); return false }
+        guard !UploadToken.contains(in: uploadText) else { setStatus(ComposerUploadError.unresolved.localizedDescription, .warning); return false }
         guard let draft = await persistDraft(state: .editing) else {
             if !dirty { setStatus("No changes to save.", .info) }
             return !dirty
@@ -235,7 +276,12 @@ final class DocEditorModel: UploadTokenHost {
             base = (saved.docRowVersion, saved.sha256, saved.storageObjectId)
             setStatus("Saved.", .success)
             return true
-        case .recovery(_, let message), .leaseHeld(let message), .notSaved(let message):
+        case .recovery(_, let message):
+            // Someone saved first: show their version in the reader behind the editor (the draft stays).
+            setStatus(message, .warning)
+            app?.openDoc(doc.id, in: workspace, force: true)
+            return false
+        case .leaseHeld(let message), .notSaved(let message):
             setStatus(message, .warning)
             return false
         }
@@ -267,7 +313,8 @@ final class DocEditorModel: UploadTokenHost {
         deliverImages()
     }
 
-    /// Sends the page every image it asked for that is now in the file cache; asks for downloads of the rest.
+    /// Sends the page every image it asked for that is now in the file cache, asks once for downloads of the rest, and
+    /// checks again every second for a minute (a download lands in the cache without any other signal).
     func deliverImages() {
         guard let app, let cache = app.fileCache else { return }
         for id in waitingImages {
@@ -277,46 +324,68 @@ final class DocEditorModel: UploadTokenHost {
                     guard let url = await Task.detached(priority: .userInitiated, operation: { DocumentEditorImages.dataURL(file) }).value else { return }
                     self?.page?.setImage(id, dataURL: url)
                 }
-            } else if app.isUnlocked {
+            } else if app.isUnlocked, !downloadsRequested.contains(id) {
+                downloadsRequested.insert(id)
                 app.downloadAttachment(id, in: workspace)
             }
+        }
+        guard !waitingImages.isEmpty, imagePoll == nil else { return }
+        imagePoll = Task { [weak self] in
+            for _ in 0..<60 {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, let self, !self.waitingImages.isEmpty else { break }
+                self.deliverImages()
+            }
+            self?.imagePoll = nil
         }
     }
 
     // MARK: Pasted files (sol doc rich paste → native upload pipeline)
 
-    func pagePasted(_ files: [[String: Any]]) {
-        guard let app, let uploads = app.uploads else { setStatus(ComposerUploadError.locked.localizedDescription, .warning); return }
-        var providers: [NSItemProvider] = []
-        var tooLarge = false
-        for file in files {
-            if file["tooLarge"] as? Bool == true { tooLarge = true; continue }
-            guard let encoded = file["data"] as? String, let data = Data(base64Encoded: encoded) else { continue }
-            let mime = (file["type"] as? String) ?? ""
-            let name = (file["name"] as? String) ?? ""
-            let type = UTType(mimeType: mime) ?? UTType(filenameExtension: (name as NSString).pathExtension) ?? .data
+    /// The page announced a paste: files over the upload limit or past the per-paste count were not sent.
+    func pageAnnouncedPaste(skipped: Int, tooLarge: Int) {
+        if tooLarge > 0 { setStatus(ComposerUploadError.tooLarge.localizedDescription, .warning) }
+        else if skipped > 0 { setStatus("Only the first \(ComposerUploads.maxItemsPerPaste) pasted items are uploaded.", .info) }
+    }
+
+    /// One pasted file from the page (`<index>\n<name>\n<type>\n<base64>`). It is decoded off the main actor, then
+    /// goes through the same paste pipeline as chat (metadata stripped, staged, uploaded with retry), and its
+    /// placeholder goes in at the caret.
+    func pageSentFile(_ body: String) {
+        guard let uploads = app?.uploads else { setStatus(ComposerUploadError.locked.localizedDescription, .warning); return }
+        let target = uploadTarget, appNpub = workspace.appNpub
+        Task { [weak self] in
+            let decoded = await Task.detached(priority: .userInitiated) { () -> (data: Data, name: String, type: UTType)? in
+                let parts = body.split(separator: "\n", maxSplits: 3, omittingEmptySubsequences: false)
+                guard parts.count == 4, let data = Data(base64Encoded: String(parts[3])), data.count <= ComposerUploads.maxBytes else { return nil }
+                let name = String(parts[1].prefix(255)), mime = String(parts[2].prefix(127))
+                let type = UTType(mimeType: mime) ?? UTType(filenameExtension: (name as NSString).pathExtension) ?? .data
+                return (data, name, type)
+            }.value
+            guard let self else { return }
+            guard let decoded else { self.setStatus(ComposerUploadError.unreadable.localizedDescription, .warning); return }
             let provider = NSItemProvider()
-            provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { completion in
+            let data = decoded.data
+            provider.registerDataRepresentation(forTypeIdentifier: decoded.type.identifier, visibility: .all) { completion in
                 completion(data, nil)
                 return nil
             }
-            if !name.isEmpty { provider.suggestedName = name }
-            providers.append(provider)
+            if !decoded.name.isEmpty { provider.suggestedName = decoded.name }
+            let tokens = uploads.paste([provider], target: target, appNpub: appNpub, context: "doc-rich")
+            if !tokens.isEmpty { self.insertedTokens += tokens; self.page?.insertUploads(tokens) }
         }
-        if tooLarge { setStatus(ComposerUploadError.tooLarge.localizedDescription, .warning) }
-        let tokens = uploads.paste(providers, target: uploadTarget, appNpub: workspace.appNpub, context: "doc-rich")
-        if !tokens.isEmpty { page?.insertUploads(tokens) }
     }
 
     // MARK: UploadTokenHost
 
     var uploadTarget: ChatTarget { ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: "content-doc-\(doc.id)") }
-    var uploadText: String { content }
+    var uploadText: String { ([content] + insertedTokens).joined(separator: "\n") }
 
     /// Puts the uploaded image or file where its placeholder is (sol `replaceDocRichUploadPlaceholder`), or removes it.
     func replaceUploadToken(_ token: String, with replacement: String) -> Bool {
-        guard let page, UploadToken.contains(token: token, in: content) else { return false }
+        guard let page, UploadToken.contains(token: token, in: uploadText) else { return false }
         page.replaceUpload(token, node: Self.storageNode(replacement))
+        insertedTokens.removeAll { $0 == token }
         return true
     }
 

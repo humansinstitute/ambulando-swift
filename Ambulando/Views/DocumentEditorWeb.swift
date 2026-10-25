@@ -36,9 +36,13 @@ struct DocumentFormatting: Equatable, Sendable {
 @MainActor
 final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
     static let path = "/document.html"
+    /// Small messages (ready, change, state, image requests, paste announcements).
     static let handler = "document"
-    /// Upper bound for one message from the page (pasted files arrive base64-encoded, at most 50 MB each).
-    static let maxMessageBytes = 300 * 1024 * 1024
+    /// One pasted file per message, base64, within the upload pipeline's own limit (`ComposerUploads.maxBytes`).
+    static let fileHandler = "documentFile"
+    /// A document's edited JSON or Markdown is far below this; anything larger is refused (the draft is unchanged).
+    static let maxMessageBytes = 32 * 1024 * 1024
+    static var maxFileMessageBytes: Int { (ComposerUploads.maxBytes + 2) / 3 * 4 + 1024 }
 
     weak var webView: WKWebView?
     weak var editor: DocEditorModel?
@@ -58,6 +62,7 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
 
     func stop() {
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: Self.handler)
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: Self.fileHandler)
         if editor?.page === self { editor?.page = nil }
     }
 
@@ -101,6 +106,12 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
 
     func focus() { call("focus") }
 
+    func reveal(_ anchor: DocumentAnchor) {
+        guard let data = try? JSONSerialization.data(withJSONObject: anchor.metadata) else { return }
+        call("reveal", String(decoding: data, as: UTF8.self))
+    }
+
+
     /// The edited document now, flushed from the page (nil: no page or it failed).
     func snapshot() async -> String? {
         guard ready, let webView else { return nil }
@@ -121,14 +132,51 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
         webView.callAsyncJavaScript(script, arguments: args, in: nil, in: .page, completionHandler: nil)
     }
 
+    #if DEBUG
+    /// Sample data only (`-AmbulandoFixtureDocBridgeProbe`): the page sends what the bridge must refuse, an oversize
+    /// message, an undecodable file and a post from a frame, so the refusals can be checked in the running app.
+    func probeBridge() {
+        let script = """
+        const h = window.webkit.messageHandlers;
+        h.document.postMessage('{"type":"change","content":"' + 'x'.repeat(33 * 1024 * 1024) + '"}');
+        setTimeout(() => h.documentFile.postMessage('0\\nprobe.png\\nimage/png\\n@@not-base64@@'), 4000);
+        setTimeout(() => {
+          const frame = document.createElement('iframe');
+          frame.style.display = 'none';
+          frame.srcdoc = '<script>parent.webkit.messageHandlers.document.postMessage(JSON.stringify({type:"change",content:"from a frame"}))<\\/script>';
+          document.body.append(frame);
+        }, 8000);
+        return true;
+        """
+        webView?.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page, completionHandler: nil)
+    }
+    #endif
+
     // MARK: From the page
 
+    /// Only the bundled document page itself, in the main frame of this editor's web view, may talk to the editor.
+    static func isEditorPage(_ message: WKScriptMessage, of webView: WKWebView?) -> Bool {
+        guard message.frameInfo.isMainFrame, let webView, message.webView === webView, let url = message.frameInfo.request.url else { return false }
+        return url.scheme == BoardEditorBundle.scheme && url.host == "editor" && url.path == path && url.user == nil && url.port == nil
+    }
+
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        // Only the bundled document page in the main frame may talk to the editor.
-        guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.scheme == BoardEditorBundle.scheme,
-              message.frameInfo.request.url?.path == Self.path,
-              let json = message.body as? String, json.utf8.count <= Self.maxMessageBytes,
-              let object = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+        guard Self.isEditorPage(message, of: webView), let body = message.body as? String else { return }
+        if message.name == Self.fileHandler {
+            // `<index>\n<name>\n<type>\n<base64>`; decoded off the main actor by the model.
+            guard body.utf8.count <= Self.maxFileMessageBytes else {
+                editor?.pageError(ComposerUploadError.tooLarge.localizedDescription)
+                return
+            }
+            editor?.pageSentFile(body)
+            return
+        }
+        guard message.name == Self.handler else { return }
+        guard body.utf8.count <= Self.maxMessageBytes else {
+            editor?.pageError("The editor sent more than this app accepts, so it was ignored. Your saved draft is unchanged.")
+            return
+        }
+        guard let object = (try? JSONSerialization.jsonObject(with: Data(body.utf8))) as? [String: Any],
               let type = object["type"] as? String else { return }
         switch type {
         case "ready":
@@ -138,12 +186,14 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
             editor?.pageLoaded(ok: object["ok"] as? Bool ?? false, message: object["message"] as? String)
         case "change":
             if let content = object["content"] as? String { editor?.pageChanged(content) }
+        case "selection":
+            editor?.selection = (object["anchor"] as? [String: Any]).flatMap { DocumentAnchor(metadata: $0) }
         case "state":
             editor?.formatting = DocumentFormatting(object["active"] as? [String: Any] ?? [:])
         case "need-image":
             if let id = object["objectId"] as? String { editor?.pageNeedsImage(id) }
         case "paste-files":
-            editor?.pagePasted(object["files"] as? [[String: Any]] ?? [])
+            editor?.pageAnnouncedPaste(skipped: object["skipped"] as? Int ?? 0, tooLarge: object["tooLarge"] as? Int ?? 0)
         case "error":
             editor?.pageError(object["message"] as? String ?? "The editor reported an error.")
         default:
@@ -185,6 +235,7 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
         configuration.websiteDataStore = .nonPersistent()
         configuration.setURLSchemeHandler(BoardSchemeHandler(), forURLScheme: BoardEditorBundle.scheme)
         configuration.userContentController.add(WeakMessageHandler(page), name: DocumentEditorPage.handler)
+        configuration.userContentController.add(WeakMessageHandler(page), name: DocumentEditorPage.fileHandler)
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         #if os(iOS)
         configuration.dataDetectorTypes = []

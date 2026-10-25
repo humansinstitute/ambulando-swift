@@ -180,6 +180,26 @@ xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Amb
 open -n build/ddmac/Build/Products/Debug/Ambulando.app --args -AmbulandoUITestFixture
 ```
 
+## Editing documents on the page
+
+A document opens as a white page with dark ink on a faint lavender surround, in light and dark mode alike, with
+comments in the right column. **Edit** (or **Continue editing** when a draft exists) turns the page itself into the
+editor: the title becomes a field, a formatting bar appears above the page (text style and headings, bold, italic,
+strikethrough, inline code, link, bulleted, numbered and task lists, quote, code block, divider, undo, redo; the usual
+shortcuts such as ⌘B and ⌘I work), and **Cancel** and **Save** (⌘S) sit beside it. The lease state and unsaved changes
+show under the title. Cancel with changes asks whether to keep the draft on this Mac or discard it. In a narrow window
+the bar takes two rows and the less used tools move into a More menu. The page follows the app's text size.
+
+The editor is the web app's own document editor (Tiptap with sol's schema), built into the app (`BoardEditor/`,
+`document.html`) and shown in a web view with no signer, keys, network or website data; the app hands it the stored
+document and its images and takes the edited document back. Rich documents keep every node, attribute and mark the
+editor does not know (unknown nodes appear as a "kept unchanged" chip), and anything the user did not change is written
+back as the stored JSON. Markdown documents are edited formatted and saved as Markdown; blocks the user did not change
+keep their exact source. Pasted or dropped images and files go through the same paste pipeline as chat (metadata
+stripped, uploaded with Retry and Remove; Save waits until they are done). Saving uses the edit lease and version
+checks as before: someone else's newer save turns yours into a recovery copy and keeps your draft. Read mode keeps
+the native renderer with text selection and the **+** comment control. Canvas documents open this screen too.
+
 ## Documents and content paste (Mac build 2)
 
 Documents use white paper and dark text independently of the window theme. Comments and replies stay in a separate

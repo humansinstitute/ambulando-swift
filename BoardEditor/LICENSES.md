@@ -1,10 +1,14 @@
-# Board editor notices
+# Editor page notices
 
-The board editor page (`dist/`, copied into the apps as `BoardEditor.bundle`) contains:
+The board and document editor pages (`dist/`, copied into the apps as `BoardEditor.bundle`) contain:
 
 | Component | Version | Licence |
 | --- | --- | --- |
-| Ambulando web client (`sol`) board editor sources, vendored in `web/sol` | commit `c7fafcb` | MIT, © 2026 Wingman contributors |
+| Ambulando web client (`sol`) board and document editor sources, vendored in `web/sol` | commit `c7fafcb` | MIT, © 2026 Wingman contributors |
+| `@tiptap/*` (core, pm, starter-kit and extensions) | 3.27.1 | MIT, © 2025 Tiptap GmbH |
+| `prosemirror-*`, `orderedmap`, `rope-sequence`, `w3c-keyname` (via `@tiptap/pm`) | as locked in `bun.lock` (sol's versions) | MIT, © Marijn Haverbeke and others |
+| `marked` | 17.0.4 | MIT, © MarkedJS and Christopher Jeffrey |
+| `linkifyjs` (via the Tiptap link extension) | 4.3.3 | MIT, © Hypercontext |
 | `@excalidraw/excalidraw` | 0.18.1 | MIT, © 2020 Excalidraw |
 | `react`, `react-dom` | 19.2.0 | MIT, © Meta Platforms, Inc. and affiliates |
 | Excalidraw's bundled dependencies | as locked in `bun.lock` | as declared in each package (`node_modules/*/package.json`) |

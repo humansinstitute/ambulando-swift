@@ -658,7 +658,8 @@ final class ComposerModel {
     var attachments: [PendingAttachment] = []
 
     /// Hands the composed text to the outbox (which clears the stored draft in the same transaction).
-    func send(with outbox: OutboxSender, connection: ConnectionRecord, workspace: WorkspaceRecord) {
+    func send(with outbox: OutboxSender, connection: ConnectionRecord, workspace: WorkspaceRecord,
+              onEnqueued: (@MainActor @Sendable (String) -> Void)? = nil) {
         debounce?.cancel()
         debounce = nil
         let text = text, mentions = mentions, target = target, attachments = attachments
@@ -668,7 +669,11 @@ final class ComposerModel {
         self.attachments = []
         edited = false
         chain {
-            do { try await outbox.send(text: text, mentions: mentions, target: target, connection: connection, workspace: workspace, attachments: attachments) }
+            do {
+                if let item = try await outbox.send(text: text, mentions: mentions, target: target, connection: connection, workspace: workspace, attachments: attachments) {
+                    await onEnqueued?(item.id)
+                }
+            }
             catch {
                 // The outbox write failed (for example, storage full): put the text back rather than lose it.
                 await MainActor.run { [weak self] in if self?.text.isEmpty == true { self?.mentions = mentions; self?.text = text } }
@@ -696,6 +701,7 @@ struct Composer: View {
     let workspace: WorkspaceRecord
     let store: LocalStore
     let placeholder: String
+    var onEnqueued: (@MainActor @Sendable (String) -> Void)? = nil
     @State private var composer: ComposerModel?
     @State private var members = LiveQuery<[MentionCandidate]>(initial: [])
     @State private var storedDraft = LiveQuery<Draft?>(initial: nil)
@@ -841,7 +847,7 @@ struct Composer: View {
     private func send() {
         guard canSend, let composer, let outbox = model.outbox, let connection = model.connection,
               connection.id == target.connectionId, workspace.id == target.workspaceId else { return }
-        composer.send(with: outbox, connection: connection, workspace: workspace)
+        composer.send(with: outbox, connection: connection, workspace: workspace, onEnqueued: onEnqueued)
     }
 }
 

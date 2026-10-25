@@ -39,7 +39,7 @@ Tasks, documents, files and inbox are native too (0.1.0 build 3):
 
 - **Inbox** shows mentions, assignments and unread conversations from Tower's view states. Opening an item marks it read; Mark all read and task Done are available.
 - **Tasks** as a list or board: create, change state, priority and assignee, edit, comment.
-- **Docs** render natively from the stored ProseMirror model. The editor changes only the text you touch and keeps formatting, block ids and unknown content. It holds Tower's edit lease, keeps a draft on the phone, and never overwrites a newer version (Tower keeps a recovery copy instead).
+- **Docs** render natively from the stored ProseMirror model on a white page with a faint lavender surround. On iPhone and iPad the document opens directly into its formatted editor; on Mac, **Edit** turns that page into the editor: select, format from the toolbar (text style, bold, italic, strike, code, link, lists, tasks, quote, code block, divider, undo) and type in the formatted text; Markdown documents edit the same way and are saved as Markdown. Untouched content, unknown nodes, attributes, marks and images are written back exactly as stored. It holds Tower's edit lease, keeps a draft on the device, and never overwrites a newer version (Tower keeps a recovery copy instead). On iPhone/iPad, highlight a passage and choose **Comment on selected text**; the comment keeps its quote and reopens that passage after reload.
 - **Files**: folders, checksum-verified download, QuickLook and Share, upload from Photos or Files.
 - **Search** covers what is stored on the phone.
 - **Chat** messages can be reacted to, edited (signed revision) and deleted; photos are attached without location or camera metadata.

@@ -293,7 +293,7 @@ public final class ComposerUploads {
         guard running == nil, let next = items.first(where: { $0.phase == .waiting }), let sha = next.sha256,
               let record = readRecord(next.id) else {
             if running == nil, let stuck = items.firstIndex(where: { $0.phase == .waiting }) {
-                items[stuck].phase = .failed("This pasted item is no longer on this iPhone.")
+                items[stuck].phase = .failed("This pasted item is no longer on this device.")
                 items[stuck].retryable = false
                 pump()
             }
@@ -391,7 +391,7 @@ public final class ComposerUploads {
             }
             guard let record = readRecord(id), record.target == target, record.kind == kind else {
                 items.append(ComposerUpload(id: id, target: target, appNpub: "", kind: kind, filename: kind == .image ? "Image" : "File",
-                                            mimeType: "", phase: .failed("This pasted item is no longer on this iPhone."), retryable: false))
+                                            mimeType: "", phase: .failed("This pasted item is no longer on this device."), retryable: false))
                 continue
             }
             var item = ComposerUpload(id: id, target: target, appNpub: record.appNpub, kind: kind, filename: record.filename, mimeType: record.mimeType,
@@ -404,7 +404,7 @@ public final class ComposerUploads {
                 if let markdown = item.markdown, host.replaceUploadToken(item.token, with: markdown) { discardFiles(id); continue }
             } else {
                 item.retryable = FileManager.default.fileExists(atPath: staging.appendingPathComponent(record.staged).path)
-                if !item.retryable { item.phase = .failed("This pasted item is no longer on this iPhone.") }
+                if !item.retryable { item.phase = .failed("This pasted item is no longer on this device.") }
             }
             items.append(item)
         }

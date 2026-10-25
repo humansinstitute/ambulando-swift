@@ -165,6 +165,8 @@ struct DeckInboxCard: View {
     @State private var visible = DeckInbox.pageSize
     @State private var notice: String?
     @State private var startedKey: String?
+    @State private var composingThread = false
+    @State private var createdThread: ThreadFocus?
 
     var body: some View {
         let nav = model.navigation.value
@@ -173,7 +175,7 @@ struct DeckInboxCard: View {
         let channel = nav.channel(context.channelId)
         DeckCardFrame(title: channel.map { "Inbox: #\(nav.label($0))" } ?? "Inbox", identifier: "inbox") {
             if let channel { PinButton(type: .channel, id: channel.id, title: nav.label(channel), workspace: workspace) }
-            newThreadMenu(nav, context)
+            newThreadButton
             readMenu(filtered)
         } content: {
             controls
@@ -189,6 +191,11 @@ struct DeckInboxCard: View {
         }
         .task(id: "\(workspace.id):\(context.encoded()):\(active)") { if active { start(context) } else { snapshot.pause() } }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { refresh(context) } }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $composingThread, onDismiss: openCreatedThread) { DeckThreadComposer(workspace: workspace, store: store, onCreated: { createdThread = $0 }) }
+        #else
+        .sheet(isPresented: $composingThread, onDismiss: openCreatedThread) { DeckThreadComposer(workspace: workspace, store: store, onCreated: { createdThread = $0 }).frame(minWidth: 600, minHeight: 440) }
+        #endif
     }
 
     private var emptyText: String {
@@ -234,15 +241,12 @@ struct DeckInboxCard: View {
         .padding(.bottom, 2)
     }
 
-    /// New thread (sol `openDeckThreadComposer`): choose a channel in the context; Chat opens there with its composer.
-    private func newThreadMenu(_ nav: NavigationSnapshot, _ context: WorkContext) -> some View {
-        Menu {
-            let channels = nav.channels(in: context)
-            if channels.isEmpty { Text("No channels in this context") }
-            ForEach(channels) { channel in
-                Button("#\(nav.label(channel))") { model.openInChat(channelId: channel.id) }
-            }
-        } label: {
+    private func openCreatedThread() {
+        if let createdThread { model.focusThread(createdThread); self.createdThread = nil }
+    }
+
+    private var newThreadButton: some View {
+        Button { composingThread = true } label: {
             Image(systemName: "plus").font(.amb(.body).weight(.semibold)).frame(width: 30, height: 30)
         }
         .accessibilityLabel("New thread")
@@ -962,3 +966,76 @@ private struct MacLauncherAddPill: View {
     }
 }
 #endif
+
+/// Deck keeps its context and position underneath; routing happens inside the composer.
+struct DeckThreadComposer: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let workspace: WorkspaceRecord
+    let store: LocalStore
+    let onCreated: (ThreadFocus) -> Void
+    @State private var channelId: String?
+    @State private var requestId: String?
+    @State private var sent = LiveQuery<MessageRecord?>(initial: nil)
+    @State private var pending = LiveQuery<OutboxItem?>(initial: nil)
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                let nav = model.navigation.value
+                let channels = nav.channels(in: model.context)
+                Picker("Channel", selection: $channelId) {
+                    Text("Choose channel").tag(Optional<String>.none)
+                    ForEach(channels) { Text("#\(nav.label($0))").tag(Optional($0.id)) }
+                }
+                .disabled(requestId != nil)
+                .accessibilityIdentifier("deck.compose.channel")
+                if let channelId, let connection = model.connection {
+                    Text("New conversation").font(.amb(.headline))
+                    Text("Write the first message to start a thread.").foregroundStyle(Amb.mutedForeground)
+                    Spacer(minLength: 0)
+                    if requestId == nil {
+                        Composer(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId),
+                                 workspace: workspace, store: store, placeholder: "Start a new thread…", onEnqueued: { requestId = $0 })
+                            .id(channelId)
+                    } else {
+                        Text(pending.value?.lastError ?? "Starting thread… Your message is saved on this device.")
+                            .accessibilityIdentifier("deck.compose.pending")
+                    }
+                } else {
+                    Text(channels.isEmpty ? "No channels in this context." : "Choose a channel here to start your thread.")
+                    Spacer()
+                }
+            }
+            .padding()
+            .background(Amb.background)
+            .navigationTitle("New thread")
+            .inlineTitle()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(requestId == nil ? "Cancel" : "Close") { dismiss() }.accessibilityIdentifier("deck.compose.cancel")
+                }
+            }
+            .onAppear {
+                let channels = model.navigation.value.channels(in: model.context)
+                channelId = model.context.channelId.flatMap { id in channels.contains(where: { $0.id == id }) ? id : nil } ?? channels.first?.id
+            }
+            .task(id: requestId) {
+                guard let requestId else { return }
+                let w = workspace.id, store = store
+                sent.start(store: store, matches: { $0.workspaceId == w && $0.table == .messages }) {
+                    try await store.reader.sentMessage(workspaceId: w, clientRequestId: requestId)
+                }
+                pending.start(store: store, matches: { $0.workspaceId == w && $0.table == .outbox }) {
+                    try await store.reader.outboxItem(id: requestId)
+                }
+            }
+            .onChange(of: sent.value) { _, message in
+                guard let message, let threadId = message.threadId else { return }
+                onCreated(ThreadFocus(workspaceId: workspace.id, channelId: message.channelId, threadId: threadId))
+                dismiss()
+            }
+        }
+        .accessibilityIdentifier("deck.compose")
+    }
+}

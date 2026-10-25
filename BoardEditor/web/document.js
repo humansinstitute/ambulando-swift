@@ -6,7 +6,9 @@
 // version checks. Untouched content goes back exactly as stored (document-preserve.js).
 //
 // In:  window.ambulandoDocument.load / command / insertUploads / replaceUpload / setImage / setStyle / snapshot / focus
-// Out: webkit.messageHandlers.document.postMessage(JSON): ready, loaded, change, state, need-image, paste-files, error
+// Out: webkit.messageHandlers.document.postMessage(JSON): ready, loaded, change, state, need-image, paste-files, error;
+//      webkit.messageHandlers.documentFile.postMessage(`<index>\n<name>\n<type>\n<base64>`): one pasted file.
+import { captureSelection, revealSelection } from './document-selection.js';
 import { Editor, getSchema } from '@tiptap/core';
 import { createFlightDeckTiptapExtensions } from './sol/docs/editor/prosemirror-flightdeck-schema.js';
 import {
@@ -18,12 +20,15 @@ const native = window.webkit?.messageHandlers?.document;
 const post = (message) => native?.postMessage(JSON.stringify(message));
 const root = document.getElementById('document-root');
 
-/// Pasted files the page hands to the app (it strips metadata and uploads them; no more than this per paste).
-const MAX_PASTE_BYTES = 50 * 1024 * 1024;
+/// Paste limits of the app's upload pipeline (sent with `load`); nothing larger or beyond the count is read.
+let limits = { maxFileBytes: 100 * 1024 * 1024, maxFiles: 4 };
+const files = window.webkit?.messageHandlers?.documentFile;
 
 let editor = null;
 let session = null; // { mode, reuse?, markdown?, normalized, knownTypes }
 let changeTimer = null;
+/// Set by the first user input; plugin adjustments made while the document opens are not edits.
+let touched = false;
 const images = new Map(); // objectId -> data URL from the app
 const requested = new Set();
 
@@ -51,6 +56,7 @@ function output() {
 function emitChange() {
   clearTimeout(changeTimer);
   changeTimer = null;
+  if (!touched) return;
   try {
     post({ type: 'change', content: output() });
   } catch (error) {
@@ -77,6 +83,7 @@ function activeState() {
 let lastState = '';
 function emitState() {
   const state = JSON.stringify(activeState());
+  post({ type: 'selection', anchor: captureSelection(editor, session?.mode === 'markdown' ? output() : null) });
   if (state === lastState) return;
   lastState = state;
   post({ type: 'state', active: JSON.parse(state) });
@@ -109,21 +116,30 @@ function base64(buffer) {
   return btoa(binary);
 }
 
-/// Files go to the app, which strips metadata, stages and uploads them and then asks the page to insert placeholders.
+/// Files go to the app one per message on their own channel; it strips metadata, stages and uploads them and then
+/// asks the page to insert placeholders. Files over the upload limit, or past the per-paste count, are not read.
 function handleFiles(list) {
-  const files = [...(list || [])].filter((file) => file && file.size >= 0);
-  if (files.length === 0) return false;
-  Promise.all(files.map(async (file) => {
-    if (file.size > MAX_PASTE_BYTES) return { name: file.name, type: file.type, tooLarge: true };
-    return { name: file.name, type: file.type, data: base64(await file.arrayBuffer()) };
-  })).then((items) => post({ type: 'paste-files', files: items }))
-    .catch((error) => post({ type: 'error', message: `Could not read the pasted item: ${error?.message || error}` }));
+  const all = [...(list || [])].filter(Boolean);
+  if (all.length === 0) return false;
+  const chosen = all.slice(0, limits.maxFiles);
+  const fitting = chosen.filter((file) => file.size <= limits.maxFileBytes);
+  post({ type: 'paste-files', count: fitting.length, skipped: all.length - chosen.length, tooLarge: chosen.length - fitting.length });
+  (async () => {
+    for (const [index, file] of fitting.entries()) {
+      const name = String(file.name || '').replace(/\n/g, ' ');
+      const type = String(file.type || '').replace(/\n/g, '');
+      files?.postMessage(`${index}\n${name}\n${type}\n${base64(await file.arrayBuffer())}`);
+    }
+  })().catch((error) => post({ type: 'error', message: `Could not read the pasted item: ${error?.message || error}` }));
   return true;
 }
 
 // MARK: Load
 
 function mount(message) {
+  if (message.limits && Number.isFinite(message.limits.maxFileBytes) && Number.isFinite(message.limits.maxFiles)) {
+    limits = { maxFileBytes: message.limits.maxFileBytes, maxFiles: message.limits.maxFiles };
+  }
   editor?.destroy();
   editor = null;
   root.textContent = '';
@@ -154,12 +170,21 @@ function mount(message) {
     enableContentCheck: false,
     editorProps: {
       attributes: { 'aria-label': 'Document text', role: 'textbox', 'aria-multiline': 'true' },
+      handleDOMEvents: {
+        beforeinput: () => { touched = true; return false; },
+        keydown: () => { touched = true; return false; },
+        mousedown: () => { touched = true; return false; },
+        cut: () => { touched = true; return false; },
+        compositionstart: () => { touched = true; return false; },
+      },
       handlePaste: (_view, event) => {
+        touched = true;
         const files = event.clipboardData?.files;
         if (files && files.length > 0 && handleFiles(files)) { event.preventDefault(); return true; }
         return false;
       },
       handleDrop: (_view, event) => {
+        touched = true;
         const files = event.dataTransfer?.files;
         if (files && files.length > 0 && handleFiles(files)) { event.preventDefault(); return true; }
         return false;
@@ -169,7 +194,10 @@ function mount(message) {
     onSelectionUpdate: emitState,
     onFocus: emitState,
   });
-  next.normalized = editor.getJSON();
+  // The stored document as the schema loaded it, before plugins adjust it on their first transaction (a trailing
+  // paragraph after a final table, table repairs): those adjustments are new content, not stored content.
+  next.normalized = editor.schema.nodeFromJSON(content).toJSON();
+  touched = false;
   if (next.mode === 'rich') next.reuse = reuseMap(next.stored, next.prepared, next.normalized);
   session = next;
   imageObserver.disconnect();
@@ -183,6 +211,7 @@ function mount(message) {
 
 function command(name, args = {}) {
   if (!editor) return false;
+  touched = true;
   const chain = editor.chain().focus();
   switch (name) {
     case 'paragraph': return chain.setParagraph().run();
@@ -237,6 +266,7 @@ Object.defineProperty(window, 'ambulandoDocument', {
     command(name, json) { return command(name, json ? JSON.parse(json) : {}); },
     insertUploads(json) {
       if (!editor) return false;
+      touched = true;
       const tokens = JSON.parse(json);
       const nodes = tokens.map((token) => ({
         type: 'fdUploadPlaceholder',
@@ -249,6 +279,7 @@ Object.defineProperty(window, 'ambulandoDocument', {
       if (!editor) return false;
       const found = findUpload(token);
       if (!found) return false;
+      touched = true;
       const { tr } = editor.state;
       const node = json ? editor.schema.nodeFromJSON(JSON.parse(json)) : null;
       if (node) tr.replaceWith(found.pos, found.pos + found.node.nodeSize, node);
@@ -269,11 +300,16 @@ Object.defineProperty(window, 'ambulandoDocument', {
       }
       return true;
     },
-    /// The edited document now (rich: JSON text; Markdown: text). Pending change events are flushed first.
+    /// The edited document now (rich: JSON text; Markdown: text), or null before the user changed anything.
     snapshot() {
       clearTimeout(changeTimer);
       changeTimer = null;
-      return output();
+      return touched ? output() : null;
+    },
+    reveal(json) {
+      const result = revealSelection(editor, JSON.parse(json), session?.mode === 'markdown' ? output() : null);
+      if (result.state === 'found') editor.commands.scrollIntoView();
+      return result.state === 'found';
     },
     focus() { editor?.commands.focus(); return true; },
   }),

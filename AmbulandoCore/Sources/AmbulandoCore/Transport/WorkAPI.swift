@@ -194,7 +194,7 @@ public enum LeaseError: LocalizedError, Equatable, Sendable {
     case invalid(String)
     public var errorDescription: String? {
         switch self {
-        case .held(let by, _): "Someone else is editing this document" + (by.map { " (\(shortLabel($0)))" } ?? "") + ". Your changes stay on this iPhone."
+        case .held(let by, _): "Someone else is editing this document" + (by.map { " (\(shortLabel($0)))" } ?? "") + ". Your changes stay on this device."
         case .invalid(let code): "The edit lease is no longer valid (\(code)). Reopen the editor to continue."
         }
     }

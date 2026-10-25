@@ -171,3 +171,18 @@ test('raw Markdown without a trailing newline, and an emptied document', () => {
   const empty = { type: 'doc', content: [{ type: 'paragraph' }] };
   expect(markdownFromEditor(empty, session, normalized)).toBe('');
 });
+
+test('a paragraph the editor appends after a final table (trailing node) does not disturb stored content', () => {
+  const source = 'Intro\n\n| a | b |\n|---|---|\n| 1 | 2 |\n';
+  const { session, pm, normalized } = openMarkdown(source);
+  let state = EditorState.create({ schema: baseSchema, doc: pm });
+  state = state.apply(state.tr.insert(state.doc.content.size, baseSchema.nodes.paragraph.create()));
+  expect(markdownFromEditor(state.doc.toJSON(), session, normalized)).toBe(source);
+
+  const rich = open(stored);
+  let edited = EditorState.create({ schema: rich.schema, doc: rich.pm });
+  edited = edited.apply(edited.tr.insert(edited.doc.content.size, rich.schema.nodes.paragraph.create()));
+  const out = restoreDocument(edited.doc.toJSON(), rich.reuse);
+  expect(out.content.slice(0, stored.content.length)).toEqual(stored.content);
+  stored.content.forEach((node, i) => expect(out.content[i]).toBe(node));
+});

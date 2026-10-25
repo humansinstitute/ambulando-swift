@@ -308,6 +308,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         let work = work
         boards.objectBytes = { id in work.completedObjectBytes(id) }
         boards.externalSaveBeforeNextPublish = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureBoardConflict")
+        work.externalSaveBeforeNextDocBodySave = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDocConflict")
         surfaces.recordLookup = { id in
             if let t = work.task(id) { return ["title": t["title"] ?? "", "channel_id": t["channel_id"] ?? NSNull(), "scope_id": t["scope_id"] ?? NSNull()] }
             if let d = work.doc(id) { return ["title": d["title"] ?? "", "channel_id": d["channel_id"] ?? NSNull(), "scope_id": d["scope_id"] ?? NSNull()] }
@@ -749,6 +750,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
 
         let rich = Self.richDocument()
         let plan = w.seedDoc(scope: a, channel: general, title: "Native app plan", body: rich, contentType: DocumentBody.envelopeContentType)
+        // Debug sample switch: another member holds the plan's edit lease.
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDocLeaseHeld") { w.holdLease(doc: plan, by: Self.rick) }
         w.seedDoc(scope: a, channel: design, title: "Theme notes (Markdown)", body: Data("# Theme notes\n\nThe primary colour is **deep purple**.\n\n- Light\n- Dark".utf8),
                   contentType: "text/markdown")
         let folder = w.seedFolder(channel: general, scope: a, title: "Reports")

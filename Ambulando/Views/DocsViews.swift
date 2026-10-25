@@ -153,8 +153,8 @@ struct DocumentSnapshot: Sendable, Equatable {
     var choice = ScopeChoice()
 }
 
-/// A document as a white page on a faint lavender surround, with comments beside it (Mac) or below it (iPhone/iPad).
-/// Edit turns the page itself into the editor on the Mac; the iPhone and iPad open the same editor full screen.
+/// A document as a white page on a faint lavender surround. iPhone/iPad open straight into formatted editing with
+/// comments in a sheet; Mac keeps comments beside the page and enters editing with Edit.
 struct DocumentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -163,7 +163,8 @@ struct DocumentView: View {
     let store: LocalStore
     @State private var snapshot = LiveQuery<DocumentSnapshot>(initial: DocumentSnapshot())
     @State private var editor: DocEditorModel?
-    @State private var editingFullScreen = false
+    @State private var showingComments = false
+    @State private var automaticEditing = true
     @State private var comment = ""
     @State private var anchor: DocumentAnchor?
     @State private var replyTo: CommentRecord?
@@ -187,18 +188,31 @@ struct DocumentView: View {
             }
         }
         #if os(iOS)
-        .fullScreenCover(isPresented: $editingFullScreen, onDismiss: { editor = nil }) {
-            if let editor { DocumentEditorScreen(editor: editor, onFinish: { editingFullScreen = false }) }
+        .sheet(isPresented: $showingComments) {
+            NavigationStack {
+                ScrollView { docComments.padding() }
+                    .safeAreaInset(edge: .bottom) { composer }
+                    .navigationTitle("Comments")
+                    .inlineTitle()
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingComments = false } } }
+            }
+            .presentationDetents([.medium, .large])
         }
         #endif
         .refreshable { model.openDoc(docId, in: workspace, force: true) }
         .task { start() }
         .onAppear { model.openDoc(docId, in: workspace); model.markViewed(.document, docId, in: workspace) }
-        .onChange(of: snapshot.value.doc?.id) { _, _ in takeEditRequest() }
+        .onChange(of: snapshot.value.doc?.id) { _, _ in takeEditRequest(); openFormattedPage() }
+        .onChange(of: snapshot.value.hasBody) { _, _ in openFormattedPage() }
+        .onChange(of: snapshot.value.editable) { _, _ in openFormattedPage() }
         .onChange(of: model.docEditRequest) { _, _ in takeEditRequest() }
-        #if os(macOS)
         .onDisappear { if let editor { Task { _ = await editor.persistDraft(state: .editing); editor.close() } } }
         .onChange(of: scenePhase) { _, phase in if phase != .active, let editor { Task { _ = await editor.persistDraft(state: .editing) } } }
+    }
+
+    private func openFormattedPage() {
+        #if os(iOS)
+        if automaticEditing && canEdit { beginEditing() }
         #endif
     }
 
@@ -217,21 +231,22 @@ struct DocumentView: View {
             await created.load()
             created.holdLease()
         }
-        #if os(iOS)
-        editingFullScreen = true
-        #endif
+
     }
 
     @ViewBuilder private var readerLayout: some View {
         #if os(macOS)
         GeometryReader { geometry in
+            let commentsWidth = min(340, max(250, geometry.size.width * 0.3))
+            // A narrow page column (small window) gets smaller margins and a two-row edit bar.
+            let compact = geometry.size.width - commentsWidth < 720
             HStack(alignment: .top, spacing: 0) {
                 Group {
                     if let editor {
-                        DocumentEditingPage(editor: editor, onFinish: { self.editor = nil })
+                        DocumentEditingPage(editor: editor, compact: compact, onFinish: { self.editor = nil })
                     } else {
                         ScrollViewReader { scroll in
-                            ScrollView { paper.padding(.horizontal, 28).padding(.vertical, 24).frame(maxWidth: .infinity) }
+                            ScrollView { paper(compact: compact).padding(.horizontal, compact ? 14 : 28).padding(.vertical, 24).frame(maxWidth: .infinity) }
                                 .onChange(of: revealRevision) { _, _ in
                                     if let value = revealed, let result = DocumentAnchors.resolve(value, in: snapshot.value.spans) {
                                         withAnimation { scroll.scrollTo(result.span.path.first ?? 0, anchor: .center) }
@@ -242,13 +257,15 @@ struct DocumentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Amb.paperSurround)
+                // The surround is always light, so the page column (edit bar included) is drawn in light appearance.
+                .environment(\.colorScheme, .light)
                 Divider()
                 VStack(spacing: 0) {
                     ScrollView { docComments.frame(maxWidth: .infinity, alignment: .leading).padding(12) }
                     Divider()
                     composer
                 }
-                .frame(width: min(340, max(250, geometry.size.width * 0.3)))
+                .frame(width: commentsWidth)
                 .background(Amb.card)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("doc.commentColumn")
@@ -256,19 +273,44 @@ struct DocumentView: View {
         }
         .background(Amb.background)
         #else
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                paper
-                docComments.padding(.horizontal, 4)
+        VStack(spacing: 0) {
+            if let editor {
+                HStack {
+                    DocumentCancelButton(editor: editor) { automaticEditing = false; self.editor = nil }
+                    Spacer()
+                    Button { showingComments = true } label: { Label("Comments", systemImage: "text.bubble") }
+                        .accessibilityIdentifier("doc.comments")
+                    Spacer()
+                    Button("Save") { Task { _ = await editor.save() } }
+                        .disabled(editor.saving || !model.isUnlocked || !editor.pageReady)
+                        .accessibilityIdentifier("editor.save")
+                }.padding(.horizontal, 12).padding(.vertical, 6)
+                DocumentFormatBar(editor: editor, compact: true).padding(.horizontal, 12)
+                Button("Comment on selected text") {
+                    if let selected = editor.selection {
+                        Task {
+                            if let saved = await editor.commentAnchor(selected) {
+                                anchor = saved; replyTo = nil; revealed = saved; showingComments = true
+                            }
+                        }
+                    }
+                }.font(.amb(.footnote)).padding(.horizontal, 12)
+                    .disabled(editor.selection == nil || editor.saving || !model.isUnlocked)
+                    .accessibilityIdentifier("doc.commentSelection")
+                DocumentEditSurface(editor: editor)
+                    .modifier(DocumentPaper(fill: true, compact: true))
+                    .padding(.horizontal, 10).padding(.bottom, 8)
+            } else {
+                ScrollView { paper(compact: true).padding(12).tabletReadingWidth() }
+                Button("Comments") { showingComments = true }.padding(8).accessibilityIdentifier("doc.comments")
             }
-            .padding(.horizontal, 12).padding(.vertical, 16).tabletReadingWidth()
         }
-        .safeAreaInset(edge: .bottom) { composer.tabletReadingWidth() }
         .background(Amb.paperSurround)
+        .environment(\.colorScheme, .light)
         #endif
     }
 
-    private var paper: some View {
+    private func paper(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             if let doc = snapshot.value.doc {
                 Text(doc.title).font(Amb.editorial).foregroundStyle(Amb.paperInk).accessibilityIdentifier("doc.title")
@@ -290,7 +332,7 @@ struct DocumentView: View {
                          ?? (model.isUnlocked ? "Loading document…" : "This document is not saved on this \(Device.name) yet. Unlock to load it."))
             }
         }
-        .modifier(DocumentPaper())
+        .modifier(DocumentPaper(compact: compact))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("doc.paper")
     }
@@ -312,7 +354,13 @@ struct DocumentView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if let quote = c.anchorQuote, !quote.isEmpty {
                         Button {
-                            if let found = c.documentAnchor { revealed = found; revealRevision += 1 }
+                            if let found = c.documentAnchor {
+                                revealed = found; revealRevision += 1
+                                editor?.page?.reveal(found)
+                                #if os(iOS)
+                                showingComments = false
+                                #endif
+                            }
                         } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text("“\(quote)”").lineLimit(4)
@@ -373,7 +421,7 @@ struct DocumentView: View {
                 if let replyTo { payload["parent_comment_id"] = replyTo.id }
                 if model.submit(WriteIntent(kind: .docComment, targetId: docId, payload: payload), in: workspace) { comment = ""; anchor = nil; replyTo = nil }
             } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)) }
-                .disabled(comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!model.isUnlocked || comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send comment").accessibilityIdentifier("doccomment.send")
         }
             }
@@ -411,12 +459,13 @@ struct DocumentView: View {
 /// The white page: generous margins, dark ink in both appearances, centred on the lavender surround.
 struct DocumentPaper: ViewModifier {
     var fill = false
+    var compact = false
     func body(content: Content) -> some View {
         content
             #if os(macOS)
-            .padding(.horizontal, 56).padding(.vertical, 44)
+            .padding(.horizontal, compact ? 24 : 56).padding(.vertical, compact ? 24 : 44)
             #else
-            .padding(.horizontal, 22).padding(.vertical, 24)
+            .padding(.horizontal, compact ? 14 : 22).padding(.vertical, compact ? 12 : 24)
             #endif
             .frame(maxWidth: .infinity, maxHeight: fill ? .infinity : nil, alignment: .topLeading)
             .background(Color.white, in: RoundedRectangle(cornerRadius: 4))
@@ -432,15 +481,16 @@ struct DocumentPaper: ViewModifier {
 /// Mac: the document page turned into the editor, in place (formatting bar above the page, Save and Cancel beside it).
 struct DocumentEditingPage: View {
     let editor: DocEditorModel
+    var compact = false
     let onFinish: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            DocumentEditBar(editor: editor, onFinish: onFinish)
-                .padding(.horizontal, 20).padding(.vertical, 8)
+            DocumentEditBar(editor: editor, compact: compact, onFinish: onFinish)
+                .padding(.horizontal, compact ? 12 : 20).padding(.vertical, 8)
             DocumentEditSurface(editor: editor)
-                .modifier(DocumentPaper(fill: true))
-                .padding(.horizontal, 28).padding(.bottom, 20)
+                .modifier(DocumentPaper(fill: true, compact: compact))
+                .padding(.horizontal, compact ? 14 : 28).padding(.bottom, compact ? 12 : 20)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -449,13 +499,16 @@ struct DocumentEditingPage: View {
 /// iPhone and iPad: the same editor full screen, on the same page and surround.
 struct DocumentEditorScreen: View {
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
     let editor: DocEditorModel
     let onFinish: () -> Void
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                DocumentFormatBar(editor: editor)
+                DocumentFormatBar(editor: editor, compact: isCompact)
                     .padding(.horizontal, 12).padding(.vertical, 6)
                 DocumentEditSurface(editor: editor)
                     .modifier(DocumentPaper(fill: true))
@@ -464,6 +517,7 @@ struct DocumentEditorScreen: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Amb.paperSurround)
+            .environment(\.colorScheme, .light)
             .navigationTitle("Edit")
             .inlineTitle()
             .toolbar {
@@ -473,21 +527,42 @@ struct DocumentEditorScreen: View {
         }
         .onChange(of: scenePhase) { _, phase in if phase != .active { Task { _ = await editor.persistDraft(state: .editing) } } }
     }
+
+    private var isCompact: Bool {
+        #if os(iOS)
+        sizeClass == .compact
+        #else
+        false
+        #endif
+    }
 }
 
 /// Formatting on the left; save status, Cancel and Save on the right.
 struct DocumentEditBar: View {
     let editor: DocEditorModel
+    var compact = false
     let onFinish: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            DocumentFormatBar(editor: editor)
-            Spacer(minLength: 8)
-            DocumentCancelButton(editor: editor, onFinish: onFinish).buttonStyle(.bordered)
-            DocumentSaveButton(editor: editor, onFinish: onFinish).buttonStyle(.borderedProminent)
+        if compact {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 12) { Spacer(); actions }
+                DocumentFormatBar(editor: editor, compact: true)
+            }
+            .controlSize(.regular)
+        } else {
+            HStack(spacing: 12) {
+                DocumentFormatBar(editor: editor)
+                Spacer(minLength: 8)
+                actions
+            }
+            .controlSize(.regular)
         }
-        .controlSize(.regular)
+    }
+
+    @ViewBuilder private var actions: some View {
+        DocumentCancelButton(editor: editor, onFinish: onFinish).buttonStyle(.bordered)
+        DocumentSaveButton(editor: editor, onFinish: onFinish).buttonStyle(.borderedProminent)
     }
 }
 
@@ -539,6 +614,8 @@ struct DocumentCancelButton: View {
 /// page's selection and shows what is active there.
 struct DocumentFormatBar: View {
     let editor: DocEditorModel
+    /// Narrow: the less used tools move into a More menu.
+    var compact = false
     @State private var linking = false
     @State private var href = ""
 
@@ -552,27 +629,46 @@ struct DocumentFormatBar: View {
                     Button("Heading 2") { editor.command("heading", ["level": "2"]) }
                     Button("Heading 3") { editor.command("heading", ["level": "3"]) }
                 } label: {
-                    Text(f.heading > 0 ? "Heading \(f.heading)" : "Text").font(.amb(.callout).weight(.medium)).frame(minWidth: 70, alignment: .leading)
+                    // A fixed width, so the tools after it never move under the pointer when the style changes.
+                    Text(f.heading > 0 ? "Heading \(f.heading)" : "Text").font(.amb(.callout).weight(.medium)).lineLimit(1)
+                        .frame(width: 84 * TextScaleFactor.current, alignment: .leading)
                 }
                 .menuStyle(.button).fixedSize()
                 .accessibilityLabel("Text style").accessibilityIdentifier("editor.format.style")
                 divider
                 tool("bold", "Bold", f.bold, "bold")
                 tool("italic", "Italic", f.italic, "italic")
-                tool("strikethrough", "Strikethrough", f.strike, "strike")
-                tool("chevron.left.forwardslash.chevron.right", "Inline code", f.code, "code")
+                if !compact {
+                    tool("strikethrough", "Strikethrough", f.strike, "strike")
+                    tool("chevron.left.forwardslash.chevron.right", "Inline code", f.code, "code")
+                }
                 Button { href = f.link ?? ""; linking = true } label: { icon("link", active: f.link != nil) }
                     .help("Link").accessibilityLabel("Link").accessibilityIdentifier("editor.format.link")
                 divider
                 tool("list.bullet", "Bulleted list", f.bulletList, "bulletList")
                 tool("list.number", "Numbered list", f.orderedList, "orderedList")
                 tool("checklist", "Task list", f.taskList, "taskList")
-                tool("text.quote", "Quote", f.blockquote, "blockquote")
-                tool("curlybraces", "Code block", f.codeBlock, "codeBlock")
-                tool("minus", "Divider", false, "horizontalRule")
-                divider
-                tool("arrow.uturn.backward", "Undo", false, "undo").disabled(!f.canUndo)
-                tool("arrow.uturn.forward", "Redo", false, "redo").disabled(!f.canRedo)
+                if compact {
+                    Menu {
+                        Button("Strikethrough") { editor.command("strike") }
+                        Button("Inline code") { editor.command("code") }
+                        Button("Quote") { editor.command("blockquote") }
+                        Button("Code block") { editor.command("codeBlock") }
+                        Button("Divider") { editor.command("horizontalRule") }
+                        Divider()
+                        Button("Undo") { editor.command("undo") }.disabled(!f.canUndo)
+                        Button("Redo") { editor.command("redo") }.disabled(!f.canRedo)
+                    } label: { icon("ellipsis", active: f.strike || f.code || f.blockquote || f.codeBlock) }
+                        .menuStyle(.button).menuIndicator(.hidden).fixedSize()
+                        .accessibilityLabel("More formatting").accessibilityIdentifier("editor.format.more")
+                } else {
+                    tool("text.quote", "Quote", f.blockquote, "blockquote")
+                    tool("curlybraces", "Code block", f.codeBlock, "codeBlock")
+                    tool("minus", "Divider", false, "horizontalRule")
+                    divider
+                    tool("arrow.uturn.backward", "Undo", false, "undo").disabled(!f.canUndo)
+                    tool("arrow.uturn.forward", "Redo", false, "redo").disabled(!f.canRedo)
+                }
             }
             .buttonStyle(.borderless)
             .disabled(!editor.pageReady)
@@ -639,7 +735,7 @@ struct DocumentEditSurface: View {
             .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
             if let status = editor.status {
                 Notice(tone: editor.statusTone, text: status).accessibilityIdentifier("editor.status")
-                if editor.statusTone == .warning || editor.statusTone == .error {
+                if editor.dirty, editor.statusTone == .warning || editor.statusTone == .error {
                     HStack(spacing: 16) {
                         Button("Copy my text") { Pasteboard.copy(editor.draftText) }
                         Button("Discard my edits", role: .destructive) { confirmDiscard = true }.accessibilityIdentifier("editor.discardEdits")
@@ -675,13 +771,23 @@ struct DocumentEditSurface: View {
     }
 }
 
+enum TextScaleFactor {
+    @MainActor static var current: CGFloat {
+        #if os(macOS)
+        TextScale.shared.factor
+        #else
+        1
+        #endif
+    }
+}
+
 /// Text sizes for the editor page, the same as the reader's at the app's text size.
 enum DocumentEditorStyle {
     @MainActor static func sizes() -> [String: CGFloat] {
         #if os(macOS)
-        let scale = TextScale.shared
-        return ["body": scale.pointSize(.body), "h1": scale.pointSize(.title2), "h2": scale.pointSize(.title3),
-                "h3": scale.pointSize(.headline), "code": scale.pointSize(.footnote)]
+        // The Mac reader's selectable text (DocumentSelection): 15 pt text, 25 pt and 20 pt headings, at the app's scale.
+        let f = TextScale.shared.factor
+        return ["body": 15 * f, "h1": 25 * f, "h2": 20 * f, "h3": 17 * f, "code": 13 * f]
         #else
         func size(_ style: UIFont.TextStyle) -> CGFloat { UIFont.preferredFont(forTextStyle: style).pointSize }
         return ["body": size(.body), "h1": size(.title2), "h2": size(.title3), "h3": size(.headline), "code": size(.footnote)]

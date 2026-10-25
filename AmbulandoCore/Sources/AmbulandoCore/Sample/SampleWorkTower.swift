@@ -177,6 +177,13 @@ public final class SampleWorkTower: @unchecked Sendable {
 
     public var recoveryCount: Int { lock.withLock { table("recoveries").count } }
 
+    private var externalDocSave = false
+    /// Sample-data switch: the next document body save finds that someone else saved first (a recovery copy).
+    public var externalSaveBeforeNextDocBodySave: Bool {
+        get { lock.withLock { externalDocSave } }
+        set { lock.withLock { externalDocSave = newValue } }
+    }
+
     /// Another editor holds the document's lease.
     public func holdLease(doc: String, by npub: String) {
         lock.withLock {
@@ -613,6 +620,13 @@ public final class SampleWorkTower: @unchecked Sendable {
             return (200, ["doc": docOut(row)])
         }
         guard let submitted = table("objects")[objectId], submitted["completed_at"] is String else { return error(400, "validation_error") }
+        if externalDocSave {
+            externalDocSave = false
+            row["storage_object_id"] = storeObject(DocumentBody.newDocument(text: "Someone else's edit").bytes, contentType: DocumentBody.envelopeContentType,
+                                                   name: "external.json")
+            row["row_version"] = ((row["row_version"] as? Int) ?? 1) + 1
+            put("docs", id, row)
+        }
         let head = table("objects")[row["storage_object_id"] as? String ?? ""] ?? [:]
         let stale = o["row_version"] as? Int != row["row_version"] as? Int || (o["base_body_sha256_hex"] as? String) != (head["sha256_hex"] as? String)
         if stale {

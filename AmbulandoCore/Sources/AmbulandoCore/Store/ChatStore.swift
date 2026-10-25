@@ -400,6 +400,13 @@ extension StoreReader {
         return try s.step() ? Self.message(s, workspaceId: workspaceId) : nil
     }
 
+    /// Resolves exactly the acknowledged send, even if other messages arrive concurrently.
+    public func sentMessage(workspaceId: String, clientRequestId: String) throws -> MessageRecord? {
+        let s = try db.prepare("SELECT \(Self.messageColumns) FROM messages WHERE workspace_id = ? AND client_request_id = ? AND deleted = 0 LIMIT 1")
+        try s.bind([.text(workspaceId), .text(clientRequestId)])
+        return try s.step() ? Self.message(s, workspaceId: workspaceId) : nil
+    }
+
     public func thread(workspaceId: String, id: String) throws -> ThreadRecord? {
         let s = try db.prepare("""
         SELECT id, channel_id, source_message_id, title, latest, archived, deleted, row_version, updated_at, raw FROM threads WHERE workspace_id = ? AND id = ?

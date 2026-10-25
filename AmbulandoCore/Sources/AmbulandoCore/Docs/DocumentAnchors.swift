@@ -47,6 +47,17 @@ public struct DocumentTextSpan: Sendable, Equatable {
 }
 
 public enum DocumentAnchors {
+    /// ProseMirror textBetween for a passage spanning text blocks (UTF-16 positions).
+    public static func selectedText(_ anchor: DocumentAnchor, in state: JSONValue) -> String? {
+        guard anchor.line == nil, anchor.from >= 0, anchor.to > anchor.from else { return nil }
+        let parts = spans(state).compactMap { span -> String? in
+            let start = max(anchor.from, span.start), end = min(anchor.to, span.start + span.text.utf16.count)
+            guard end > start else { return nil }
+            return (span.text as NSString).substring(with: NSRange(location: start - span.start, length: end - start))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
     public static func spans(_ state: JSONValue) -> [DocumentTextSpan] {
         var out: [DocumentTextSpan] = []
         func size(_ node: JSONValue) -> Int {

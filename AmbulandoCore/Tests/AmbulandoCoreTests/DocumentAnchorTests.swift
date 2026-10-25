@@ -3,6 +3,13 @@ import XCTest
 @testable import AmbulandoCore
 
 final class DocumentAnchorTests: XCTestCase {
+    func testCrossParagraphQuoteUsesWebSeparatorsAndUTF16Coordinates() throws {
+        let state = try JSONValue.parse(#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"A😀B"}]},{"type":"paragraph","content":[{"type":"text","text":"Next"}]}]}"#)
+        let anchor = DocumentAnchor(quote: "😀B\nNex", from: 2, to: 10)
+        XCTAssertEqual(DocumentAnchors.selectedText(anchor, in: state), anchor.quote)
+        XCTAssertNotEqual(DocumentAnchors.selectedText(DocumentAnchor(quote: "wrong", from: 1, to: 4), in: state), "wrong")
+    }
+
     func testUTF16PositionsNestedBlocksAndVersionRelocation() throws {
         let state = try JSONValue.parse(#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"A😀B"}]},{"type":"blockquote","content":[{"type":"paragraph","content":[{"type":"text","text":"quoted words"}]}]}]}"#)
         let spans = DocumentAnchors.spans(state)
