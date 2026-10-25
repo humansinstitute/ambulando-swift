@@ -31,6 +31,8 @@ architecture that later packages build on. Implementation status:
   `app_state` key `browser.sites.v1` and a separate browser website data store.
 - Build 13 opens WApps (Deck › Hello and Links › Apps, Toolbox) and Context Tree artifact links as signed in-app
   browser tabs through `BrowserModel.launch` (§4.9); HTML naplets keep the sandboxed view. No schema change.
+- Build 15 puts all browser chrome in one compact bottom bar (Ambulando, back, forward, address, tabs, ••• menu) on
+  iPhone, iPad and Mac (§4.9). No schema change.
 - Device validation and packaging are WP6, as is anything else here without evidence in the parity matrix.
 
 The feature-by-feature status is in [parity-matrix.md](parity-matrix.md); package order and
@@ -471,7 +473,8 @@ directory refresh). No Tower route or schema was added.
 - **Browser** (`BrowserModel`, `BrowserView`; policy and NIP-07 in `AmbulandoCore/Browser`). Native-only: no Tower or
   shared contract changes, and no new network owner for workspace data (pages talk to their own sites).
   - Full-screen cover over the shell, so the shell's sections, Chat path, scroll and composer drafts are untouched;
-    **Ambulando** (top left), the tab switcher and the bottom mark return. Tabs are live `WKWebView`s held in memory
+    **Ambulando** in the single bottom bar (build 15: all chrome in one bottom row, rarely used actions in the •••
+    menu, no top toolbar) and the tab switcher return. Tabs are live `WKWebView`s held in memory
     for the app's lifetime (not restored after relaunch), at most 12.
   - Entry: the globe button in every section's toolbar (with the tab count), HTTPS links anywhere in the app
     (`openURL` on the shell; other schemes keep the system behaviour), links leaving an HTML artefact, and the WApp

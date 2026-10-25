@@ -21,7 +21,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (14); Mac version 0.1.0 (1). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (15); Mac version 0.1.0 (1). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -173,6 +173,14 @@ Web apps as browser tabs (build 13):
   key through the same approval sheets. **Ambulando** returns to the Deck card or Toolbox you launched from, and
   launching the same app again shows the tab it opened before. HTML artefacts are unchanged: a labelled, sandboxed
   view with no signing.
+
+One bottom browser bar (build 15):
+
+- **All browser controls are in one compact bar at the bottom**, with no toolbar above the page: **Ambulando** (back to
+  exactly where you were), back, forward, the site address with a lock, the tab count and a ••• menu. Reload/Stop,
+  Share, Open in Safari, New tab, Close tab, Forget Nostr permission and Clear browsing data are in the menu. Editing
+  the address gives the field the whole bar, with Cancel, above the keyboard. The same browser is used on iPhone, iPad
+  and Mac.
 
 Security notes:
 
