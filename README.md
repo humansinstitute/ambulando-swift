@@ -21,7 +21,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (16); Mac version 0.1.0 (3). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (17); Mac version 0.1.0 (5). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -181,6 +181,21 @@ One bottom browser bar (build 15):
   Share, Open in Safari, New tab, Close tab, Forget Nostr permission and Clear browsing data are in the menu. Editing
   the address gives the field the whole bar, with Cancel, above the keyboard. The same browser is used on iPhone, iPad
   and Mac.
+
+Live naplets, the focused thread view and Mac navigation (iPhone/iPad build 17, Mac build 5):
+
+- **Naplets are live windows.** A selected naplet takes touches: conversations with a reply composer, documents with
+  Comments and Edit, HTML artefacts inline in the web app's sandbox, and task trees with the real task graph (add a sub
+  task or next task, open a node). Boards edit in the web app's Excalidraw editor, can be renamed from their window,
+  and an unsaved board draft survives the app being killed.
+- **Focused thread view.** Conversations open over the current screen, like the web's thread modal (a centred card on
+  iPad and Mac, full height on iPhone), from chat, Deck, Search, pins, Inbox and canvases. Close returns to the same
+  place; reopening a thread keeps its reading position for the app session.
+- **Settings › About** shows Version, Build and Platform read from the installed app.
+- **Mac build 5 includes Mac build 4** (clickable section bar, sized Tabs sheet, stacked launchers with logos, app text
+  size). See [docs/mac.md](docs/mac.md).
+- Not checked against a live Tower yet: naplet interaction, task-tree writes and board rename were tested on sample
+  data in the simulator. Push notifications are still not turned on.
 
 Canvas editing and the Mac revision (iPhone/iPad build 16, Mac build 3):
 

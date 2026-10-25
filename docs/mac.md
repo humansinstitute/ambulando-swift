@@ -16,7 +16,7 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (3) |
+| Version | 0.1.0 (5) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
@@ -29,7 +29,7 @@ the screens is shared:
 
 `scripts/mac-install.sh --package` writes `dist/Ambulando-mac-<version>-<build>.zip` and a `.sha256` file next to it.
 
-1. Copy the ZIP to the Mac (AirDrop or Files). Check it: `shasum -a 256 Ambulando-mac-0.1.0-3.zip` must match the
+1. Copy the ZIP to the Mac (AirDrop or Files). Check it: `shasum -a 256 Ambulando-mac-0.1.0-5.zip` must match the
    `.sha256` file.
 2. Double-click the ZIP and drag **Ambulando** into **Applications**.
 3. The app is signed with a Developer ID certificate but **not notarized**. Gatekeeper assessment rejects this release
@@ -178,6 +178,13 @@ At narrow widths the same panels stack vertically, with no horizontal swipe caro
 Tower actor-owned `/me/autopilot-agents` settings and opens configured secure URLs in the signed browser; it does not
 add direct Autopilot session control. Its cached list is scoped to the connection and workspace, with an explicit Retry
 when loading fails.
+
+## Naplets, focused threads and About (Mac build 5)
+
+Build 5 is Mac build 4 plus the shared iPhone/iPad build 17 changes: live naplets (conversation, document, HTML, task
+tree), board rename and draft recovery, the focused thread card over the current window (Escape closes it), and
+Settings › About with separate Version, Build and Platform rows from the installed app's Info.plist. It is signed with
+Developer ID and **not notarized**.
 
 ## Navigation, launchers and text size (Mac build 4)
 
