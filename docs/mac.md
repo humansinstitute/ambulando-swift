@@ -32,11 +32,11 @@ the screens is shared:
 1. Copy the ZIP to the Mac (AirDrop or Files). Check it: `shasum -a 256 Ambulando-mac-0.1.0-1.zip` must match the
    `.sha256` file.
 2. Double-click the ZIP and drag **Ambulando** into **Applications**.
-3. Open it. The app is signed with a Developer ID certificate but **not notarized**, so on first open macOS says it
-   cannot verify the app. If you trust where the ZIP came from, open **System Settings › Privacy & Security**, find
-   the message about Ambulando and choose **Open Anyway**. This is macOS asking you; nothing here turns off Gatekeeper.
-   A notarized build would open without this step; notarization needs an Apple notary profile that was not available.
-4. Import your `nsec`, choose a PIN and connect to your Tower, as on the iPhone. Each device keeps its own encrypted
+3. The app is signed with a Developer ID certificate but **not notarized**. Gatekeeper assessment rejects this release
+   as **Unnotarized Developer ID**, so a downloaded copy may be blocked. Use the source-build route below if macOS
+   blocks it, or wait for a notarized package. These instructions do not change system security settings; an authorized
+   Apple notary profile was not available for this delivery.
+4. Once launched, import your `nsec`, choose a PIN and connect to your Tower, as on the iPhone. Each device keeps its own encrypted
    copy; nothing is copied from the iPhone.
 
 To update, quit Ambulando first, then replace the app in Applications with the new one. Your identity, connection, saved data, drafts and
