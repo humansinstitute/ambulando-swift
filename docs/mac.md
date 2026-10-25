@@ -44,19 +44,37 @@ unsent messages stay (they live in the app's container and Keychain, not in the 
 
 ### Option B: build from source
 
-There is currently no Git remote configured for this checkout, so no clone URL is available. Use the committed
-source ZIP supplied with the release. It includes the project, core package and these scripts; dependencies download
-on the receiving Mac. Unzip it, then run the commands below.
-
 Requirements: macOS 15 or later, Xcode 26 (built with 26.3) selected with `xcode-select`, and network access the
 first time (Swift Package Manager fetches `swift-secp256k1` 0.23.2 from GitHub).
 
+Install Xcode and complete its first-launch setup. If it is installed at `/Applications/Xcode.app`, select it with:
+
 ```sh
-# After unzipping ambulando-native-source-<commit>.zip:
+sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+xcodebuild -version
+```
+
+Clone the repository, then build, sign, install and open the Mac app:
+
+```sh
+git clone https://github.com/humansinstitute/ambulando-swift.git
+cd ambulando-swift
+zsh scripts/mac-install.sh
+```
+
+Alternatively, use the committed source ZIP supplied with the release. It includes the project, core package and
+these scripts; dependencies download on the receiving Mac. After unzipping `ambulando-native-source-<commit>.zip`:
+
+```sh
 cd ambulando-native-ip
-scripts/mac-install.sh            # (or: zsh scripts/mac-install.sh) build Release (arm64 + x86_64), sign, install, open
-scripts/mac-install.sh --no-open  # install without opening
-scripts/mac-install.sh --package  # also write the ZIP and its SHA-256
+zsh scripts/mac-install.sh
+```
+
+Both routes build Release for arm64 and x86_64. From either source directory, optional installer commands are:
+
+```sh
+zsh scripts/mac-install.sh --no-open  # build and install without opening
+zsh scripts/mac-install.sh --package  # build, install, open, and write the ZIP and its SHA-256
 ```
 
 The script installs to `/Applications` (or `~/Applications` if that is not writable), asks a running Ambulando to quit
