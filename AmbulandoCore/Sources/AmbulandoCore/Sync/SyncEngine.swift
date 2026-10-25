@@ -41,7 +41,11 @@ public struct SyncSnapshot: Sendable, Equatable {
 public actor SyncEngine {
     public typealias Work = @Sendable () async throws -> Void
 
-    private struct Job { let key: String; var priority: SyncPriority; var work: Work; let sequence: UInt64 }
+    private struct Job {
+        let key: String; var priority: SyncPriority; var work: Work; let sequence: UInt64
+        /// Called when the job is removed without running (cancelled, or replaced by a newer job of its key).
+        var dropped: (@Sendable () -> Void)? = nil
+    }
 
     public let maxConcurrent: Int
     public let reservedForeground: Int
@@ -89,8 +93,13 @@ public actor SyncEngine {
     /// postpones one already pending without delay, and an immediate request cancels an earlier delay.
     public func enqueue(_ key: String, priority: SyncPriority = .background, force: Bool = false, delay: Duration? = nil,
                         _ work: @escaping Work) {
+        enqueue(key, priority: priority, force: force, delay: delay, work: work, dropped: nil)
+    }
+
+    private func enqueue(_ key: String, priority: SyncPriority, force: Bool, delay: Duration?, work: @escaping Work,
+                         dropped: (@Sendable () -> Void)?) {
         sequence &+= 1
-        let job = Job(key: key, priority: priority, work: work, sequence: sequence)
+        let job = Job(key: key, priority: priority, work: work, sequence: sequence, dropped: dropped)
         if force { notBefore[key] = nil }
         let pendingImmediately = (reruns[key] != nil || queue.contains { $0.key == key }) && delayedUntil[key] == nil
         if let delay, !force {
@@ -103,10 +112,12 @@ public actor SyncEngine {
         }
         if running[key] != nil {
             var rerun = job
-            if let existing = reruns[key] { rerun.priority = max(existing.priority, priority) }
+            if let existing = reruns[key] { rerun.priority = max(existing.priority, priority); existing.dropped?() }
             reruns[key] = rerun
         } else if let index = queue.firstIndex(where: { $0.key == key }) {
+            queue[index].dropped?()
             queue[index].work = work
+            queue[index].dropped = dropped
             queue[index].priority = max(queue[index].priority, priority)
         } else {
             queue.append(job)
@@ -125,8 +136,9 @@ public actor SyncEngine {
     }
 
     public func cancel(_ key: String) {
+        for job in queue where job.key == key { job.dropped?() }
         queue.removeAll { $0.key == key }
-        reruns[key] = nil
+        reruns.removeValue(forKey: key)?.dropped?()
         delayedUntil[key] = nil
         running[key]?.cancel()
         publish()
@@ -142,6 +154,8 @@ public actor SyncEngine {
     /// Cancels everything (identity locked, workspace removed, background task expiring).
     public func cancelAll() {
         generation &+= 1
+        for job in queue { job.dropped?() }
+        for job in reruns.values { job.dropped?() }
         queue.removeAll()
         reruns.removeAll()
         delayedUntil.removeAll()
@@ -167,6 +181,23 @@ public actor SyncEngine {
     private func releaseIdleWaiter(_ id: UUID) { idleWaiters.removeValue(forKey: id)?.resume() }
 
     public func failureCount(_ key: String) -> Int { failures[key] ?? 0 }
+
+    /// Runs one job under the engine's slots and priorities and returns its result. The job's own error is returned
+    /// to the caller rather than recorded (no backoff for the key). A job removed before it ran (cancel, `cancelAll`)
+    /// or a cancelled caller ends with `CancellationError`, so a waiter is never left hanging.
+    public nonisolated func perform<T: Sendable>(_ key: String, priority: SyncPriority = .user,
+                                                 _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+        let result = OneShot<T>()
+        return try await withTaskCancellationHandler {
+            await enqueue(key, priority: priority, force: true, delay: nil, work: {
+                do { result.resume(.success(try await work())) } catch { result.resume(.failure(error)) }
+            }, dropped: { result.resume(.failure(CancellationError())) })
+            return try await result.value()
+        } onCancel: {
+            result.resume(.failure(CancellationError()))
+            Task { await self.cancel(key) }
+        }
+    }
 
     private func pump() {
         let now = clock.now
@@ -210,7 +241,9 @@ public actor SyncEngine {
             notBefore[key] = nil
             errors[key] = nil
         }
-        if let rerun = reruns.removeValue(forKey: key), started == generation { queue.append(rerun) }
+        if let rerun = reruns.removeValue(forKey: key) {
+            if started == generation { queue.append(rerun) } else { rerun.dropped?() }
+        }
         pump()
         publish()
         resumeIdleWaitersIfIdle()
@@ -236,5 +269,33 @@ public actor SyncEngine {
         let waiters = idleWaiters.values
         idleWaiters.removeAll()
         for waiter in waiters { waiter.resume() }
+    }
+}
+
+/// A result delivered once, whether it arrives before or after someone waits for it.
+final class OneShot<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<T, Error>?
+    private var waiter: CheckedContinuation<T, Error>?
+
+    func resume(_ value: Result<T, Error>) {
+        let waiting: CheckedContinuation<T, Error>? = lock.withLock {
+            guard case .none = result else { return nil }
+            result = value
+            defer { waiter = nil }
+            return waiter
+        }
+        waiting?.resume(with: value)
+    }
+
+    func value() async throws -> T {
+        try await withCheckedThrowingContinuation { c in
+            let ready: Result<T, Error>? = lock.withLock {
+                if let result { return result }
+                waiter = c
+                return nil
+            }
+            if let ready { c.resume(with: ready) }
+        }
     }
 }

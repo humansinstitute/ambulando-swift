@@ -626,6 +626,18 @@ final class ComposerModel {
     }
 }
 
+/// Pasted uploads finish into this composer while it shows their target (otherwise into the stored draft).
+extension ComposerModel: UploadTokenHost {
+    var uploadTarget: ChatTarget { target }
+    var uploadText: String { text }
+
+    func replaceUploadToken(_ token: String, with replacement: String) -> Bool {
+        guard let next = ComposerText.replacing(token, with: replacement, in: text, selection: nil) else { return false }
+        text = next.text   // saved on the usual debounce; the text view keeps the caret
+        return true
+    }
+}
+
 struct Composer: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -637,7 +649,7 @@ struct Composer: View {
     @State private var members = LiveQuery<[MemberRecord]>(initial: [])
     @State private var storedDraft = LiveQuery<Draft?>(initial: nil)
     @State private var photos: [PhotosPickerItem] = []
-    @FocusState private var focused: Bool
+    @State private var focused = false
 
     private var suggestions: [MemberRecord] {
         guard let composer, let query = MentionCodec.activeQuery(in: composer.text) else { return [] }
@@ -654,6 +666,9 @@ struct Composer: View {
             if let composer {
                 @Bindable var composer = composer
                 ComposerAttachments(attachments: $composer.attachments, staging: model.staging)
+                if let uploads = model.uploads {
+                    ComposerPastedUploads(uploads: uploads, target: target, text: composer.text)
+                }
             }
             HStack(alignment: .bottom, spacing: 8) {
                 // While typing the keyboard covers the section bar: this slot puts the keyboard away (same frame, so the row
@@ -680,13 +695,11 @@ struct Composer: View {
                 } label: { Image(systemName: "at").font(.body.weight(.semibold)).frame(width: 36, height: 36) }
                     .accessibilityLabel("Mention someone")
                     .accessibilityIdentifier("composer.mention")
-                TextField(placeholder, text: Binding(get: { composer?.text ?? "" }, set: { composer?.text = $0; fixtureTyping() }), axis: .vertical)
-                    .lineLimit(1...6)
-                    .focused($focused)
+                ComposerTextView(text: Binding(get: { composer?.text ?? "" }, set: { composer?.text = $0; fixtureTyping() }),
+                                 focused: $focused, placeholder: placeholder, plainKeyboard: model.fixture?.plainKeyboard == true,
+                                 onPasteItems: pasteItems)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .accessibilityIdentifier("composer.field")
-                    .autocorrectionDisabled(model.fixture?.plainKeyboard == true)
                 Button { send() } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).foregroundStyle(canSend ? Amb.primary : Amb.border)
                 }
@@ -698,9 +711,12 @@ struct Composer: View {
         }
         .background(Amb.card)
         .task(id: target) {
-            let model = ComposerModel(target: target, store: store)
-            composer = model
-            await model.restore()
+            if let previous = composer { model.uploads?.detach(previous); previous.saveNow() }
+            let composerModel = ComposerModel(target: target, store: store)
+            composer = composerModel
+            await composerModel.restore()
+            // After the draft is back: finished uploads land in it and interrupted ones can be retried.
+            model.uploads?.attach(composerModel)
             let workspaceId = target.workspaceId
             members.start(store: store, matches: { $0.table == .members && $0.workspaceId == workspaceId }) {
                 try await store.reader.members(workspaceId: workspaceId)
@@ -718,7 +734,9 @@ struct Composer: View {
                 for item in items { if let staged = await PendingAttachment.fromPicker(item, staging: staging) { composer?.attachments.append(staged) } }
             }
         }
-        .onDisappear { composer?.saveNow() }
+        .onDisappear {
+            if let composer { model.uploads?.detach(composer); composer.saveNow() }
+        }
         .onChange(of: scenePhase) { _, phase in if phase != .active { composer?.saveNow() } }
         .onChange(of: model.chatPath) { _, _ in composer?.saveNow() }
     }
@@ -732,7 +750,16 @@ struct Composer: View {
 
     private var canSend: Bool {
         guard let composer else { return false }
+        // A pasted item still uploading (or failed) holds its placeholder in the text: nothing is sent until it is resolved.
+        guard !UploadToken.contains(in: composer.text) else { return false }
         return !composer.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composer.attachments.isEmpty
+    }
+
+    /// An explicit Paste of images or files: uploads start for this composer's own target and their placeholders go
+    /// in at the caret. Nothing to upload (or no workspace connection) leaves it an ordinary text paste.
+    private func pasteItems(_ providers: [NSItemProvider]) -> [String] {
+        guard let uploads = model.uploads, model.connection?.id == target.connectionId, workspace.id == target.workspaceId else { return [] }
+        return uploads.paste(providers, target: target, appNpub: workspace.appNpub, context: target.threadId == nil ? "message" : "thread")
     }
 
     private func send() {

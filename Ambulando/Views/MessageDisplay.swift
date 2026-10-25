@@ -48,7 +48,7 @@ final class MessageDisplayCache: @unchecked Sendable {
     }
 
     static func make(_ m: MessageRecord) -> MessageDisplay {
-        MessageDisplay(blocks: MessageText.blocks(m.body), time: ChatTime.label(m.createdAt), attachments: MessageAttachment.from(messageRaw: m.raw))
+        MessageDisplay(blocks: MessageText.blocks(m.body), time: ChatTime.label(m.createdAt), attachments: StorageMarkdown.standalone(MessageAttachment.from(messageRaw: m.raw), body: m.body))
     }
 }
 

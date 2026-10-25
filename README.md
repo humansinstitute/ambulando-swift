@@ -132,6 +132,19 @@ Theme, names and avatars, chat separators (build 10):
 - A Deck card that was out of sight while records were removed (access lost, archived, deleted) no longer shows them
   again for a moment when you come back to it.
 
+Paste images and files into chat (next build, not yet released; build number set at release):
+
+- In a channel's or a thread's message box, choose **Paste** (or ⌘V) with an image or file on the clipboard. An
+  "Uploading…" placeholder goes in at the cursor and the item uploads to workspace storage. When it finishes, the
+  placeholder becomes the same storage image (`![name](storage://…)`) or file link (`[name](storage://…)`) the web app
+  inserts. Images are privacy-stripped to PNG first, as picked photos are.
+- Above the box each upload shows Preparing, Waiting, Uploading or why it failed (offline, locked, Tower's answer), with
+  Retry and Remove. Send stays off while a placeholder is in the text; nothing is sent on its own.
+- The result only ever goes to the conversation you pasted in: if you have moved on, it goes into that conversation's
+  saved draft. After a relaunch an unfinished upload can be retried.
+- Pasting text works as before. The app never looks at the clipboard except when you choose Paste. Up to 4 items per
+  paste, 100 MB each.
+
 Security notes:
 
 - Identity import is explicit. The app never searches for, reads or exports keys from other apps or

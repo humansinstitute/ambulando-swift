@@ -139,6 +139,18 @@ extension StoreWriter {
         await emit([ChangeKey(.drafts, target.workspaceId)])
     }
 
+    /// Replaces the first `token` in one target's stored draft (read and written in this writer step, so no other
+    /// draft can receive it). Returns false when the draft does not hold the token.
+    @discardableResult
+    public func replaceDraftToken(_ target: ChatTarget, token: String, with replacement: String) async throws -> Bool {
+        let s = try db.prepare("SELECT text FROM drafts WHERE key = ?")
+        try s.bind([.text(target.draftKey)])
+        guard try s.step(), let text = s.text(0), let next = ComposerText.replacing(token, with: replacement, in: text, selection: nil) else { return false }
+        try db.prepare("UPDATE drafts SET text = ?, updated_at = ? WHERE key = ?").run([.text(next.text), .text(draftStamp()), .text(target.draftKey)])
+        await emit([ChangeKey(.drafts, target.workspaceId)])
+        return true
+    }
+
     // MARK: Outbox
 
     /// Moves a composed message into the outbox and clears that target's draft in one transaction:

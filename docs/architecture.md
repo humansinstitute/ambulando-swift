@@ -213,6 +213,43 @@ Native behaviour:
 - **Disconnect.** Disconnecting deletes the connection's drafts and outbox (cascade) after a warning
   that counts unsent messages.
 
+**Pasted images and files (next build).** Sources: sol `handleMentionComposerPaste`, `handleChatPaste`,
+`uploadChatFileDraft`, `createStorageMarkdown` / `createStorageFileMarkdown`, `chat-attachments.js`.
+
+- **Paste entry.** The composer field is a `UITextView` wrapper (`ComposerTextView`) because SwiftUI's field has no
+  hook for an image or file paste. Only `paste(_:)` is overridden; `canPerformAction` reads only the pasteboard's
+  has-flags. Images, or items carrying no text, go to `ComposerUploads.paste`. Anything else (and an empty result)
+  is `super.paste`. A copied file counts as a file when it carries a name or a file URL.
+- **Placeholders.** One token per item (`[ Uploading image|file <uuid>... ]`), at most 4 per paste, inserted with
+  `insertText` so the caret, undo and the draft debounce behave like typing. Text changed from outside the keyboard
+  (mentions, results, drafts) keeps the caret through `ComposerText.remap`. SwiftUI can run `updateUIView` inside a
+  keystroke, re-entrantly while the composer's `@Observable` text is changing and still returns the previous value,
+  or before `textViewDidChange`. The coordinator therefore writes text back only when it differs from what the view
+  last reported, and never while it is reporting. Without this, the second typed character was dropped under the
+  typing and draft UI tests.
+- **Staging.** Off the main actor: images go through `ImagePrivacy.strippedPNG`; files are copied inside the
+  provider's handler (≤ 100 MB, the Files limit). Bytes and a JSON record (target, `app_npub`, kind, name, type,
+  size, sha256, prepared object, and object id once done) sit in Staging as `paste-<id>.*`.
+- **Upload.** `ComposerUploads` (one per app, main actor) runs one upload at a time. `ComposerUploadTransfer` uses
+  `SyncEngine.perform` at `user` priority with `TowerAPI.store`: prepare → upload (presigned PUT unsigned, background
+  transfers) → complete, verified. The prepared object is reused on Retry. Signing is done only by the connection the
+  paste was captured in, and only while it is unlocked; otherwise the upload fails with "Unlock to upload".
+  `perform` hands the job's error to its caller (no key backoff), and a job dropped by `cancel` or `cancelAll` ends
+  with `CancellationError` ("Upload was interrupted.", retryable).
+- **Results.** The token is unique, so its Markdown can only replace it in the captured target's text:
+  - the live composer of that target (`UploadTokenHost`);
+  - otherwise the stored draft, through `StoreWriter.replaceDraftToken` (read and written in one writer step).
+  If neither holds it yet (the draft is still being saved), the result stays known and is applied when that
+  composer shows the text (`attach`). After a relaunch, `attach` turns the records back into retryable uploads.
+  A placeholder without a record, or with another target's record, can only be removed.
+- **Send.** The Send button is off while `UploadToken.contains`, and `OutboxSender.send` refuses such a body
+  (`ComposerUploadError.unresolved`). `OutboxRequest.build` adds the body's storage references to
+  `metadata.attachments` (sol `mergeChatStorageAttachments`). The message view skips attachments already linked in
+  the body (sol `standaloneChatFileAttachments`).
+- **Difference from the web.** A pasted non-image file is inserted as a storage link. The web shows it as an
+  attachment chip, but the sent message is equivalent. Escaped link labels are parsed (the web's pattern stops at
+  `\]`).
+
 
 ### 4.2 Durable writes (WP4, delivered)
 

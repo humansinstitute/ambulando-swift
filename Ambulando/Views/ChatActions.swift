@@ -269,6 +269,66 @@ struct ComposerAttachments: View {
     }
 }
 
+/// Images and files pasted into this composer while they upload: what is happening, and Retry / Remove. Only uploads
+/// whose placeholder is still in the text are shown.
+struct ComposerPastedUploads: View {
+    let uploads: ComposerUploads
+    let target: ChatTarget
+    let text: String
+
+    var body: some View {
+        let shown = uploads.uploads(for: target).filter { text.contains($0.token) }
+        let notice = uploads.notice(for: target)
+        if !shown.isEmpty || notice != nil {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(shown) { row($0) }
+                if let notice {
+                    Text(notice).font(.caption).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("composer.upload.notice")
+                }
+            }
+            .padding(.horizontal, 12).padding(.top, 8)
+            .accessibilityIdentifier("composer.uploads")
+        }
+    }
+
+    private func row(_ upload: ComposerUpload) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: upload.kind == .image ? "photo" : "doc").foregroundStyle(Amb.mutedForeground)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(upload.filename).font(.footnote.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1).truncationMode(.middle)
+                Text(status(upload)).font(.caption).foregroundStyle(isFailed(upload) ? Amb.destructive : Amb.mutedForeground).lineLimit(2)
+                    .accessibilityIdentifier("composer.upload.status")
+            }
+            Spacer(minLength: 4)
+            if upload.isActive { ProgressView().controlSize(.small) }
+            if isFailed(upload), upload.retryable {
+                Button("Retry") { uploads.retry(upload.id) }
+                    .font(.footnote.weight(.semibold))
+                    .accessibilityIdentifier("composer.upload.retry")
+            }
+            Button { uploads.remove(upload.id) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Amb.mutedForeground) }
+                .accessibilityLabel("Remove \(upload.filename)")
+                .accessibilityIdentifier("composer.upload.remove")
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Amb.muted, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("composer.upload")
+    }
+
+    private func isFailed(_ upload: ComposerUpload) -> Bool { if case .failed = upload.phase { true } else { false } }
+
+    private func status(_ upload: ComposerUpload) -> String {
+        switch upload.phase {
+        case .preparing: "Preparing…"
+        case .waiting: "Waiting to upload…"
+        case .uploading: "Uploading…"
+        case .failed(let message): message
+        case .done: "Uploaded"
+        }
+    }
+}
+
 extension PendingAttachment {
     /// Strips and stages one picked photo (off the main actor).
     static func fromPicker(_ item: PhotosPickerItem, staging: URL) async -> PendingAttachment? {

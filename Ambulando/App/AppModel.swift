@@ -122,6 +122,8 @@ final class AppModel {
     @ObservationIgnored private(set) var outbox: OutboxSender?
     @ObservationIgnored private(set) var writes: WriteSender?
     @ObservationIgnored private(set) var saver: DocumentSaver?
+    /// Images and files pasted into chat composers, uploading to workspace storage (see `ComposerUploads`).
+    private(set) var uploads: ComposerUploads?
     /// Privacy-stripped images and files waiting to upload (Application Support, excluded from backup).
     @ObservationIgnored private(set) var staging: URL?
     /// Downloaded file and attachment content (Caches: the system may purge it; it is re-downloaded on demand).
@@ -265,6 +267,12 @@ final class AppModel {
             self.outbox = OutboxSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers)
             self.writes = WriteSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers)
             self.saver = DocumentSaver(store: store, identity: identity, transport: transport)
+            let pasted = ComposerUploadTransfer(engine: engine, identity: identity, transport: transport, transfers: transfers)
+            self.uploads = ComposerUploads(store: store, staging: staging) { [weak self] job in
+                // Signed by the connection the paste was made in; a different (or no) connection does not upload it.
+                guard let connection = await MainActor.run(body: { self?.connection }) else { throw ComposerUploadError.otherConnection }
+                return try await pasted.upload(job, connection: connection)
+            }
             self.manager = ScopeChannelManager(store: store, identity: identity, transport: transport)
             // Debug test runs on a production store (the upgrade check) pass -AmbulandoNoPublicNetwork: no relay or
             // picture host is contacted.

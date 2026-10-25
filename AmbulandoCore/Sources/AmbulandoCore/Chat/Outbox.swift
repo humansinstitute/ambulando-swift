@@ -24,11 +24,11 @@ public enum OutboxRequest {
         ]
         if let thread = item.threadId { object["thread_id"] = thread } else { object["create_thread"] = true }
         if !item.mentions.isEmpty { object["mentions"] = item.mentions.map(\.requestObject) }
-        if !item.attachments.isEmpty {
-            let wire = item.attachments.compactMap(\.wire)
-            guard wire.count == item.attachments.count, item.attachments.allSatisfy(\.complete) else { throw FileTransferError.notAttachable }
-            object["metadata"] = ["attachments": wire.map(\.requestObject)]
-        }
+        let wire = item.attachments.compactMap(\.wire)
+        guard wire.count == item.attachments.count, item.attachments.allSatisfy(\.complete) else { throw FileTransferError.notAttachable }
+        // Storage links in the body are attachments too (sol `mergeChatStorageAttachments`).
+        let attachments = StorageMarkdown.merged(wire, body: item.body)
+        if !attachments.isEmpty { object["metadata"] = ["attachments": attachments.map(\.requestObject)] }
         return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 
@@ -93,6 +93,8 @@ public struct OutboxSender: Sendable {
         let (encoded, mentions) = MentionCodec.encode(text: text, selected: selected)
         let body = OutboxRequest.normalizedBody(encoded)
         guard !body.isEmpty || !attachments.isEmpty else { return nil }
+        // A pasted item still uploading would otherwise be sent as its placeholder text.
+        guard !UploadToken.contains(in: body) else { throw ComposerUploadError.unresolved }
         let item = try await store.writer.enqueueSend(target: target, origin: connection.origin, signerNpub: connection.signerNpub,
                                                       appNpub: workspace.appNpub, body: body, mentions: mentions, attachments: attachments)
         await kick(connection)
