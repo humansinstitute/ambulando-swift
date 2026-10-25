@@ -316,6 +316,34 @@ Priorities are `user` (a send, opening a thread), then `visible` (the open chann
 `background` (catch-up). One engine slot is reserved for non-background work, so a send never waits
 behind a storm of catch-up jobs. A delayed (retry) request never postpones an immediate one.
 
+
+### 4.7 Section shell, Deck and management (build 9)
+
+Sources: sol `index.html` (`.mobile-section-switcher`, `.deck-columns-track`, sidebar scope/channel controls),
+`autopilot-overview-manager.js`, `task-board-state.js` (`selectWorkContextBoard`), `shell-state.js` (view lock),
+`channels-manager.js`, `scopes-manager.js`; Tower `routes/flightdeck-pg.ts` at `99d18d4`. No route or schema was added.
+
+- **Shell** (`WorkspaceShell`): one `SectionHost` (a plain container view controller holding a `UIHostingController`)
+  per section opened so far, inside a `ZStack`, with the `SectionBar` as a separate layout row below it. An inactive
+  host's hosting view is `isHidden` in UIKit (hiding the representable's own view does not hold: SwiftUI manages it), so its
+  SwiftUI state (navigation stack, scroll offsets, Deck card, canvas viewport, composer) survives while it is out of the
+  accessibility tree and hit testing. Per-section paths live on `AppModel` (`deckPath`, `tasksPath`, …; Chat keeps
+  `chatPath`). The shell ignores the keyboard (it covers the bar); each host moves its own content above it. A host's root view is set once: reassigning it on every shell update re-rendered every open section and raised the typing stall to 118–126 ms. The build 8 launch order is unchanged: one context restore
+  before the workspace list is observed, generation and edit counters guarding every restore.
+- **Destinations**: sidebar choices go through `chooseInSidebar` (Deck, or the locked Chat/Tasks/Docs/Files view;
+  Deck returns to its root and Inbox card). In-section controls (the context bar's Home, the Chat channel list, Deck's
+  Recent and channel pins) call `selectContext` directly and say where they go. Mentions open the record in its section;
+  inside Deck, Agents, Context and Toolbox they push on the current stack.
+- **Deck Inbox** (`DeckActivity`): pure projection over stored threads (`deckThreads`: one grouped scan, newest 300,
+  then title/root/latest body for those rows only), tasks, docs, files, view states, comment activity and agent activity.
+  The card's `LiveQuery` pauses (keeping rows; `start(keepingValue:)` resumes) when Deck is not the current section or the
+  card is not shown, so message bursts do not re-run the feed for an unseen card. Found necessary under the 20,000-row
+  sync storm, where an always-live feed starved the Canvas snapshot read.
+- **Management** (`ScopeChannelManager`): confirmed online requests over the routes listed in the parity matrix, each
+  signed with a fresh NIP-98 event, refused while locked, classified into forbidden / duplicate / conflict / not found /
+  invalid / offline / saved-but-not-refreshed. Results are written to the store from Tower's answer or a fresh list read.
+  The personal scope order reads the current `row_version` before `PUT`; a `scope_order_conflict` stores the other
+  session's order and is reported, never replayed.
 ### 5.1 Chat catch-up (WP3, delivered)
 
 `GET /channels/:c/messages` is the only message list route. It pages forward from the oldest message
@@ -420,6 +448,13 @@ fresh iPhone 17 Pro simulator, same tests: storm p99 13.79 ms, max 57.17 ms (aft
 no-write control p99 25.65 ms, max 58.52 ms; plain-keyboard control p99 24.69 ms, max 57.82 ms; no dropped characters;
 first frame → cached list 234–257 ms. The 50 ms max target remains unmet in storm and control alike and is not relaxed.
 No phone measurement of build 7 exists.
+
+Build 9 (section shell; the composer itself unchanged apart from the Hide keyboard slot) on the "Ambulando Native
+Validation" simulator, three iterations each of the same tests: storm p99 12.21–15.89 ms, max 57.12–58.23 ms (after first
+key max 45.05–48.45 ms); no-write control max 50.56–57.90 ms; plain-keyboard control max 56.90–58.15 ms; no dropped
+characters in 9 runs. Two intermediate versions regressed and were fixed before this: rebuilding every section host's
+root view on each shell update plus hiding the bar on keyboard show (first-key stall 118–126 ms), and a keyboard
+accessory Done button in Chat (83–102 ms). The 50 ms max target remains unmet, as in builds 7–8, and is not relaxed.
 
 ### 5.5 WP5 responsiveness work and attribution (simulator)
 

@@ -17,7 +17,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-Version 0.1.0 (8). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+Version 0.1.0 (9). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -84,7 +84,7 @@ Workspace surfaces and pins (build 7): the sidebar has two new sections.
   - **Toolbox** lists your WApps; each opens in a labelled web view that stays on the WApp's own HTTPS origin.
 
 Editing boards and the Context Tree, reordering pins, the pipeline viewer and Autopilot session control stay in the web
-app. See the parity matrix for every gap.
+app. See the parity matrix for every gap. (Build 9 moved Pinned and the Workspace screens out of the sidebar; see below.)
 
 Sidebar loading fix (build 8): builds 6 and 7 started reading scopes and channels only for a workspace chosen in the
 switcher. Most people never choose one, so the sidebar stayed on "Loading navigation…" and the Chat channel list kept
@@ -95,6 +95,24 @@ Chat channel list now always say why they are empty: loading, a failed refresh w
 no scopes shared; when a refresh fails over saved scopes they stay visible with a "couldn't refresh" note. The launch
 restores the open channel exactly once before it starts watching the workspace list, and no restore overwrites a channel
 or thread the user opened after it began, so a later refresh never moves the screen or touches the composer.
+
+Navigation like the web app (build 9): Canvas used to cover the five tabs with no way back to Chat. The app now follows
+the web app on a phone:
+
+- A **section bar** at the bottom on every screen, in the web's order: Deck, Chat, Tasks, Docs, Files, Agents and Context
+  (optional, in Settings › Sections), Toolbox. Each section remembers where you were; tapping the current one goes back
+  to its first screen. While you type, the keyboard covers the bar; the composer's Hide keyboard button (in place of the photo button) or dragging the conversation down puts it away.
+- **Deck** is a set of cards you swipe between, with dots: Hello and Links, Inbox, Pinned items, Canvas, Feed, Recent.
+  Deck's Inbox is the web's activity feed for the chosen scope or channel (conversations, open tasks, documents and
+  files, newest first, unread marked), with type filters, search, Pin, Mark read, Mark done and Load older activity.
+  Anything opened from Deck has Back to the same card. Canvas boards open from the Canvas card and keep their position.
+  Feeds are not in the iPhone app yet; the Feed card says so.
+- Choosing a scope or channel in the sidebar opens Deck for it, as on the web, unless you lock the current Chat, Tasks,
+  Docs or Files view with the lock in the context bar.
+- **Scope and channel management** from the sidebar, through the same Tower routes as the web: create a channel (+ on a
+  scope), Channel settings (⋯: rename, context prompt, position, archive), and Manage scopes (your own scope order, and
+  rename, describe, create or archive scopes you manage). Tower decides every change; a refusal says why. Channel and
+  scope access, initial permissions and scope templates are still set in the web app, and the create screens say so.
 
 Security notes:
 
