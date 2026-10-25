@@ -162,6 +162,14 @@ Names and the in-app browser (build 12):
   sign-in requests (NIP-42, NIP-98) can be allowed for a site until you lock. Locking cancels and refuses all
   requests. Your key never enters the page. Encryption (NIP-04/44) is not offered.
 
+Web apps as browser tabs (build 13):
+
+- **WApps and artifact links open in the browser.** Deck › Hello and Links › Apps, the Toolbox and Context Tree
+  artifact links now open as full-screen browser tabs, with the same HTTPS checks, so a WApp can ask to use your Nostr
+  key through the same approval sheets. **Ambulando** returns to the Deck card or Toolbox you launched from, and
+  launching the same app again shows the tab it opened before. HTML artefacts are unchanged: a labelled, sandboxed
+  view with no signing.
+
 Security notes:
 
 - Identity import is explicit. The app never searches for, reads or exports keys from other apps or

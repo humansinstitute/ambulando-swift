@@ -29,6 +29,8 @@ architecture that later packages build on. Implementation status:
 - Build 12 names people from their public Nostr profile first, as the web does, loads Blossom avatars through checked
   redirects (≤ 5 MiB), and adds the full-screen in-app browser with native NIP-07 signing (§4.9). No schema change; new
   `app_state` key `browser.sites.v1` and a separate browser website data store.
+- Build 13 opens WApps (Deck › Hello and Links › Apps, Toolbox) and Context Tree artifact links as signed in-app
+  browser tabs through `BrowserModel.launch` (§4.9); HTML naplets keep the sandboxed view. No schema change.
 - Device validation and packaging are WP6, as is anything else here without evidence in the parity matrix.
 
 The feature-by-feature status is in [parity-matrix.md](parity-matrix.md); package order and
