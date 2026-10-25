@@ -50,8 +50,8 @@ struct SettingsView: View {
                     LabeledContent("Queued", value: "\(model.syncStatus.queued.count)")
                     ForEach(model.syncStatus.errors.sorted(by: { $0.key < $1.key }), id: \.key) { key, message in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(key.split(separator: ":").first.map(String.init) ?? key).font(.caption.weight(.semibold))
-                            Text(message).font(.caption).foregroundStyle(Amb.destructive)
+                            Text(key.split(separator: ":").first.map(String.init) ?? key).font(.amb(.caption).weight(.semibold))
+                            Text(message).font(.amb(.caption)).foregroundStyle(Amb.destructive)
                         }
                     }
                 }
@@ -93,11 +93,12 @@ struct SettingsView: View {
                 Section {
                     LabeledContent("Version", value: version)
                     Text("Push notifications and FIPS transport are not part of this build. Tower provides Web Push only; this app uses HTTPS only.")
-                        .font(.caption).foregroundStyle(Amb.mutedForeground)
+                        .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 } header: { Text("About") }
                 }
                 .ambListRows()
             }
+            .macGroupedForm()
             .scrollContentBackground(.hidden)
             .background(Amb.canvas)   // grouped rows (white) on the recessed surface
             .navigationTitle("Settings")
@@ -161,13 +162,13 @@ private struct ProfileHeader: View {
         HStack(spacing: 12) {
             PersonAvatar(person: account.person, size: 52)
             VStack(alignment: .leading, spacing: 2) {
-                Text(account.person.name).font(.headline).foregroundStyle(Amb.foreground).accessibilityIdentifier("profile.name")
-                Text(source).font(.caption).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("profile.source")
+                Text(account.person.name).font(.amb(.headline)).foregroundStyle(Amb.foreground).accessibilityIdentifier("profile.name")
+                Text(source).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("profile.source")
                 if let publicName = account.publicName, account.person.nameSource != .nostr, publicName != account.person.name {
-                    Text("Public profile: \(publicName)").font(.caption).foregroundStyle(Amb.mutedForeground)
+                    Text("Public profile: \(publicName)").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                         .accessibilityIdentifier("profile.publicName")
                 }
-                Text(shortNpub(npub)).font(.caption.monospaced()).foregroundStyle(Amb.mutedForeground)
+                Text(shortNpub(npub)).font(.amb(.caption).monospaced()).foregroundStyle(Amb.mutedForeground)
             }
         }
         .padding(.vertical, 4)

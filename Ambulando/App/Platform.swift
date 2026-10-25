@@ -184,6 +184,26 @@ extension View {
         #endif
     }
 
+    /// A Mac sheet sizes itself to its content's ideal size, which for a `List` is next to nothing: give it room there.
+    /// No change on the iPhone/iPad, where sheets fill their presentation.
+    func macSheetSize(minWidth: CGFloat, idealWidth: CGFloat, minHeight: CGFloat, idealHeight: CGFloat) -> some View {
+        #if os(iOS)
+        self
+        #else
+        frame(minWidth: minWidth, idealWidth: idealWidth, minHeight: minHeight, idealHeight: idealHeight)
+        #endif
+    }
+
+    /// A settings-style form on the Mac (labels and controls in grouped rows that scroll) instead of the default column
+    /// form, which repeated section names as row labels and clipped multi-line fields. iOS forms are grouped already.
+    func macGroupedForm() -> some View {
+        #if os(iOS)
+        self
+        #else
+        formStyle(.grouped)
+        #endif
+    }
+
     /// Full-screen cover on the iPhone; on the Mac a large sheet over the window.
     func coverSheet<Content: View>(isPresented: Binding<Bool>, @ViewBuilder content: @escaping () -> Content) -> some View {
         #if os(iOS)

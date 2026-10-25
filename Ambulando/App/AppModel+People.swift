@@ -160,3 +160,85 @@ struct InitialsAvatar: View {
             .accessibilityHidden(true)
     }
 }
+
+/// A launcher logo (WApp icon, manifest icon or favicon), always drawn from local bytes: public HTTPS images through
+/// the credential-free avatar cache (`AvatarStore`: no cookies or Authorization, thumbnail PNG on disk), and
+/// `storage://` objects through the signed file cache, as message images are. Initials show until a source has
+/// loaded, and stay when every source fails; a failed source is skipped for the next one.
+struct LauncherLogoView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.displayScale) private var scale
+    let sources: [LauncherLogoSource]
+    let initials: String
+    let workspace: WorkspaceRecord
+    var size: CGFloat = 38
+    @State private var loaded: PlatformImage?
+    @State private var attempt = 0
+    @State private var requested: Set<String> = []
+
+    var body: some View {
+        let image = loaded ?? memoryHit
+        ZStack {
+            if let image {
+                Image(platformImage: image).resizable().scaledToFill()
+                    .accessibilityIdentifier("launcher.logo.image")
+            } else {
+                Text(initials).font(.system(size: size * 0.34, weight: .heavy)).foregroundStyle(Amb.mutedForeground)
+                    .frame(width: size, height: size).background(Amb.muted)
+                    .accessibilityIdentifier("launcher.logo.initials")
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+        .task(id: "\(sources)#\(attempt)") { await load() }
+        // A storage logo was asked for: look again when its download finishes (or fails, to try the next source).
+        .onChange(of: model.syncStatus) { _, _ in if loaded == nil && !requested.isEmpty { attempt += 1 } }
+        .onChange(of: model.isUnlocked) { _, unlocked in if unlocked && loaded == nil { attempt += 1 } }
+    }
+
+    /// First frame: a logo already decoded this run, without waiting for any task.
+    private var memoryHit: PlatformImage? {
+        for source in sources {
+            switch source {
+            case .web(let url): if let hit = model.avatars?.cached(url) { return hit }
+            case .storage(let id): if let hit = StorageImageCache.shared.image(storageKey(id)) { return hit }
+            }
+        }
+        return nil
+    }
+
+    private func storageKey(_ objectId: String) -> String { "logo:\(workspace.id):\(objectId):\(Int(size * scale))" }
+
+    private func load() async {
+        if let hit = memoryHit { loaded = hit; return }
+        for source in sources {
+            switch source {
+            case .web(let url):
+                guard let center = model.avatars else { continue }
+                if let image = await center.load(url, scale: scale) {
+                    guard !Task.isCancelled else { return }
+                    loaded = image
+                    return
+                }
+            case .storage(let id):
+                if let file = model.fileCache?.attachment(workspaceId: workspace.id, objectId: id) {
+                    let pixels = size * scale, scale = scale
+                    let decoded = await Task.detached(priority: .utility) { StorageImageCache.downsample(file, maxPixels: pixels, scale: scale) }.value
+                    guard !Task.isCancelled else { return }
+                    if let decoded {
+                        StorageImageCache.shared.store(decoded, key: storageKey(id))
+                        loaded = decoded
+                        return
+                    }
+                } else if model.syncError(forKey: "attachment:\(workspace.id):\(id)") == nil, model.isUnlocked {
+                    // Not downloaded yet: ask once (signed object route) and wait for it rather than a lesser source.
+                    if !requested.contains(id) {
+                        requested.insert(id)
+                        model.downloadAttachment(id, in: workspace)
+                    }
+                    return
+                }
+            }
+        }
+    }
+}

@@ -44,7 +44,7 @@ struct ScopeMenu: View {
                 Image(systemName: "line.3.horizontal.decrease.circle")
                 Text(choice.scopeName(selection) ?? "All scopes").lineLimit(1)
             }
-            .font(.subheadline.weight(.semibold))
+            .font(.amb(.subheadline).weight(.semibold))
         }
         .accessibilityIdentifier("scope.filter")
     }
@@ -69,14 +69,14 @@ struct WriteStatusLine: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Label(text, systemImage: icon).font(.caption).foregroundStyle(tone)
+            Label(text, systemImage: icon).font(.amb(.caption)).foregroundStyle(tone)
             Spacer(minLength: 4)
             switch item.state {
             case .failed, .retrying:
-                Button("Retry") { retry(force: false) }.font(.caption.weight(.semibold)).accessibilityIdentifier("write.retry")
+                Button("Retry") { retry(force: false) }.font(.amb(.caption).weight(.semibold)).accessibilityIdentifier("write.retry")
                 if item.state == .failed { discard }
             case .conflict:
-                Button("Apply mine") { retry(force: true) }.font(.caption.weight(.semibold)).accessibilityIdentifier("write.force")
+                Button("Apply mine") { retry(force: true) }.font(.amb(.caption).weight(.semibold)).accessibilityIdentifier("write.force")
                 discard
             default: EmptyView()
             }
@@ -88,7 +88,7 @@ struct WriteStatusLine: View {
 
     private var discard: some View {
         Button("Discard", role: .destructive) { Task { try? await model.store?.writer.discardWrite(id: item.id) } }
-            .font(.caption.weight(.semibold)).accessibilityIdentifier("write.discard")
+            .font(.amb(.caption).weight(.semibold)).accessibilityIdentifier("write.discard")
     }
 
     private var text: String {

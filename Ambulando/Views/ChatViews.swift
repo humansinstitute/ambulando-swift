@@ -192,7 +192,7 @@ struct ChannelView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if snapshot.value.posts.count >= limit {
                     Button("Show earlier messages") { limit += 150 }
-                        .font(.footnote.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
+                        .font(.amb(.footnote).weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
                 }
                 if snapshot.loaded {
                     ChannelSyncNote(key: WorkspaceSync.messagesKey(workspace.id, target.channelId), historyComplete: snapshot.value.historyComplete)
@@ -215,7 +215,7 @@ struct ChannelView: View {
                 }
                 if snapshot.loaded && snapshot.value.posts.isEmpty && snapshot.value.pending.isEmpty && snapshot.value.historyComplete {
                     Text("No messages yet. Start a conversation below.")
-                        .font(.footnote).foregroundStyle(Amb.mutedForeground).frame(maxWidth: .infinity).padding(.vertical, 40)
+                        .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).frame(maxWidth: .infinity).padding(.vertical, 40)
                 }
             }
             .padding(.bottom, 8)
@@ -385,9 +385,9 @@ struct MessageRow: View {
             PersonAvatar(person: sender)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(sender.name).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+                    Text(sender.name).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
                         .accessibilityIdentifier("message.author")
-                    Text(display.time).font(.caption).foregroundStyle(Amb.mutedForeground)
+                    Text(display.time).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 }
                 if let bodyOverride {
                     if !bodyOverride.isEmpty { MessageBody(text: bodyOverride, muted: true) }
@@ -425,7 +425,7 @@ struct MessageBody: View {
         if let blocks {
             RichBlocksView(blocks: blocks, muted: muted, workspace: workspace)
         } else {
-            Text(verbatim: plain).font(.body).foregroundStyle(muted ? Amb.mutedForeground : Amb.foreground)
+            Text(verbatim: plain).font(.amb(.body)).foregroundStyle(muted ? Amb.mutedForeground : Amb.foreground)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -460,13 +460,13 @@ struct OutboxRow: View {
         HStack(alignment: .top, spacing: 10) {
             PersonAvatar(person: me)
             VStack(alignment: .leading, spacing: 4) {
-                Text(me.nameSource == .npub ? "You" : me.name).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
+                Text(me.nameSource == .npub ? "You" : me.name).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground)
                 if !item.body.isEmpty { MessageBody(text: item.body, muted: true) }
                 if !item.attachments.isEmpty {
                     Label("\(item.attachments.count) \(item.attachments.count == 1 ? "photo" : "photos")" + (item.attachments.allSatisfy(\.complete) ? "" : " (uploading)"),
-                          systemImage: "photo").font(.caption).foregroundStyle(Amb.mutedForeground)
+                          systemImage: "photo").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 }
-                Label(status.text, systemImage: status.icon).font(.caption).foregroundStyle(status.tone)
+                Label(status.text, systemImage: status.icon).font(.amb(.caption)).foregroundStyle(status.tone)
                     .accessibilityIdentifier("outbox.status")
                 if item.state == .failed || item.state == .retrying {
                     HStack(spacing: 16) {
@@ -477,7 +477,7 @@ struct OutboxRow: View {
                             Button("Discard", role: .destructive) { Task { try? await model.outbox?.discard(item.id, restoreDraft: false) } }
                         }
                     }
-                    .font(.caption.weight(.semibold))
+                    .font(.amb(.caption).weight(.semibold))
                     .buttonStyle(.borderless)
                 }
             }
@@ -692,7 +692,7 @@ struct Composer: View {
                 }
                 #if os(macOS)
                 Button { attachingFiles = true } label: {
-                    Image(systemName: "paperclip").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+                    Image(systemName: "paperclip").font(.amb(.body).weight(.semibold)).frame(width: 36, height: 36)
                 }
                 .accessibilityLabel("Attach files")
                 .accessibilityIdentifier("composer.files")
@@ -711,7 +711,7 @@ struct Composer: View {
                     composer.text += "@"
                     focused = true
                     model.refreshDirectory(workspace)
-                } label: { Image(systemName: "at").font(.body.weight(.semibold)).frame(width: 36, height: 36) }
+                } label: { Image(systemName: "at").font(.amb(.body).weight(.semibold)).frame(width: 36, height: 36) }
                     .accessibilityLabel("Mention someone")
                     .accessibilityIdentifier("composer.mention")
                     .iconButton()
@@ -812,8 +812,8 @@ struct MentionPicker: View {
                     HStack(spacing: 10) {
                         PersonAvatar(person: candidate.person)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(member.label).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
-                            Text(member.mentionType == .agent ? "Agent" : "Person").font(.caption).foregroundStyle(Amb.mutedForeground)
+                            Text(member.label).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground)
+                            Text(member.mentionType == .agent ? "Agent" : "Person").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                         }
                         Spacer()
                     }
@@ -895,21 +895,21 @@ struct ThreadSummaryRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if unread { Circle().fill(Amb.brandOrange).frame(width: 7, height: 7).accessibilityLabel("Unread") }
                 Text(title?.isEmpty == false ? title! : String(root.prefix(120)))
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(2)
+                    .font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(2)
                 Spacer(minLength: 4)
-                Text(ChatTime.label(thread.lastActivityAt)).font(.caption).foregroundStyle(Amb.mutedForeground)
+                Text(ChatTime.label(thread.lastActivityAt)).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
             }
             if let title, !title.isEmpty, !root.hasPrefix(title) {
-                Text(root).font(.footnote).foregroundStyle(Amb.mutedForeground).lineLimit(2)
+                Text(root).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).lineLimit(2)
             }
             HStack(spacing: 6) {
                 Label("\(thread.replyCount) \(thread.replyCount == 1 ? "reply" : "replies")", systemImage: "bubble.left.and.text.bubble.right")
-                    .font(.caption.weight(.semibold)).foregroundStyle(Amb.primary)
-                Text("·").font(.caption).foregroundStyle(Amb.mutedForeground)
+                    .font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.primary)
+                Text("·").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 Text("\(person(thread.latestSender)): \(MentionCodec.plain(thread.latestBody))")
-                    .font(.caption).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                    .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
             }
-            if thread.archived { Text("Archived").font(.caption2.weight(.semibold)).foregroundStyle(Amb.mutedForeground) }
+            if thread.archived { Text("Archived").font(.amb(.caption2).weight(.semibold)).foregroundStyle(Amb.mutedForeground) }
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)

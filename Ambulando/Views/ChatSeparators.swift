@@ -50,7 +50,7 @@ struct DaySeparator: View {
     var body: some View {
         HStack(spacing: 10) {
             Rectangle().fill(Amb.border).frame(height: 1)
-            Text(day.label).font(.caption.weight(.semibold)).foregroundStyle(Amb.mutedForeground).fixedSize()
+            Text(day.label).font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground).fixedSize()
             Rectangle().fill(Amb.border).frame(height: 1)
         }
         .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
@@ -66,7 +66,7 @@ struct RepliesRule: View {
     var body: some View {
         HStack(spacing: 10) {
             Text("\(count) \(count == 1 ? "reply" : "replies")")
-                .font(.caption.weight(.bold)).foregroundStyle(Amb.primary).fixedSize()
+                .font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.primary).fixedSize()
             Rectangle().fill(Amb.border).frame(height: 1)
         }
         .padding(.horizontal, 16).padding(.vertical, 8)

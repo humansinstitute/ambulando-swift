@@ -54,7 +54,8 @@ struct MacWorkspaceShell: View {
         .onChange(of: model.contextSelections) { _, _ in model.resetContextSections() }
         .onChange(of: model.navigation.value) { _, _ in model.validateContext() }
         .sheet(isPresented: $ui.showSettings) {
-            SettingsView().frame(minWidth: 560, idealWidth: 640, minHeight: 600, idealHeight: 760)
+            // No taller minimum than the smallest window: the form scrolls inside the sheet.
+            SettingsView().frame(minWidth: 560, idealWidth: 640, minHeight: 420, idealHeight: 760)
         }
         .sheet(isPresented: $ui.showSearch) {
             if let workspace = model.selectedWorkspace, let store = model.store {
@@ -132,28 +133,45 @@ struct MacSidebar: View {
     var body: some View { SidebarContent().background(Amb.card) }
 }
 
+/// The section bar is a plain row, not a horizontal `ScrollView`: on macOS that scroll view swallowed real mouse clicks
+/// on its plain buttons (accessibility presses still worked), so the bar looked dead. When the labelled row does not
+/// fit, the same buttons show icons only (with the name as tooltip and accessibility label).
 struct MacSectionBar: View {
     @Environment(AppModel.self) private var model
     let sections: [AppMode]
     var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 4) {
-                ForEach(sections, id: \.self) { section in
-                    Button {
-                        if model.mode == section { model.popToRoot(section) } else { model.show(section) }
-                    } label: {
-                        Label(section.title, systemImage: section.systemImage)
-                            .font(.subheadline.weight(model.mode == section ? .semibold : .regular))
-                            .padding(.horizontal, 10).padding(.vertical, 8)
-                            .background(model.mode == section ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: 6))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(model.mode == section ? [.isSelected, .isButton] : .isButton)
-                    .accessibilityIdentifier("section.\(section.rawValue)")
-                }
-            }.padding(8)
+        ViewThatFits(in: .horizontal) {
+            row(labelled: true)
+            row(labelled: false)
         }
-        .scrollIndicators(.hidden).background(Amb.card)
+        .frame(maxWidth: .infinity, alignment: .leading).background(Amb.card)
         .accessibilityElement(children: .contain).accessibilityLabel("Sections").accessibilityIdentifier("section.bar")
+    }
+
+    private func row(labelled: Bool) -> some View {
+        HStack(spacing: 4) {
+            ForEach(sections, id: \.self) { section in
+                let selected = model.mode == section
+                Button {
+                    if selected { model.popToRoot(section) } else { model.show(section) }
+                } label: {
+                    Group {
+                        if labelled { Label(section.title, systemImage: section.systemImage) } else { Image(systemName: section.systemImage) }
+                    }
+                    .font(.amb(.subheadline).weight(selected ? .semibold : .regular))
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(selected ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+                    // The whole pill is clickable, not only the glyphs.
+                    .contentShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .help(section.title)
+                .accessibilityLabel(section.title)
+                .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+                .accessibilityIdentifier("section.\(section.rawValue)")
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(8)
     }
 }

@@ -304,6 +304,37 @@ public struct PersonalWappRecord: Sendable, Equatable, Identifiable {
 
     /// The launch URL if it is an HTTPS URL without credentials; anything else is never opened.
     public var safeLaunchURL: URL? { WebContentPolicy.launchURL(launchURL) }
+
+    /// Where the launcher logo may come from, best first (sol `getPersonalWappIconUrl`): `icon_url`, the metadata's
+    /// manifest icon, icon and favicon, then `/favicon.ico` at the launch origin. Only `storage://<uuid>` objects and
+    /// HTTPS addresses on public hosts are kept; the caller shows initials when none loads.
+    public var logoCandidates: [LauncherLogoSource] {
+        let metadata = ((try? JSONSerialization.jsonObject(with: raw)) as? [String: Any])?["metadata"] as? [String: Any] ?? [:]
+        var texts = [iconURL] + ["manifest_icon_url", "icon_url", "favicon_url"].map { nonEmpty(metadata[$0]) }
+        if let launch = safeLaunchURL, let origin = WebContentPolicy.origin(of: launch) { texts.append(origin + "/favicon.ico") }
+        var seen = Set<LauncherLogoSource>()
+        return texts.compactMap { $0.flatMap(LauncherLogoSource.init) }.filter { seen.insert($0).inserted }
+    }
+}
+
+/// A launcher logo address the app is willing to load: a Tower storage object (signed download into the file cache)
+/// or a public HTTPS image (the credential-free avatar cache).
+public enum LauncherLogoSource: Sendable, Hashable {
+    case storage(objectId: String)
+    case web(URL)
+
+    public init?(_ text: String) {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.lowercased().hasPrefix("storage://") {
+            let id = String(value.dropFirst("storage://".count))
+            guard UUID(uuidString: id) != nil else { return nil }
+            self = .storage(objectId: id.lowercased())
+        } else if let url = AvatarURLPolicy.validate(value) {
+            self = .web(url)
+        } else {
+            return nil
+        }
+    }
 }
 
 /// Origin rules for publisher-owned web content (WApps, artifacts). HTTPS only, no embedded credentials, and the

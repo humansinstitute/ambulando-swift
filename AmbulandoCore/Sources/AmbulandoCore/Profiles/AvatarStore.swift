@@ -106,7 +106,7 @@ public actor AvatarStore {
     public static let thumbnailPixels = 192
     public static let maxFiles = 400
     public static let maxDiskBytes = 16 * 1024 * 1024
-    static let acceptedTypes: Set<String> = [UTType.png, .jpeg, .gif, .webP, .heic, .heif, .bmp, .tiff].map(\.identifier).reduce(into: []) { $0.insert($1) }
+    static let acceptedTypes: Set<String> = [UTType.png, .jpeg, .gif, .webP, .heic, .heif, .bmp, .tiff, .ico].map(\.identifier).reduce(into: []) { $0.insert($1) }
 
     public nonisolated let directory: URL
     let transport: AvatarTransport
@@ -204,7 +204,7 @@ public actor AvatarStore {
         if waiters.isEmpty { running -= 1 } else { waiters.removeFirst().resume() }
     }
 
-    /// Validates and shrinks downloaded bytes: only known still-image types, at most `maxSourcePixels`, decoded as an
+    /// Validates and shrinks downloaded bytes: only known still-image types (ICO for launcher favicons), at most `maxSourcePixels`, decoded as an
     /// ImageIO thumbnail (no full-size bitmap) and re-encoded as PNG, which also drops any metadata.
     public static func thumbnailPNG(_ data: Data, maxPixels: Int = thumbnailPixels, maxSourcePixels: Int = maxSourcePixels) throws -> Data {
         guard !data.isEmpty, data.count <= maxBytes else { throw AvatarError.tooLarge }

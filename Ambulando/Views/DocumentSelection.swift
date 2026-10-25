@@ -19,6 +19,8 @@ struct DocumentSelectableText: NSViewRepresentable {
     let span: DocumentTextSpan
     let selection: DocumentSelectionContext
     var heading = 0
+    /// Read while the parent draws, so a text size change (`TextScale`) redraws the text.
+    private let textScale = TextScale.shared.factor
     @Environment(\.openURL) private var openURL
     func makeNSView(context: Context) -> SelectionTextView {
         let view = SelectionTextView()
@@ -35,7 +37,7 @@ struct DocumentSelectableText: NSViewRepresentable {
         context.coordinator.parent = self
         let result = NSMutableAttributedString()
         for run in runs {
-            let size: CGFloat = heading == 0 ? 15 : (heading == 1 ? 25 : 20)
+            let size: CGFloat = (heading == 0 ? 15 : (heading == 1 ? 25 : 20)) * textScale
             var font = run.code ? NSFont.monospacedSystemFont(ofSize: size, weight: .regular) : NSFont.systemFont(ofSize: size, weight: heading > 0 || run.bold ? .semibold : .regular)
             if run.italic { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
             var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]

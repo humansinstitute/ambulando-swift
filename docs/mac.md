@@ -112,6 +112,7 @@ each time, so after each rebuild macOS asks once for the login password to let A
 | ⇧⌘L | Lock now / Unlock… |
 | ⌘, | Settings |
 | ⌃⌘S | Show or hide the sidebar |
+| ⌘+ · ⌘− · ⌘0 | View › Increase, Decrease and Actual Text Size (the app's text, kept across launches) |
 
 ## Differences from the iPhone app
 
@@ -177,3 +178,19 @@ At narrow widths the same panels stack vertically, with no horizontal swipe caro
 Tower actor-owned `/me/autopilot-agents` settings and opens configured secure URLs in the signed browser; it does not
 add direct Autopilot session control. Its cached list is scoped to the connection and workspace, with an explicit Retry
 when loading fails.
+
+## Navigation, launchers and text size (Mac build 4)
+
+- The section bar is a plain row of buttons. A horizontal scroll view had swallowed real mouse clicks (accessibility
+  presses still worked); when the labelled row does not fit, the same buttons show icons with the name as tooltip.
+- The Tabs sheet has a real size on the Mac (it had collapsed to its toolbar): it lists, selects, opens and closes tabs.
+- Deck Apps and My Agents are stacks like the web's: the first launcher with up to two card edges behind it; clicking
+  the stack lists every launcher in a popover. Logos come from local bytes only: public HTTPS icons and favicons through
+  the credential-free avatar cache (thumbnail PNGs on disk, shown offline), `storage://` icons through the signed file
+  cache. Initials show until a logo loads and stay when none does.
+- **Text size:** macOS SwiftUI ignores Dynamic Type sizes, so the app's text styles go through `Font.amb` and
+  `TextScale` (0.85× to 2×, View menu and ⌘+ ⌘− ⌘0). It applies to every window and sheet, including list rows
+  (`appRowTextSize`). System pop-up menus, list section headers and footers, and web pages keep their own size. The
+  shortcuts act in the main window and its sheets; in the Browser window use the View menu.
+  The iPhone and iPad keep Dynamic Type.
+- Channel settings, Settings and New channel/scope use grouped, scrolling forms sized to fit the smallest window.

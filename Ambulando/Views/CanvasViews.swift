@@ -21,12 +21,12 @@ struct CanvasListView: View {
             ForEach(canvases.value) { canvas in
                 NavigationLink(value: WorkRoute.canvas(workspaceId: workspace.id, canvasId: canvas.id)) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(canvas.title).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
+                        Text(canvas.title).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground)
                         HStack(spacing: 6) {
                             Text(canvas.visibilityMode == "workspace" ? "Everyone in the workspace" : "Shared with selected people")
                             if !canvas.updatedAt.isEmpty { Text(ChatTime.label(canvas.updatedAt)) }
                         }
-                        .font(.caption).foregroundStyle(Amb.mutedForeground)
+                        .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                     }
                 }
                 .accessibilityIdentifier("canvas.\(canvas.title)")
@@ -353,7 +353,7 @@ struct CanvasBoardView: View {
             .accessibilityIdentifier("canvas.editError")
         } else if editing {
             Text(busy ? "Saving…" : "Tap an item to select it. Drag it to move; drag its corner to resize.")
-                .font(.caption).foregroundStyle(Amb.mutedForeground)
+                .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 .frame(maxWidth: .infinity).padding(.vertical, 6).background(.bar)
                 .accessibilityIdentifier("canvas.editing")
         }
@@ -370,8 +370,8 @@ struct CanvasBoardView: View {
             HStack(spacing: 10) {
                 Image(systemName: NapletCard.icon(naplet.content)).foregroundStyle(Amb.primary)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(naplet.title).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Text(NapletCard.kindLabel(naplet.content)).font(.caption).foregroundStyle(Amb.mutedForeground)
+                    Text(naplet.title).font(.amb(.subheadline).weight(.semibold)).lineLimit(1)
+                    Text(NapletCard.kindLabel(naplet.content)).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 }
                 Spacer()
                 if editing {
@@ -391,7 +391,7 @@ struct CanvasBoardView: View {
         NavigationStack {
             List(value.scene.naplets) { naplet in
                 Button { selected = naplet.id; if openable(naplet) { pendingOpen = naplet }; showItems = false } label: {
-                    Label { VStack(alignment: .leading) { Text(naplet.title); Text(NapletCard.kindLabel(naplet.content)).font(.caption).foregroundStyle(Amb.mutedForeground) } }
+                    Label { VStack(alignment: .leading) { Text(naplet.title).appRowTextSize(); Text(NapletCard.kindLabel(naplet.content)).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground) } }
                     icon: { Image(systemName: NapletCard.icon(naplet.content)) }
                 }
                 .disabled(!openable(naplet))
@@ -544,7 +544,7 @@ struct CanvasAddItemSheet: View {
                     if !rows.isEmpty {
                         Section(Self.sectionTitle(type)) {
                             ForEach(rows) { choice in
-                                Button { choose(choice) } label: { Label(choice.title, systemImage: Self.icon(type)) }
+                                Button { choose(choice) } label: { Label(choice.title, systemImage: Self.icon(type)).appRowTextSize() }
                                     .accessibilityIdentifier("canvas.add.\(choice.title)")
                             }
                         }

@@ -63,10 +63,10 @@ struct SearchView: View {
 
     private func row(_ hit: SearchHit) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(hit.title).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
-            if !hit.snippet.isEmpty { Text(hit.snippet).font(.caption).foregroundStyle(Amb.mutedForeground).lineLimit(2) }
+            Text(hit.title).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+            if !hit.snippet.isEmpty { Text(hit.snippet).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(2) }
             // Search spans the workspace; each result says where it lives, and opening it follows that context.
-            if let place = place(hit) { Text(place).font(.caption2.weight(.semibold)).foregroundStyle(Amb.primary).lineLimit(1) }
+            if let place = place(hit) { Text(place).font(.amb(.caption2).weight(.semibold)).foregroundStyle(Amb.primary).lineLimit(1) }
         }
     }
 

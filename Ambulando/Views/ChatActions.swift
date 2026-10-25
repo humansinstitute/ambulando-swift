@@ -39,7 +39,7 @@ struct MessageCell: View {
                         VStack(alignment: .leading, spacing: 0) {
                             if let title = distinctTitle {
                                 Label(title, systemImage: "text.bubble")
-                                    .font(.caption.weight(.semibold)).foregroundStyle(Amb.itemHeading).lineLimit(1)
+                                    .font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.itemHeading).lineLimit(1)
                                     .padding(.leading, 60).padding(.trailing, 16).padding(.top, 6)
                             }
                             row
@@ -52,9 +52,9 @@ struct MessageCell: View {
                                         Text("\(replyCount) \(replyCount == 1 ? "reply" : "replies")").fontWeight(.bold)
                                         if let lastReplyAt { Text("· last \(ChatTime.label(lastReplyAt))").fontWeight(.regular).foregroundStyle(Amb.mutedForeground) }
                                         Spacer(minLength: 4)
-                                        Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                        Image(systemName: "chevron.right").font(.amb(.caption2).weight(.bold)).foregroundStyle(Amb.mutedForeground)
                                     }
-                                    .font(.caption).foregroundStyle(Amb.primary)
+                                    .font(.amb(.caption)).foregroundStyle(Amb.primary)
                                     .padding(.vertical, 8)
                                 }
                                 .padding(.leading, 60).padding(.trailing, 16).padding(.bottom, 2)
@@ -142,7 +142,7 @@ struct ReactionBar: View {
                     let list = counts[emoji.rawValue] ?? []
                     let mine = list.contains { $0.reactorNpub == me }
                     Button { toggle(emoji.rawValue) } label: {
-                        HStack(spacing: 4) { Image(systemName: emoji.symbol); Text("\(list.count)") }.font(.caption.weight(.semibold))
+                        HStack(spacing: 4) { Image(systemName: emoji.symbol); Text("\(list.count)") }.font(.amb(.caption).weight(.semibold))
                             .foregroundStyle(emoji == .heart ? Amb.destructive : Amb.primary)
                             .padding(.horizontal, 8).padding(.vertical, 3)
                             // sol `.reaction-pill` / `.reaction-pill-active`: bordered on white; yours on the muted fill.
@@ -172,7 +172,7 @@ struct MessageEditSheet: View {
         NavigationStack {
             Form {
                 ContentTextEntry(text: $text, placeholder: "Message", workspace: workspace, field: "edit-message-\(message.id)").lineLimit(3...12).accessibilityIdentifier("editmessage.field")
-                Text("Edits are signed with your identity and replace the message for everyone.").font(.footnote).foregroundStyle(Amb.mutedForeground)
+                Text("Edits are signed with your identity and replace the message for everyone.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             }
             .navigationTitle("Edit message")
             .inlineTitle()
@@ -213,7 +213,7 @@ struct AttachmentView: View {
             Button {
                 if let url { preview = url } else { model.downloadAttachment(attachment.storageObjectId, in: workspace) }
             } label: {
-                Label(attachment.filename, systemImage: "paperclip").font(.footnote)
+                Label(attachment.filename, systemImage: "paperclip").font(.amb(.footnote))
                     .padding(8).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
             }
             .buttonStyle(.plain)
@@ -283,7 +283,7 @@ struct ComposerPastedUploads: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(shown) { row($0) }
                 if let notice {
-                    Text(notice).font(.caption).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("composer.upload.notice")
+                    Text(notice).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("composer.upload.notice")
                 }
             }
             .padding(.horizontal, 12).padding(.top, 8)
@@ -295,15 +295,15 @@ struct ComposerPastedUploads: View {
         HStack(spacing: 8) {
             Image(systemName: upload.kind == .image ? "photo" : "doc").foregroundStyle(Amb.mutedForeground)
             VStack(alignment: .leading, spacing: 1) {
-                Text(upload.filename).font(.footnote.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1).truncationMode(.middle)
-                Text(status(upload)).font(.caption).foregroundStyle(isFailed(upload) ? Amb.destructive : Amb.mutedForeground).lineLimit(2)
+                Text(upload.filename).font(.amb(.footnote).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1).truncationMode(.middle)
+                Text(status(upload)).font(.amb(.caption)).foregroundStyle(isFailed(upload) ? Amb.destructive : Amb.mutedForeground).lineLimit(2)
                     .accessibilityIdentifier("composer.upload.status")
             }
             Spacer(minLength: 4)
             if upload.isActive { ProgressView().controlSize(.small) }
             if isFailed(upload), upload.retryable {
                 Button("Retry") { uploads.retry(upload.id) }
-                    .font(.footnote.weight(.semibold))
+                    .font(.amb(.footnote).weight(.semibold))
                     .accessibilityIdentifier("composer.upload.retry")
             }
             Button { uploads.remove(upload.id) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Amb.mutedForeground) }

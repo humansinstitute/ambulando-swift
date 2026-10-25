@@ -175,6 +175,8 @@ struct ComposerTextView: NSViewRepresentable {
     let onPasteItems: ([NSItemProvider]) -> [String]
     var onSubmit: (() -> Void)? = nil
     var fixedHeight: CGFloat? = nil
+    /// Read while the parent draws, so a text size change (`TextScale`) reaches `updateNSView`.
+    private let textScale = TextScale.shared.factor
 
     static let maxLines: CGFloat = 6
 
@@ -186,7 +188,7 @@ struct ComposerTextView: NSViewRepresentable {
         scroll.borderType = .noBorder
         let view = PasteAwareTextView()
         view.delegate = context.coordinator
-        view.font = .preferredFont(forTextStyle: .body)
+        view.font = TextScale.shared.nsFont(.body)
         view.textColor = NSColor(Amb.foreground)
         view.insertionPointColor = NSColor(Amb.primary)
         view.drawsBackground = false
@@ -218,6 +220,11 @@ struct ComposerTextView: NSViewRepresentable {
             }
         }
         view.placeholder = placeholder
+        let font = TextScale.shared.nsFont(.body)
+        if view.font != font {
+            view.font = font
+            scroll.invalidateIntrinsicContentSize()
+        }
         // As on the iPhone: only a change made outside typing (a mention, a finished upload, a restored draft) is
         // written back, so an update that arrives mid-keystroke never drops a character.
         if !context.coordinator.reporting {

@@ -24,7 +24,7 @@ struct SidebarButton: View {
             withAnimation(.snappy) { model.sidebarOpen = true }
             #endif
         } label: {
-            Image(systemName: "line.3.horizontal").font(.body.weight(.semibold)).foregroundStyle(Amb.foreground)
+            Image(systemName: "line.3.horizontal").font(.amb(.body).weight(.semibold)).foregroundStyle(Amb.foreground)
                 .frame(width: 32, height: 32)
         }
         .accessibilityLabel("Open navigation")
@@ -48,12 +48,12 @@ struct ContextBar: View {
             Button { withAnimation(.snappy) { model.sidebarOpen = true } } label: {
                 HStack(spacing: 6) {
                     Text(nav.scope(context.scopeId)?.name ?? "All scopes")
-                        .font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
-                    Text("|").font(.subheadline).foregroundStyle(Amb.border).accessibilityHidden(true)
+                        .font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+                    Text("|").font(.amb(.subheadline)).foregroundStyle(Amb.border).accessibilityHidden(true)
                     Text(nav.channel(context.channelId).map { "#" + nav.label($0) } ?? (context.isHome ? "Everything" : "All channels"))
-                        .font(.subheadline).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                        .font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
                     Spacer(minLength: 0)
-                    Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(Amb.mutedForeground)
+                    Image(systemName: "chevron.down").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
                 }
                 .contentShape(Rectangle())
             }
@@ -65,7 +65,7 @@ struct ContextBar: View {
             if model.canLockCurrentView {
                 let locked = model.isCurrentViewLocked
                 Button { model.toggleCurrentViewLock() } label: {
-                    Image(systemName: locked ? "lock.fill" : "lock.open").font(.caption.weight(.semibold))
+                    Image(systemName: locked ? "lock.fill" : "lock.open").font(.amb(.caption).weight(.semibold))
                         .foregroundStyle(locked ? Amb.primary : Amb.mutedForeground)
                         .frame(width: 30, height: 28).contentShape(Rectangle())
                 }
@@ -168,7 +168,7 @@ struct SidebarContent: View {
                     Button { model.chooseInSidebar(.home) } label: {
                         HStack(spacing: 8) {
                             WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 24)
-                            Text("Home").font(.subheadline.weight(context.isHome ? .bold : .semibold))
+                            Text("Home").font(.amb(.subheadline).weight(context.isHome ? .bold : .semibold))
                                 .foregroundStyle(context.isHome ? Amb.selectedForeground : Amb.foreground)
                             Spacer()
                         }
@@ -201,7 +201,7 @@ struct SidebarContent: View {
                         HStack(spacing: 2) {
                             Button { model.toggleScopeCollapsed(group.id) } label: {
                                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                                    .font(.caption.weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                    .font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.mutedForeground)
                                     .frame(width: 28, height: 32)
                                     .contentShape(Rectangle())
                             }
@@ -210,7 +210,7 @@ struct SidebarContent: View {
                             .accessibilityIdentifier("sidebar.collapse.\(group.scope.name)")
                             Button { model.chooseInSidebar(WorkContext(scopeId: group.id)) } label: {
                                 Text(group.scope.name)
-                                    .font(.footnote.weight(.heavy)).foregroundStyle(context.scopeId == group.id && context.channelId == nil ? Amb.primary : Amb.mutedForeground)
+                                    .font(.amb(.footnote).weight(.heavy)).foregroundStyle(context.scopeId == group.id && context.channelId == nil ? Amb.primary : Amb.mutedForeground)
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
                                     .padding(.horizontal, 4)
@@ -225,7 +225,7 @@ struct SidebarContent: View {
                             // sol `.sidebar-scope-add-channel`: shown where the member may create channels in the scope.
                             if ManagementPermissions.canCreateChannel(in: group.scope, membership: model.membership) {
                                 Button { sheet = .newChannel(group.scope) } label: {
-                                    Image(systemName: "plus").font(.caption.weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                    Image(systemName: "plus").font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.mutedForeground)
                                         .frame(width: 30, height: 32).contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
@@ -236,7 +236,7 @@ struct SidebarContent: View {
                         .padding(.top, 6)
                         if !collapsed {
                             if group.channels.isEmpty {
-                                Text("No channels visible").font(.caption).foregroundStyle(Amb.mutedForeground).padding(.leading, 34).padding(.vertical, 4)
+                                Text("No channels visible").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(.leading, 34).padding(.vertical, 4)
                             }
                             ForEach(group.channels) { channel in
                                 HStack(spacing: 0) {
@@ -244,7 +244,7 @@ struct SidebarContent: View {
                                                active: context.channelId == channel.id, identifierPrefix: "sidebar.channel")
                                     // sol `.sidebar-scope-channel-menu`: Channel settings on every channel.
                                     Button { sheet = .channelSettings(channel) } label: {
-                                        Image(systemName: "ellipsis").font(.caption.weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                        Image(systemName: "ellipsis").font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.mutedForeground)
                                             .frame(width: 30, height: 36).contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
@@ -257,7 +257,7 @@ struct SidebarContent: View {
                     if !nav.groups.isEmpty {
                         // sol `.sidebar-manage-scopes-footer`.
                         Button { sheet = .manageScopes } label: {
-                            Label("Manage scopes", systemImage: "slider.horizontal.3").font(.subheadline.weight(.semibold))
+                            Label("Manage scopes", systemImage: "slider.horizontal.3").font(.amb(.subheadline).weight(.semibold))
                                 .foregroundStyle(Amb.primary).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                                 .padding(.horizontal, 10).contentShape(Rectangle())
                         }
@@ -298,7 +298,7 @@ enum SidebarSheet: Identifiable {
 private struct SidebarHeading: View {
     let text: String
     var body: some View {
-        Text(text).font(.footnote.weight(.heavy)).foregroundStyle(Amb.mutedForeground)
+        Text(text).font(.amb(.footnote).weight(.heavy)).foregroundStyle(Amb.mutedForeground)
             .padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 2)
             .accessibilityAddTraits(.isHeader)
     }
@@ -317,12 +317,12 @@ private struct ChannelRow: View {
         Button { model.chooseInSidebar(WorkContext(scopeId: channel.scopeId, channelId: channel.id)) } label: {
             HStack(spacing: 6) {
                 if SidebarNavigation.isDirectMessageChannel(channel) {
-                    Image(systemName: "person.2").font(.caption).foregroundStyle(Amb.mutedForeground).frame(width: 14)
+                    Image(systemName: "person.2").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).frame(width: 14)
                 } else {
-                    Text("#").font(.subheadline).foregroundStyle(Amb.mutedForeground).frame(width: 14)
+                    Text("#").font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground).frame(width: 14)
                 }
                 // sol `.sidebar-scope-channel-row.active`: muted fill, primary bold label.
-                Text(label).font(.subheadline.weight(active ? .bold : unread ? .semibold : .regular))
+                Text(label).font(.amb(.subheadline).weight(active ? .bold : unread ? .semibold : .regular))
                     .foregroundStyle(active ? Amb.selectedForeground : unread ? Amb.foreground : Amb.mutedForeground).lineLimit(1)
                 Spacer(minLength: 0)
                 if unread { Circle().fill(Amb.brandOrange).frame(width: 7, height: 7).accessibilityHidden(true) }
@@ -354,11 +354,11 @@ private struct WorkspaceFooter: View {
             HStack(spacing: 10) {
                 WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 32)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Workspace").font(.caption2).foregroundStyle(Amb.mutedForeground)
-                    Text(model.selectedWorkspace?.label ?? "Ambulando").font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+                    Text("Workspace").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
+                    Text(model.selectedWorkspace?.label ?? "Ambulando").font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
                 }
                 Spacer()
-                Image(systemName: "chevron.up.chevron.down").font(.caption.weight(.semibold)).foregroundStyle(Amb.mutedForeground)
+                Image(systemName: "chevron.up.chevron.down").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
             }
             .padding(10)
             .background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
@@ -384,7 +384,7 @@ struct ChannelDirectoryView: View {
             ForEach(groups) { group in
                 Section {
                     if group.channels.isEmpty {
-                        Text("No channels visible").font(.footnote).foregroundStyle(Amb.mutedForeground)
+                        Text("No channels visible").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     }
                     ForEach(group.channels) { channel in
                         Button { model.selectContext(WorkContext(scopeId: group.id, channelId: channel.id)) } label: {
@@ -395,15 +395,16 @@ struct ChannelDirectoryView: View {
                                     .fontWeight(nav.unread.contains(channel.id) ? .semibold : .regular)
                                 Spacer()
                                 if nav.unread.contains(channel.id) { Circle().fill(Amb.brandOrange).frame(width: 8, height: 8).accessibilityLabel("Unread") }
-                                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Amb.border)
+                                Image(systemName: "chevron.right").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.border)
                             }
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .appRowTextSize()
                         .accessibilityIdentifier("channel.\(nav.label(channel))")
                     }
                 } header: {
-                    Text(group.scope.name).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.itemHeading).textCase(nil)
+                    Text(group.scope.name).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.itemHeading).textCase(nil)
                 }
             }
         }
@@ -448,7 +449,7 @@ struct NavigationStatus: View {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text(state == .loading ? "Loading scopes and channels…" : "Finding your workspaces…")
-                    .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                    .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     .accessibilityIdentifier("sidebar.state.loading")
             }
             .frame(maxWidth: .infinity, alignment: compact ? .leading : .center)
@@ -472,12 +473,12 @@ struct NavigationStatus: View {
 
     private func message(tone: Notice.Tone, text: String, identifier: String, retry: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(text).font(.footnote)
+            Text(text).font(.amb(.footnote))
                 .foregroundStyle(tone == .error ? Amb.destructive : tone == .warning ? Amb.warning : Amb.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier(identifier)
             if retry {
-                Button { model.retryNavigation() } label: { Label("Retry", systemImage: "arrow.clockwise").font(.footnote.weight(.semibold)) }
+                Button { model.retryNavigation() } label: { Label("Retry", systemImage: "arrow.clockwise").font(.amb(.footnote).weight(.semibold)) }
                     .buttonStyle(.bordered).controlSize(.small)
                     .accessibilityIdentifier("sidebar.retry")
             }

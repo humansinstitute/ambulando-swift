@@ -29,19 +29,19 @@ struct AgentsView: View {
         List {
             Section("Agents in this workspace") {
                 if value.agents.isEmpty {
-                    Text(snapshot.loaded ? "No agents are installed in this workspace." : "Loading…").font(.footnote).foregroundStyle(Amb.mutedForeground)
+                    Text(snapshot.loaded ? "No agents are installed in this workspace." : "Loading…").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                 }
                 ForEach(value.agents) { agent in
                     HStack(spacing: 10) {
                         Image(systemName: "sparkles").foregroundStyle(Amb.primary).frame(width: 24)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(agent.displayName).font(.subheadline.weight(.semibold))
+                            Text(agent.displayName).font(.amb(.subheadline).weight(.semibold))
                             Text(([String(agent.agentNpub.prefix(12)) + "…"] + agent.capabilities.prefix(3)).joined(separator: " · "))
-                                .font(.caption).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                                .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
                         }
                         Spacer()
                         let busy = live.contains { $0.agentNpub == agent.agentNpub }
-                        Text(busy ? "Working" : "Idle").font(.caption.weight(.semibold))
+                        Text(busy ? "Working" : "Idle").font(.amb(.caption).weight(.semibold))
                             .foregroundStyle(busy ? Amb.brandOrange : Amb.mutedForeground)
                     }
                     .accessibilityElement(children: .combine)
@@ -53,7 +53,7 @@ struct AgentsView: View {
             activitySection("Recently finished", Array(recent.prefix(30)), value)
             Section("Not available on \(Device.name)") {
                 Label("Pipeline runs and Autopilot sessions need a direct Autopilot connection, which this HTTPS-only app does not make.", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
-                    .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                    .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     .accessibilityIdentifier("agents.pipelines.unavailable")
             }
         }
@@ -71,15 +71,15 @@ struct AgentsView: View {
                     Button { open(activity) } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 6) {
-                                Text(value.names[activity.agentNpub] ?? "Agent").font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
-                                Text(stateLabel(activity)).font(.caption.weight(.semibold)).foregroundStyle(stateColor(activity))
+                                Text(value.names[activity.agentNpub] ?? "Agent").font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground)
+                                Text(stateLabel(activity)).font(.amb(.caption).weight(.semibold)).foregroundStyle(stateColor(activity))
                                 Spacer()
-                                Text(ChatTime.label(activity.updatedAt)).font(.caption).foregroundStyle(Amb.mutedForeground)
+                                Text(ChatTime.label(activity.updatedAt)).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                             }
                             if let text = activity.label ?? activity.summary {
-                                Text(text).font(.footnote).foregroundStyle(Amb.foreground).lineLimit(3)
+                                Text(text).font(.amb(.footnote)).foregroundStyle(Amb.foreground).lineLimit(3)
                             }
-                            Text("#" + (value.channelNames[activity.channelId] ?? "channel")).font(.caption).foregroundStyle(Amb.mutedForeground)
+                            Text("#" + (value.channelNames[activity.channelId] ?? "channel")).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                         }
                         .contentShape(Rectangle())
                     }

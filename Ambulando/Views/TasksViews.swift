@@ -67,7 +67,7 @@ struct TasksView: View {
                 .pickerStyle(.segmented).frame(width: 110)
                 .labelsHidden()
                 .accessibilityIdentifier("tasks.layout")
-                Button { creating = true } label: { Image(systemName: "plus.circle.fill").font(.title2) }
+                Button { creating = true } label: { Image(systemName: "plus.circle.fill").font(.amb(.title2)) }
                     .accessibilityLabel("New task").accessibilityIdentifier("tasks.new")
             }
         }
@@ -92,7 +92,7 @@ struct TasksView: View {
                 Section("Creating") {
                     ForEach(snapshot.value.creating) { item in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(item.string("title") ?? "Task").font(.subheadline.weight(.semibold))
+                            Text(item.string("title") ?? "Task").font(.amb(.subheadline).weight(.semibold))
                             WriteStatusLine(item: item, label: "New task")
                         }
                     }
@@ -135,7 +135,7 @@ struct TasksView: View {
             LazyHStack(alignment: .top, spacing: 12) {
                 ForEach(columns, id: \.0) { state, rows in
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("\(state.label) · \(rows.count)").font(.subheadline.weight(.semibold)).foregroundStyle(Amb.itemHeading)
+                        Text("\(state.label) · \(rows.count)").font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.itemHeading)
                         ScrollView {
                             LazyVStack(spacing: 8) {
                                 ForEach(rows) { row in
@@ -151,7 +151,7 @@ struct TasksView: View {
                                         }
                                     }
                                 }
-                                if rows.isEmpty { Text("Nothing here").font(.caption).foregroundStyle(Amb.mutedForeground).padding(.vertical, 20) }
+                                if rows.isEmpty { Text("Nothing here").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(.vertical, 20) }
                             }
                         }
                     }
@@ -193,7 +193,7 @@ struct TaskRowView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(row.title).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(3)
+            Text(row.title).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(3)
             HStack(spacing: 8) {
                 PriorityBadge(priority: row.priority)
                 if let channel = snapshot.choice.channelName(row.task.channelId) { Text("#\(channel)").lineLimit(1) }
@@ -201,7 +201,7 @@ struct TaskRowView: View {
                 if row.pending.contains(where: \.isPending) { Image(systemName: "arrow.up.circle").accessibilityLabel("Change not sent yet") }
                 if row.pending.contains(where: { !$0.isPending }) { Image(systemName: "exclamationmark.circle").foregroundStyle(Amb.destructive).accessibilityLabel("Change not saved") }
             }
-            .font(.caption).foregroundStyle(Amb.mutedForeground)
+            .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
         }
     }
 }
@@ -210,7 +210,7 @@ struct PriorityBadge: View {
     let priority: String
     var body: some View {
         Text((TaskPriority(rawValue: priority)?.label ?? priority).uppercased())
-            .font(.caption2.weight(.bold))
+            .font(.amb(.caption2).weight(.bold))
             .padding(.horizontal, 6).padding(.vertical, 2)
             .foregroundStyle(priority == "rock" || priority == "urgent" || priority == "high" ? Amb.brandOrange : Amb.accentForeground)
             .background(Amb.accent, in: Capsule())
@@ -280,7 +280,7 @@ struct TaskDetailView: View {
             Text(row.title).font(Amb.editorial).foregroundStyle(Amb.foreground).accessibilityIdentifier("task.title")
             if let channel = snapshot.value.choice.channelName(row.task.channelId) {
                 Text([snapshot.value.choice.scopeName(row.task.scopeId), "#\(channel)"].compactMap { $0 }.joined(separator: " · "))
-                    .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                    .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             }
             HStack(spacing: 10) {
                 Menu {
@@ -307,24 +307,24 @@ struct TaskDetailView: View {
     }
 
     private func chip(_ text: String, systemImage: String) -> some View {
-        Label(text, systemImage: systemImage).font(.footnote.weight(.semibold)).lineLimit(1)
+        Label(text, systemImage: systemImage).font(.amb(.footnote).weight(.semibold)).lineLimit(1)
             .padding(.horizontal, 10).frame(minHeight: 32)
             .background(Amb.accent, in: Capsule()).foregroundStyle(Amb.accentForeground)
     }
 
     private var comments: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Comments").font(.headline).foregroundStyle(Amb.itemHeading)
+            Text("Comments").font(.amb(.headline)).foregroundStyle(Amb.itemHeading)
             ForEach(snapshot.value.comments) { c in CommentRow(comment: c, names: snapshot.value.names, me: model.identity.npub, workspace: workspace) }
             ForEach(snapshot.value.pendingComments) { item in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(item.string("body") ?? "").font(.body).foregroundStyle(Amb.mutedForeground)
+                    Text(item.string("body") ?? "").font(.amb(.body)).foregroundStyle(Amb.mutedForeground)
                     WriteStatusLine(item: item, label: "Comment")
                 }
                 .accessibilityIdentifier("comment.pending")
             }
             if snapshot.value.comments.isEmpty && snapshot.value.pendingComments.isEmpty {
-                Text("No comments yet.").font(.footnote).foregroundStyle(Amb.mutedForeground)
+                Text("No comments yet.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             }
         }
     }
@@ -400,9 +400,9 @@ struct CommentRow: View {
             Avatar(name: displayName(comment.senderNpub, names, me: me))
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(displayName(comment.senderNpub, names, me: me)).font(.subheadline.weight(.semibold))
-                    Text(ChatTime.label(comment.createdAt)).font(.caption).foregroundStyle(Amb.mutedForeground)
-                    if comment.status == "resolved" { Label("Resolved", systemImage: "checkmark.circle").font(.caption).foregroundStyle(Amb.success) }
+                    Text(displayName(comment.senderNpub, names, me: me)).font(.amb(.subheadline).weight(.semibold))
+                    Text(ChatTime.label(comment.createdAt)).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                    if comment.status == "resolved" { Label("Resolved", systemImage: "checkmark.circle").font(.amb(.caption)).foregroundStyle(Amb.success) }
                 }
                 MessageBody(text: comment.body, workspace: workspace)
             }
@@ -445,7 +445,7 @@ struct TaskCreateSheet: View {
                     Text("Unassigned").tag(String?.none)
                     ForEach(members) { Text($0.label).tag(Optional($0.npub)) }
                 }
-                if !model.isUnlocked { Text("Saved on this \(Device.name) and sent after you unlock.").font(.footnote).foregroundStyle(Amb.mutedForeground) }
+                if !model.isUnlocked { Text("Saved on this \(Device.name) and sent after you unlock.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground) }
             }
             .navigationTitle("New task")
             .inlineTitle()

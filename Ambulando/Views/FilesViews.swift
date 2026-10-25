@@ -41,7 +41,7 @@ struct FilesView: View {
                 Section("Uploading") {
                     ForEach(snapshot.value.uploads) { item in
                         VStack(alignment: .leading, spacing: 4) {
-                            Label(item.string("display_name") ?? "File", systemImage: "arrow.up.doc").font(.subheadline.weight(.semibold))
+                            Label(item.string("display_name") ?? "File", systemImage: "arrow.up.doc").font(.amb(.subheadline).weight(.semibold))
                             WriteStatusLine(item: item, label: "Upload")
                         }
                         .accessibilityIdentifier("upload.row")
@@ -53,9 +53,9 @@ struct FilesView: View {
                     ForEach(group.folders, id: \.folder.id) { entry in
                         DisclosureGroup {
                             ForEach(entry.files) { fileRow($0) }
-                            if entry.files.isEmpty { Text("Empty folder").font(.footnote).foregroundStyle(Amb.mutedForeground) }
+                            if entry.files.isEmpty { Text("Empty folder").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground) }
                         } label: {
-                            Label(entry.folder.title, systemImage: "folder").foregroundStyle(Amb.foreground)
+                            Label(entry.folder.title, systemImage: "folder").foregroundStyle(Amb.foreground).appRowTextSize()
                         }
                         .accessibilityIdentifier("folder.\(entry.folder.title)")
                     }
@@ -74,7 +74,7 @@ struct FilesView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             ListHeaderBar {
                 Spacer()
-                Button { uploading = true } label: { Image(systemName: "plus.circle.fill").font(.title2) }
+                Button { uploading = true } label: { Image(systemName: "plus.circle.fill").font(.amb(.title2)) }
                     .accessibilityLabel("Upload").accessibilityIdentifier("files.upload")
             }
         }
@@ -89,9 +89,9 @@ struct FilesView: View {
             HStack(spacing: 10) {
                 Image(systemName: FileIcon.name(file.contentType)).foregroundStyle(Amb.primary).frame(width: 24)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(file.displayName).font(.subheadline).foregroundStyle(Amb.foreground).lineLimit(2)
+                    Text(file.displayName).font(.amb(.subheadline)).foregroundStyle(Amb.foreground).lineLimit(2)
                     Text([byteLabel(file.sizeBytes), ChatTime.label(file.updatedAt)].filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(.caption).foregroundStyle(Amb.mutedForeground)
+                        .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 }
             }
         }
@@ -153,40 +153,40 @@ struct FileDetailView: View {
             if let file = snapshot.value.file {
                 Section {
                     HStack(spacing: 14) {
-                        Image(systemName: FileIcon.name(file.contentType)).font(.largeTitle).foregroundStyle(Amb.primary)
+                        Image(systemName: FileIcon.name(file.contentType)).font(.amb(.largeTitle)).foregroundStyle(Amb.primary)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(file.displayName).font(.headline).accessibilityIdentifier("file.name")
+                            Text(file.displayName).font(.amb(.headline)).accessibilityIdentifier("file.name")
                             Text([file.contentType, byteLabel(file.sizeBytes)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
-                                .font(.caption).foregroundStyle(Amb.mutedForeground)
+                                .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                         }
                     }
-                    if let channel = snapshot.value.choice.channelName(file.channelId) { LabeledContent("Channel", value: "#\(channel)") }
-                    LabeledContent("Updated", value: ChatTime.label(file.updatedAt))
-                    if let description = file.description, !description.isEmpty { Text(description).font(.footnote) }
+                    if let channel = snapshot.value.choice.channelName(file.channelId) { LabeledContent("Channel", value: "#\(channel)").appRowTextSize() }
+                    LabeledContent("Updated", value: ChatTime.label(file.updatedAt)).appRowTextSize()
+                    if let description = file.description, !description.isEmpty { Text(description).font(.amb(.footnote)) }
                 }
                 Section {
                     if let url = snapshot.value.cached {
-                        Button { preview = url } label: { Label("Preview", systemImage: "eye") }.accessibilityIdentifier("file.preview")
-                        ShareLink(item: url) { Label("Share or save", systemImage: "square.and.arrow.up") }
+                        Button { preview = url } label: { Label("Preview", systemImage: "eye").appRowTextSize() }.accessibilityIdentifier("file.preview")
+                        ShareLink(item: url) { Label("Share or save", systemImage: "square.and.arrow.up").appRowTextSize() }
                         #if os(macOS)
-                        Button { MacFiles.saveCopy(of: url, suggestedName: file.displayName) } label: { Label("Save As…", systemImage: "square.and.arrow.down") }
+                        Button { MacFiles.saveCopy(of: url, suggestedName: file.displayName) } label: { Label("Save As…", systemImage: "square.and.arrow.down").appRowTextSize() }
                             .accessibilityIdentifier("file.saveAs")
-                        Button { NSWorkspace.shared.open(url) } label: { Label("Open in Default App", systemImage: "arrow.up.forward.app") }
+                        Button { NSWorkspace.shared.open(url) } label: { Label("Open in Default App", systemImage: "arrow.up.forward.app").appRowTextSize() }
                             .accessibilityIdentifier("file.openExternally")
                         #endif
                     } else if model.isSyncing(WorkspaceSync.downloadKey(workspace.id, file.id)) {
-                        HStack { ProgressView(); Text("Downloading…").foregroundStyle(Amb.mutedForeground) }
+                        HStack { ProgressView(); Text("Downloading…").foregroundStyle(Amb.mutedForeground) }.appRowTextSize()
                     } else {
-                        Button { model.download(file, in: workspace) } label: { Label("Download", systemImage: "arrow.down.circle") }
+                        Button { model.download(file, in: workspace) } label: { Label("Download", systemImage: "arrow.down.circle").appRowTextSize() }
                             .disabled(!model.isUnlocked).accessibilityIdentifier("file.download")
-                        if !model.isUnlocked { Text("Unlock to download.").font(.footnote).foregroundStyle(Amb.mutedForeground) }
+                        if !model.isUnlocked { Text("Unlock to download.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground) }
                     }
-                    if let error = model.syncError(forKey: WorkspaceSync.downloadKey(workspace.id, file.id)) { Text(error).font(.footnote).foregroundStyle(Amb.destructive) }
+                    if let error = model.syncError(forKey: WorkspaceSync.downloadKey(workspace.id, file.id)) { Text(error).font(.amb(.footnote)).foregroundStyle(Amb.destructive) }
                 } footer: {
                     Text("Downloads are checked against the file's checksum and kept in this app's cache.")
                 }
             } else if snapshot.loaded {
-                Text("This file is not on this \(Device.name).").foregroundStyle(Amb.mutedForeground)
+                Text("This file is not on this \(Device.name).").foregroundStyle(Amb.mutedForeground).appRowTextSize()
             }
         }
         .groupedList()

@@ -10,14 +10,17 @@ struct ContentTextEntry: View {
     let workspace: WorkspaceRecord
     let field: String
     var multilineEditor = false
+    /// The Mac editor's height at the system text size (it grows with `TextScale`).
+    var macEditorHeight: CGFloat = 76
     @State private var focused = false
     @State private var host: ContentUploadHost?
 
     var body: some View {
         #if os(macOS)
+        let height = macEditorHeight * TextScale.shared.factor
         VStack(alignment: .leading, spacing: 4) {
-            ComposerTextView(text: $text, focused: $focused, placeholder: placeholder, plainKeyboard: false, onPasteItems: paste, fixedHeight: 76)
-                .frame(height: 76)
+            ComposerTextView(text: $text, focused: $focused, placeholder: placeholder, plainKeyboard: false, onPasteItems: paste, fixedHeight: height)
+                .frame(height: height)
             if let uploads = model.uploads, let host { ComposerPastedUploads(uploads: uploads, target: host.uploadTarget, text: text) }
         }
         .task(id: "\(model.connection?.id ?? ""):\(workspace.id):\(field)") {
@@ -67,9 +70,10 @@ struct WorkspaceContentTextEntry: View {
     @Binding var text: String
     let placeholder: String
     let field: String
+    var macEditorHeight: CGFloat = 76
     var body: some View {
         if let workspace = model.selectedWorkspace {
-            ContentTextEntry(text: $text, placeholder: placeholder, workspace: workspace, field: field)
+            ContentTextEntry(text: $text, placeholder: placeholder, workspace: workspace, field: field, macEditorHeight: macEditorHeight)
         } else { TextField(placeholder, text: $text, axis: .vertical) }
     }
 }

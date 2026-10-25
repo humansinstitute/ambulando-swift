@@ -17,7 +17,7 @@ struct ConnectView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Connect your nStack").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
                     Text("Enter the HTTPS address of your Tower. Ambulando reads its public service descriptor first, then lists the workspaces your identity can access.")
-                        .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                        .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     TextField("https://your-tower.example", text: $origin)
                         .urlEntry().autocorrectionDisabled()
                         .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
@@ -60,13 +60,13 @@ struct DescriptorSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Tower \(descriptor.tower?.availability?.status ?? "unknown")", systemImage: "server.rack")
-                .font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
-            Text("Protocols: " + (descriptor.tower?.protocols ?? []).joined(separator: ", ")).font(.caption).foregroundStyle(Amb.mutedForeground)
-            Text("Services: " + descriptor.services.map(\.kind).joined(separator: ", ")).font(.caption).foregroundStyle(Amb.mutedForeground)
+                .font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground)
+            Text("Protocols: " + (descriptor.tower?.protocols ?? []).joined(separator: ", ")).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+            Text("Services: " + descriptor.services.map(\.kind).joined(separator: ", ")).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
             Text(descriptor.advertisesFIPS
                  ? "A FIPS service is advertised, but this \(Device.name) app uses HTTPS only and will not switch transports."
                  : "Transport: HTTPS with NIP-98 signed requests.")
-                .font(.caption).foregroundStyle(descriptor.advertisesFIPS ? Amb.warning : Amb.success)
+                .font(.amb(.caption)).foregroundStyle(descriptor.advertisesFIPS ? Amb.warning : Amb.success)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)

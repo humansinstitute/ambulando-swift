@@ -38,9 +38,10 @@ enum Amb {
     static let radiusControl: CGFloat = 6     // --radius-control 0.375rem
     static let touchTarget: CGFloat = 44      // --touch-target 2.75rem
 
-    static let editorial = Font.system(.title2, design: .serif).weight(.semibold)   // --font-editorial
-    static let heading = Font.headline
-    static let code = Font.system(.footnote, design: .monospaced)
+    // Computed so they follow the app text size (`TextScale`).
+    @MainActor static var editorial: Font { .amb(.title2, design: .serif).weight(.semibold) }   // --font-editorial
+    @MainActor static var heading: Font { .amb(.headline) }
+    @MainActor static var code: Font { .amb(.footnote, design: .monospaced) }
 }
 
 extension Amb {
@@ -75,8 +76,8 @@ struct BrandHeader: View {
     var body: some View {
         VStack(spacing: 12) {
             PassageMark(size: 64)
-            Text("Ambulando").font(.system(.largeTitle, design: .serif).weight(.semibold)).foregroundStyle(Amb.foreground)
-            if let subtitle { Text(subtitle).font(.subheadline).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center) }
+            Text("Ambulando").font(.amb(.largeTitle, design: .serif).weight(.semibold)).foregroundStyle(Amb.foreground)
+            if let subtitle { Text(subtitle).font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center) }
         }
         .frame(maxWidth: .infinity)
     }
@@ -86,7 +87,7 @@ struct PrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.body.weight(.semibold))
+            .font(.amb(.body).weight(.semibold))
             .frame(maxWidth: .infinity, minHeight: Amb.touchTarget)
             .foregroundStyle(Amb.primaryForeground)
             .background(Amb.primary.opacity(enabled ? (configuration.isPressed ? 0.85 : 1) : 0.4),
@@ -123,7 +124,7 @@ struct Notice: View {
         case .success: (Amb.success, Amb.successBackground, "checkmark.circle")
         }
         Label(text, systemImage: icon)
-            .font(.footnote)
+            .font(.amb(.footnote))
             .foregroundStyle(fg)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -69,11 +69,11 @@ struct BrowserView: View {
             }
             addressField
             if editing {
-                Button("Cancel") { editing = false }.font(.subheadline).padding(.leading, 8).frame(minHeight: 44)
+                Button("Cancel") { editing = false }.font(.amb(.subheadline)).padding(.leading, 8).frame(minHeight: 44)
                     .accessibilityIdentifier("browser.address.cancel")
             } else {
                 Button { browser.showingTabs = true } label: {
-                    Text("\(browser.tabs.count)").font(.caption.weight(.bold)).frame(minWidth: 20, minHeight: 20)
+                    Text("\(browser.tabs.count)").font(.amb(.caption).weight(.bold)).frame(minWidth: 20, minHeight: 20)
                         .overlay(RoundedRectangle(cornerRadius: 5).stroke(Amb.foreground, lineWidth: 1.5))
                         .barTarget()
                 }
@@ -82,7 +82,7 @@ struct BrowserView: View {
                 menu
             }
         }
-        .font(.body.weight(.medium))
+        .font(.amb(.body).weight(.medium))
         .tabletReadingWidth()
         .padding(.horizontal, 6).padding(.vertical, 4)
         .background(Amb.card.ignoresSafeArea(edges: .bottom))
@@ -97,13 +97,13 @@ struct BrowserView: View {
 
     private var addressField: some View {
         HStack(spacing: 6) {
-            Image(systemName: browser.selected?.origin != nil ? "lock.fill" : "globe").font(.caption).foregroundStyle(Amb.mutedForeground)
+            Image(systemName: browser.selected?.origin != nil ? "lock.fill" : "globe").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
             TextField("Search or enter address", text: $address)
                 .focused($editing)
                 .urlEntry()
                 .autocorrectionDisabled()
                 .submitLabel(.go)
-                .font(.subheadline)
+                .font(.amb(.subheadline))
                 .onSubmit {
                     guard let tab = browser.selected else { return }
                     if browser.go(address, in: tab) { editing = false }
@@ -163,10 +163,10 @@ struct BrowserView: View {
 
     private var startPage: some View {
         VStack(spacing: 10) {
-            Image(systemName: "globe").font(.largeTitle).foregroundStyle(Amb.mutedForeground)
-            Text("Enter an address below").font(.headline).foregroundStyle(Amb.foreground)
+            Image(systemName: "globe").font(.amb(.largeTitle)).foregroundStyle(Amb.mutedForeground)
+            Text("Enter an address below").font(.amb(.headline)).foregroundStyle(Amb.foreground)
             Text("Pages open here with your Nostr key available through window.nostr. Each site asks before it can see your key, and every signature asks you first.")
-                .font(.footnote).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
+                .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
         }
         .padding(32)
         .tabletReadingWidth(620)
@@ -176,7 +176,7 @@ struct BrowserView: View {
     }
 
     private func notice(_ text: String, systemImage: String) -> some View {
-        Label(text, systemImage: systemImage).font(.caption).foregroundStyle(Amb.foreground)
+        Label(text, systemImage: systemImage).font(.amb(.caption)).foregroundStyle(Amb.foreground)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12).padding(.vertical, 6)
             .background(Amb.muted)
@@ -258,7 +258,7 @@ struct BrowserTabsView: View {
                         browser.showingTabs = false
                         browser.presented = false
                     } label: {
-                        Label { Text("Ambulando").font(.body.weight(.semibold)) } icon: { Image("PassageMark").resizable().scaledToFit().frame(width: 22, height: 22) }
+                        Label { Text("Ambulando").font(.amb(.body).weight(.semibold)) } icon: { Image("PassageMark").resizable().scaledToFit().frame(width: 22, height: 22) }
                     }
                     .accessibilityIdentifier("browser.tabs.ambulando")
                 }
@@ -267,8 +267,8 @@ struct BrowserTabsView: View {
                         HStack {
                             Button { browser.select(tab) } label: {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(tab.displayTitle).font(.subheadline.weight(tab.id == browser.selected?.id ? .semibold : .regular)).lineLimit(1)
-                                    if let host = tab.url?.host { Text(host).font(.caption).foregroundStyle(Amb.mutedForeground) }
+                                    Text(tab.displayTitle).font(.amb(.subheadline).weight(tab.id == browser.selected?.id ? .semibold : .regular)).lineLimit(1)
+                                    if let host = tab.url?.host { Text(host).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground) }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
@@ -292,6 +292,8 @@ struct BrowserTabsView: View {
                 }
             }
         }
+        // Without a size the Mac sheet collapsed to its toolbar and showed no tabs.
+        .macSheetSize(minWidth: 440, idealWidth: 520, minHeight: 360, idealHeight: 480)
     }
 }
 
@@ -314,10 +316,10 @@ struct NostrApprovalSheet: View {
             Form {
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
-                        Label(host, systemImage: "lock.fill").font(.title3.weight(.semibold)).foregroundStyle(Amb.foreground)
+                        Label(host, systemImage: "lock.fill").font(.amb(.title3).weight(.semibold)).foregroundStyle(Amb.foreground)
                             .accessibilityIdentifier("nostr.origin")
-                        Text(prompt.context.origin).font(.caption.monospaced()).foregroundStyle(Amb.mutedForeground)
-                        Text(summary).font(.subheadline).foregroundStyle(Amb.foreground)
+                        Text(prompt.context.origin).font(.amb(.caption).monospaced()).foregroundStyle(Amb.mutedForeground)
+                        Text(summary).font(.amb(.subheadline)).foregroundStyle(Amb.foreground)
                     }
                     .padding(.vertical, 4)
                 }
@@ -329,7 +331,7 @@ struct NostrApprovalSheet: View {
                             Text("No content").foregroundStyle(Amb.mutedForeground)
                         } else {
                             ScrollView { Text(String(event.content.prefix(4000)) + (event.content.count > 4000 ? "…" : ""))
-                                    .font(.footnote.monospaced()).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
+                                    .font(.amb(.footnote).monospaced()).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
                                 .frame(maxHeight: 180)
                                 .accessibilityIdentifier("nostr.content")
                         }
@@ -337,14 +339,14 @@ struct NostrApprovalSheet: View {
                     if !event.tags.isEmpty {
                         Section("Tags (\(event.tags.count))") {
                             ForEach(Array(event.tags.prefix(20).enumerated()), id: \.offset) { _, tag in
-                                Text(tag.map { String($0.prefix(120)) }.joined(separator: " · ")).font(.caption.monospaced()).lineLimit(3)
+                                Text(tag.map { String($0.prefix(120)) }.joined(separator: " · ")).font(.amb(.caption).monospaced()).lineLimit(3)
                             }
-                            if event.tags.count > 20 { Text("and \(event.tags.count - 20) more").font(.caption).foregroundStyle(Amb.mutedForeground) }
+                            if event.tags.count > 20 { Text("and \(event.tags.count - 20) more").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground) }
                         }
                     }
                 }
                 if let npub = prompt.npub {
-                    Section("Your key") { Text(shortNpub(npub)).font(.footnote.monospaced()) }
+                    Section("Your key") { Text(shortNpub(npub)).font(.amb(.footnote).monospaced()) }
                 }
                 if prompt.kind == .connect {
                     Section { Toggle("Remember for \(host)", isOn: $remember).accessibilityIdentifier("nostr.remember") } footer: {

@@ -30,10 +30,10 @@ struct ToolboxView: View {
                 }
             } footer: {
                 if !complete.value {
-                    Text("Tower lists at most \(TowerAPI.personalWappLimit) WApps, so this list may be incomplete.").font(.caption).foregroundStyle(Amb.warning)
+                    Text("Tower lists at most \(TowerAPI.personalWappLimit) WApps, so this list may be incomplete.").font(.amb(.caption)).foregroundStyle(Amb.warning)
                 }
                 Text("WApps are web apps their publishers own. They open as tabs in the Ambulando browser, where a WApp must ask before it can see your Nostr key and you approve each signature. Adding, editing and placing WApps is done in the web app.")
-                    .font(.caption)
+                    .font(.amb(.caption)).fixedSize(horizontal: false, vertical: true)
             }
         }
         .groupedList()
@@ -58,11 +58,11 @@ struct ToolboxView: View {
 
     private func row(_ wapp: PersonalWappRecord, origin: String?) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "app.dashed").font(.title3).foregroundStyle(Amb.primary).frame(width: 28)
+            Image(systemName: "app.dashed").font(.amb(.title3)).foregroundStyle(Amb.primary).frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text(wapp.title).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
-                if let d = wapp.description { Text(d).font(.caption).foregroundStyle(Amb.mutedForeground).lineLimit(2) }
-                Text(origin.map { "Web content · \($0)" } ?? "Not opened: its address is not HTTPS").font(.caption2).foregroundStyle(Amb.mutedForeground)
+                Text(wapp.title).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground)
+                if let d = wapp.description { Text(d).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(2) }
+                Text(origin.map { "Web content · \($0)" } ?? "Not opened: its address is not HTTPS").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
             }
         }
     }
@@ -128,8 +128,8 @@ struct LabelledWebView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: "globe").font(.caption)
-                Text(label).font(.caption).lineLimit(2)
+                Image(systemName: "globe").font(.amb(.caption))
+                Text(label).font(.amb(.caption)).lineLimit(2)
                 Spacer(minLength: 0)
                 if loading { ProgressView().controlSize(.mini) }
             }

@@ -179,12 +179,12 @@ public final class SampleSurfaceTower: @unchecked Sendable {
     }
 
     @discardableResult
-    public func seedAgent(npub: String, name: String, sortOrder: Int, visible: Bool = true) -> String {
+    public func seedAgent(npub: String, name: String, sortOrder: Int, visible: Bool = true, avatarURL: String? = nil) -> String {
         let id = UUID().uuidString.lowercased()
         mutate {
             let stamp = now()
             put("agents", id, ["id": id, "workspace_id": workspaceId, "connection_id": UUID().uuidString.lowercased(), "agent_id": name.lowercased(),
-                               "agent_npub": npub, "display_name": name, "avatar_url": NSNull(), "capabilities": ["chat"], "sort_order": sortOrder,
+                               "agent_npub": npub, "display_name": name, "avatar_url": avatarURL ?? NSNull(), "capabilities": ["chat"], "sort_order": sortOrder,
                                "is_visible": visible, "metadata": [:], "row_version": 1, "created_at": stamp, "updated_at": stamp, "archived_at": NSNull()])
         }
         return id
@@ -209,13 +209,14 @@ public final class SampleSurfaceTower: @unchecked Sendable {
     }
 
     @discardableResult
-    public func seedWapp(title: String, launchURL: String, description: String? = nil, sortOrder: Int, owner: String, status: String = "active") -> String {
+    public func seedWapp(title: String, launchURL: String, description: String? = nil, iconURL: String? = nil, sortOrder: Int, owner: String,
+                         status: String = "active") -> String {
         let id = UUID().uuidString.lowercased()
         mutate {
             let stamp = now()
             put("wapps", id, ["id": id, "record_id": id, "workspace_id": workspaceId, "owner_actor_id": UUID().uuidString.lowercased(), "owner_npub": owner,
                               "owner_actor_npub": owner, "scope_id": NSNull(), "channel_id": NSNull(), "title": title, "description": description ?? NSNull(),
-                              "launch_url": launchURL, "icon_url": NSNull(), "app_id": NSNull(), "wapp_id": NSNull(), "source_wingman_url": NSNull(),
+                              "launch_url": launchURL, "icon_url": iconURL ?? NSNull(), "app_id": NSNull(), "wapp_id": NSNull(), "source_wingman_url": NSNull(),
                               "sort_order": sortOrder, "status": status, "record_state": status, "metadata": [:], "signer_profile": NSNull(),
                               "row_version": 1, "created_at": stamp, "updated_at": stamp])
         }

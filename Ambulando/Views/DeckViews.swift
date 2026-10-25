@@ -104,7 +104,7 @@ private struct DeckCardFrame<Actions: View, Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text(title).font(.headline).foregroundStyle(Amb.foreground).lineLimit(1)
+                Text(title).font(.amb(.headline)).foregroundStyle(Amb.foreground).lineLimit(1)
                     .accessibilityAddTraits(.isHeader).accessibilityIdentifier("deck.card.title")
                 Spacer(minLength: 4)
                 actions()
@@ -136,7 +136,7 @@ private struct DeckRowStyle: ViewModifier {
 private struct DeckNote: View {
     let text: String
     var body: some View {
-        Text(text).font(.footnote).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 4).padding(.vertical, 8)
+        Text(text).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 4).padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -182,7 +182,7 @@ struct DeckInboxCard: View {
             ForEach(filtered.prefix(visible)) { item in row(item, labels: snapshot.value.channelLabels) }
             if filtered.count > visible {
                 Button("Load older activity") { visible += DeckInbox.pageSize }
-                    .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 8)
+                    .font(.amb(.subheadline).weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 8)
                     .accessibilityIdentifier("deck.inbox.more")
             }
             if filtered.isEmpty { DeckNote(text: emptyText).accessibilityIdentifier("deck.inbox.empty") }
@@ -204,7 +204,7 @@ struct DeckInboxCard: View {
                 ForEach(DeckActivity.Kind.allCases, id: \.self) { kind in
                     let on = kinds.contains(kind)
                     Button { if on { kinds.remove(kind) } else { kinds.insert(kind) }; visible = DeckInbox.pageSize } label: {
-                        Image(systemName: DeckInbox.icon(kind)).font(.subheadline)
+                        Image(systemName: DeckInbox.icon(kind)).font(.amb(.subheadline))
                             .foregroundStyle(on ? Amb.selectedForeground : Amb.mutedForeground)
                             .frame(width: 36, height: 30)
                             .background(on ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
@@ -243,7 +243,7 @@ struct DeckInboxCard: View {
                 Button("#\(nav.label(channel))") { model.openInChat(channelId: channel.id) }
             }
         } label: {
-            Image(systemName: "plus").font(.body.weight(.semibold)).frame(width: 30, height: 30)
+            Image(systemName: "plus").font(.amb(.body).weight(.semibold)).frame(width: 30, height: 30)
         }
         .accessibilityLabel("New thread")
         .accessibilityIdentifier("deck.inbox.new")
@@ -256,7 +256,7 @@ struct DeckInboxCard: View {
             Button("Mark all chats as read") { markAll(items, [.chat], label: "chats") }
             Button("Mark everything as read") { markAll(items, [.chat, .task, .document], label: "Inbox items") }
         } label: {
-            Image(systemName: "ellipsis.circle").font(.body).frame(width: 30, height: 30)
+            Image(systemName: "ellipsis.circle").font(.amb(.body)).frame(width: 30, height: 30)
         }
         .accessibilityLabel("Inbox read actions")
         .accessibilityIdentifier("deck.inbox.readMenu")
@@ -266,18 +266,18 @@ struct DeckInboxCard: View {
         HStack(alignment: .top, spacing: 8) {
             NavigationLink(value: route(item)) {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: DeckInbox.icon(item.kind)).font(.subheadline).foregroundStyle(item.isUnread ? Amb.brandOrange : Amb.primary)
+                    Image(systemName: DeckInbox.icon(item.kind)).font(.amb(.subheadline)).foregroundStyle(item.isUnread ? Amb.brandOrange : Amb.primary)
                         .frame(width: 20).padding(.top, 2)
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
-                            Text(kicker(item, labels)).font(.caption.weight(.semibold)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                            Text(kicker(item, labels)).font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
                             Spacer(minLength: 4)
-                            Text(ChatTime.label(item.activityAt)).font(.caption2).foregroundStyle(Amb.mutedForeground)
+                            Text(ChatTime.label(item.activityAt)).font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
                         }
-                        Text(item.title).font(.subheadline.weight(item.isUnread ? .semibold : .regular)).foregroundStyle(Amb.foreground)
+                        Text(item.title).font(.amb(.subheadline).weight(item.isUnread ? .semibold : .regular)).foregroundStyle(Amb.foreground)
                             .lineLimit(2).multilineTextAlignment(.leading)
-                        Text(item.kind == .chat ? item.subtitle : item.reason).font(.caption).foregroundStyle(Amb.mutedForeground).lineLimit(1)
-                        if item.isWorking { Label("Agent working", systemImage: "sparkles").font(.caption2).foregroundStyle(Amb.primary) }
+                        Text(item.kind == .chat ? item.subtitle : item.reason).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                        if item.isWorking { Label("Agent working", systemImage: "sparkles").font(.amb(.caption2)).foregroundStyle(Amb.primary) }
                     }
                 }
                 .contentShape(Rectangle())
@@ -467,7 +467,7 @@ struct DeckPinnedCard: View {
                         HStack(spacing: 10) {
                             Image(systemName: icon(item.pin.resourceType)).foregroundStyle(Amb.mutedForeground).frame(width: 20)
                             Text(item.title ?? unavailable(item.pin.resourceType))
-                                .font(.subheadline).foregroundStyle(item.title == nil ? Amb.mutedForeground : Amb.foreground).lineLimit(2)
+                                .font(.amb(.subheadline)).foregroundStyle(item.title == nil ? Amb.mutedForeground : Amb.foreground).lineLimit(2)
                             Spacer(minLength: 0)
                             if snapshot.pending[PinsSnapshot.key(item.pin.resourceType, item.pin.resourceId)]?.isPending == true {
                                 ProgressView().controlSize(.mini).accessibilityLabel("Saving pin")
@@ -550,12 +550,12 @@ struct DeckCanvasCard: View {
                     HStack(spacing: 10) {
                         Image(systemName: "rectangle.3.group").foregroundStyle(Amb.primary).frame(width: 20)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(canvas.title).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(2)
+                            Text(canvas.title).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(2)
                             Text(canvas.visibilityMode == "workspace" ? "Everyone in the workspace" : "Shared with selected people")
-                                .font(.caption).foregroundStyle(Amb.mutedForeground)
+                                .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                         }
                         Spacer(minLength: 0)
-                        if !canvas.updatedAt.isEmpty { Text(ChatTime.label(canvas.updatedAt)).font(.caption2).foregroundStyle(Amb.mutedForeground) }
+                        if !canvas.updatedAt.isEmpty { Text(ChatTime.label(canvas.updatedAt)).font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground) }
                     }
                     .contentShape(Rectangle())
                 }
@@ -582,10 +582,10 @@ struct DeckFeedCard: View {
     var body: some View {
         DeckCardFrame(title: "Feed", identifier: "feed") { EmptyView() } content: {
             VStack(alignment: .leading, spacing: 8) {
-                Label("Feeds are in the web app", systemImage: "dot.radiowaves.up.forward").font(.subheadline.weight(.semibold))
+                Label("Feeds are in the web app", systemImage: "dot.radiowaves.up.forward").font(.amb(.subheadline).weight(.semibold))
                     .foregroundStyle(Amb.foreground)
                 Text("Subscribed feeds (RSS) and Nostr notifications are read and managed in the web app's Deck. This \(Device.name) app doesn't show them yet.")
-                    .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                    .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             }
             .modifier(DeckRowStyle())
             .accessibilityElement(children: .combine)
@@ -610,19 +610,19 @@ struct DeckRecentCard: View {
     var body: some View {
         let nav = model.navigation.value
         DeckCardFrame(title: "Recent channels", identifier: "recent") {
-            Text("Latest activity").font(.caption).foregroundStyle(Amb.mutedForeground)
+            Text("Latest activity").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
         } content: {
             ForEach(rows.value, id: \.channelId) { thread in
                 let label = nav.channel(thread.channelId).map(nav.label) ?? "channel"
                 Button { model.openInChat(channelId: thread.channelId, threadId: thread.isThread ? thread.threadId : nil) } label: {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
-                            Text("# \(label)").font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+                            Text("# \(label)").font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
                             Spacer(minLength: 4)
-                            Text(ChatTime.label(thread.latestAt)).font(.caption2).foregroundStyle(Amb.mutedForeground)
+                            Text(ChatTime.label(thread.latestAt)).font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
                         }
-                        Text(DeckActivity.threadTitle(thread)).font(.footnote).foregroundStyle(Amb.foreground).lineLimit(1)
-                        Text(MentionCodec.plain(thread.latestBody)).font(.caption).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                        Text(DeckActivity.threadTitle(thread)).font(.amb(.footnote)).foregroundStyle(Amb.foreground).lineLimit(1)
+                        Text(MentionCodec.plain(thread.latestBody)).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
                     }
                     .contentShape(Rectangle())
                 }
@@ -663,16 +663,16 @@ struct DeckHelloCard: View {
         let nav = model.navigation.value
         DeckCardFrame(title: "Hello and Links", identifier: "hello") { EmptyView() } content: {
             VStack(alignment: .leading, spacing: 4) {
-                Text(greeting).font(.title3.weight(.semibold)).foregroundStyle(Amb.foreground)
-                Text(contextLabel(nav)).font(.subheadline).foregroundStyle(Amb.mutedForeground)
+                Text(greeting).font(.amb(.title3).weight(.semibold)).foregroundStyle(Amb.foreground)
+                Text(contextLabel(nav)).font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground)
             }
             .padding(.horizontal, 4).padding(.bottom, 6)
-            Text("Apps").font(.footnote.weight(.heavy)).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 4)
+            Text("Apps").font(.amb(.footnote).weight(.heavy)).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 4)
             ForEach(wapps.value) { wapp in
                 // A browser tab over Deck (signing through `window.nostr`); **Ambulando** returns to this card.
                 if let url = wapp.safeLaunchURL {
                     Button { model.browser.launch(url) } label: {
-                        Label(wapp.title, systemImage: "app.dashed").font(.subheadline).foregroundStyle(Amb.foreground)
+                        Label(wapp.title, systemImage: "app.dashed").font(.amb(.subheadline)).foregroundStyle(Amb.foreground)
                             .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -752,7 +752,7 @@ private struct MacDeckLaunchers: Equatable, Sendable {
     var name: String?
     var apps: [PersonalWappRecord] = []
     var agents: [PersonalAgentLauncher] = []
-    var names: [String: String] = [:]
+    var people = PeopleDirectory()
 }
 
 private struct MacDeckWelcome: View {
@@ -761,6 +761,8 @@ private struct MacDeckWelcome: View {
     let store: LocalStore
     let compact: Bool
     @State private var snapshot = LiveQuery<MacDeckLaunchers>(initial: MacDeckLaunchers())
+    /// The one launcher stack shown expanded ("apps" or "agents"); opening one closes the other, as on the web.
+    @State private var expanded: String?
 
     var body: some View {
         Group {
@@ -775,36 +777,42 @@ private struct MacDeckWelcome: View {
     private var welcome: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Welcome \(snapshot.value.name ?? "back"),\nwhere will we focus today?")
-                .font(.title2.weight(.bold)).foregroundStyle(Amb.foreground)
+                .font(.amb(.title2).weight(.bold)).foregroundStyle(Amb.foreground)
             let nav = model.navigation.value
             Text([workspace.label, nav.scope(model.context.scopeId)?.name, nav.channel(model.context.channelId).map(nav.label)].compactMap { $0 }.joined(separator: " / "))
-                .font(.subheadline).foregroundStyle(Amb.mutedForeground)
+                .font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground)
         }.accessibilityIdentifier("deck.welcome")
     }
     private var apps: some View {
-        launcherPanel("Apps") {
-            ForEach(snapshot.value.apps) { app in
-                if let url = app.safeLaunchURL {
-                    Button { model.browser.launch(url) } label: {
-                        Label(app.title, systemImage: "app.dashed").lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                    }.buttonStyle(.plain).modifier(DeckRowStyle()).accessibilityIdentifier("deck.app.\(app.title)")
+        let items = snapshot.value.apps.compactMap { app -> MacLauncherItem? in
+            guard let url = app.safeLaunchURL else { return nil }
+            return MacLauncherItem(id: app.id, title: app.title, subtitle: app.description ?? "WApp", url: url,
+                                   logo: .app(app.logoCandidates, initials: PersonInitials.of(app.title)), identifier: "deck.app.\(app.title)")
+        }
+        return launcherPanel("Apps") {
+            if !items.isEmpty {
+                MacLauncherStack(kind: "apps", noun: "apps", items: items, workspace: workspace, expanded: $expanded) {
+                    // As on the web: the expanded list ends with the way to choose apps.
+                    Button { model.show(.toolbox) } label: { MacLauncherAddPill(title: "Manage apps in Toolbox") }
+                        .buttonStyle(.plain).accessibilityIdentifier("deck.apps.manage")
                 }
+            } else if snapshot.loaded {
+                Button { model.show(.toolbox) } label: { MacLauncherAddPill(title: "Choose apps in Toolbox") }
+                    .buttonStyle(.plain).accessibilityIdentifier("deck.apps.choose")
             }
-            if snapshot.loaded && snapshot.value.apps.isEmpty { DeckNote(text: "No apps configured.") }
         }
     }
     private var agents: some View {
-        launcherPanel("My Agents") {
-            ForEach(snapshot.value.agents) { agent in
-                Button { if let url = agent.safeURL { model.browser.launch(url) } } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Label(snapshot.value.names[agent.npub] ?? shortNpub(agent.npub), systemImage: "sparkles").lineLimit(1)
-                        Text(agent.safeURL == nil ? "Secure launch URL unavailable" : "Dive deeper in Autopilot").font(.caption).foregroundStyle(Amb.mutedForeground)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }.buttonStyle(.plain).disabled(agent.safeURL == nil).modifier(DeckRowStyle())
-                    .accessibilityIdentifier("deck.agent.\(agent.npub)")
-            }
-            if snapshot.loaded && snapshot.value.agents.isEmpty {
+        let people = snapshot.value.people
+        let items = snapshot.value.agents.map { agent in
+            MacLauncherItem(id: agent.npub, title: people.name(agent.npub),
+                            subtitle: agent.safeURL == nil ? "Secure launch URL unavailable" : "Dive deeper in Autopilot",
+                            url: agent.safeURL, logo: .person(people.person(agent.npub)), identifier: "deck.agent.\(agent.npub)")
+        }
+        return launcherPanel("My Agents") {
+            if !items.isEmpty {
+                MacLauncherStack(kind: "agents", noun: "agents", items: items, workspace: workspace, expanded: $expanded) { EmptyView() }
+            } else if snapshot.loaded {
                 let error = model.syncError(forKey: WorkspaceSync.personalAgentsKey(model.connection?.id ?? "", workspace.id))
                 DeckNote(text: error == nil ? "No personal agents configured." : "Could not load personal agents.")
                 if error != nil {
@@ -817,23 +825,140 @@ private struct MacDeckWelcome: View {
     }
     private func launcherPanel<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased()).font(.caption.weight(.bold)).foregroundStyle(Amb.mutedForeground)
-            ScrollView { VStack(alignment: .leading, spacing: 6, content: content) }
-        }.frame(maxWidth: compact ? .infinity : 250, maxHeight: .infinity, alignment: .topLeading)
+            Text(title.uppercased()).font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.mutedForeground)
+            content()
+        }.frame(maxWidth: compact ? .infinity : 260, maxHeight: .infinity, alignment: .topLeading)
     }
     private func start() {
         let w = workspace.id, store = store, connection = model.connection?.id ?? "", me = model.connection?.signerNpub
         let key = WorkspaceSync.personalAgentsKey(connection, w)
-        snapshot.start(store: store, matches: { $0.table == .appState || ($0.workspaceId == w && [.toolbox, .members].contains($0.table)) || $0.table == .profiles }) {
+        snapshot.start(store: store, matches: { $0.table == .appState || ($0.workspaceId == w && [.toolbox, .members, .agents].contains($0.table)) || $0.table == .profiles }) {
             async let apps = store.reader.personalWapps(connectionId: connection, workspaceId: w)
             async let members = store.reader.members(workspaceId: w)
             let saved = try await store.reader.state(key)
             let agents = saved.flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode([PersonalAgentLauncher].self, from: $0) } ?? []
-            let names = try await directoryNames(store, w)
-            return MacDeckLaunchers(name: try await members.first { $0.npub == me }?.label, apps: try await apps, agents: agents, names: names)
+            let people = try await store.reader.people(workspaceId: w)
+            return MacDeckLaunchers(name: try await members.first { $0.npub == me }?.label, apps: try await apps, agents: agents, people: people)
         }
         model.openToolbox(workspace)
         if let sync = model.sync, let connection = model.connection { Task { await sync.refreshPersonalAgentLaunchers(connection, workspace) } }
+    }
+}
+
+private struct MacLauncherItem: Identifiable {
+    enum Logo { case app([LauncherLogoSource], initials: String), person(PersonDisplay) }
+    let id: String
+    let title: String
+    let subtitle: String
+    let url: URL?
+    let logo: Logo
+    let identifier: String
+}
+
+/// sol `.launcher-stack-panel`: collapsed, only the first launcher is a real card, with up to two card edges behind
+/// it when there are more. Clicking the stack expands every launcher as a list (a popover over the Deck, so the
+/// dashboard layout does not move; click outside or Escape closes it). A single launcher opens directly.
+private struct MacLauncherStack<Footer: View>: View {
+    @Environment(AppModel.self) private var model
+    let kind: String
+    let noun: String
+    let items: [MacLauncherItem]
+    let workspace: WorkspaceRecord
+    @Binding var expanded: String?
+    @ViewBuilder let footer: () -> Footer
+
+    static var layerOffset: CGFloat { 7.5 }  // sol 0.48rem per ghost layer
+
+    var body: some View {
+        let first = items[0]
+        let layers = min(2, items.count - 1)
+        let open = Binding(get: { expanded == kind }, set: { expanded = $0 ? kind : (expanded == kind ? nil : expanded) })
+        Button {
+            if items.count == 1 { launch(first) } else { expanded = kind }
+        } label: {
+            MacLauncherPill(item: first, workspace: workspace)
+                .background(alignment: .top) {
+                    ZStack(alignment: .top) {
+                        ForEach((0..<layers).reversed(), id: \.self) { layer in
+                            RoundedRectangle(cornerRadius: Amb.radiusPanel)
+                                .fill(Amb.card)
+                                .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border, lineWidth: 1))
+                                .shadow(color: .black.opacity(0.06), radius: 9, y: 8)
+                                .opacity(layer == 1 ? 0.9 : 1)
+                                .offset(y: Self.layerOffset * CGFloat(layer + 1))
+                        }
+                    }
+                }
+                .padding(.bottom, Self.layerOffset * CGFloat(layers))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(items.count == 1 && first.url == nil)
+        .help(items.count == 1 ? first.title : "Show all \(items.count) \(noun)")
+        .accessibilityLabel(items.count == 1 ? "\(first.title), \(first.subtitle)" : "\(first.title) and \(items.count - 1) more \(noun)")
+        .accessibilityHint(items.count == 1 ? "Opens in the browser" : "Shows every launcher")
+        .accessibilityIdentifier(items.count == 1 ? first.identifier : "deck.\(kind).stack")
+        .popover(isPresented: open, arrowEdge: .bottom) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(items) { item in
+                        Button { launch(item) } label: { MacLauncherPill(item: item, workspace: workspace) }
+                            .buttonStyle(.plain)
+                            .disabled(item.url == nil)
+                            .opacity(item.url == nil ? 0.58 : 1)
+                            .accessibilityIdentifier(item.identifier)
+                    }
+                    footer()
+                }.padding(12)
+            }
+            .frame(width: 300).frame(maxHeight: 440).fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("deck.\(kind).expanded")
+        }
+    }
+
+    private func launch(_ item: MacLauncherItem) {
+        expanded = nil
+        if let url = item.url { model.browser.launch(url) }
+    }
+}
+
+/// sol `.launcher-pill`: logo ring, title and one line of detail.
+private struct MacLauncherPill: View {
+    let item: MacLauncherItem
+    let workspace: WorkspaceRecord
+    var body: some View {
+        HStack(spacing: 11) {
+            Group {
+                switch item.logo {
+                case .app(let sources, let initials): LauncherLogoView(sources: sources, initials: initials, workspace: workspace)
+                case .person(let person): PersonAvatar(person: person, size: 38)
+                }
+            }
+            .frame(width: 38, height: 38)
+            .clipShape(Circle())
+            .overlay(Circle().stroke(Amb.border, lineWidth: 2))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title).font(.amb(.subheadline).weight(.bold)).foregroundStyle(Amb.itemHeading).lineLimit(1)
+                Text(item.subtitle).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 8).padding(.trailing, 11).padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
+        .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border, lineWidth: 1))
+        .shadow(color: .black.opacity(0.06), radius: 10, y: 6)
+        .contentShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
+    }
+}
+
+private struct MacLauncherAddPill: View {
+    let title: String
+    var body: some View {
+        Label(title, systemImage: "plus").font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+            .contentShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
     }
 }
 #endif

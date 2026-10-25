@@ -23,10 +23,10 @@ struct BackgroundSection: View {
             }
             if model.backgroundRevocationIncomplete {
                 Text("The stored key could not be deleted from the Keychain yet. It is blocked and will not be used; Ambulando retries the deletion.")
-                    .font(.caption).foregroundStyle(Amb.destructive)
+                    .font(.amb(.caption)).foregroundStyle(Amb.destructive)
             }
             if let error = model.backgroundScheduleError {
-                Text("iOS did not accept a background refresh request: \(error)").font(.caption).foregroundStyle(Amb.mutedForeground)
+                Text("iOS did not accept a background refresh request: \(error)").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
             }
         } header: { Text("Background") } footer: {
             Text(footer)

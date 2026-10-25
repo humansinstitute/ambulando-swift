@@ -28,7 +28,7 @@ struct TabletSidebar: View {
                         if selected { model.popToRoot(section) } else { model.show(section) }
                     } label: {
                         Label(section.title, systemImage: section.systemImage)
-                            .font(.body.weight(selected ? .semibold : .regular))
+                            .font(.amb(.body).weight(selected ? .semibold : .regular))
                             .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
                             .padding(.horizontal, 12)
                             .foregroundStyle(selected ? Amb.selectedForeground : Amb.foreground)
@@ -63,7 +63,7 @@ struct TabletFixtureWindow: ViewModifier {
             content
                 .safeAreaInset(edge: .top, spacing: 0) {
                     Text("Sample compact window · 420 pt")
-                        .font(.caption).foregroundStyle(Amb.warning)
+                        .font(.amb(.caption)).foregroundStyle(Amb.warning)
                         .frame(maxWidth: .infinity).padding(6).background(Amb.warningBackground)
                 }
                 .frame(width: 420)

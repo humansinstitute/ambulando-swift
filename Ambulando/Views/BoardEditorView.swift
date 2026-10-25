@@ -262,7 +262,7 @@ struct BoardNotices: View {
         VStack(alignment: .leading, spacing: 6) {
             if !state.viewingVersionId.isEmpty {
                 HStack(spacing: 8) {
-                    Text("Viewing version \(state.viewingVersionNumber) (read-only)").font(.caption.weight(.semibold))
+                    Text("Viewing version \(state.viewingVersionNumber) (read-only)").font(.amb(.caption).weight(.semibold))
                     Spacer()
                     if state.canWrite { Button("Restore") { session.restoreViewed() }.accessibilityIdentifier("board.restore") }
                     Button("Back to latest") { session.returnToLatest() }.accessibilityIdentifier("board.latest")
@@ -271,7 +271,7 @@ struct BoardNotices: View {
             }
             if state.save == .stale || state.newerAvailable {
                 HStack(spacing: 8) {
-                    Text("Version \(state.latestVersionNumber) was saved by someone else.").font(.caption)
+                    Text("Version \(state.latestVersionNumber) was saved by someone else.").font(.amb(.caption))
                     Spacer()
                     Button("Merge my changes") { session.mergeLatest() }.accessibilityIdentifier("board.merge")
                     Button("Discard mine", role: .destructive) { confirmDiscard = true }
@@ -342,7 +342,7 @@ struct BoardStatusPill: View {
         let text = state.headerStatus
         if !text.isEmpty {
             Text(text)
-                .font(.caption2.weight(.semibold))
+                .font(.amb(.caption2).weight(.semibold))
                 .padding(.horizontal, 7).padding(.vertical, 3)
                 .background(state.dirty || state.save == .stale ? Color.yellow.opacity(0.25) : Amb.muted, in: Capsule())
                 .foregroundStyle(state.dirty || state.save == .stale ? Color.orange : Amb.mutedForeground)

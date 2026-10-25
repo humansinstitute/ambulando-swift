@@ -139,8 +139,8 @@ private struct RichBlockView: View {
             Rectangle().fill(Amb.border).frame(height: 1).padding(.vertical, 4).accessibilityHidden(true)
         case .preserved(let type, let text):
             VStack(alignment: .leading, spacing: 4) {
-                Label("\(type) block — shown on the web; kept unchanged here", systemImage: "square.dashed").font(.caption).foregroundStyle(Amb.mutedForeground)
-                if !text.isEmpty { Text(text).font(.footnote).foregroundStyle(Amb.mutedForeground) }
+                Label("\(type) block — shown on the web; kept unchanged here", systemImage: "square.dashed").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                if !text.isEmpty { Text(text).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground) }
             }
             .padding(8).frame(maxWidth: .infinity, alignment: .leading)
             .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl).stroke(Amb.border, style: StrokeStyle(lineWidth: 1, dash: [4])))
@@ -152,12 +152,12 @@ private struct RichBlockView: View {
     /// Chat: h1 1.3rem, h2 1.12rem, h3+ 0.98rem (styles.css `.chat-post-markdown`); documents use larger headings.
     private func headingFont(_ level: Int) -> Font {
         switch (context.style, level) {
-        case (.chat, ...1): .title3.weight(.bold)
-        case (.chat, 2): .headline
-        case (.chat, _): .subheadline.weight(.semibold)
-        case (.document, ...1): .title2.weight(.bold)
-        case (.document, 2): .title3.weight(.semibold)
-        case (.document, _): .headline
+        case (.chat, ...1): .amb(.title3).weight(.bold)
+        case (.chat, 2): .amb(.headline)
+        case (.chat, _): .amb(.subheadline).weight(.semibold)
+        case (.document, ...1): .amb(.title2).weight(.bold)
+        case (.document, 2): .amb(.title3).weight(.semibold)
+        case (.document, _): .amb(.headline)
         }
     }
 }
@@ -184,7 +184,7 @@ private struct ParagraphView: View {
     }
 
     private func line(_ runs: [InlineRun]) -> some View {
-        Text(InlineText.attributed(runs)).font(.body).foregroundStyle(context.muted ? Amb.mutedForeground : Amb.foreground)
+        Text(InlineText.attributed(runs)).font(.amb(.body)).foregroundStyle(context.muted ? Amb.mutedForeground : Amb.foreground)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -222,7 +222,7 @@ private struct CodeBlockView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(language.isEmpty ? "code" : language.lowercased())
-                    .font(.caption2.monospaced().weight(.semibold)).foregroundStyle(RichPalette.codeMuted).lineLimit(1)
+                    .font(.amb(.caption2).monospaced().weight(.semibold)).foregroundStyle(RichPalette.codeMuted).lineLimit(1)
                 Spacer()
                 Button {
                     Pasteboard.copy(text)
@@ -230,7 +230,7 @@ private struct CodeBlockView: View {
                     Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
                 } label: {
                     Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
-                        .font(.caption2.weight(.semibold)).foregroundStyle(RichPalette.codeMuted)
+                        .font(.amb(.caption2).weight(.semibold)).foregroundStyle(RichPalette.codeMuted)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(copied ? "Copied code" : "Copy code")
@@ -286,7 +286,7 @@ private struct TableBlockView: View {
                         ForEach(Array(row.enumerated()), id: \.offset) { c, cell in
                             cellView(cell, row: r, column: c)
                                 /* native selection and the normal rich fallback share table sizing */
-                                .font(r == 0 ? .subheadline.weight(.semibold) : .subheadline)
+                                .font(r == 0 ? .amb(.subheadline).weight(.semibold) : .amb(.subheadline))
                                 .foregroundStyle(Amb.foreground)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -399,13 +399,13 @@ struct RichImage: View {
         } else if let url = URL(string: source), RichLinks.isSafeWeb(url) {
             Link(destination: url) {
                 Label(alt.isEmpty ? "Web image (not loaded)" : "\(alt) — web image (not loaded)", systemImage: "photo.badge.arrow.down")
-                    .font(.footnote).lineLimit(2)
+                    .font(.amb(.footnote)).lineLimit(2)
                     .padding(8).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
             }
             .accessibilityHint("Opens the image address in your browser")
             .accessibilityIdentifier("image.remote")
         } else {
-            Label(alt.isEmpty ? "Image unavailable" : "Image: \(alt)", systemImage: "photo").font(.footnote).foregroundStyle(Amb.mutedForeground)
+            Label(alt.isEmpty ? "Image unavailable" : "Image: \(alt)", systemImage: "photo").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                 .accessibilityIdentifier("image.error")
         }
     }
@@ -502,7 +502,7 @@ struct StorageImageView: View {
             else { ("photo", "Loading image…", "image.loading") }
         HStack(spacing: 8) {
             if id == "image.loading" { ProgressView().controlSize(.small) } else { Image(systemName: icon) }
-            Text(alt.isEmpty ? text : "\(alt) — \(text)").font(.footnote).lineLimit(3)
+            Text(alt.isEmpty ? text : "\(alt) — \(text)").font(.amb(.footnote)).lineLimit(3)
         }
         .foregroundStyle(Amb.mutedForeground)
         .padding(12)
@@ -512,7 +512,7 @@ struct StorageImageView: View {
         .accessibilityIdentifier(id)
         .overlay(alignment: .topTrailing) {
             if failure != nil {
-                Button("Retry") { requested = false; attempt += 1 }.font(.caption.weight(.semibold)).padding(8)
+                Button("Retry") { requested = false; attempt += 1 }.font(.amb(.caption).weight(.semibold)).padding(8)
             }
         }
     }

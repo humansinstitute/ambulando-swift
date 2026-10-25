@@ -15,6 +15,7 @@ struct AmbulandoMacApp: App {
     var body: some Scene {
         Window("Ambulando", id: MacWindow.main) {
             RootView()
+                .appTextSize()
                 .environment(delegate.model)
                 .environment(delegate.ui)
                 .tint(Amb.primary)
@@ -33,6 +34,7 @@ struct AmbulandoMacApp: App {
 
         Window("Browser", id: MacWindow.browser) {
             MacBrowserWindow()
+                .appTextSize()
                 .environment(delegate.model)
                 .tint(Amb.primary)
                 .preferredColorScheme(AppearancePreference(rawValue: appearance)?.colorScheme)

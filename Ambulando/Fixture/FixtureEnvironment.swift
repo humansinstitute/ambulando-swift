@@ -253,6 +253,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     static let notesChannel = "f1c70000-0000-4000-8000-0000000000c4"
     static let ana = Bech32.encode(hrp: "npub", data: Data(repeating: 0xA1, count: 32))
     static let rick = Bech32.encode(hrp: "npub", data: Data(repeating: 0xB2, count: 32))
+    static let brick = Bech32.encode(hrp: "npub", data: Data(repeating: 0xB5, count: 32))
     /// A member without a workspace name: the app names her from her (sample) public profile.
     static let bea = Bech32.encode(hrp: "npub", data: Data(repeating: 0xC4, count: 32))
     /// Someone who posted but is no longer listed and has no profile: shown by npub and initials.
@@ -831,14 +832,20 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
 
         // Agents and their activity in #general.
         s.seedAgent(npub: Self.rick, name: "Rick", sortOrder: 1)
+        // A second launcher agent, so the Mac Deck's My Agents stack has a card behind the top one.
+        s.seedAgent(npub: Self.brick, name: "Brick", sortOrder: 2, avatarURL: FixtureProfileSource.host + "brick.png")
         s.seedActivity(channel: general, scope: a, thread: thread, agent: Self.rick, state: "working", label: "Checking the outbox retry states")
         s.seedActivity(channel: general, scope: a, thread: thread, agent: Self.rick, state: "completed", label: "Answered the theme question")
 
         // Toolbox and pins.
-        s.seedWapp(title: "Timesheets", launchURL: "https://timesheets.sample.invalid/", description: "Log time against tasks", sortOrder: 1, owner: Self.ana)
+        // Launcher logos: a cached sample image, a missing one (favicon fallback that fails) and one that is not an image.
+        s.seedWapp(title: "Timesheets", launchURL: "https://timesheets.sample.invalid/", description: "Log time against tasks",
+                   iconURL: FixtureProfileSource.host + "timesheets.png", sortOrder: 1, owner: Self.ana)
         s.seedWapp(title: "Legacy tool", launchURL: "http://legacy.sample.invalid/", description: "Served without HTTPS", sortOrder: 2, owner: Self.ana)
         // Served from memory by the browser's sample page (`browserSample`), so launching it can use `window.nostr` offline.
         s.seedWapp(title: "Sample Artifacts", launchURL: "https://browser.sample.invalid/apps/artifacts", description: "A Nostr web app", sortOrder: 3, owner: Self.rick)
+        s.seedWapp(title: "Field Notes", launchURL: "https://fieldnotes.sample.invalid/", description: "Notes from site visits",
+                   iconURL: FixtureProfileSource.host + "broken.png", sortOrder: 4, owner: Self.ana)
         s.externalPin(type: "thread", resource: thread, pinned: true)
         s.externalPin(type: "channel", resource: design, pinned: true)
         s.markSeeded()

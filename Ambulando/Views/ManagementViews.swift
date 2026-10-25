@@ -66,7 +66,7 @@ struct ManagementStatusView: View {
         case .idle:
             EmptyView()
         case .working(let text):
-            HStack(spacing: 8) { ProgressView().controlSize(.small); Text(text).font(.footnote).foregroundStyle(Amb.mutedForeground) }
+            HStack(spacing: 8) { ProgressView().controlSize(.small); Text(text).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground) }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("manage.working")
         case .failed(let error):
@@ -124,9 +124,9 @@ struct NewChannelSheet: View {
                     }
                 } else {
                     Section {
-                        Label("Limited: access isn't set here", systemImage: "person.badge.key").font(.subheadline.weight(.semibold))
+                        Label("Limited: access isn't set here", systemImage: "person.badge.key").font(.amb(.subheadline).weight(.semibold))
                         Text("This creates the channel with no extra permissions: you get Manage access, and nobody else is added. To give people or groups access, use Channel settings › Channel access in the web app.")
-                            .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                            .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("newChannel.limited")
@@ -144,9 +144,11 @@ struct NewChannelSheet: View {
                     } header: { Text("Channel context prompt (optional)") }
                 }
             }
+            .macGroupedForm()
             .modifier(KeyboardDone())
             .modifier(ManagementStatusInset(phase: phase, retry: create))
             .navigationTitle(isDirect ? "New direct message" : "New channel")
+            .macSheetSize(minWidth: 480, idealWidth: 560, minHeight: 420, idealHeight: 600)
             .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(phase.isWorking) }
@@ -222,6 +224,7 @@ struct ChannelSettingsSheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() }.disabled(phase.isWorking) } }
             .interactiveDismissDisabled(phase.isWorking)
         }
+        .macSheetSize(minWidth: 520, idealWidth: 620, minHeight: 420, idealHeight: 640)
         .onAppear { model.loadMembership(force: true) }
     }
 
@@ -237,42 +240,43 @@ struct ChannelSettingsSheet: View {
                 if !participants.isEmpty { LabeledContent("Participants", value: "\(participants.count)") }
             }
             if canManage {
+                #if os(macOS)
+                macManageSections(channel, nav, siblings: siblings, index: index)
+                #else
                 Section {
                     TextField("Channel name", text: $name).noCapitalization().accessibilityIdentifier("channelSettings.name")
-                    Button("Rename channel") { run("Renaming…", done: "Channel renamed.") { m, c, w in _ = try await m.renameChannel(c, w, channelId: channel.id, name: name) } }
+                    Button("Rename channel") { rename(channel) }
                         .disabled(phase.isWorking || name.trimmingCharacters(in: .whitespaces).isEmpty || name == channel.name)
                         .accessibilityIdentifier("channelSettings.rename")
                 } header: { Text("Channel name") }
                 Section {
                     Stepper("Position \(position) of \(siblings.count)", value: $position, in: 1...max(1, siblings.count))
                         .accessibilityIdentifier("channelSettings.position")
-                    Button("Move to position \(position)") {
-                        run("Moving…", done: "Channel order saved.") { m, c, w in try await m.moveChannel(c, w, channel: channel, position: position) }
-                    }
-                    .disabled(phase.isWorking || position == index)
-                    .accessibilityIdentifier("channelSettings.move")
+                    Button("Move to position \(position)") { move(channel) }
+                        .disabled(phase.isWorking || position == index)
+                        .accessibilityIdentifier("channelSettings.move")
                 } header: { Text("Order in \(nav.scope(channel.scopeId)?.name ?? "scope")") }
                 Section {
                     WorkspaceContentTextEntry(text: $prompt, placeholder: "Context agents get in this channel", field: "channel-context-\(channel.id)").lineLimit(2...8)
                         .accessibilityIdentifier("channelSettings.prompt")
-                    Button("Save context prompt") {
-                        run("Saving…", done: "Channel context settings saved.") { m, c, w in _ = try await m.saveContextPrompt(c, w, channel: channel, prompt: prompt) }
-                    }
-                    .disabled(phase.isWorking || prompt == channel.contextPrompt)
-                    .accessibilityIdentifier("channelSettings.savePrompt")
+                    Button("Save context prompt") { savePrompt(channel) }
+                        .disabled(phase.isWorking || prompt == channel.contextPrompt)
+                        .accessibilityIdentifier("channelSettings.savePrompt")
                 } header: { Text("Channel context prompt") }
+                #endif
             } else {
                 Section {
                     Text(model.membership == nil && model.isUnlocked ? "Checking your access…"
                          : "You need Manage access to rename, reorder or archive this channel.")
-                        .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                        .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                         .accessibilityIdentifier("channelSettings.readOnly")
                     if !channel.contextPrompt.isEmpty { LabeledContent("Context prompt", value: channel.contextPrompt) }
                 }
             }
             Section {
                 Text("Who can read and write this channel is managed in the web app (Channel settings › Channel access).")
-                    .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                    .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
             } header: { Text("Channel access") }
             if canManage {
                 Section {
@@ -282,6 +286,7 @@ struct ChannelSettingsSheet: View {
                 }
             }
         }
+        .macGroupedForm()
         .onAppear {
             guard !loaded else { return }
             loaded = true; name = channel.name; prompt = channel.contextPrompt; position = index
@@ -295,6 +300,64 @@ struct ChannelSettingsSheet: View {
         } message: {
             Text("This archives the channel, including nonempty channels. Stored tasks, documents, messages and files remain intact in Tower; the channel is no longer accessible to anyone.")
         }
+    }
+
+    #if os(macOS)
+    /// The Mac form: each value with its action on the same row, and a context editor tall enough to read and edit
+    /// (the column form clipped it and repeated the section names as row labels).
+    @ViewBuilder private func macManageSections(_ channel: ChannelRecord, _ nav: NavigationSnapshot, siblings: [ChannelRecord], index: Int) -> some View {
+        Section {
+            HStack(spacing: 8) {
+                TextField("Channel name", text: $name, prompt: Text("Channel name"))
+                    .labelsHidden().textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("channelSettings.name")
+                Button("Rename") { rename(channel) }
+                    .disabled(phase.isWorking || name.trimmingCharacters(in: .whitespaces).isEmpty || name == channel.name)
+                    .accessibilityIdentifier("channelSettings.rename")
+            }
+        } header: { Text("Channel name") }
+        Section {
+            HStack(spacing: 8) {
+                Text("Position \(position) of \(siblings.count)").monospacedDigit()
+                Stepper("Position", value: $position, in: 1...max(1, siblings.count)).labelsHidden()
+                    .accessibilityLabel("Position \(position) of \(siblings.count)")
+                    .accessibilityIdentifier("channelSettings.position")
+                Spacer(minLength: 8)
+                Button("Move to position \(position)") { move(channel) }
+                    .disabled(phase.isWorking || position == index)
+                    .accessibilityIdentifier("channelSettings.move")
+            }
+        } header: { Text("Order in \(nav.scope(channel.scopeId)?.name ?? "scope")") }
+        Section {
+            WorkspaceContentTextEntry(text: $prompt, placeholder: "Context agents get in this channel", field: "channel-context-\(channel.id)",
+                                      macEditorHeight: 150)
+                .padding(8)
+                .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl).stroke(Amb.border, lineWidth: 1))
+                .accessibilityIdentifier("channelSettings.prompt")
+            HStack {
+                Text("Agents get this context in the channel.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+                Spacer(minLength: 8)
+                Button("Save context prompt") { savePrompt(channel) }
+                    .disabled(phase.isWorking || prompt == channel.contextPrompt)
+                    .accessibilityIdentifier("channelSettings.savePrompt")
+            }
+        } header: { Text("Channel context prompt") }
+    }
+    #endif
+
+    private func rename(_ channel: ChannelRecord) {
+        let name = name
+        run("Renaming…", done: "Channel renamed.") { m, c, w in _ = try await m.renameChannel(c, w, channelId: channel.id, name: name) }
+    }
+
+    private func move(_ channel: ChannelRecord) {
+        let position = position
+        run("Moving…", done: "Channel order saved.") { m, c, w in try await m.moveChannel(c, w, channel: channel, position: position) }
+    }
+
+    private func savePrompt(_ channel: ChannelRecord) {
+        let prompt = prompt
+        run("Saving…", done: "Channel context settings saved.") { m, c, w in _ = try await m.saveContextPrompt(c, w, channel: channel, prompt: prompt) }
     }
 
     private func run(_ working: String, done: String, _ body: @escaping @Sendable (ScopeChannelManager, ConnectionRecord, WorkspaceRecord) async throws -> Void) {
@@ -328,9 +391,9 @@ struct ScopeManagementSheet: View {
                         HStack(spacing: 6) {
                             NavigationLink(value: scope.id) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(scope.name).foregroundStyle(Amb.foreground)
+                                    Text(scope.name).foregroundStyle(Amb.foreground).appRowTextSize()
                                     Text(ManagementPermissions.canManage(scope, membership: model.membership) ? "You manage this scope" : "View only")
-                                        .font(.caption).foregroundStyle(Amb.mutedForeground)
+                                        .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                                 }
                             }
                             .accessibilityIdentifier("scopes.row.\(scope.name)")
@@ -342,14 +405,14 @@ struct ScopeManagementSheet: View {
                     Text("This order is yours: it changes the sidebar on every device you use, not for anyone else.")
                 }
                 if !others.isEmpty {
-                    Section("Direct messages and system scopes") { ForEach(others) { Text($0.name).foregroundStyle(Amb.mutedForeground) } }
+                    Section("Direct messages and system scopes") { ForEach(others) { Text($0.name).foregroundStyle(Amb.mutedForeground).appRowTextSize() } }
                 }
                 Section {
                     if ManagementPermissions.canCreateScope(model.membership) {
                         NavigationLink("New scope", value: "new").accessibilityIdentifier("scopes.new")
                     } else {
                         Text(model.membership == nil ? "Checking your access…" : "You don't have permission to create scopes in this workspace.")
-                            .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                            .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     }
                 } footer: {
                     Text("Scope templates, starting channels and who can access a scope are set up in the web app.")
@@ -406,9 +469,9 @@ struct ScopeEditView: View {
         Form {
             if scope == nil {
                 Section {
-                    Label("Limited: name and description only", systemImage: "person.badge.key").font(.subheadline.weight(.semibold))
+                    Label("Limited: name and description only", systemImage: "person.badge.key").font(.amb(.subheadline).weight(.semibold))
                     Text("Templates, starting channels and who can access the scope aren't set here. You get Manage access; set up the rest in the web app (Settings › Scopes).")
-                        .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                        .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("scopeEdit.limited")
@@ -421,7 +484,7 @@ struct ScopeEditView: View {
                     .accessibilityIdentifier("scopeEdit.description")
             }
             if !canManage {
-                Section { Text("You need Manage access to change this scope.").font(.footnote).foregroundStyle(Amb.mutedForeground) }
+                Section { Text("You need Manage access to change this scope.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground) }
             }
             if let scope, canManage {
                 Section {
@@ -435,6 +498,7 @@ struct ScopeEditView: View {
                 }
             }
         }
+        .macGroupedForm()
         .modifier(KeyboardDone())
             .modifier(ManagementStatusInset(phase: phase))
             .navigationTitle(scope == nil ? "New scope" : scope!.name)

@@ -38,9 +38,9 @@ struct ContextTreeView: View {
                     Button { model.selectContext(WorkContext(scopeId: group.id)) } label: {
                         HStack {
                             Image(systemName: "point.3.connected.trianglepath.dotted").foregroundStyle(Amb.primary)
-                            Text(group.scope.name).foregroundStyle(Amb.foreground)
+                            Text(group.scope.name).foregroundStyle(Amb.foreground).appRowTextSize()
                             Spacer()
-                            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(Amb.border)
+                            Image(systemName: "chevron.right").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.border)
                         }
                         .contentShape(Rectangle())
                     }
@@ -73,12 +73,12 @@ struct ContextTreeView: View {
                 OutlineGroup(nodes, children: \.outlineChildren) { node in
                     NavigationLink(value: WorkRoute.contextComponent(workspaceId: workspace.id, scopeId: scopeId, componentId: node.id)) {
                         Label(node.component.title, systemImage: node.children.isEmpty ? "square" : "square.stack")
-                            .foregroundStyle(Amb.foreground)
+                            .foregroundStyle(Amb.foreground).appRowTextSize()
                     }
                     .accessibilityIdentifier("context.node.\(node.component.title)")
                 }
             } footer: {
-                Text("Creating, renaming, moving and linking components is done in the web app for now.").font(.caption)
+                Text("Creating, renaming, moving and linking components is done in the web app for now.").font(.amb(.caption))
             }
         }
         .groupedList()
@@ -129,7 +129,7 @@ struct ContextComponentView: View {
         List {
             if !value.path.isEmpty {
                 Section {
-                    Text(value.path.map(\.title).joined(separator: " › ")).font(.caption).foregroundStyle(Amb.mutedForeground)
+                    Text(value.path.map(\.title).joined(separator: " › ")).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                         .accessibilityLabel("Path: " + value.path.map(\.title).joined(separator: ", "))
                 }
             }
@@ -137,7 +137,7 @@ struct ContextComponentView: View {
                 Section("Components") {
                     ForEach(value.children) { child in
                         NavigationLink(value: WorkRoute.contextComponent(workspaceId: workspace.id, scopeId: scopeId, componentId: child.id)) {
-                            Label(child.title, systemImage: "square").foregroundStyle(Amb.foreground)
+                            Label(child.title, systemImage: "square").foregroundStyle(Amb.foreground).appRowTextSize()
                         }
                     }
                 }
@@ -145,7 +145,7 @@ struct ContextComponentView: View {
             Section("Linked records") {
                 if value.references.isEmpty {
                     Text(model.isSyncing(WorkspaceSync.contextReferencesKey(workspace.id, componentId)) ? "Loading…" : "Nothing linked to this component.")
-                        .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                        .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                 }
                 ForEach(value.references) { reference in
                     referenceRow(reference, localTitle: reference.targetRecordId.flatMap { value.localTitles[$0] })
@@ -206,7 +206,7 @@ struct ContextComponentView: View {
                 Button { model.browser.launch(url) } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Label(artifact.artifact, systemImage: "globe").foregroundStyle(Amb.foreground)
-                        Text("Web content · \(artifact.origin)").font(.caption).foregroundStyle(Amb.mutedForeground)
+                        Text("Web content · \(artifact.origin)").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                     }
                 }
                 .accessibilityIdentifier("context.reference.artifact.\(artifact.artifact)")

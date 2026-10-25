@@ -19,7 +19,7 @@ struct ImportIdentityView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Import your identity").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
                     Text("Paste the nsec you use with Ambulando. It is encrypted on this \(Device.name) with your PIN and a device-only Keychain secret, and never leaves this app.")
-                        .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                        .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     SecureField("nsec1…", text: $nsec)
                         .textContentType(.password).noCapitalization().autocorrectionDisabled()
                         .font(Amb.code).padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
@@ -58,7 +58,7 @@ struct UnlockView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Unlock to sync").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
                 Text("Your cached workspace stays readable while locked. Unlocking lets Ambulando sign requests to your Tower.")
-                    .font(.footnote).foregroundStyle(Amb.mutedForeground)
+                    .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                 SecureField("PIN", text: $pin).numberPadEntry().oneTimeCodeEntry()
                     .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                 if let notice = model.notice { Notice(tone: .error, text: notice) }
@@ -93,8 +93,8 @@ struct LockScreen: View {
             Spacer(minLength: 24)
             VStack(spacing: 12) {
                 PassageMark(size: 88)
-                Text("Ambulando").font(.system(.largeTitle, design: .serif).weight(.semibold)).foregroundStyle(Amb.foreground)
-                Text("Locked").font(.headline).foregroundStyle(Amb.itemHeading).accessibilityIdentifier("lock.screen")
+                Text("Ambulando").font(.amb(.largeTitle, design: .serif).weight(.semibold)).foregroundStyle(Amb.foreground)
+                Text("Locked").font(.amb(.headline)).foregroundStyle(Amb.itemHeading).accessibilityIdentifier("lock.screen")
                 if let npub = model.identity.npub {
                     Text(shortNpub(npub)).font(Amb.code).foregroundStyle(Amb.mutedForeground)
                 }
@@ -102,7 +102,7 @@ struct LockScreen: View {
             VStack(spacing: 12) {
                 SecureField("PIN", text: $pin)
                     .numberPadEntry().oneTimeCodeEntry()
-                    .multilineTextAlignment(.center).font(.title3.monospacedDigit())
+                    .multilineTextAlignment(.center).font(.amb(.title3).monospacedDigit())
                     .padding(12).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                     .focused($focused)
                     .submitLabel(.go)
@@ -116,7 +116,7 @@ struct LockScreen: View {
                 .disabled(pin.count < 4 || working)
                 .accessibilityIdentifier("lock.unlock")
                 Text("Enter your PIN to open your workspaces. Ambulando stays unlocked on this \(Device.name) until you choose Lock now.")
-                    .font(.footnote).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
+                    .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
             }
             .frame(maxWidth: 360)
             Spacer()
@@ -151,15 +151,15 @@ struct IdentityUnavailableView: View {
             Spacer(minLength: 24)
             VStack(spacing: 12) {
                 PassageMark(size: 88)
-                Text("Ambulando").font(.system(.largeTitle, design: .serif).weight(.semibold)).foregroundStyle(Amb.foreground)
-                Text("Your identity is on this \(Device.name)").font(.headline).foregroundStyle(Amb.itemHeading)
+                Text("Ambulando").font(.amb(.largeTitle, design: .serif).weight(.semibold)).foregroundStyle(Amb.foreground)
+                Text("Your identity is on this \(Device.name)").font(.amb(.headline)).foregroundStyle(Amb.itemHeading)
                     .accessibilityIdentifier("identity.unavailable")
             }
             VStack(spacing: 12) {
                 Text(model.vaultProblem == .damaged
                      ? "The identity file on this \(Device.name) could not be opened: it looks damaged. It has been left exactly as it is, together with your Tower connection and saved work. Nothing was replaced."
                      : "It can't be opened right now. This happens when Ambulando was started while the \(Device.name) was locked. Your key, Tower connection and saved work are kept; nothing needs to be imported again.")
-                    .font(.callout).foregroundStyle(Amb.foreground).multilineTextAlignment(.center)
+                    .font(.amb(.callout)).foregroundStyle(Amb.foreground).multilineTextAlignment(.center)
                     .accessibilityIdentifier(model.vaultProblem == .damaged ? "identity.damaged" : "identity.sealed")
                 Button {
                     checking = true
@@ -169,7 +169,7 @@ struct IdentityUnavailableView: View {
                 .disabled(checking)
                 .accessibilityIdentifier("identity.retry")
                 Text("If this stays after unlocking your \(Device.name), the identity file may be damaged. Leave it in place and contact support; do not remove the app.")
-                    .font(.footnote).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
+                    .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
             }
             .frame(maxWidth: 360)
             Spacer()

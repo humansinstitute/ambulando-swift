@@ -370,11 +370,11 @@ struct FixtureBanner: View {
     var body: some View {
         if let fixture = model.fixture {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Sample data on this \(Device.name). Not connected to a Tower.").font(.caption.weight(.semibold))
+                Text("Sample data on this \(Device.name). Not connected to a Tower.").font(.amb(.caption).weight(.semibold))
                     .accessibilityIdentifier("fixture.banner")
-                if let storm = fixture.stormStatus { Text(storm).font(.caption2.monospaced()).accessibilityIdentifier("fixture.storm") }
-                if let launch = model.launchToCachedListMs { Text(String(format: "launch: firstFrameToCachedList=%.0fms", launch)).font(.caption2.monospaced()).accessibilityIdentifier("fixture.launch") }
-                if let simulated = fixture.backgroundSimulation { Text(simulated).font(.caption2.monospaced()).accessibilityIdentifier("fixture.background") }
+                if let storm = fixture.stormStatus { Text(storm).font(.amb(.caption2).monospaced()).accessibilityIdentifier("fixture.storm") }
+                if let launch = model.launchToCachedListMs { Text(String(format: "launch: firstFrameToCachedList=%.0fms", launch)).font(.amb(.caption2).monospaced()).accessibilityIdentifier("fixture.launch") }
+                if let simulated = fixture.backgroundSimulation { Text(simulated).font(.amb(.caption2).monospaced()).accessibilityIdentifier("fixture.background") }
             }
             .foregroundStyle(Amb.warning)
             .padding(.horizontal, 16).padding(.vertical, 6)
@@ -397,8 +397,8 @@ struct WorkspaceMenu: View {
         } label: {
             HStack(spacing: 8) {
                 PassageMark(size: 28)
-                Text(model.selectedWorkspace?.label ?? "Ambulando").font(.headline).foregroundStyle(Amb.foreground).lineLimit(1)
-                Image(systemName: "chevron.down").font(.caption.weight(.semibold)).foregroundStyle(Amb.mutedForeground)
+                Text(model.selectedWorkspace?.label ?? "Ambulando").font(.amb(.headline)).foregroundStyle(Amb.foreground).lineLimit(1)
+                Image(systemName: "chevron.down").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
             }
         }
         .accessibilityLabel("Switch workspace")

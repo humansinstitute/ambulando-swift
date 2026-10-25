@@ -754,3 +754,63 @@ final class RecordingAvatarProtocol: URLProtocol, @unchecked Sendable {
     }
     override func stopLoading() {}
 }
+
+/// A 32×32 Windows icon, as sites serve `/favicon.ico`.
+private func sampleICO() -> Data {
+    let context = CGContext(data: nil, width: 32, height: 32, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    context.setFillColor(CGColor(red: 0.75, green: 0.3, blue: 0.05, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+    let out = NSMutableData()
+    let destination = CGImageDestinationCreateWithData(out, UTType.ico.identifier as CFString, 1, nil)!
+    CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+    CGImageDestinationFinalize(destination)
+    return out as Data
+}
+
+/// Mac Deck launcher logos: where a logo may come from, and that a shown logo is local bytes on the next display.
+final class LauncherLogoTests: XCTestCase {
+    func testCandidatesFollowTheWebOrderAndRefuseUnsafeSources() throws {
+        let object = UUID().uuidString
+        let wapp = try PersonalWappRecord(raw: Fixtures.json([
+            "id": UUID().uuidString, "workspace_id": Fixtures.workspaceId, "title": "Timesheets", "launch_url": "https://apps.example.com/time/",
+            "icon_url": "storage://\(object)", "sort_order": 1, "status": "active", "row_version": 1,
+            "metadata": ["manifest_icon_url": "https://apps.example.com/icon-192.png", "icon_url": "http://apps.example.com/plain.png",
+                         "favicon_url": "https://apps.example.com/icon-192.png"],
+        ]))
+        XCTAssertEqual(wapp.logoCandidates, [.storage(objectId: object.lowercased()), .web(URL(string: "https://apps.example.com/icon-192.png")!),
+                                             .web(URL(string: "https://apps.example.com/favicon.ico")!)],
+                       "storage icon, then the manifest icon once (duplicates dropped), then the launch origin's favicon; plain HTTP is skipped")
+        for refused in ["storage://not-a-uuid", "http://apps.example.com/a.png", "https://192.168.1.2/a.png", "javascript:alert(1)", "https://user:pw@apps.example.com/a.png", " "] {
+            XCTAssertNil(LauncherLogoSource(refused), refused)
+        }
+        let bare = try PersonalWappRecord(raw: Fixtures.json(["id": UUID().uuidString, "workspace_id": Fixtures.workspaceId, "title": "Legacy",
+                                                             "launch_url": "http://legacy.example.com/", "sort_order": 2, "status": "active"]))
+        XCTAssertEqual(bare.logoCandidates, [], "no safe source: the launcher shows initials")
+    }
+
+    func testFaviconIsCachedAndAFreshStoreShowsTheSameBytesOffline() async throws {
+        let favicon = URL(string: "https://apps.example.com/favicon.ico")!
+        let transport = StubAvatarTransport()
+        transport.answer(favicon, sampleICO(), type: "image/x-icon")
+        let root = temporaryDirectory()
+        let first = AvatarStore(directory: root, transport: transport)
+        let file = try XCTUnwrapValue(await first.thumbnail(for: favicon))
+        let stored = try Data(contentsOf: file)
+        XCTAssertEqual(pixelSize(stored).map { [$0.0, $0.1] }, [32, 32], "ICO accepted and stored as a PNG thumbnail")
+        XCTAssertEqual(transport.calls, [favicon])
+
+        // Next launch, network gone: a new store over the same directory answers from disk without asking.
+        transport.offline = true
+        let relaunched = AvatarStore(directory: root, transport: transport)
+        XCTAssertEqual(relaunched.cachedFile(for: favicon), file)
+        let again = await relaunched.thumbnail(for: favicon)
+        XCTAssertEqual(again, file)
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrapValue(again)), stored, "the same local bytes")
+        let uncached = await relaunched.thumbnail(for: URL(string: "https://notes.example.com/favicon.ico")!)
+        XCTAssertNil(uncached, "an uncached logo offline fails cleanly (initials placeholder)")
+        XCTAssertEqual(transport.calls.count, 2, "only the uncached logo was asked for")
+        let downloads = await relaunched.downloads
+        XCTAssertEqual(downloads, 1)
+    }
+}

@@ -30,7 +30,7 @@ struct DocumentsView: View {
         List {
             ForEach(snapshot.value.creating) { item in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(item.string("title") ?? "Document").font(.subheadline.weight(.semibold))
+                    Text(item.string("title") ?? "Document").font(.amb(.subheadline).weight(.semibold))
                     WriteStatusLine(item: item, label: "New document")
                 }
             }
@@ -39,14 +39,14 @@ struct DocumentsView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
                             Image(systemName: "doc.text").foregroundStyle(Amb.primary)
-                            Text(doc.title).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(2)
+                            Text(doc.title).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(2)
                         }
                         HStack(spacing: 6) {
                             if let channel = snapshot.value.choice.channelName(doc.channelId) { Text("#\(channel)") }
                             Text(ChatTime.label(doc.updatedAt))
                             if snapshot.value.drafts.contains(doc.id) { Label("Unsaved edits", systemImage: "pencil.circle").foregroundStyle(Amb.warning) }
                         }
-                        .font(.caption).foregroundStyle(Amb.mutedForeground)
+                        .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                     }
                 }
                 .accessibilityIdentifier("doc.\(doc.title)")
@@ -64,7 +64,7 @@ struct DocumentsView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             ListHeaderBar {
                 Spacer()
-                Button { creating = true } label: { Image(systemName: "plus.circle.fill").font(.title2) }
+                Button { creating = true } label: { Image(systemName: "plus.circle.fill").font(.amb(.title2)) }
                     .accessibilityLabel("New document").accessibilityIdentifier("docs.new")
             }
         }
@@ -223,7 +223,7 @@ struct DocumentView: View {
                 if let doc = snapshot.value.doc {
                     Text(doc.title).font(Amb.editorial).foregroundStyle(Amb.foreground).accessibilityIdentifier("doc.title")
                     Text([snapshot.value.choice.scopeName(doc.scopeId), snapshot.value.choice.channelName(doc.channelId).map { "#\($0)" }, ChatTime.label(doc.updatedAt)]
-                        .compactMap { $0 }.joined(separator: " · ")).font(.footnote).foregroundStyle(Amb.mutedForeground)
+                        .compactMap { $0 }.joined(separator: " · ")).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                 }
                 if let draft = snapshot.value.draft {
                     Button { editing = true } label: {
@@ -260,7 +260,7 @@ struct DocumentView: View {
 
     private var docComments: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Comments").font(.headline).foregroundStyle(Amb.itemHeading)
+            Text("Comments").font(.amb(.headline)).foregroundStyle(Amb.itemHeading)
             ForEach(snapshot.value.comments.filter { $0.parentCommentId == nil }) { c in
                 VStack(alignment: .leading, spacing: 8) {
                     if let quote = c.anchorQuote, !quote.isEmpty {
@@ -270,8 +270,8 @@ struct DocumentView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text("“\(quote)”").lineLimit(4)
                                 if c.documentAnchor.flatMap({ DocumentAnchors.resolve($0, in: snapshot.value.spans) }) == nil {
-                                    Text("Original selection unavailable").font(.caption)
-                                } else { Label("Locate text", systemImage: "text.magnifyingglass").font(.caption) }
+                                    Text("Original selection unavailable").font(.amb(.caption))
+                                } else { Label("Locate text", systemImage: "text.magnifyingglass").font(.amb(.caption)) }
                             }
                         }.buttonStyle(.plain).foregroundStyle(Amb.primary)
                     }
@@ -286,7 +286,7 @@ struct DocumentView: View {
                     ForEach(snapshot.value.comments.filter { $0.parentCommentId == c.id }) { reply in
                         CommentRow(comment: reply, names: snapshot.value.names, me: model.identity.npub, workspace: workspace).padding(.leading, 14)
                     }
-                    Button("Reply") { replyTo = c; anchor = c.documentAnchor }.font(.caption)
+                    Button("Reply") { replyTo = c; anchor = c.documentAnchor }.font(.amb(.caption))
                 }
                 .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: 8))
             }
@@ -297,7 +297,7 @@ struct DocumentView: View {
                 }
             }
             if snapshot.value.comments.isEmpty && snapshot.value.pendingComments.isEmpty {
-                Text("No comments yet.").font(.footnote).foregroundStyle(Amb.mutedForeground)
+                Text("No comments yet.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             }
         }
     }
@@ -309,8 +309,8 @@ struct DocumentView: View {
                     Text(replyTo.map { "Replying to \(displayName($0.senderNpub, snapshot.value.names, me: model.identity.npub))" } ?? "Selected text")
                     Spacer()
                     Button { anchor = nil; replyTo = nil; revealed = nil } label: { Image(systemName: "xmark.circle") }
-                }.font(.caption)
-                if let anchor { Text("“\(anchor.quote)”").font(.footnote).lineLimit(4).foregroundStyle(Amb.primary) }
+                }.font(.amb(.caption))
+                if let anchor { Text("“\(anchor.quote)”").font(.amb(.footnote)).lineLimit(4).foregroundStyle(Amb.primary) }
             }
             HStack(alignment: .bottom, spacing: 8) {
             ContentTextEntry(text: $comment, placeholder: replyTo == nil ? "Comment on this document" : "Reply", workspace: workspace, field: "doc-comment-\(docId)-\(replyTo?.id ?? "root")")
@@ -609,7 +609,7 @@ struct DocumentEditorView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 TextField("Title", text: $editor.title, axis: .vertical).font(Amb.editorial).accessibilityIdentifier("editor.title")
-                Text(editor.leaseState).font(.caption).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("editor.lease")
+                Text(editor.leaseState).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("editor.lease")
                 if let status = editor.status {
                     Notice(tone: editor.statusTone, text: status).accessibilityIdentifier("editor.status")
                     if editor.statusTone == .warning {
@@ -617,17 +617,17 @@ struct DocumentEditorView: View {
                             Button("Copy my text") { Pasteboard.copy(editor.draftText) }
                             Button("Discard my edits", role: .destructive) { confirmDiscard = true }.accessibilityIdentifier("editor.discard")
                         }
-                        .font(.footnote.weight(.semibold))
+                        .font(.amb(.footnote).weight(.semibold))
                     }
                 }
                 switch editor.mode {
                 case .blocks:
                     ForEach(editor.blocks) { block in blockEditor(block, editor: editor) }
                     Button { editor.appendParagraph() } label: { Label("Add paragraph", systemImage: "plus") }
-                        .font(.footnote.weight(.semibold)).padding(.top, 4).accessibilityIdentifier("editor.addParagraph")
+                        .font(.amb(.footnote).weight(.semibold)).padding(.top, 4).accessibilityIdentifier("editor.addParagraph")
                 case .markdown:
-                    Text("Markdown").font(.caption.weight(.semibold)).foregroundStyle(Amb.mutedForeground)
-                    ContentTextEntry(text: $editor.markdown, placeholder: "Document text", workspace: workspace, field: "doc-body-\(doc.id)", multilineEditor: true).font(.body.monospaced()).frame(minHeight: 320)
+                    Text("Markdown").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
+                    ContentTextEntry(text: $editor.markdown, placeholder: "Document text", workspace: workspace, field: "doc-body-\(doc.id)", multilineEditor: true).font(.amb(.body).monospaced()).frame(minHeight: 320)
                         .scrollContentBackground(.hidden).padding(8).background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                         .focused($focused, equals: "markdown").accessibilityIdentifier("editor.markdown")
                 case .unavailable(let reason):
@@ -654,7 +654,7 @@ struct DocumentEditorView: View {
                 .focused($focused, equals: block.id)
                 .accessibilityIdentifier("editor.block")
             if block.rich {
-                Image(systemName: "textformat").font(.caption2).foregroundStyle(Amb.mutedForeground)
+                Image(systemName: "textformat").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
                     .accessibilityLabel("Formatting in this block is kept")
             }
         }
@@ -675,9 +675,9 @@ struct DocumentEditorView: View {
 
     private func font(_ block: EditableBlock) -> Font {
         switch block.type {
-        case "heading": (block.level ?? 1) <= 1 ? .title2.weight(.bold) : .title3.weight(.semibold)
+        case "heading": (block.level ?? 1) <= 1 ? .amb(.title2).weight(.bold) : .amb(.title3).weight(.semibold)
         case "codeBlock": Amb.code
-        default: .body
+        default: .amb(.body)
         }
     }
 }

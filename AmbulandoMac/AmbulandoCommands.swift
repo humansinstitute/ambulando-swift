@@ -5,6 +5,7 @@ import SwiftUI
 struct AmbulandoCommands: Commands {
     let model: AppModel
     let ui: MacUI
+    private let textScale = TextScale.shared
     @AppStorage(AppMode.agentsPreference) private var showAgents = false
     @AppStorage(AppMode.contextPreference) private var showContext = false
 
@@ -26,6 +27,17 @@ struct AmbulandoCommands: Commands {
             Button(ui.sidebarVisible ? "Hide Sidebar" : "Show Sidebar") { ui.sidebarVisible.toggle() }
                 .keyboardShortcut("s", modifiers: [.command, .control])
                 .disabled(!ready)
+            Divider()
+            // The app's own text (not web pages in the browser), kept across launches.
+            Button("Increase Text Size") { textScale.increase() }
+                .keyboardShortcut("+", modifiers: .command)
+                .disabled(!textScale.canIncrease)
+            Button("Decrease Text Size") { textScale.decrease() }
+                .keyboardShortcut("-", modifiers: .command)
+                .disabled(!textScale.canDecrease)
+            Button("Actual Text Size") { textScale.reset() }
+                .keyboardShortcut("0", modifiers: .command)
+                .disabled(textScale.isDefault)
         }
         CommandMenu("Go") {
             ForEach(Array(AppMode.visible(agents: showAgents, context: showContext).enumerated()), id: \.element) { index, section in
