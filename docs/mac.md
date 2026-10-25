@@ -44,14 +44,22 @@ unsent messages stay (they live in the app's container and Keychain, not in the 
 
 ### Option B: build from source
 
-Requirements: macOS 15 or later, Xcode 26 (built with 26.3) selected with `xcode-select`, and network access the
-first time (Swift Package Manager fetches `swift-secp256k1` 0.23.2 from GitHub).
+Requirements: macOS 15 or later, Xcode 26 (built with 26.3) selected with `xcode-select`, [bun](https://bun.sh) for
+the embedded board editor (built with bun 1.4.4), and network access the first time (Swift Package Manager fetches
+`swift-secp256k1` 0.23.2 from GitHub; bun fetches the board editor's locked dependencies from the npm registry).
 
 Install Xcode and complete its first-launch setup. If it is installed at `/Applications/Xcode.app`, select it with:
 
 ```sh
 sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 xcodebuild -version
+```
+
+Install bun if `bun --version` does not print a version (then open a new Terminal window), or update an older one:
+
+```sh
+curl -fsSL https://bun.sh/install | bash   # install
+bun upgrade                                # update an existing bun
 ```
 
 Clone the repository, then build, sign, install and open the Mac app:
@@ -70,6 +78,30 @@ cd ambulando-native-ip
 zsh scripts/mac-install.sh
 ```
 
+The script prints a line for each step: Xcode and macOS versions, board editor (with the bun version), app build,
+signing identity, the built version and build, the app it replaces, the installed version read back from
+Applications, and which copy is running after it opens. A successful run ends with:
+
+```text
+==> Installed /Applications/Ambulando.app: Ambulando 0.1.0 (build 5)
+==> Running: /Applications/Ambulando.app, Ambulando 0.1.0 (build 5)
+    In Ambulando, Settings > About should show Version 0.1.0 and Build 5.
+```
+
+If any step fails, it prints why (xcodebuild's errors and failed commands, the end of the build log, codesign's
+message) and a final `==> FAILED (exit N) while <step>` line that says whether anything in Applications changed.
+If the output ends without a `FAILED` or `Running:` line, the script is out of date: run `git pull --ff-only` again.
+To send the whole output and both logs for diagnosis:
+
+```sh
+zsh scripts/mac-install.sh 2>&1 | tee ~/Desktop/ambulando-install.txt; echo "exit status: ${pipestatus[1]}"
+tail -n 80 build/mac-release.log build/board-editor.log
+```
+
+Other copies of Ambulando on the Mac (for example an older one in `~/Applications`, or a Dock icon pointing at it) open
+the version they contain. The script lists them with their versions and leaves them in place; remove them yourself
+once the new one works. Settings > About shows the running app's Version and Build.
+
 Both routes build Release for arm64 and x86_64. From either source directory, optional installer commands are:
 
 ```sh
@@ -77,8 +109,10 @@ zsh scripts/mac-install.sh --no-open  # build and install without opening
 zsh scripts/mac-install.sh --package  # build, install, open, and write the ZIP and its SHA-256
 ```
 
-The script installs to `/Applications` (or `~/Applications` if that is not writable), asks a running Ambulando to quit
-first and stops if it does not, and only replaces the installed app once a complete, verified copy exists. A build made
+The script installs to `/Applications` (or `~/Applications` if that is not writable, or `AMBULANDO_INSTALL_DIR`),
+asks a running Ambulando to quit first (wherever it was opened from) and stops if it does not, refuses to install on a
+macOS older than the app's minimum, and only replaces the installed app once a complete, verified copy exists. If an
+earlier run was interrupted after setting the old app aside, the next run puts it back before updating. A build made
 on the same Mac has no quarantine flag, so Gatekeeper does not ask.
 
 Signing: `AMBULANDO_SIGN_IDENTITY` if set, otherwise the first *Developer ID Application*, then *Apple Development*

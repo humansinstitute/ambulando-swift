@@ -149,9 +149,13 @@ if [[ -z $identity ]]; then
         [[ -n $identity ]] && break
     done
 fi
-if [[ -z $identity || $identity == - ]]; then
+if [[ $identity == - ]]; then
+    print "==> Signing ad-hoc (AMBULANDO_SIGN_IDENTITY=-)."
+elif [[ -z $identity ]]; then
     identity=-
     print "==> Signing ad-hoc: no Developer ID Application or Apple Development identity found in your keychain."
+fi
+if [[ $identity == - ]]; then
     print "    After this update macOS asks once for your login password so Ambulando can read its Keychain item;"
     print "    choose Always Allow."
 else

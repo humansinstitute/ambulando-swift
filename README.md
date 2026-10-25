@@ -17,7 +17,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `Ambulando.xcodeproj`, `Ambulando/` | App target `studio.otherstuff.ambulando.native`, iOS 18+, iPhone and iPad; SwiftUI views, theme, assets |
 | `AmbulandoCore/` | UI-free Swift package: identity vault and signing, Tower transport, SQLite store, sync engine, probes |
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
-| `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `source-bundle.sh` |
+| `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
 ## What this build does
 
@@ -252,8 +252,10 @@ xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Amb
 xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Ambulando \
   -destination 'platform=iOS Simulator,name=<simulator>' -derivedDataPath build/dd test
 
-# Mac app: build (Release, arm64 + x86_64), sign, install to /Applications and open; --package also writes a ZIP
+# Mac app: build (Release, arm64 + x86_64), sign, install to /Applications and open; --package also writes a ZIP.
+# Needs Xcode and bun (docs/mac.md). Its regression tests use stub tools and install nothing.
 scripts/mac-install.sh
+zsh scripts/tests/mac-install-test.sh
 
 # Opt-in live checks (public descriptor + a signed discovery call made with the public test key)
 AMBULANDO_LIVE_ORIGIN=https://<tower> swift test --package-path AmbulandoCore --scratch-path build/core --filter WhenConfigured

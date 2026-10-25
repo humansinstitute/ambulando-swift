@@ -207,6 +207,14 @@ run --no-open
 check "succeeds" [ $RC -eq 0 ]
 check "signs ad-hoc" called "--sign - "
 
+# 9b. Explicit ad-hoc signing is not described as a missing identity, and skips the keychain lookup.
+start explicit-ad-hoc STUB_IDENTITIES=devid AMBULANDO_SIGN_IDENTITY=-
+run --no-open
+check "succeeds" [ $RC -eq 0 ]
+check "says ad-hoc was requested" has "Signing ad-hoc (AMBULANDO_SIGN_IDENTITY=-)"
+check "does not claim no identity was found" not has "no Developer ID Application or Apple Development identity found"
+check "signs ad-hoc" called "--sign - "
+
 # 10. Signing failure: actionable, nothing installed.
 start signing-fails STUB_IDENTITIES=devid STUB_CODESIGN=fail
 write_app "$T/Applications/Ambulando.app" 0.1.0 2
