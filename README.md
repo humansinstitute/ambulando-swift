@@ -145,6 +145,20 @@ Paste images and files into chat (build 11):
 - Pasting text works as before. The app never looks at the clipboard except when you choose Paste. Up to 4 items per
   paste, 100 MB each.
 
+Names and the in-app browser (build 12):
+
+- **Names like the web app.** People are named from their public Nostr profile first, then the workspace name, then a
+  short npub, everywhere: chat, the @-mention list (now with pictures), task assignees, documents and the sidebar.
+  Pictures hosted on Blossom servers (such as Primal's), which always redirect to a CDN, now load.
+- **Browser.** Web links in Ambulando open full-screen as tabs, and the globe button at the top of every screen opens
+  the browser or a new tab (it shows how many are open). **Ambulando** at the top left goes back to exactly where you
+  were, draft included; tabs keep their pages and back/forward history while the app runs. Pages are HTTPS only;
+  links for mail, phone, messages, FaceTime, Lightning and Nostr apps ask before leaving.
+- **Nostr signing in the browser** (`window.nostr`, NIP-07). A site asks before it can see your public key (you can
+  remember or forget that per site). Every signature shows a sheet naming the site and what will be signed; only
+  sign-in requests (NIP-42, NIP-98) can be allowed for a site until you lock. Locking cancels and refuses all
+  requests. Your key never enters the page. Encryption (NIP-04/44) is not offered.
+
 Security notes:
 
 - Identity import is explicit. The app never searches for, reads or exports keys from other apps or
@@ -158,6 +172,8 @@ Security notes:
   check (Blossom servers redirect every picture to their CDN). The relays and picture hosts can see your network address, as with the web
   app. Settings › Nostr profiles turns both off.
 - `.fips` endpoints are refused rather than replaced with HTTPS.
+- The in-app browser keeps website data in its own store, separate from Toolbox views, and answers `window.nostr`
+  only for the top frame of the HTTPS page shown in the tab (see architecture §4.9).
 - Every request carries a fresh NIP-98 event over the exact URL and body bytes.
 - Chat sends carry a kind 33358 signature over the exact (trimmed) message body. The request is frozen
   once signed and reused for every retry under the same `client_request_id`, so Tower replays instead

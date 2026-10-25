@@ -52,7 +52,16 @@ final class AppModel {
     enum Phase: Equatable { case starting, failed(String), ready }
 
     private(set) var phase: Phase = .starting
-    private(set) var identity: IdentityState = .none
+    private(set) var identity: IdentityState = .none {
+        didSet {
+            guard identity != oldValue else { return }
+            // window.nostr follows the identity: locking cancels and refuses every request; removing it forgets sites.
+            browser.setLocked(!isUnlocked)
+            if identity == .none, oldValue != .none { browser.reset() }
+        }
+    }
+    /// The in-app browser (full-screen tabs with `window.nostr`); see `BrowserModel`.
+    @ObservationIgnored let browser = BrowserModel()
     /// Why an existing identity cannot be opened (sealed while the iPhone is locked, or a damaged file).
     private(set) var vaultProblem: VaultReadProblem?
     private(set) var connection: ConnectionRecord?
@@ -295,6 +304,8 @@ final class AppModel {
             self.fixture = fixture
             if let fixture { try await fixture.prepare(identity: identity, sync: sync, store: store) }
             self.identity = await identity.state
+            await browser.configure(store: store, signer: { [weak self] in await MainActor.run { self?.sync?.identity } }, locked: !isUnlocked)
+            browser.samplePage = fixture?.browserSample
             vaultProblem = await identity.vaultProblem
             canReadWhileLocked = await identity.canReadWhileLocked
             backgroundRefreshEnabled = try await store.reader.state(Self.backgroundPreferenceKey) == "on"
@@ -483,6 +494,7 @@ final class AppModel {
 
     func disconnect() async {
         guard let sync, let store, let connection else { return }
+        browser.reset()
         await liveStream?.stop()
         await sync.engine.cancelAll()
         // Disconnecting ends the trusted-device session; the next launch asks for the PIN.

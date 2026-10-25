@@ -127,8 +127,8 @@ struct WebContentView: View {
 
 /// A WKWebView with a persistent label naming where the content comes from. It uses a non-persistent data store (no
 /// cookies or storage shared with anything), registers no script bridge, and keeps every navigation — including server
-/// redirects and new-window links — on its origin (`WebContentPolicy.decide`). Other HTTPS pages are only offered to
-/// Safari. HTML artefacts get sol's sandbox CSP (no network, frames, forms or plugins).
+/// redirects and new-window links — on its origin (`WebContentPolicy.decide`). Other HTTPS pages are only offered as
+/// a separate tab of the in-app browser (`BrowserModel`, through `openURL`). HTML artefacts get sol's sandbox CSP (no network, frames, forms or plugins).
 struct LabelledWebView: View {
     enum Content: Equatable { case url(URL), html(String) }
     let content: Content
@@ -155,10 +155,10 @@ struct LabelledWebView: View {
         }
         .navigationTitle(title)
         .confirmationDialog("This link leaves \(title).", isPresented: Binding(get: { external != nil }, set: { if !$0 { external = nil } }), titleVisibility: .visible) {
-            if let url = external { Button("Open \(url.host ?? "link") in Safari") { openURL(url); external = nil } }
+            if let url = external { Button("Open \(url.host ?? "link") in a browser tab") { openURL(url); external = nil } }
             Button("Stay here", role: .cancel) { external = nil }
         } message: {
-            Text("It is opened outside Ambulando, in Safari.")
+            Text("It opens in a separate browser tab, outside \(title).")
         }
     }
 }

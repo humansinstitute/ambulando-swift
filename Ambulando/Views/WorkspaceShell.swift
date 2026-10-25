@@ -38,6 +38,12 @@ struct WorkspaceShell: View {
         .overlay {
             if model.sidebarOpen { SidebarDrawer().zIndex(1) }
         }
+        // HTTPS links anywhere in the app open as in-app browser tabs; the browser covers the app without changing it,
+        // so returning finds the same section, channel and draft.
+        .environment(\.openURL, OpenURLAction { model.browser.handleLink($0) })
+        .fullScreenCover(isPresented: Binding(get: { model.browser.presented }, set: { model.browser.presented = $0 })) {
+            BrowserView().environment(model)
+        }
         // Record mentions in messages and documents open the record in its section and follow its context.
         .environment(\.openMention, OpenMentionAction { kind, id in model.openRecord(kind: kind, id: id) })
         .onAppear {
@@ -273,6 +279,7 @@ private struct ShellToolbar: ViewModifier {
                         SyncIndicator()
                         Button { searching = true } label: { Image(systemName: "magnifyingglass") }
                             .accessibilityLabel("Search").accessibilityIdentifier("search")
+                        BrowserButton()
                         // The profile menu (sol `.avatar-menu` button): the signed-in person's avatar or initials.
                         Button { showSettings = true } label: {
                             if let me = model.me.value?.person {
@@ -288,6 +295,26 @@ private struct ShellToolbar: ViewModifier {
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// The explicit browser entry: opens the browser (a new tab when none is open) and shows how many tabs are open.
+struct BrowserButton: View {
+    @Environment(AppModel.self) private var model
+    var body: some View {
+        let count = model.browser.tabs.count
+        Button { model.browser.show() } label: {
+            Image(systemName: "globe")
+                .overlay(alignment: .topTrailing) {
+                    if count > 0 {
+                        Text("\(count)").font(.system(size: 9, weight: .bold)).foregroundStyle(Amb.primaryForeground)
+                            .padding(.horizontal, 3).frame(minWidth: 14, minHeight: 14)
+                            .background(Amb.primary, in: Capsule()).offset(x: 7, y: -6)
+                    }
+                }
+        }
+        .accessibilityLabel(count == 0 ? "Browser" : "Browser, \(count) open \(count == 1 ? "tab" : "tabs")")
+        .accessibilityIdentifier("browser.open")
     }
 }
 

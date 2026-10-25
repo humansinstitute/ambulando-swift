@@ -438,7 +438,8 @@ directory refresh). No Tower route or schema was added.
   so a cached name is in the first frame, offline and locked included, and a missing one shows the short npub.
 - **Avatars.** `AvatarStore` fetches an HTTPS picture only if `AvatarURLPolicy` accepts it (no credentials, no IP literal
   or local host name, ≤ 2,048 characters), through an ephemeral session with no Authorization header, cookies, credential
-  store or HTTP cache and no redirects; ≤ 2 MB (stream cut at the limit), `image/*`, known still-image types, ≤ 40 MP. The
+  store or HTTP cache; at most 3 redirects, each re-checked by `AvatarURLPolicy` (build 12: Blossom servers redirect
+  every picture to their CDN); ≤ 2 MB (stream cut at the limit), `image/*`, known still-image types, ≤ 40 MP. The
   first frame is decoded as an ImageIO thumbnail (≤ 192 px, never the full bitmap) and re-encoded as PNG, which drops
   metadata. Files are named by the URL's SHA-256 under a versioned directory (`AmbulandoAvatars/v1`, other versions
   deleted), bounded to 400 files / 16 MB; a changed picture is a new URL and file. At most 3 downloads run at once and a
@@ -453,6 +454,39 @@ directory refresh). No Tower route or schema was added.
   message of each day (computed with the snapshot, off the main actor; the label text is resolved at render so
   "Today" moves at midnight), and a "Today" label above unsent messages that follow older history. Rows keep their ids,
   so scroll anchoring, live insertion, drafts and text selection are unchanged.
+
+### 4.9 Names like the web, and the in-app browser (build 12)
+
+- **Names.** `PeopleDirectory` follows sol `getSenderName`: the public profile (`display_name`, then `name`) first, then
+  a usable Tower member or agent name, the message's `created_by_actor_label`, then the short npub. `PersonNamePolicy`
+  treats Tower's setup placeholders ("Workspace Creator", ...) and npub/hex-only strings as no name.
+  `StoreReader.directoryMembers(workspaceId:)` gives every picker and name map (mention picker, task assignees, DM
+  picker, task/doc names, sidebar labels, agents) the same resolved label, and those screens also observe `.profiles`.
+  Relays get 8 s each (handshake included). Schema and stored data are unchanged.
+- **Browser** (`BrowserModel`, `BrowserView`; policy and NIP-07 in `AmbulandoCore/Browser`). Native-only: no Tower or
+  shared contract changes, and no new network owner for workspace data (pages talk to their own sites).
+  - Full-screen cover over the shell, so the shell's sections, Chat path, scroll and composer drafts are untouched;
+    **Ambulando** (top left), the tab switcher and the bottom mark return. Tabs are live `WKWebView`s held in memory
+    for the app's lifetime (not restored after relaunch), at most 12.
+  - Entry: the globe button in every section's toolbar (with the tab count), HTTPS links anywhere in the app
+    (`openURL` on the shell; other schemes keep the system behaviour) and the Toolbox's other-origin links.
+  - `BrowserURLPolicy`: pages are HTTPS only, without URL credentials or `.fips`; `about:blank` for new windows;
+    frames may also use `about:`, `data:`, `blob:`. `mailto`, `tel`, `sms`, `facetime(-audio)`, `lightning`, `nostr`
+    are handed to iOS after a confirmation, and only from a user-started navigation. Popups (`target=_blank`,
+    `window.open`) become tabs built from WebKit's configuration; `window.close()` closes the tab; `alert`/`confirm`
+    are native alerts naming the host.
+  - Website data lives in its own persistent `WKWebsiteDataStore(forIdentifier:)`, separate from the Toolbox's
+    non-persistent views; the browser menu clears it.
+  - `window.nostr`: a document-start script in the page world, top frame of HTTPS pages only, calls a
+    `WKScriptMessageHandlerWithReply`. The handler answers only the main frame whose `securityOrigin` equals the tab's
+    committed origin; requests carry the tab's document number (bumped on every main-frame commit). `NIP07Broker`
+    asks per origin before revealing the public key (remembered in `app_state` `browser.sites.v1`, forgettable from
+    the menu), shows a sheet with origin, kind, time, content and tags for **every** `signEvent`, and only for kinds
+    22242/27235 offers "until Ambulando locks" per origin and kind. Events are bounded (kind 0–65535, content
+    ≤ 256 KB, ≤ 2,000 tags) and a foreign `pubkey` is refused. Navigation, reload, tab close and lock cancel waiting
+    requests; after the user answers, lock and document are checked again before and after signing. Locking clears
+    the until-lock grants and refuses everything; removing the identity or disconnecting closes tabs and forgets
+    sites. `getRelays` returns `{}`; NIP-04/44 reject. JavaScript only ever receives the public key and signed events.
 
 ### 5.1 Chat catch-up (WP3, delivered)
 
