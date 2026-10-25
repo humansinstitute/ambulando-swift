@@ -646,7 +646,8 @@ struct DeckRecentCard: View {
 
 // MARK: Hello and Links
 
-/// Greeting, the current context and the member's WApps (sol `.deck-hello-card`, personal launchers).
+/// Greeting, the current context and the member's WApps (sol `.deck-hello-card`, personal launchers), which open as
+/// in-app browser tabs.
 struct DeckHelloCard: View {
     @Environment(AppModel.self) private var model
     let workspace: WorkspaceRecord
@@ -664,13 +665,15 @@ struct DeckHelloCard: View {
             .padding(.horizontal, 4).padding(.bottom, 6)
             Text("Apps").font(.footnote.weight(.heavy)).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 4)
             ForEach(wapps.value) { wapp in
-                if wapp.safeLaunchURL != nil {
-                    NavigationLink(value: WorkRoute.webContent(workspaceId: workspace.id, source: .wapp(id: wapp.id))) {
+                // A browser tab over Deck (signing through `window.nostr`); **Ambulando** returns to this card.
+                if let url = wapp.safeLaunchURL {
+                    Button { model.browser.launch(url) } label: {
                         Label(wapp.title, systemImage: "app.dashed").font(.subheadline).foregroundStyle(Amb.foreground)
                             .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .modifier(DeckRowStyle())
+                    .accessibilityIdentifier("deck.app.\(wapp.title)")
                 }
             }
             if wapps.loaded && wapps.value.isEmpty { DeckNote(text: "WApps you add in the web app appear here and in Toolbox.") }

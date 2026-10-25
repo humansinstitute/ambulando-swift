@@ -472,14 +472,18 @@ directory refresh). No Tower route or schema was added.
     **Ambulando** (top left), the tab switcher and the bottom mark return. Tabs are live `WKWebView`s held in memory
     for the app's lifetime (not restored after relaunch), at most 12.
   - Entry: the globe button in every section's toolbar (with the tab count), HTTPS links anywhere in the app
-    (`openURL` on the shell; other schemes keep the system behaviour) and the Toolbox's other-origin links.
+    (`openURL` on the shell; other schemes keep the system behaviour), links leaving an HTML artefact, and the WApp
+    and artifact launchers (Deck › Hello and Links › Apps, Toolbox, Context Tree artifact links) through
+    `BrowserModel.launch`, which checks the address with `WebContentPolicy.launchURL` and `BrowserURLPolicy` and shows
+    the tab that launcher opened before rather than adding one. HTML naplets keep the sandboxed labelled view (CSP, no
+    script bridge, no network) and never get `window.nostr`.
   - `BrowserURLPolicy`: pages are HTTPS only, without URL credentials or `.fips`; `about:blank` for new windows;
     frames may also use `about:`, `data:`, `blob:`. `mailto`, `tel`, `sms`, `facetime(-audio)`, `lightning`, `nostr`
     are handed to iOS after a confirmation, and only from a user-started navigation. Popups (`target=_blank`,
     `window.open`) become tabs built from WebKit's configuration; `window.close()` closes the tab; `alert`/`confirm`
     are native alerts naming the host.
-  - Website data lives in its own persistent `WKWebsiteDataStore(forIdentifier:)`, separate from the Toolbox's
-    non-persistent views; the browser menu clears it.
+  - Website data lives in its own persistent `WKWebsiteDataStore(forIdentifier:)`, separate from the HTML-artefact
+    view's non-persistent store; the browser menu clears it.
   - `window.nostr`: a document-start script in the page world, top frame of HTTPS pages only, calls a
     `WKScriptMessageHandlerWithReply`. The handler answers only the main frame whose `securityOrigin` equals the tab's
     committed origin; requests carry the tab's document number (bumped on every main-frame commit). `NIP07Broker`
@@ -671,8 +675,9 @@ SQLite WAL checkpoints are shared, so these targets are measured, not assumed.
   `https`/`nip-98` and no FIPS service. FIPS is a WMapp-shell capability, so
   native-ip does not offer it. If a FIPS-only endpoint is selected, the app
   refuses it rather than falling back to HTTPS.
-- **Web content**: only records that are themselves HTML documents, such as
-  HTML artefacts and WApps' own UIs, open in an explicitly labelled web view, and
-  they are not counted as native parity. Canvas, naplets, Excalidraw, the context
+- **Web content**: only records that are themselves HTML documents are web
+  content, and they are not counted as native parity. HTML artefacts open in an
+  explicitly labelled, sandboxed web view; WApps' own UIs and Context Tree
+  artifact pages (HTTPS) open as in-app browser tabs (§4.9). Canvas, naplets, Excalidraw, the context
   tree and agents are native since build 7 (§4.6); the pipeline viewer needs an
   Autopilot contract this app does not have.

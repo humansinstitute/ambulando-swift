@@ -85,4 +85,44 @@ final class BrowserUITests: XCTestCase {
         home.tap()
         XCTAssertTrue(app.navigationBars["#general"].waitForExistence(timeout: 10))
     }
+
+    /// Deck → Hello and Links → Apps opens the WApp as a browser tab with `window.nostr`; **Ambulando** returns to the
+    /// same Deck card, and launching the app again shows its existing tab rather than a new one.
+    func testDeckAppLaunchesInTheSignedBrowserAndReturnsToTheDeckCard() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-AmbulandoUITestFixture", "-appearance", "light", "-AmbulandoFixtureReset"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Sample data on this iPhone. Not connected to a Tower."].waitForExistence(timeout: 15))
+        app.section("Deck")
+        app.deckCard("hello")
+        let launcher = app.buttons["deck.app.Sample Artifacts"].firstMatch
+        XCTAssertTrue(launcher.waitForExistence(timeout: 15), "the WApp is listed under Apps")
+        XCTAssertFalse(app.buttons["deck.app.Legacy tool"].exists, "a WApp without HTTPS is not offered")
+        launcher.tap()
+
+        // The browser, not the sandboxed labelled view: the page gets window.nostr and signing asks first.
+        XCTAssertTrue(app.buttons["browser.return"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.descendants(matching: .any)["web.label"].exists)
+        XCTAssertTrue(webText(app, "window.nostr: ready").waitForExistence(timeout: 15), "window.nostr is available to the WApp")
+        app.webViews.buttons["Connect"].tap()
+        let allow = app.buttons["nostr.allow"]
+        XCTAssertTrue(allow.waitForExistence(timeout: 10), "the WApp asks before it sees the key")
+        allow.tap()
+        XCTAssertTrue(webText(app, "pubkey ").waitForExistence(timeout: 10))
+        capture(app, "deck-app-browser")
+
+        // Back to Ambulando: the same Deck card, with the tab still open.
+        app.buttons["browser.return"].tap()
+        XCTAssertTrue(launcher.waitForExistence(timeout: 10), "returns to Hello and Links")
+        XCTAssertTrue(app.buttons["section.deck"].isSelected && launcher.isHittable, "the Deck section and card are kept")
+        XCTAssertEqual(app.buttons["browser.open"].firstMatch.label, "Browser, 1 open tab")
+        capture(app, "deck-app-returned")
+
+        // Launching it again shows the same tab and page.
+        launcher.tap()
+        XCTAssertTrue(webText(app, "pubkey ").waitForExistence(timeout: 10), "the existing tab is shown again")
+        XCTAssertEqual(app.buttons["browser.tabs"].label, "1 open tab")
+        app.buttons["browser.return"].tap()
+        XCTAssertTrue(launcher.waitForExistence(timeout: 10))
+    }
 }

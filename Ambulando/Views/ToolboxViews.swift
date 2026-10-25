@@ -3,8 +3,10 @@ import SwiftUI
 import WebKit
 
 // Toolbox (sol `toolbox-manager.js`): the viewer's personal WApps, listed natively. A WApp's UI is a web document its
-// publisher owns, so it opens in a clearly labelled web view confined to its HTTPS origin. HTML naplets and Context Tree
-// artifact pages use the same view. Nothing in these views can reach the app's identity, Tower session or storage.
+// publisher owns at an HTTPS address; it opens as an in-app browser tab (`BrowserModel.launch`), as Context Tree
+// artifact pages do, where `window.nostr` asks the user before anything is shared or signed. HTML naplets are workspace
+// content with no origin of their own, so they stay in the labelled, sandboxed view below: no script bridge, no network,
+// nothing that can reach the app's identity, Tower session or storage.
 
 struct ToolboxView: View {
     @Environment(AppModel.self) private var model
@@ -19,7 +21,7 @@ struct ToolboxView: View {
             Section {
                 ForEach(wapps.value) { wapp in
                     if let url = wapp.safeLaunchURL {
-                        NavigationLink(value: WorkRoute.webContent(workspaceId: workspace.id, source: .wapp(id: wapp.id))) { row(wapp, origin: WebContentPolicy.origin(of: url)) }
+                        Button { model.browser.launch(url) } label: { row(wapp, origin: WebContentPolicy.origin(of: url)) }
                             .accessibilityIdentifier("wapp.\(wapp.title)")
                     } else {
                         row(wapp, origin: nil).opacity(0.6)
@@ -30,7 +32,7 @@ struct ToolboxView: View {
                 if !complete.value {
                     Text("Tower lists at most \(TowerAPI.personalWappLimit) WApps, so this list may be incomplete.").font(.caption).foregroundStyle(Amb.warning)
                 }
-                Text("WApps are web apps their publishers own. They open in a labelled web view, separate from your Ambulando identity. Adding, editing and placing WApps is done in the web app.")
+                Text("WApps are web apps their publishers own. They open as tabs in the Ambulando browser, where a WApp must ask before it can see your Nostr key and you approve each signature. Adding, editing and placing WApps is done in the web app.")
                     .font(.caption)
             }
         }
@@ -76,7 +78,6 @@ struct WebContentView: View {
     @State private var failure: String?
 
     enum Resolved: Equatable {
-        case url(URL, title: String, publisher: String?)
         case html(String, title: String)
     }
 
@@ -84,9 +85,6 @@ struct WebContentView: View {
         Group {
             if let resolved {
                 switch resolved {
-                case .url(let url, let title, let publisher):
-                    LabelledWebView(content: .url(url), title: title, label: "Web content · \(WebContentPolicy.origin(of: url) ?? url.host ?? "")"
-                                    + (publisher.map { " · published by \($0)" } ?? ""))
                 case .html(let html, let title):
                     LabelledWebView(content: .html(html), title: title, label: "Web content · HTML artefact from this workspace (no network access)")
                 }
@@ -102,17 +100,6 @@ struct WebContentView: View {
 
     private func resolve() async {
         switch source {
-        case .artifact(let url, let title):
-            guard let safe = WebContentPolicy.launchURL(url.absoluteString) else { failure = "Only HTTPS pages are opened."; return }
-            resolved = .url(safe, title: title, publisher: nil)
-        case .wapp(let id):
-            guard let connection = model.connection?.id,
-                  let wapp = try? await store.reader.personalWapp(connectionId: connection, workspaceId: workspace.id, id: id) else {
-                failure = "This WApp is no longer in your Toolbox."; return
-            }
-            guard let url = wapp.safeLaunchURL else { failure = "This WApp's address is not HTTPS, so it is not opened."; return }
-            let owner = wapp.ownerNpub.map { $0 == model.connection?.signerNpub ? "you" : String($0.prefix(12)) + "…" }
-            resolved = .url(url, title: wapp.title, publisher: owner)
         case .htmlNaplet(let canvas, let naplet, let title):
             guard let sync = model.sync, let connection = model.connection, model.canRead else { failure = "Unlock to open this HTML artefact."; return }
             do {

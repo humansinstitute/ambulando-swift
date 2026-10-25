@@ -81,7 +81,9 @@ Workspace surfaces and pins (build 7): the sidebar has two new sections.
     never saved to the board. Items open natively (documents, conversations, tasks, other canvases); Excalidraw boards
     are drawn natively, and what cannot be drawn is listed. Locked items show only their frame.
   - **Agents** lists the workspace's agents and what they are doing in the current context, from Tower's records.
-  - **Toolbox** lists your WApps; each opens in a labelled web view that stays on the WApp's own HTTPS origin.
+  - **Toolbox** lists your WApps (also under Deck › Hello and Links › Apps); each opens as an in-app browser tab, where
+    it can ask to use your Nostr key, and **Ambulando** returns to where you launched it. HTML artefacts stay in a
+    labelled, sandboxed web view with no signing.
 
 Editing boards and the Context Tree, reordering pins, the pipeline viewer and Autopilot session control stay in the web
 app. See the parity matrix for every gap. (Build 9 moved Pinned and the Workspace screens out of the sidebar; see below.)
@@ -173,7 +175,7 @@ Security notes:
   check (Blossom servers redirect every picture to their CDN). The relays and picture hosts can see your network address, as with the web
   app. Settings › Nostr profiles turns both off.
 - `.fips` endpoints are refused rather than replaced with HTTPS.
-- The in-app browser keeps website data in its own store, separate from Toolbox views, and answers `window.nostr`
+- The in-app browser keeps website data in its own store, separate from the HTML-artefact view, and answers `window.nostr`
   only for the top frame of the HTTPS page shown in the tab (see architecture §4.9).
 - Every request carries a fresh NIP-98 event over the exact URL and body bytes.
 - Chat sends carry a kind 33358 signature over the exact (trimmed) message body. The request is frozen

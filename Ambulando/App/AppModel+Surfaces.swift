@@ -1,11 +1,10 @@
 import AmbulandoCore
 import Foundation
 
-/// What a labelled web view shows: a Toolbox WApp's own UI, an HTML naplet, or a Context Tree artifact page.
+/// What the labelled, sandboxed web view shows: an HTML naplet. WApps and Context Tree artifact pages have HTTPS
+/// addresses of their own and open as in-app browser tabs instead (`BrowserModel.launch`).
 enum WebContentSource: Hashable, Codable {
-    case wapp(id: String)
     case htmlNaplet(canvasId: String, napletId: String, title: String)
-    case artifact(url: URL, title: String)
 }
 
 /// The viewer's pins with the state of any pin or unpin still waiting in the write queue.

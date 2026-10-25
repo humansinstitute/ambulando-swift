@@ -202,8 +202,8 @@ struct ContextComponentView: View {
                 .accessibilityIdentifier("context.reference.\(r.resolvedTitle ?? id)")
             }
         case (_, .artifact?):
-            if let artifact = r.artifact, artifact.isHTTPS, let url = artifact.latestURL {
-                NavigationLink(value: WorkRoute.webContent(workspaceId: workspace.id, source: .artifact(url: url, title: artifact.artifact))) {
+            if let artifact = r.artifact, artifact.isHTTPS, let url = artifact.latestURL.flatMap({ WebContentPolicy.launchURL($0.absoluteString) }) {
+                Button { model.browser.launch(url) } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Label(artifact.artifact, systemImage: "globe").foregroundStyle(Amb.foreground)
                         Text("Web content · \(artifact.origin)").font(.caption).foregroundStyle(Amb.mutedForeground)

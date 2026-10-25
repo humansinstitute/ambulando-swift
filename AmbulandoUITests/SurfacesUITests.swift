@@ -122,12 +122,14 @@ final class SurfacesUITests: XCTestCase {
         XCTAssertTrue(wapp.waitForExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts["Not opened: its address is not HTTPS"].exists)
         capture(app, "toolbox")
+        // A WApp opens as an in-app browser tab; Ambulando returns to the Toolbox.
         wapp.tap()
-        let label = app.descendants(matching: .any)["web.label"].firstMatch
-        XCTAssertTrue(label.waitForExistence(timeout: 10))
-        XCTAssertTrue(label.label.contains("Web content · https://timesheets.sample.invalid"), label.label)
+        let returnButton = app.buttons["browser.return"]
+        XCTAssertTrue(returnButton.waitForExistence(timeout: 10))
+        XCTAssertEqual(app.buttons["browser.tabs"].label, "1 open tab")
         capture(app, "toolbox-web")
-        back(app)
+        returnButton.tap()
+        XCTAssertTrue(wapp.waitForExistence(timeout: 10), "back in the Toolbox")
         app.section("Chat")
         XCTAssertTrue(app.navigationBars["#design"].waitForExistence(timeout: 5), "Chat is one tap away and shows the shared context")
         XCTAssertTrue(app.buttons["context.bar"].firstMatch.label.contains("design"), "the context is shared")

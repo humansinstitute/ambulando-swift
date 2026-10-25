@@ -22,6 +22,8 @@ final class BrowserTab: Identifiable {
     /// The committed page's HTTPS origin (nil for `about:blank` and anything not HTTPS).
     @ObservationIgnored var origin: String?
     @ObservationIgnored var closed = false
+    /// The WApp or artifact address this tab was opened for from an Ambulando launcher, so launching it again returns here.
+    @ObservationIgnored var launchURL: URL?
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
 
     var isBlank: Bool { url == nil || url?.scheme == "about" }
@@ -126,6 +128,22 @@ final class BrowserModel {
         let tab = addTab(configuration: nil)
         if let url { load(url, in: tab) }
         presented = true
+    }
+
+    /// A launcher in Ambulando (Deck's Apps, the Toolbox, Context Tree artifacts) opening an HTTPS web app as a browser
+    /// tab, where it may ask to use `window.nostr`. The tab it opened before is shown again (page, sign-in and history
+    /// kept) rather than a new one. Returns false if the address is not one the browser opens.
+    @discardableResult
+    func launch(_ url: URL) -> Bool {
+        guard BrowserURLPolicy.decide(url, mainFrame: true) == .load else { return false }
+        if let tab = tabs.first(where: { $0.launchURL == url }) {
+            select(tab)
+        } else {
+            open(url)
+            selected?.launchURL = url
+        }
+        presented = true
+        return true
     }
 
     /// The globe button: back to the open tabs, or a new tab when there are none.

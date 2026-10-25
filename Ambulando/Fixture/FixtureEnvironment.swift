@@ -825,6 +825,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         // Toolbox and pins.
         s.seedWapp(title: "Timesheets", launchURL: "https://timesheets.sample.invalid/", description: "Log time against tasks", sortOrder: 1, owner: Self.ana)
         s.seedWapp(title: "Legacy tool", launchURL: "http://legacy.sample.invalid/", description: "Served without HTTPS", sortOrder: 2, owner: Self.ana)
+        // Served from memory by the browser's sample page (`browserSample`), so launching it can use `window.nostr` offline.
+        s.seedWapp(title: "Sample Artifacts", launchURL: "https://browser.sample.invalid/apps/artifacts", description: "A Nostr web app", sortOrder: 3, owner: Self.rick)
         s.externalPin(type: "thread", resource: thread, pinned: true)
         s.externalPin(type: "channel", resource: design, pinned: true)
         s.markSeeded()
