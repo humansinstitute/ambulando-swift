@@ -1,10 +1,14 @@
 import AmbulandoCore
+#if os(iOS)
 import BackgroundTasks
+#endif
 import Foundation
 import Network
 import Observation
 import os
+#if os(iOS)
 import UIKit
+#endif
 
 /// A place in chat navigation. Routes carry their workspace so a restored or stale path can never open a
 /// conversation under a different workspace.
@@ -230,9 +234,10 @@ final class AppModel {
         do {
             let fixture = FixtureEnvironment.fromLaunchArguments()
             let directory = fixture?.directory ?? Self.dataDirectory
-            let secrets = fixture?.secrets ?? KeychainVaultSecretStore()
-            let background = fixture?.backgroundCredentials ?? KeychainBackgroundCredentialStore()
-            let session = fixture?.sessionKeys ?? KeychainSessionKeyStore()
+            let secrets = fixture?.secrets ?? KeychainVaultSecretStore(service: KeychainServices.named(ProductionStorage.vaultSecretService))
+            let background = fixture?.backgroundCredentials
+                ?? KeychainBackgroundCredentialStore(service: KeychainServices.named(ProductionStorage.backgroundReadService))
+            let session = fixture?.sessionKeys ?? KeychainSessionKeyStore(service: KeychainServices.named(ProductionStorage.sessionService))
             let (store, identity) = try await Task.detached(priority: .userInitiated) {
                 let store = try LocalStore(directory: ProductionStorage.storeDirectory(directory))
                 // Nothing is in flight at launch; an interrupted send is queued again (Tower replays by client_request_id),
@@ -588,12 +593,14 @@ final class AppModel {
 
     /// iOS made files with complete protection readable again (the iPhone was unlocked) while this process kept running.
     private func observeProtectedData() {
+        #if os(iOS)
         NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 await self?.retryStartIfFailed()
                 await self?.refreshIdentityAvailability()
             }
         }
+        #endif
     }
 
     /// Scene went to the background: close the stream (iOS would suspend it anyway), give unsent work the short
@@ -623,11 +630,13 @@ final class AppModel {
 
     /// Requests a `BGAppRefreshTask` no earlier than 15 minutes from now. iOS decides whether and when it runs.
     func scheduleBackgroundRefresh() {
+        #if os(iOS)
         guard fixture == nil else { return }
         let request = BGAppRefreshTaskRequest(identifier: AppDelegate.refreshTaskIdentifier)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         do { try BGTaskScheduler.shared.submit(request); backgroundScheduleError = nil }
         catch { backgroundScheduleError = (error as NSError).localizedDescription + " (\((error as NSError).domain) \((error as NSError).code))" }
+        #endif
     }
 
     /// Runs the shared sync pipeline once for a background window (also used by the sample-data simulation).
@@ -645,6 +654,7 @@ final class AppModel {
 
     /// Unsent messages and changes get the finishing time iOS allows after leaving the foreground (about 30 s).
     private func finishPendingWorkInBackground() {
+        #if os(iOS)
         guard let sync, isUnlocked else { return }
         let application = UIApplication.shared
         var identifier = UIBackgroundTaskIdentifier.invalid
@@ -658,6 +668,7 @@ final class AppModel {
             Task { await sync.engine.cancelAll() }
             if identifier != .invalid { application.endBackgroundTask(identifier); identifier = .invalid }
         }
+        #endif
     }
 
     // MARK: Background refresh preference

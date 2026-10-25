@@ -52,9 +52,9 @@ struct DocumentsView: View {
                 .accessibilityIdentifier("doc.\(doc.title)")
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedList()
         .scrollContentBackground(.hidden)
-        .searchable(text: $filter, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Filter documents")
+        .searchable(text: $filter, placement: .drawer, prompt: "Filter documents")
         .overlay {
             if snapshot.loaded && snapshot.value.docs.isEmpty && snapshot.value.creating.isEmpty {
                 EmptyNote(title: "No documents", systemImage: "doc.text", detail: model.isUnlocked ? "Documents in this scope appear here." : "Unlock to load documents.")
@@ -109,7 +109,7 @@ struct DocumentCreateSheet: View {
                 if let error { Text(error).foregroundStyle(Amb.destructive) }
             }
             .navigationTitle("New document")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -171,7 +171,7 @@ struct DocumentView: View {
                 if let draft = snapshot.value.draft {
                     Button { editing = true } label: {
                         Notice(tone: draft.state == .recovery || draft.state == .conflict ? .warning : .info,
-                               text: draft.lastError ?? "You have unsaved edits on this iPhone. Tap to continue editing.")
+                               text: draft.lastError ?? "You have unsaved edits on this \(Device.name). Tap to continue editing.")
                     }
                     .buttonStyle(.plain).accessibilityIdentifier("doc.draftBanner")
                 }
@@ -181,27 +181,28 @@ struct DocumentView: View {
                         .accessibilityElement(children: .contain).accessibilityIdentifier("doc.body")
                 } else if snapshot.loaded {
                     SyncNote(text: model.syncError(forKey: WorkspaceSync.docKey(workspace.id, docId))
-                             ?? (model.isUnlocked ? "Loading document…" : "This document is not saved on this iPhone yet. Unlock to load it."))
+                             ?? (model.isUnlocked ? "Loading document…" : "This document is not saved on this \(Device.name) yet. Unlock to load it."))
                 }
                 Divider()
                 docComments
             }
             .padding(16)
+            .tabletReadingWidth()
         }
         .scrollDismissesKeyboard(.interactively)
-        .safeAreaInset(edge: .bottom) { composer }
+        .safeAreaInset(edge: .bottom) { composer.tabletReadingWidth() }
         .background(Amb.background)
         .fixtureLabel()
         .navigationTitle("Document")
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .trailingBar) {
                 Button(snapshot.value.draft == nil ? "Edit" : "Continue") { editing = true }
                     .disabled(!snapshot.value.editable && snapshot.value.draft == nil)
                     .accessibilityIdentifier("doc.edit")
             }
         }
-        .fullScreenCover(isPresented: $editing) {
+        .coverSheet(isPresented: $editing) {
             if let doc = snapshot.value.doc { DocumentEditorView(doc: doc, workspace: workspace, store: store) }
         }
         .refreshable { model.openDoc(docId, in: workspace, force: true) }
@@ -322,7 +323,7 @@ final class DocEditorModel {
         let draft = try? await store.reader.docDraft(key: key)
         let cached = try? await store.reader.docBody(workspaceId: w, docId: d)
         let source: (Data, String)? = draft.map { ($0.body, $0.contentType) } ?? cached.map { ($0.bytes, $0.contentType) }
-        guard let source else { mode = .unavailable("This document's text is not on this iPhone yet. Go back, unlock and open it again."); return }
+        guard let source else { mode = .unavailable("This document's text is not on this \(Device.name) yet. Go back, unlock and open it again."); return }
         let decoded = await Task.detached { DocumentBody(bytes: source.0, contentType: source.1) }.value
         body = decoded
         if let draft { base = (draft.baseRowVersion, draft.baseSha256, draft.baseStorageObjectId); dirty = true; status = draft.lastError }
@@ -346,7 +347,7 @@ final class DocEditorModel {
     // MARK: Lease
 
     func holdLease(saver: DocumentSaver?, unlocked: Bool) {
-        guard let saver, unlocked else { leaseState = "Editing on this iPhone. Unlock to save."; return }
+        guard let saver, unlocked else { leaseState = "Editing on this \(Device.name). Unlock to save."; return }
         let connection = connection, workspace = workspace, id = doc.id
         renew?.cancel()
         renew = Task { [weak self] in
@@ -354,7 +355,7 @@ final class DocEditorModel {
                 try await saver.acquire(connection, workspace, docId: id)
                 self?.leaseState = "You are editing (lease held)."
             } catch {
-                self?.leaseState = (error as? LocalizedError)?.errorDescription ?? "Could not take the edit lease; your edits stay on this iPhone."
+                self?.leaseState = (error as? LocalizedError)?.errorDescription ?? "Could not take the edit lease; your edits stay on this \(Device.name)."
                 return
             }
             while !Task.isCancelled {
@@ -489,7 +490,7 @@ struct DocumentEditorView: View {
             }
             .background(Amb.background)
             .navigationTitle("Edit")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { Task { _ = await editor?.persistDraft(state: .editing); dismiss() } }.accessibilityIdentifier("editor.close")
@@ -529,7 +530,7 @@ struct DocumentEditorView: View {
                     Notice(tone: editor.statusTone, text: status).accessibilityIdentifier("editor.status")
                     if editor.statusTone == .warning {
                         HStack(spacing: 16) {
-                            Button("Copy my text") { UIPasteboard.general.string = editor.draftText }
+                            Button("Copy my text") { Pasteboard.copy(editor.draftText) }
                             Button("Discard my edits", role: .destructive) { confirmDiscard = true }.accessibilityIdentifier("editor.discard")
                         }
                         .font(.footnote.weight(.semibold))

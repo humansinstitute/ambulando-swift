@@ -16,6 +16,7 @@ struct BrowserView: View {
         @Bindable var browser = browser
         VStack(spacing: 0) {
             topBar
+            FixtureBanner()
             if let tab = browser.selected {
                 if tab.loading { ProgressView(value: tab.progress).progressViewStyle(.linear).tint(Amb.primary).frame(height: 2) }
                 if let refusal = tab.refusal { notice(refusal, systemImage: "exclamationmark.triangle").accessibilityIdentifier("browser.refusal") }
@@ -70,8 +71,7 @@ struct BrowserView: View {
                 Image(systemName: browser.selected?.origin != nil ? "lock.fill" : "globe").font(.caption).foregroundStyle(Amb.mutedForeground)
                 TextField("Search or enter address", text: $address)
                     .focused($editing)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
+                    .urlEntry()
                     .autocorrectionDisabled()
                     .submitLabel(.go)
                     .font(.subheadline)
@@ -140,6 +140,7 @@ struct BrowserView: View {
                 .accessibilityLabel("Back to Ambulando").accessibilityIdentifier("browser.home")
         }
         .font(.title3)
+        .tabletReadingWidth()
         .padding(.horizontal, 28).padding(.vertical, 10)
         .background(Amb.card)
         .overlay(alignment: .top) { Rectangle().fill(Amb.border).frame(height: 0.5) }
@@ -153,6 +154,7 @@ struct BrowserView: View {
                 .font(.footnote).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
         }
         .padding(32)
+        .tabletReadingWidth(620)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Amb.background)
         .accessibilityIdentifier("browser.start")
@@ -180,19 +182,11 @@ extension BrowserModel {
 }
 
 /// Hosts a tab's existing `WKWebView`; switching tabs swaps which view is inside, never recreating one.
-private struct WebViewHost: UIViewRepresentable {
+@MainActor
+private struct WebViewHost {
     let webView: WKWebView
 
-    func makeUIView(context: Context) -> UIView {
-        let container = UIView()
-        container.backgroundColor = .systemBackground
-        attach(to: container)
-        return container
-    }
-
-    func updateUIView(_ container: UIView, context: Context) { attach(to: container) }
-
-    private func attach(to container: UIView) {
+    private func attach(to container: PlatformView) {
         guard webView.superview !== container else { return }
         container.subviews.forEach { $0.removeFromSuperview() }
         webView.removeFromSuperview()
@@ -206,6 +200,29 @@ private struct WebViewHost: UIViewRepresentable {
         ])
     }
 }
+
+#if os(iOS)
+extension WebViewHost: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.backgroundColor = .systemBackground
+        attach(to: container)
+        return container
+    }
+
+    func updateUIView(_ container: UIView, context: Context) { attach(to: container) }
+}
+#else
+extension WebViewHost: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let container = NSView()
+        attach(to: container)
+        return container
+    }
+
+    func updateNSView(_ container: NSView, context: Context) { attach(to: container) }
+}
+#endif
 
 /// Ambulando first, then every open tab.
 struct BrowserTabsView: View {
@@ -246,7 +263,7 @@ struct BrowserTabsView: View {
                 }
             }
             .navigationTitle("Tabs")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
                 ToolbarItem(placement: .primaryAction) {
@@ -321,7 +338,7 @@ struct NostrApprovalSheet: View {
                 }
             }
             .navigationTitle(prompt.kind == .connect ? "Connect to Nostr" : "Sign with Nostr")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(prompt.kind == .connect ? "Don't allow" : "Reject") { decide(.deny(remember: prompt.kind == .connect && remember)) }

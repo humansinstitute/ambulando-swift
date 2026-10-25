@@ -9,8 +9,21 @@ import SwiftUI
 /// The menu button that opens the sidebar (toolbar leading item of every mode).
 struct SidebarButton: View {
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    @Environment(\.tabletNavigation) private var tablet
+    #endif
     var body: some View {
-        Button { withAnimation(.snappy) { model.sidebarOpen = true } } label: {
+        Button {
+            #if os(iOS)
+            if let tablet, tablet.available {
+                tablet.collapsed.toggle()
+            } else {
+                withAnimation(.snappy) { model.sidebarOpen = true }
+            }
+            #else
+            withAnimation(.snappy) { model.sidebarOpen = true }
+            #endif
+        } label: {
             Image(systemName: "line.3.horizontal").font(.body.weight(.semibold)).foregroundStyle(Amb.foreground)
                 .frame(width: 32, height: 32)
         }
@@ -133,7 +146,7 @@ struct SidebarDrawer: View {
     }
 }
 
-private struct SidebarContent: View {
+struct SidebarContent: View {
     @Environment(AppModel.self) private var model
     @State private var sheet: SidebarSheet?
     /// A channel created in the New channel sheet, opened in Chat once the sheet has gone (as the web selects it).
@@ -350,6 +363,7 @@ private struct WorkspaceFooter: View {
             .padding(10)
             .background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
         }
+        .fullLabelMenu()
         .accessibilityLabel("Switch workspace, current \(model.selectedWorkspace?.label ?? "none")")
         .accessibilityIdentifier("sidebar.workspace")
         .padding(12)
@@ -393,7 +407,7 @@ struct ChannelDirectoryView: View {
                 }
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedList()
         .scrollContentBackground(.hidden)
         .onChange(of: nav.groups.isEmpty, initial: true) { _, empty in if !empty { model.markCachedListShown() } }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -443,11 +457,11 @@ struct NavigationStatus: View {
             message(tone: .error, text: (state == .failed(error) ? "Couldn't load scopes and channels. " : "Couldn't load your workspaces. ") + error,
                     identifier: "sidebar.state.error", retry: true)
         case .ready(let error?):
-            message(tone: .warning, text: "Couldn't refresh; showing scopes saved on this iPhone. " + error,
+            message(tone: .warning, text: "Couldn't refresh; showing scopes saved on this \(Device.name). " + error,
                     identifier: "sidebar.state.stale", retry: true)
         case .locked:
             message(tone: .info, text: model.identity == .unavailable
-                    ? "Scopes and channels load once this iPhone is unlocked."
+                    ? "Scopes and channels load once this \(Device.name) is unlocked."
                     : "Unlock your identity to load scopes and channels.", identifier: "sidebar.state.locked", retry: false)
         case .empty:
             message(tone: .info, text: "No scopes are shared with you in this workspace yet.", identifier: "sidebar.state.empty", retry: true)

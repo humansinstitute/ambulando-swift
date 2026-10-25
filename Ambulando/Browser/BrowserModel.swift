@@ -177,7 +177,11 @@ final class BrowserModel {
         webView.navigationDelegate = webDelegate
         webView.uiDelegate = webDelegate
         webView.allowsBackForwardNavigationGestures = true
+        #if os(iOS)
         webView.accessibilityIdentifier = "browser.page"
+        #else
+        webView.setAccessibilityIdentifier("browser.page")
+        #endif
         let tab = BrowserTab(webView: webView)
         tabs.append(tab)
         selectedId = tab.id
@@ -274,7 +278,9 @@ final class BrowserModel {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = store()
         configuration.userContentController = controller()
+        #if os(iOS)
         configuration.allowsInlineMediaPlayback = true
+        #endif
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         return configuration
     }

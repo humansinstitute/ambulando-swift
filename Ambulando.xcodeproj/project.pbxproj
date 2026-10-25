@@ -7,20 +7,42 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D10000000000000000000003 /* AmbulandoCore in Frameworks */ = {isa = PBXBuildFile; productRef = D10000000000000000000002 /* AmbulandoCore */; };
 		C10000000000000000000003 /* AmbulandoCore in Frameworks */ = {isa = PBXBuildFile; productRef = C10000000000000000000002 /* AmbulandoCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		D1000000000000000000000A /* Ambulando.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ambulando.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000000000000000000000A /* Ambulando.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ambulando.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B1000000000000000000000A /* AmbulandoUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AmbulandoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		D10000000000000000000019 /* Exceptions for "Ambulando" folder in "AmbulandoMac" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				App/AmbulandoApp.swift,
+				App/AppDelegate.swift,
+			);
+			target = D10000000000000000000005 /* AmbulandoMac */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		A10000000000000000000007 /* Ambulando */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Ambulando; sourceTree = "<group>"; };
+		A10000000000000000000007 /* Ambulando */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (D10000000000000000000019 /* Exceptions for "Ambulando" folder in "AmbulandoMac" target */, ); path = Ambulando; sourceTree = "<group>"; };
+		D10000000000000000000007 /* AmbulandoMac */ = {isa = PBXFileSystemSynchronizedRootGroup; path = AmbulandoMac; sourceTree = "<group>"; };
 		B10000000000000000000007 /* AmbulandoUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = AmbulandoUITests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		D1000000000000000000000F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D10000000000000000000003 /* AmbulandoCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A1000000000000000000000F /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -62,6 +84,7 @@
 			children = (
 				A10000000000000000000007 /* Ambulando */,
 				B10000000000000000000007 /* AmbulandoUITests */,
+				D10000000000000000000007 /* AmbulandoMac */,
 				A10000000000000000000004 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -71,6 +94,7 @@
 			children = (
 				A1000000000000000000000A /* Ambulando.app */,
 				B1000000000000000000000A /* AmbulandoUITests.xctest */,
+				D1000000000000000000000A /* Ambulando.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -78,6 +102,30 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		D10000000000000000000005 /* AmbulandoMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D1000000000000000000000C /* Build configuration list for PBXNativeTarget "AmbulandoMac" */;
+			buildPhases = (
+				D1000000000000000000000E /* Sources */,
+				D1000000000000000000000F /* Frameworks */,
+				D10000000000000000000010 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000007 /* Ambulando */,
+				D10000000000000000000007 /* AmbulandoMac */,
+			);
+			name = AmbulandoMac;
+			packageProductDependencies = (
+				D10000000000000000000002 /* AmbulandoCore */,
+			);
+			productName = Ambulando;
+			productReference = D1000000000000000000000A /* Ambulando.app */;
+			productType = "com.apple.product-type.application";
+		};
 		A10000000000000000000005 /* Ambulando */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A1000000000000000000000C /* Build configuration list for PBXNativeTarget "Ambulando" */;
@@ -156,11 +204,19 @@
 			targets = (
 				A10000000000000000000005 /* Ambulando */,
 				B10000000000000000000005 /* AmbulandoUITests */,
+				D10000000000000000000005 /* AmbulandoMac */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		D10000000000000000000010 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A10000000000000000000010 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -178,6 +234,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		D1000000000000000000000E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A1000000000000000000000E /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -195,6 +258,60 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+		D10000000000000000000017 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/AmbulandoMac.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Ambulando;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Other Stuff Studio";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.ambulando.mac.debug;
+				PRODUCT_NAME = Ambulando;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		D10000000000000000000018 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/AmbulandoMac.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Ambulando;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Other Stuff Studio";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.ambulando.mac;
+				PRODUCT_NAME = Ambulando;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
 		A10000000000000000000015 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -234,7 +351,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/Ambulando-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Ambulando;
@@ -247,7 +364,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.ambulando.native;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -257,7 +374,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/Ambulando-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Ambulando;
@@ -270,7 +387,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.ambulando.native;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -278,13 +395,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.ambulando.native.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = Ambulando;
 			};
 			name = Debug;
@@ -293,13 +410,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 13;
+				CURRENT_PROJECT_VERSION = 14;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.ambulando.native.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = Ambulando;
 			};
 			name = Release;
@@ -307,6 +424,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		D1000000000000000000000C /* Build configuration list for PBXNativeTarget "AmbulandoMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D10000000000000000000017 /* Debug */,
+				D10000000000000000000018 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		A10000000000000000000002 /* Build configuration list for PBXProject "Ambulando" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -344,6 +470,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		D10000000000000000000002 /* AmbulandoCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AmbulandoCore;
+		};
 		C10000000000000000000002 /* AmbulandoCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AmbulandoCore;

@@ -1,4 +1,4 @@
-# Ambulando for iPhone (native)
+# Ambulando for iPhone and Mac (native)
 
 A native SwiftUI client for Ambulando (Wingman Flight Deck) workspaces. It is a separate renderer, not
 a WebView: screens draw from an on-device SQLite store, and one sync engine is the only owner of
@@ -7,17 +7,21 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - Architecture, inventory and budgets: [docs/architecture.md](docs/architecture.md)
 - Feature parity with the web app (native / web / deferred / unsupported): [docs/parity-matrix.md](docs/parity-matrix.md)
 - Work packages and commands: [docs/work-packages.md](docs/work-packages.md)
+- **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
+- **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
 ## Layout
 
 | Path | Contents |
 | --- | --- |
-| `Ambulando.xcodeproj`, `Ambulando/` | App target `studio.otherstuff.ambulando.native`, iOS 18+, iPhone; SwiftUI views, theme, assets |
+| `Ambulando.xcodeproj`, `Ambulando/` | App target `studio.otherstuff.ambulando.native`, iOS 18+, iPhone and iPad; SwiftUI views, theme, assets |
 | `AmbulandoCore/` | UI-free Swift package: identity vault and signing, Tower transport, SQLite store, sync engine, probes |
+| `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
+| `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `source-bundle.sh` |
 
 ## What this build does
 
-Version 0.1.0 (10). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (14); Mac version 0.1.0 (1). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -212,6 +216,9 @@ xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Amb
 xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Ambulando \
   -destination 'platform=iOS Simulator,name=<simulator>' -derivedDataPath build/dd test
 
+# Mac app: build (Release, arm64 + x86_64), sign, install to /Applications and open; --package also writes a ZIP
+scripts/mac-install.sh
+
 # Opt-in live checks (public descriptor + a signed discovery call made with the public test key)
 AMBULANDO_LIVE_ORIGIN=https://<tower> swift test --package-path AmbulandoCore --scratch-path build/core --filter WhenConfigured
 ```
@@ -224,4 +231,6 @@ ignored `tmp/` directory or on the Flight Deck task.
 The brand artwork in `Ambulando/Assets.xcassets` is copied from `sol/public/ambulando`.
 `passage-app.png` and `passage-512.png` are byte-identical copies. The app icon is a `sips`
 proportional resample of `passage-master.png` (SHA-256 `8f3988cf…244b`) to 1024 px on its original
-opaque white backing. The artwork retains its private provenance.
+opaque white backing. The Mac icon sizes (`AppIcon-mac-*.png`) are that icon inside the standard macOS rounded tile,
+rendered by `swiftc -o /tmp/mac-icon scripts/mac-icon.swift && /tmp/mac-icon <AppIcon-1024.png> <appiconset dir>`.
+The artwork retains its private provenance.

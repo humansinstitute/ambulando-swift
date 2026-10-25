@@ -1,6 +1,7 @@
 import AmbulandoCore
 import SwiftUI
 
+#if os(iOS)
 /// Main native navigation, laid out like the web app on a phone: every section has its own navigation stack, and a
 /// bottom section bar (sol `.mobile-section-switcher`) stays on every screen, so Chat is always one tap away and no
 /// section covers another. Sections are created when first opened and kept, so switching back returns to the same
@@ -13,9 +14,16 @@ struct WorkspaceShell: View {
     @State private var showSettings = false
     @State private var showUnlock = false
     @State private var opened: Set<AppMode> = []
+    @State private var tablet = TabletNavigation()
 
     var body: some View {
-        VStack(spacing: 0) {
+        HStack(spacing: 0) {
+            if tablet.visible {
+                TabletSidebar(sections: AppMode.visible(agents: showAgents, context: showContext))
+                    .frame(width: 280)
+                Divider()
+            }
+            VStack(spacing: 0) {
             ZStack {
                 ForEach(AppMode.allCases, id: \.self) { section in
                     if opened.contains(section) || section == model.mode {
@@ -24,6 +32,7 @@ struct WorkspaceShell: View {
                         SectionHost(active: section == model.mode) {
                             sectionView(section)
                                 .environment(model)
+                                .environment(\.tabletNavigation, tablet)
                                 .environment(\.openMention, OpenMentionAction { kind, id in model.openRecord(kind: kind, id: id) })
                         }
                     }
@@ -32,11 +41,23 @@ struct WorkspaceShell: View {
             // A row of its own (not an inset), so no section's content can sit under it. The keyboard simply covers it
             // (the shell ignores the keyboard; each section's host moves its own content, such as the composer, above
             // it), so typing never re-lays-out the shell or the other sections.
-            SectionBar(sections: AppMode.visible(agents: showAgents, context: showContext))
+            if !tablet.visible {
+                SectionBar(sections: AppMode.visible(agents: showAgents, context: showContext))
+            }
+            }
+        }
+        .onGeometryChange(for: Bool.self) { proxy in
+            UIDevice.current.userInterfaceIdiom == .pad && proxy.size.width >= 760
+        } action: { tablet.available = $0 }
+        .onChange(of: model.sidebarOpen) { _, open in
+            if open && tablet.available {
+                tablet.collapsed = false
+                model.sidebarOpen = false
+            }
         }
         .ignoresSafeArea(.keyboard)
         .overlay {
-            if model.sidebarOpen { SidebarDrawer().zIndex(1) }
+            if model.sidebarOpen && !tablet.available { SidebarDrawer().zIndex(1) }
         }
         // HTTPS links anywhere in the app open as in-app browser tabs; the browser covers the app without changing it,
         // so returning finds the same section, channel and draft.
@@ -73,6 +94,7 @@ struct WorkspaceShell: View {
             }
         }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { showUnlock = false } }
+        .modifier(TabletFixtureWindow())
     }
 
     @ViewBuilder private func sectionView(_ section: AppMode) -> some View {
@@ -176,6 +198,8 @@ struct SectionHost<Content: View>: UIViewControllerRepresentable {
     }
 }
 
+#endif
+
 /// A section's navigation stack. Records opened inside Deck, Agents, Context and Toolbox (and mentions inside them)
 /// are pushed here, so Back returns to the same card, outline or board position; the record still follows its own
 /// context only when opened from a workspace-wide list.
@@ -265,6 +289,9 @@ struct SectionBar: View {
 
 private struct ShellToolbar: ViewModifier {
     @Environment(AppModel.self) private var model
+    #if os(macOS)
+    @Environment(MacUI.self) private var ui
+    #endif
     @Binding var showSettings: Bool
     @State private var searching = false
     func body(content: Content) -> some View {
@@ -273,11 +300,14 @@ private struct ShellToolbar: ViewModifier {
                 if let workspace = model.selectedWorkspace, let store = model.store { SearchView(workspace: workspace, store: store) }
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { SidebarButton() }
-                ToolbarItem(placement: .topBarTrailing) {
+                #if os(iOS)
+                // The Mac's sidebar is a window column with its own toolbar toggle.
+                ToolbarItem(placement: .leadingBar) { SidebarButton() }
+                #endif
+                ToolbarItem(placement: .trailingBar) {
                     HStack(spacing: 12) {
                         SyncIndicator()
-                        Button { searching = true } label: { Image(systemName: "magnifyingglass") }
+                        Button { search() } label: { Image(systemName: "magnifyingglass") }
                             .accessibilityLabel("Search").accessibilityIdentifier("search")
                         BrowserButton()
                         // The profile menu (sol `.avatar-menu` button): the signed-in person's avatar or initials.
@@ -294,7 +324,16 @@ private struct ShellToolbar: ViewModifier {
                     }
                 }
             }
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
+    }
+
+    /// The Mac's search sheet belongs to the window (⌘F opens the same one).
+    private func search() {
+        #if os(macOS)
+        ui.showSearch = true
+        #else
+        searching = true
+        #endif
     }
 }
 
@@ -331,7 +370,7 @@ struct FixtureBanner: View {
     var body: some View {
         if let fixture = model.fixture {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Sample data on this iPhone. Not connected to a Tower.").font(.caption.weight(.semibold))
+                Text("Sample data on this \(Device.name). Not connected to a Tower.").font(.caption.weight(.semibold))
                     .accessibilityIdentifier("fixture.banner")
                 if let storm = fixture.stormStatus { Text(storm).font(.caption2.monospaced()).accessibilityIdentifier("fixture.storm") }
                 if let launch = model.launchToCachedListMs { Text(String(format: "launch: firstFrameToCachedList=%.0fms", launch)).font(.caption2.monospaced()).accessibilityIdentifier("fixture.launch") }
@@ -387,10 +426,10 @@ struct IdentityBanner: View {
             Button(action: action) { Notice(tone: .info, text: "Locked — showing saved data. Tap to unlock and sync.") }
                 .buttonStyle(.plain).padding(.horizontal, 16).padding(.vertical, 8)
         case .unavailable:
-            Notice(tone: .info, text: "Your identity can't be opened until this iPhone is unlocked. Saved data is shown.")
+            Notice(tone: .info, text: "Your identity can't be opened until this \(Device.name) is unlocked. Saved data is shown.")
                 .padding(.horizontal, 16).padding(.vertical, 8)
         case .none:
-            Button(action: action) { Notice(tone: .warning, text: "No identity on this iPhone. Tap to import one and sync.") }
+            Button(action: action) { Notice(tone: .warning, text: "No identity on this \(Device.name). Tap to import one and sync.") }
                 .buttonStyle(.plain).padding(.horizontal, 16).padding(.vertical, 8)
         }
     }

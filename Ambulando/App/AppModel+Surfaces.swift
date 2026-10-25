@@ -81,7 +81,7 @@ extension AppModel {
             }
             guard selectedWorkspace?.id == workspace.id else { return }
             if (try? await store.reader.thread(workspaceId: workspace.id, id: threadId)) != nil { openThreadMention(threadId) }
-            else { notice = "This conversation is not available on this iPhone." }
+            else { notice = "This conversation is not available on this \(Device.name)." }
         }
     }
 

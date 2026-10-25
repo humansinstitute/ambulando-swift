@@ -1,5 +1,6 @@
 import AmbulandoCore
 import SwiftUI
+#if os(iOS)
 import UIKit
 
 /// The composer's text box: a text view that grows to six lines. Over SwiftUI's field it adds one thing: an explicit
@@ -12,6 +13,8 @@ struct ComposerTextView: UIViewRepresentable {
     let placeholder: String
     let plainKeyboard: Bool
     let onPasteItems: ([NSItemProvider]) -> [String]
+    /// Return sends on the Mac; the iPhone keyboard's Return always inserts a new line.
+    var onSubmit: (() -> Void)? = nil
 
     static let maxLines: CGFloat = 6
 
@@ -156,3 +159,180 @@ final class PasteAwareTextView: UITextView {
         delegate?.textViewDidChange?(self)
     }
 }
+#else
+import AppKit
+import UniformTypeIdentifiers
+
+/// The Mac composer's text box: an `NSTextView` that grows to six lines, then scrolls. Return sends and Shift-Return
+/// (or Option-Return) starts a new line, as in desktop chat apps. Pasting or dropping images and files goes to
+/// `onPasteItems` (the same upload path as the iPhone's Paste); text pastes are the system's own. The pasteboard is
+/// read only inside an explicit Paste or drop.
+struct ComposerTextView: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var focused: Bool
+    let placeholder: String
+    let plainKeyboard: Bool
+    let onPasteItems: ([NSItemProvider]) -> [String]
+    var onSubmit: (() -> Void)? = nil
+
+    static let maxLines: CGFloat = 6
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        let view = PasteAwareTextView()
+        view.delegate = context.coordinator
+        view.font = .preferredFont(forTextStyle: .body)
+        view.textColor = NSColor(Amb.foreground)
+        view.insertionPointColor = NSColor(Amb.primary)
+        view.drawsBackground = false
+        view.isRichText = false
+        view.allowsUndo = true
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textContainer?.widthTracksTextView = true
+        view.isVerticallyResizable = true
+        view.isHorizontallyResizable = false
+        view.autoresizingMask = [.width]
+        view.setAccessibilityIdentifier("composer.field")
+        view.string = text
+        view.placeholder = placeholder
+        view.registerForDraggedTypes([.fileURL, .png, .tiff])
+        scroll.documentView = view
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let view = scroll.documentView as? PasteAwareTextView else { return }
+        context.coordinator.parent = self
+        view.onPasteItems = onPasteItems
+        view.onSubmit = onSubmit
+        view.placeholder = placeholder
+        // As on the iPhone: only a change made outside typing (a mention, a finished upload, a restored draft) is
+        // written back, so an update that arrives mid-keystroke never drops a character.
+        if !context.coordinator.reporting {
+            if text != context.coordinator.reported, view.string != text {
+                let old = view.string, selection = view.selectedRange()
+                view.string = text
+                view.setSelectedRange(ComposerText.remap(selection, from: old, to: text))
+                view.needsDisplay = true
+            }
+            context.coordinator.reported = text
+        }
+        view.isAutomaticSpellingCorrectionEnabled = !plainKeyboard
+        view.isAutomaticQuoteSubstitutionEnabled = !plainKeyboard
+        view.isAutomaticDashSubstitutionEnabled = !plainKeyboard
+        let isFirst = view.window?.firstResponder === view
+        if focused, !isFirst {
+            DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
+        } else if !focused, isFirst {
+            DispatchQueue.main.async { view.window?.makeFirstResponder(nil) }
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView scroll: NSScrollView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, width > 0, let view = scroll.documentView as? NSTextView,
+              let container = view.textContainer, let layout = view.layoutManager else { return nil }
+        let font = view.font ?? .preferredFont(forTextStyle: .body)
+        let line = layout.defaultLineHeight(for: font)
+        container.containerSize = CGSize(width: width, height: .greatestFiniteMagnitude)
+        layout.ensureLayout(for: container)
+        let fitted = layout.usedRect(for: container).height
+        let cap = ceil(line * Self.maxLines)
+        return CGSize(width: width, height: min(max(ceil(fitted), ceil(line)), cap))
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ComposerTextView
+        var reported: String
+        var reporting = false
+        init(parent: ComposerTextView) { self.parent = parent; reported = parent.text }
+
+        func textDidChange(_ notification: Notification) {
+            guard let view = notification.object as? NSTextView else { return }
+            reported = view.string
+            reporting = true
+            parent.text = reported
+            reporting = false
+            view.needsDisplay = true
+            view.enclosingScrollView?.invalidateIntrinsicContentSize()
+        }
+
+        func textDidBeginEditing(_ notification: Notification) { if !parent.focused { parent.focused = true } }
+        func textDidEndEditing(_ notification: Notification) { if parent.focused { parent.focused = false } }
+
+        func textView(_ view: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
+            let flags = NSApp.currentEvent?.modifierFlags ?? []
+            if flags.contains(.shift) || flags.contains(.option) {
+                view.insertNewlineIgnoringFieldEditor(nil)
+                return true
+            }
+            // Return while choosing a mention or composing (marked text) behaves as usual.
+            guard !view.hasMarkedText(), let onSubmit = parent.onSubmit else { return false }
+            onSubmit()
+            return true
+        }
+    }
+}
+
+final class PasteAwareTextView: NSTextView {
+    var onPasteItems: (([NSItemProvider]) -> [String])?
+    var onSubmit: (() -> Void)?
+    var placeholder = "" {
+        didSet {
+            guard placeholder != oldValue else { return }
+            setAccessibilityPlaceholderValue(placeholder)
+            setAccessibilityLabel(placeholder)
+            needsDisplay = true
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !placeholder.isEmpty else { return }
+        let attributes: [NSAttributedString.Key: Any] = [.font: font ?? NSFont.preferredFont(forTextStyle: .body),
+                                                         .foregroundColor: NSColor(Amb.mutedForeground)]
+        NSAttributedString(string: placeholder, attributes: attributes).draw(at: NSPoint(x: textContainerInset.width, y: textContainerInset.height))
+    }
+
+    /// Images and files on a pasteboard, as item providers for the upload path (empty: nothing but text).
+    static func providers(from pasteboard: NSPasteboard) -> [NSItemProvider] {
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            return urls.compactMap { NSItemProvider(contentsOf: $0) }
+        }
+        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+            if let data = pasteboard.data(forType: type) {
+                let uti = type == .png ? UTType.png : UTType.tiff
+                return [NSItemProvider(item: data as NSData, typeIdentifier: uti.identifier)]
+            }
+        }
+        return []
+    }
+
+    private func insertUploads(from pasteboard: NSPasteboard) -> Bool {
+        guard isEditable, let onPasteItems else { return false }
+        let providers = Self.providers(from: pasteboard)
+        guard !providers.isEmpty else { return false }
+        let tokens = onPasteItems(providers)
+        guard !tokens.isEmpty else { return false }
+        // Through the normal text input path: replaces the selection, moves the caret after it, and can be undone.
+        insertText(tokens.joined(), replacementRange: selectedRange())
+        return true
+    }
+
+    override func paste(_ sender: Any?) {
+        if !insertUploads(from: .general) { super.paste(sender) }
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if insertUploads(from: sender.draggingPasteboard) { return true }
+        return super.performDragOperation(sender)
+    }
+}
+#endif

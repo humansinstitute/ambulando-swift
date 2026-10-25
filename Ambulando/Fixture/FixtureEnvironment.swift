@@ -1,7 +1,11 @@
 import AmbulandoCore
 import Foundation
+import ImageIO
 import Observation
+#if os(iOS)
 import UIKit
+#endif
+import UniformTypeIdentifiers
 
 /// Deterministic local sample data for UI automation and demos, enabled only in Debug builds with the
 /// `-AmbulandoUITestFixture` launch argument. Every app code path (identity vault, signing, store, sync engine,
@@ -65,7 +69,7 @@ final class FixtureEnvironment {
         tower = FixtureTower(file: directory.appendingPathComponent("fixture-tower.json"))
         tower.offline = offline
         tower.failScopes = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureScopesFail")
-        secrets = KeychainVaultSecretStore(service: "studio.otherstuff.ambulando.native.fixture-vault.v1")
+        secrets = KeychainVaultSecretStore(service: KeychainServices.named("studio.otherstuff.ambulando.native.fixture-vault.v1"))
         backgroundCredentials = KeychainBackgroundCredentialStore(service: Self.backgroundService)
         sessionKeys = KeychainSessionKeyStore(service: Self.sessionService)
         events = FixtureEventStream(tower: tower)
@@ -73,8 +77,8 @@ final class FixtureEnvironment {
         avatarTransport = FixtureAvatarTransport(tower: tower)
     }
 
-    nonisolated static let backgroundService = "studio.otherstuff.ambulando.native.fixture-background.v1"
-    nonisolated static let sessionService = "studio.otherstuff.ambulando.native.fixture-session.v1"
+    nonisolated static let backgroundService = KeychainServices.named("studio.otherstuff.ambulando.native.fixture-background.v1")
+    nonisolated static let sessionService = KeychainServices.named("studio.otherstuff.ambulando.native.fixture-session.v1")
 
     /// `-AmbulandoFixtureLive`: another member posts in #general every few seconds (≤ 5 messages), delivered through
     /// the event log and the SSE stand-in, so live updates are visible while the user types.
@@ -108,7 +112,7 @@ final class FixtureEnvironment {
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
         guard args.contains("-AmbulandoUITestFixture") else { return nil }
-        #if !targetEnvironment(simulator)
+        #if os(iOS) && !targetEnvironment(simulator)
         // On a physical iPhone a sample-data process looks like a different account to whoever opens the app next, so it
         // needs a second, deliberate flag (a designated test device only, never someone's everyday phone).
         guard args.contains("-AmbulandoFixtureOnDevice") else { return nil }
@@ -887,12 +891,31 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     }
 
     static func samplePNG() -> Data? {
+        #if os(macOS)
+        return png(width: 96, height: 64) { context in
+            context.setFillColor(CGColor(red: 0.17, green: 0.11, blue: 0.24, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 48, height: 64))
+            context.setFillColor(CGColor(red: 0.75, green: 0.30, blue: 0.05, alpha: 1)); context.fill(CGRect(x: 48, y: 0, width: 48, height: 64))
+        }
+        #else
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 96, height: 64))
         let image = renderer.image { context in
             UIColor(red: 0.17, green: 0.11, blue: 0.24, alpha: 1).setFill(); context.fill(CGRect(x: 0, y: 0, width: 48, height: 64))
             UIColor(red: 0.75, green: 0.30, blue: 0.05, alpha: 1).setFill(); context.fill(CGRect(x: 48, y: 0, width: 48, height: 64))
         }
         return image.pngData()
+        #endif
+    }
+
+    /// A PNG drawn with Core Graphics (the Mac build's stand-in for UIGraphicsImageRenderer; origin bottom-left).
+    static func png(width: Int, height: Int, draw: (CGContext) -> Void) -> Data? {
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        draw(context)
+        guard let image = context.makeImage() else { return nil }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 
     private func workspace(_ id: String, _ label: String) -> [String: Any] {
@@ -1005,6 +1028,20 @@ final class FixtureAvatarTransport: AvatarTransport, @unchecked Sendable {
     }
 
     static func badge(_ name: String) -> Data {
+        #if os(macOS)
+        let palette: [String: (CGColor, CGColor)] = [
+            "you": (CGColor(red: 0.13, green: 0.36, blue: 0.52, alpha: 1), CGColor(red: 0.68, green: 0.82, blue: 0.94, alpha: 1)),
+            "ana": (CGColor(red: 0.75, green: 0.30, blue: 0.05, alpha: 1), CGColor(red: 1.00, green: 0.80, blue: 0.62, alpha: 1)),
+            "bea": (CGColor(red: 0.15, green: 0.38, blue: 0.24, alpha: 1), CGColor(red: 0.64, green: 0.82, blue: 0.71, alpha: 1)),
+        ]
+        let (dark, light) = palette[name] ?? (CGColor(gray: 0.33, alpha: 1), CGColor(gray: 0.67, alpha: 1))
+        return FixtureTower.png(width: 256, height: 256) { context in
+            context.setFillColor(dark); context.fill(CGRect(x: 0, y: 0, width: 256, height: 256))
+            context.setFillColor(light)
+            context.fillEllipse(in: CGRect(x: 64, y: 256 - 40 - 128, width: 128, height: 128))
+            context.fillEllipse(in: CGRect(x: 24, y: 256 - 168 - 176, width: 208, height: 176))
+        } ?? Data()
+        #else
         let palette: [String: (UIColor, UIColor)] = [
             "you": (UIColor(red: 0.13, green: 0.36, blue: 0.52, alpha: 1), UIColor(red: 0.68, green: 0.82, blue: 0.94, alpha: 1)),
             "ana": (UIColor(red: 0.75, green: 0.30, blue: 0.05, alpha: 1), UIColor(red: 1.00, green: 0.80, blue: 0.62, alpha: 1)),
@@ -1020,5 +1057,6 @@ final class FixtureAvatarTransport: AvatarTransport, @unchecked Sendable {
             context.cgContext.fillEllipse(in: CGRect(x: 24, y: 168, width: 208, height: 176))
         }
         return image.pngData() ?? Data()
+        #endif
     }
 }

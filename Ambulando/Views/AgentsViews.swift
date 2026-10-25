@@ -51,13 +51,13 @@ struct AgentsView: View {
             activitySection("Working now", live, value)
             activitySection("Not responding", stale, value, note: "These agents stopped reporting before finishing.")
             activitySection("Recently finished", Array(recent.prefix(30)), value)
-            Section("Not available on iPhone") {
+            Section("Not available on \(Device.name)") {
                 Label("Pipeline runs and Autopilot sessions need a direct Autopilot connection, which this HTTPS-only app does not make.", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                     .font(.footnote).foregroundStyle(Amb.mutedForeground)
                     .accessibilityIdentifier("agents.pipelines.unavailable")
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedList()
         .scrollContentBackground(.hidden)
         .navigationTitle("Agents")
         .refreshable { model.openAgents(workspace, channelIds: channelIds, force: true) }

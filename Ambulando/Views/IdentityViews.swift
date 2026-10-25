@@ -18,14 +18,14 @@ struct ImportIdentityView: View {
                     .padding(.top, 32)
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Import your identity").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
-                    Text("Paste the nsec you use with Ambulando. It is encrypted on this iPhone with your PIN and a device-only Keychain secret, and never leaves this app.")
+                    Text("Paste the nsec you use with Ambulando. It is encrypted on this \(Device.name) with your PIN and a device-only Keychain secret, and never leaves this app.")
                         .font(.footnote).foregroundStyle(Amb.mutedForeground)
                     SecureField("nsec1…", text: $nsec)
-                        .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .textContentType(.password).noCapitalization().autocorrectionDisabled()
                         .font(Amb.code).padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-                    SecureField("PIN (4–12 digits)", text: $pin).keyboardType(.numberPad)
+                    SecureField("PIN (4–12 digits)", text: $pin).numberPadEntry()
                         .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-                    SecureField("Confirm PIN", text: $confirm).keyboardType(.numberPad)
+                    SecureField("Confirm PIN", text: $confirm).numberPadEntry()
                         .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                     if let notice = model.notice { Notice(tone: .error, text: notice) }
                     Button {
@@ -59,7 +59,7 @@ struct UnlockView: View {
                 Text("Unlock to sync").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
                 Text("Your cached workspace stays readable while locked. Unlocking lets Ambulando sign requests to your Tower.")
                     .font(.footnote).foregroundStyle(Amb.mutedForeground)
-                SecureField("PIN", text: $pin).keyboardType(.numberPad).textContentType(.oneTimeCode)
+                SecureField("PIN", text: $pin).numberPadEntry().oneTimeCodeEntry()
                     .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                 if let notice = model.notice { Notice(tone: .error, text: notice) }
                 Button {
@@ -101,7 +101,7 @@ struct LockScreen: View {
             }
             VStack(spacing: 12) {
                 SecureField("PIN", text: $pin)
-                    .keyboardType(.numberPad).textContentType(.oneTimeCode)
+                    .numberPadEntry().oneTimeCodeEntry()
                     .multilineTextAlignment(.center).font(.title3.monospacedDigit())
                     .padding(12).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                     .focused($focused)
@@ -115,7 +115,7 @@ struct LockScreen: View {
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(pin.count < 4 || working)
                 .accessibilityIdentifier("lock.unlock")
-                Text("Enter your PIN to open your workspaces. Ambulando stays unlocked on this iPhone until you choose Lock now.")
+                Text("Enter your PIN to open your workspaces. Ambulando stays unlocked on this \(Device.name) until you choose Lock now.")
                     .font(.footnote).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
             }
             .frame(maxWidth: 360)
@@ -152,13 +152,13 @@ struct IdentityUnavailableView: View {
             VStack(spacing: 12) {
                 PassageMark(size: 88)
                 Text("Ambulando").font(.system(.largeTitle, design: .serif).weight(.semibold)).foregroundStyle(Amb.foreground)
-                Text("Your identity is on this iPhone").font(.headline).foregroundStyle(Amb.itemHeading)
+                Text("Your identity is on this \(Device.name)").font(.headline).foregroundStyle(Amb.itemHeading)
                     .accessibilityIdentifier("identity.unavailable")
             }
             VStack(spacing: 12) {
                 Text(model.vaultProblem == .damaged
-                     ? "The identity file on this iPhone could not be opened: it looks damaged. It has been left exactly as it is, together with your Tower connection and saved work. Nothing was replaced."
-                     : "It can't be opened right now. This happens when Ambulando was started while the iPhone was locked. Your key, Tower connection and saved work are kept; nothing needs to be imported again.")
+                     ? "The identity file on this \(Device.name) could not be opened: it looks damaged. It has been left exactly as it is, together with your Tower connection and saved work. Nothing was replaced."
+                     : "It can't be opened right now. This happens when Ambulando was started while the \(Device.name) was locked. Your key, Tower connection and saved work are kept; nothing needs to be imported again.")
                     .font(.callout).foregroundStyle(Amb.foreground).multilineTextAlignment(.center)
                     .accessibilityIdentifier(model.vaultProblem == .damaged ? "identity.damaged" : "identity.sealed")
                 Button {
@@ -168,7 +168,7 @@ struct IdentityUnavailableView: View {
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(checking)
                 .accessibilityIdentifier("identity.retry")
-                Text("If this stays after unlocking your iPhone, the identity file may be damaged. Leave it in place and contact support; do not remove the app.")
+                Text("If this stays after unlocking your \(Device.name), the identity file may be damaged. Leave it in place and contact support; do not remove the app.")
                     .font(.footnote).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
             }
             .frame(maxWidth: 360)

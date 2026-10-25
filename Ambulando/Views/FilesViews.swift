@@ -2,6 +2,9 @@ import AmbulandoCore
 import PhotosUI
 import QuickLook
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 import UniformTypeIdentifiers
 
 struct FileGroup: Sendable, Equatable, Identifiable {
@@ -60,7 +63,7 @@ struct FilesView: View {
                 }
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedList()
         .scrollContentBackground(.hidden)
         .overlay {
             if snapshot.loaded && snapshot.value.groups.isEmpty && snapshot.value.uploads.isEmpty {
@@ -165,6 +168,12 @@ struct FileDetailView: View {
                     if let url = snapshot.value.cached {
                         Button { preview = url } label: { Label("Preview", systemImage: "eye") }.accessibilityIdentifier("file.preview")
                         ShareLink(item: url) { Label("Share or save", systemImage: "square.and.arrow.up") }
+                        #if os(macOS)
+                        Button { MacFiles.saveCopy(of: url, suggestedName: file.displayName) } label: { Label("Save As…", systemImage: "square.and.arrow.down") }
+                            .accessibilityIdentifier("file.saveAs")
+                        Button { NSWorkspace.shared.open(url) } label: { Label("Open in Default App", systemImage: "arrow.up.forward.app") }
+                            .accessibilityIdentifier("file.openExternally")
+                        #endif
                     } else if model.isSyncing(WorkspaceSync.downloadKey(workspace.id, file.id)) {
                         HStack { ProgressView(); Text("Downloading…").foregroundStyle(Amb.mutedForeground) }
                     } else {
@@ -177,15 +186,16 @@ struct FileDetailView: View {
                     Text("Downloads are checked against the file's checksum and kept in this app's cache.")
                 }
             } else if snapshot.loaded {
-                Text("This file is not on this iPhone.").foregroundStyle(Amb.mutedForeground)
+                Text("This file is not on this \(Device.name).").foregroundStyle(Amb.mutedForeground)
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedList()
+        .tabletReadingWidth()
         .scrollContentBackground(.hidden)
         .background(Amb.canvas)   // grouped rows (white) on the recessed surface
         .fixtureLabel()
         .navigationTitle("File")
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineTitle()
         .quickLookPreview($preview)
         .task { start() }
     }
@@ -225,13 +235,13 @@ struct UploadSheet: View {
                         .accessibilityIdentifier("upload.photo")
                     Button { importing = true } label: { Label("File from Files", systemImage: "folder") }.accessibilityIdentifier("upload.file")
                 } footer: {
-                    Text("Photos are converted to PNG without location or camera metadata. Uploads wait on this iPhone until they reach Tower.")
+                    Text("Photos are converted to PNG without location or camera metadata. Uploads wait on this \(Device.name) until they reach Tower.")
                 }
                 if working { ProgressView() }
                 if let message { Text(message).foregroundStyle(Amb.destructive) }
             }
             .navigationTitle("Upload")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .onAppear { channelId = channelId ?? context.channelId ?? choice.channels(in: context).first?.id }
             .onChange(of: photo) { _, item in if let item { Task { await stagePhoto(item) } } }

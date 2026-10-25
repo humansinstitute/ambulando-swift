@@ -91,12 +91,13 @@ final class ChatFlowUITests: XCTestCase {
         let composer = field(app)
         composer.tap()
         composer.typeText("Hello from the native app @Ri")
-        let pick = app.buttons["mention.Rick"]
+        // Public profile names take precedence over workspace names (Rick publishes "rick").
+        let pick = app.buttons["mention.rick"]
         XCTAssertTrue(pick.waitForExistence(timeout: 5), "mention picker lists matching members")
         pick.tap()
-        XCTAssertEqual(value(composer), "Hello from the native app @Rick ")
+        XCTAssertEqual(value(composer), "Hello from the native app @rick ")
         app.buttons["composer.send"].tap()
-        let sent = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Hello from the native app @Rick")).firstMatch
+        let sent = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Hello from the native app @rick")).firstMatch
         XCTAssertTrue(sent.waitForExistence(timeout: 10))
         XCTAssertTrue(app.otherElements["outbox.row"].waitForNonExistence(timeout: 10), "acknowledged: no pending row")
         XCTAssertTrue(sent.isHittable, "the conversation follows the user's own send")

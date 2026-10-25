@@ -65,6 +65,7 @@ struct TasksView: View {
                     Image(systemName: "rectangle.split.3x1").tag(true).accessibilityLabel("Board")
                 }
                 .pickerStyle(.segmented).frame(width: 110)
+                .labelsHidden()
                 .accessibilityIdentifier("tasks.layout")
                 Button { creating = true } label: { Image(systemName: "plus.circle.fill").font(.title2) }
                     .accessibilityLabel("New task").accessibilityIdentifier("tasks.new")
@@ -120,7 +121,7 @@ struct TasksView: View {
                 }
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedList()
         .scrollContentBackground(.hidden)
         .overlay {
             if snapshot.loaded && snapshot.value.rows.isEmpty && snapshot.value.creating.isEmpty {
@@ -248,20 +249,21 @@ struct TaskDetailView: View {
                     }
                     comments
                 } else if snapshot.loaded {
-                    SyncNote(text: model.isUnlocked ? "Loading task…" : "This task is not saved on this iPhone yet. Unlock to load it.")
+                    SyncNote(text: model.isUnlocked ? "Loading task…" : "This task is not saved on this \(Device.name) yet. Unlock to load it.")
                 }
                 if let error = model.syncError(forKey: WorkspaceSync.taskKey(workspace.id, taskId)) { SyncNote(text: error, tone: .warning) }
             }
             .padding(16)
+            .tabletReadingWidth()
         }
         .scrollDismissesKeyboard(.interactively)
-        .safeAreaInset(edge: .bottom) { commentComposer }
+        .safeAreaInset(edge: .bottom) { commentComposer.tabletReadingWidth() }
         .background(Amb.background)
         .fixtureLabel()
         .navigationTitle("Task")
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineTitle()
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .trailingBar) {
                 Button("Edit") { editing = true }.disabled(snapshot.value.row == nil).accessibilityIdentifier("task.edit")
             }
         }
@@ -442,10 +444,10 @@ struct TaskCreateSheet: View {
                     Text("Unassigned").tag(String?.none)
                     ForEach(members) { Text($0.label).tag(Optional($0.npub)) }
                 }
-                if !model.isUnlocked { Text("Saved on this iPhone and sent after you unlock.").font(.footnote).foregroundStyle(Amb.mutedForeground) }
+                if !model.isUnlocked { Text("Saved on this \(Device.name) and sent after you unlock.").font(.footnote).foregroundStyle(Amb.mutedForeground) }
             }
             .navigationTitle("New task")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -486,7 +488,7 @@ struct TaskEditSheet: View {
                 Section("Description") { TextEditor(text: $detail).frame(minHeight: 160).accessibilityIdentifier("edittask.description") }
             }
             .navigationTitle("Edit task")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

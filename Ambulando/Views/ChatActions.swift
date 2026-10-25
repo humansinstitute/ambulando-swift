@@ -83,7 +83,7 @@ struct MessageCell: View {
                 }
             } label: { Label("React", systemImage: "face.smiling") }
                 .accessibilityIdentifier("message.react")
-            Button { UIPasteboard.general.string = MentionCodec.plain(message.body) } label: { Label("Copy", systemImage: "doc.on.doc") }
+            Button { Pasteboard.copy(MentionCodec.plain(message.body)) } label: { Label("Copy", systemImage: "doc.on.doc") }
             if mine && !message.deleted {
                 Button { editing = true } label: { Label("Edit", systemImage: "pencil") }.accessibilityIdentifier("message.edit")
                 Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }.accessibilityIdentifier("message.delete")
@@ -175,7 +175,7 @@ struct MessageEditSheet: View {
                 Text("Edits are signed with your identity and replace the message for everyone.").font(.footnote).foregroundStyle(Amb.mutedForeground)
             }
             .navigationTitle("Edit message")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -233,7 +233,7 @@ struct AttachmentView: View {
 struct ComposerAttachments: View {
     @Binding var attachments: [PendingAttachment]
     let staging: URL?
-    @State private var thumbnails: [String: UIImage] = [:]
+    @State private var thumbnails: [String: PlatformImage] = [:]
 
     var body: some View {
         if !attachments.isEmpty {
@@ -242,7 +242,7 @@ struct ComposerAttachments: View {
                     ForEach(attachments) { a in
                         ZStack(alignment: .topTrailing) {
                             Group {
-                                if let image = thumbnails[a.id] { Image(uiImage: image).resizable().scaledToFill() } else { Color(Amb.muted) }
+                                if let image = thumbnails[a.id] { Image(platformImage: image).resizable().scaledToFill() } else { Color(Amb.muted) }
                             }
                             .frame(width: 64, height: 64).clipShape(RoundedRectangle(cornerRadius: 8))
                             Button { remove(a) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.white, .black.opacity(0.6)) }
@@ -260,7 +260,7 @@ struct ComposerAttachments: View {
     private func thumbnail(_ a: PendingAttachment) async {
         guard let staging else { return }
         let url = staging.appendingPathComponent(a.staged)
-        thumbnails[a.id] = await Task.detached { UIImage(contentsOfFile: url.path)?.preparingThumbnail(of: CGSize(width: 128, height: 128)) }.value
+        thumbnails[a.id] = await Task.detached { StorageImageCache.downsample(url, maxPixels: 256, scale: 2) }.value
     }
 
     private func remove(_ a: PendingAttachment) {

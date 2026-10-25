@@ -69,7 +69,7 @@ struct ThreadByIdView: View {
             } else if let error = model.syncError(forKey: WorkspaceSync.threadRecordKey(workspace.id, threadId)) {
                 EmptyNote(title: "Conversation unavailable", systemImage: "lock", detail: error)
             } else if !model.canRead {
-                EmptyNote(title: "Conversation not on this iPhone", systemImage: "lock", detail: "Unlock to load it.")
+                EmptyNote(title: "Conversation not on this \(Device.name)", systemImage: "lock", detail: "Unlock to load it.")
             } else {
                 ProgressView("Loading conversation…")
             }

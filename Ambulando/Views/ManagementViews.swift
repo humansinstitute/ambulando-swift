@@ -1,5 +1,8 @@
 import AmbulandoCore
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 // Scope and channel management opened from the sidebar, as on the web (sol `index.html` New channel, Channel settings,
 // Settings › Scopes). Each change is one confirmed request to Tower through `ScopeChannelManager`; the sheet keeps what
@@ -7,7 +10,13 @@ import SwiftUI
 // wizard and starting permissions stay in the web app and say so.
 
 /// Ends text editing so a result shown at the top of the form is not behind the keyboard.
-@MainActor func endEditing() { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+@MainActor func endEditing() {
+    #if os(iOS)
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    #else
+    NSApp.keyWindow?.makeFirstResponder(nil)
+    #endif
+}
 
 /// A Done button above the keyboard, so the actions under a text field can be reached.
 struct KeyboardDone: ViewModifier {
@@ -123,7 +132,7 @@ struct NewChannelSheet: View {
                     .accessibilityIdentifier("newChannel.limited")
                     Section("Channel name") {
                         TextField("e.g. general, design, ops", text: $name)
-                            .textInputAutocapitalization(.never)
+                            .noCapitalization()
                             .accessibilityIdentifier("newChannel.name")
                     }
                     Section("Description (optional)") {
@@ -138,7 +147,7 @@ struct NewChannelSheet: View {
             .modifier(KeyboardDone())
             .modifier(ManagementStatusInset(phase: phase, retry: create))
             .navigationTitle(isDirect ? "New direct message" : "New channel")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(phase.isWorking) }
                 ToolbarItem(placement: .confirmationAction) {
@@ -209,7 +218,7 @@ struct ChannelSettingsSheet: View {
             .modifier(KeyboardDone())
             .modifier(ManagementStatusInset(phase: phase))
             .navigationTitle("Channel settings")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() }.disabled(phase.isWorking) } }
             .interactiveDismissDisabled(phase.isWorking)
         }
@@ -229,7 +238,7 @@ struct ChannelSettingsSheet: View {
             }
             if canManage {
                 Section {
-                    TextField("Channel name", text: $name).textInputAutocapitalization(.never).accessibilityIdentifier("channelSettings.name")
+                    TextField("Channel name", text: $name).noCapitalization().accessibilityIdentifier("channelSettings.name")
                     Button("Rename channel") { run("Renaming…", done: "Channel renamed.") { m, c, w in _ = try await m.renameChannel(c, w, channelId: channel.id, name: name) } }
                         .disabled(phase.isWorking || name.trimmingCharacters(in: .whitespaces).isEmpty || name == channel.name)
                         .accessibilityIdentifier("channelSettings.rename")
@@ -348,7 +357,7 @@ struct ScopeManagementSheet: View {
             }
             .modifier(ManagementStatusInset(phase: phase))
             .navigationTitle("Manage scopes")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.disabled(phase.isWorking) } }
             .navigationDestination(for: String.self) { id in
                 if id == "new" { ScopeEditView(scope: nil) } else if let scope = nav.scope(id) { ScopeEditView(scope: scope) }
@@ -429,7 +438,7 @@ struct ScopeEditView: View {
         .modifier(KeyboardDone())
             .modifier(ManagementStatusInset(phase: phase))
             .navigationTitle(scope == nil ? "New scope" : scope!.name)
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineTitle()
         .toolbar {
             if canManage {
                 ToolbarItem(placement: .confirmationAction) {

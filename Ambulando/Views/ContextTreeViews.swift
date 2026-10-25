@@ -51,7 +51,7 @@ struct ContextTreeView: View {
                 Text("Each scope has its own Context Tree. Choose one.").textCase(nil)
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedList()
         .scrollContentBackground(.hidden)
     }
 
@@ -81,9 +81,9 @@ struct ContextTreeView: View {
                 Text("Creating, renaming, moving and linking components is done in the web app for now.").font(.caption)
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedList()
         .scrollContentBackground(.hidden)
-        .searchable(text: $filter, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Find component")
+        .searchable(text: $filter, placement: .drawer, prompt: "Find component")
         .overlay {
             if tree.loaded && tree.value.isEmpty {
                 if let error = model.syncError(forKey: key) {
@@ -152,7 +152,7 @@ struct ContextComponentView: View {
                 }
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedList()
         .scrollContentBackground(.hidden)
         .navigationTitle(value.component?.title ?? "Component")
         .fixtureLabel()

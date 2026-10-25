@@ -515,9 +515,9 @@ struct DeckPinnedCard: View {
 
     private func unavailable(_ type: PinRecord.ResourceType) -> String {
         switch type {
-        case .thread: "Conversation not on this iPhone"
-        case .task: "Task not on this iPhone"
-        case .document: "Document not on this iPhone"
+        case .thread: "Conversation not on this \(Device.name)"
+        case .task: "Task not on this \(Device.name)"
+        case .document: "Document not on this \(Device.name)"
         case .channel: "Channel not available"
         }
     }
@@ -580,7 +580,7 @@ struct DeckFeedCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Feeds are in the web app", systemImage: "dot.radiowaves.up.forward").font(.subheadline.weight(.semibold))
                     .foregroundStyle(Amb.foreground)
-                Text("Subscribed feeds (RSS) and Nostr notifications are read and managed in the web app's Deck. This iPhone app doesn't show them yet.")
+                Text("Subscribed feeds (RSS) and Nostr notifications are read and managed in the web app's Deck. This \(Device.name) app doesn't show them yet.")
                     .font(.footnote).foregroundStyle(Amb.mutedForeground)
             }
             .modifier(DeckRowStyle())

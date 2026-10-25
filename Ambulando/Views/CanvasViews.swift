@@ -29,7 +29,7 @@ struct CanvasListView: View {
                 .accessibilityIdentifier("canvas.\(canvas.title)")
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedList()
         .scrollContentBackground(.hidden)
         .navigationTitle("Canvas")
         .overlay {
@@ -101,7 +101,7 @@ struct CanvasBoardView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) { selectionBar(value) }
         .safeAreaInset(edge: .top, spacing: 0) { notices(value) }
         .navigationTitle(value.canvas?.title ?? "Canvas")
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineTitle()
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { withAnimation(.snappy) { viewport = nil; model.canvasViewports[canvasId] = nil } } label: { Image(systemName: "arrow.up.left.and.down.right.magnifyingglass") }
@@ -118,7 +118,7 @@ struct CanvasBoardView: View {
             } else if snapshot.loaded && !value.stored {
                 let key = WorkspaceSync.canvasKey(workspace.id, canvasId)
                 if let error = model.syncError(forKey: key) { EmptyNote(title: "Canvas unavailable", systemImage: "lock", detail: error) }
-                else if !model.canRead { EmptyNote(title: "Canvas not on this iPhone", systemImage: "lock", detail: "Unlock to load it.") }
+                else if !model.canRead { EmptyNote(title: "Canvas not on this \(Device.name)", systemImage: "lock", detail: "Unlock to load it.") }
                 else { ProgressView("Loading canvas…") }
             }
         }
@@ -197,7 +197,7 @@ struct CanvasBoardView: View {
     @ViewBuilder private func notices(_ value: CanvasBoardSnapshot) -> some View {
         let unsupported = value.scene.unsupportedElements.sorted { $0.key < $1.key }.map { "\($0.value) × \($0.key)" }
         if !unsupported.isEmpty {
-            Notice(tone: .info, text: "Not drawn on iPhone: " + unsupported.joined(separator: ", ") + ".")
+            Notice(tone: .info, text: "Not drawn on \(Device.name): " + unsupported.joined(separator: ", ") + ".")
                 .padding(.horizontal, 12).padding(.vertical, 6)
                 .accessibilityIdentifier("canvas.unsupported")
         }
@@ -266,7 +266,7 @@ struct CanvasBoardView: View {
             if let scope = model.navigation.value.channel(channel)?.scopeId {
                 model.selectContext(WorkContext(scopeId: scope, channelId: channel))
                 model.show(.tasks)
-            } else { model.notice = "This channel is not available on this iPhone." }
+            } else { model.notice = "This channel is not available on this \(Device.name)." }
         case .unknown, .denied: route = nil
         }
         if let route { pushRoute(route) }
@@ -314,7 +314,7 @@ struct NapletCard: View {
             }
             .padding(10)
         case .taskTree(_, let channel):
-            Text("Task tree for #\(channel ?? "channel"). Opens as the channel's task list on iPhone (the tree graph is web-only).")
+            Text("Task tree for #\(channel ?? "channel"). Opens as the channel's task list on \(Device.name) (the tree graph is web-only).")
                 .font(.system(size: 13)).foregroundStyle(Amb.mutedForeground).padding(10)
         case .chatThread(_, let messages):
             VStack(alignment: .leading, spacing: 6) {
@@ -341,7 +341,7 @@ struct NapletCard: View {
         case .canvas:
             Label("Link to another canvas", systemImage: "arrow.up.right.square").font(.system(size: 13)).foregroundStyle(Amb.mutedForeground).padding(10)
         case .unknown(let type):
-            Label("“\(type)” items are not shown on iPhone yet.", systemImage: "questionmark.square.dashed").font(.system(size: 13)).foregroundStyle(Amb.mutedForeground).padding(10)
+            Label("“\(type)” items are not shown on \(Device.name) yet.", systemImage: "questionmark.square.dashed").font(.system(size: 13)).foregroundStyle(Amb.mutedForeground).padding(10)
         case .denied:
             Label("Not available to you", systemImage: "lock").font(.system(size: 13)).foregroundStyle(Amb.mutedForeground)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -417,7 +417,7 @@ struct BoardSceneView: View {
             }
         }
         .navigationTitle(value.title)
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineTitle()
         .onChange(of: value.reference) { _, ref in if let ref, value.prepared.state == .notStored { model.openBoard(ref, in: workspace) } }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -443,11 +443,11 @@ struct BoardSceneView: View {
             switch value.prepared.state {
             case .ready:
                 if let ref = value.reference {
-                    Text("Version \(ref.versionNumber)" + (ref.updatedAt.map { " · " + ChatTime.label($0) } ?? "") + " · read only on iPhone")
+                    Text("Version \(ref.versionNumber)" + (ref.updatedAt.map { " · " + ChatTime.label($0) } ?? "") + " · read only on \(Device.name)")
                         .font(.caption).foregroundStyle(Amb.mutedForeground)
                 }
                 if !value.prepared.scene.unsupportedSummary.isEmpty {
-                    Notice(tone: .info, text: "Not drawn on iPhone: " + value.prepared.scene.unsupportedSummary.joined(separator: ", ") + ".")
+                    Notice(tone: .info, text: "Not drawn on \(Device.name): " + value.prepared.scene.unsupportedSummary.joined(separator: ", ") + ".")
                         .accessibilityIdentifier("board.unsupported")
                 }
                 if !value.prepared.scene.approximations.isEmpty {
@@ -457,7 +457,7 @@ struct BoardSceneView: View {
             case .failed(let reason):
                 Notice(tone: .warning, text: reason)
             case .notStored:
-                Notice(tone: .info, text: model.canRead ? "Loading this board…" : "This board is not on this iPhone yet. Unlock to load it.")
+                Notice(tone: .info, text: model.canRead ? "Loading this board…" : "This board is not on this \(Device.name) yet. Unlock to load it.")
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)

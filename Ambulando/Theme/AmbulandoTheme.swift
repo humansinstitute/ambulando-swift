@@ -1,11 +1,8 @@
 import SwiftUI
-import UIKit
 
 /// Ambulando "perspective passage" tokens, copied from sol/src/ambulando-tokens.css (light / dark).
 enum Amb {
-    fileprivate static func dynamicUI(_ light: UInt32, _ dark: UInt32) -> UIColor {
-        UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light) }
-    }
+    fileprivate static func dynamicUI(_ light: UInt32, _ dark: UInt32) -> PlatformColor { .dynamic(light, dark) }
     private static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color { Color(dynamicUI(light, dark)) }
 
     /// Page surface. The web paints its pages, header, sidebar, chat feed and section bar with `--card` (white in
@@ -34,8 +31,8 @@ enum Amb {
     /// Selected row (sol `.sidebar-scope-channel-row.active`, `.reaction-pill-active`): muted fill, primary text.
     static let selectedFill = muted
     static let selectedForeground = primary
-    static let brandOrange = Color(UIColor(hex: 0xBF4D0D))
-    static let brandNavy = Color(UIColor(hex: 0x10162B))
+    static let brandOrange = Color(PlatformColor(hex: 0xBF4D0D))
+    static let brandNavy = Color(PlatformColor(hex: 0x10162B))
 
     static let radiusPanel: CGFloat = 10      // --radius-panel 0.625rem
     static let radiusControl: CGFloat = 6     // --radius-control 0.375rem
@@ -49,17 +46,13 @@ enum Amb {
 extension Amb {
     /// Segmented controls as the web's active tab (`.chat-channel-tab-item.active`): solid primary, white label.
     static func applyControlAppearance() {
+        #if os(iOS)
         let control = UISegmentedControl.appearance()
         control.selectedSegmentTintColor = dynamicUI(0x2B1B3C, 0xCBB8FF)          // primary
         control.setTitleTextAttributes([.foregroundColor: dynamicUI(0xFFFFFF, 0x20123C)], for: .selected)   // primary-foreground
         control.setTitleTextAttributes([.foregroundColor: dynamicUI(0x10162B, 0xF5F3FC)], for: .normal)     // foreground
         control.backgroundColor = dynamicUI(0xEEEFF5, 0x26314A)                    // muted
-    }
-}
-
-extension UIColor {
-    convenience init(hex: UInt32) {
-        self.init(red: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+        #endif
     }
 }
 

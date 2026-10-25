@@ -10,3 +10,6 @@ DerivedData/
 xcuserdata/
 *.xcresult
 .DS_Store
+
+# Packaged Mac app (scripts/mac-install.sh --package)
+dist/

@@ -84,16 +84,13 @@ private struct FollowLatest: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollPosition($position)
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                restoreOnKeyboard = nearBottom
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+            .onKeyboard(willHide: { restoreOnKeyboard = nearBottom }, didShow: {
                 // The keyboard came back (menu closed, composer refocused): return to the newest message if the user was
                 // there, instead of leaving it hidden behind the composer.
                 guard restoreOnKeyboard || nearBottom else { return }
                 restoreOnKeyboard = false
                 Task { @MainActor in withAnimation(.snappy) { position.scrollTo(edge: .bottom) } }
-            }
+            })
             .onAppear { positionInitially(lastId) }
             .onChange(of: lastId) { _, id in
                 // Rows usually arrive after the first (empty) layout: open at the newest message, once.
@@ -171,10 +168,11 @@ struct ChannelView: View {
                 messages
             }
         }
+        .tabletReadingWidth()
         .background(Amb.background)
         .modifier(PushedFixtureLabel(enabled: pushed))
         .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineTitle()
         .onAppear { model.openChannel(target.channelId, in: workspace) }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openChannel(target.channelId, in: workspace) } }
     }
@@ -293,7 +291,7 @@ struct ThreadView: View {
                     }
                 }
                 if snapshot.loaded && snapshot.value.messages.isEmpty {
-                    SyncNote(text: isUnlocked ? "Loading thread…" : "This thread is not saved on this iPhone yet. Unlock to load it.")
+                    SyncNote(text: isUnlocked ? "Loading thread…" : "This thread is not saved on this \(Device.name) yet. Unlock to load it.")
                 }
             }
             .padding(.bottom, 8)
@@ -307,10 +305,11 @@ struct ThreadView: View {
         .refreshable { if let thread = target.threadId { model.openThread(thread, channelId: target.channelId, in: workspace) } }
             Composer(target: target, workspace: workspace, store: store, placeholder: "Reply")
         }
+        .tabletReadingWidth()
         .background(Amb.background)
         .fixtureLabel()
         .navigationTitle(snapshot.value.title.isEmpty ? "Thread" : snapshot.value.title)
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineTitle()
         .task { start() }
         .onAppear {
             if let thread = target.threadId {
@@ -650,6 +649,9 @@ struct Composer: View {
     @State private var storedDraft = LiveQuery<Draft?>(initial: nil)
     @State private var photos: [PhotosPickerItem] = []
     @State private var focused = false
+    #if os(macOS)
+    @State private var attachingFiles = false
+    #endif
 
     private var suggestions: [MentionCandidate] {
         guard let composer, let query = MentionCodec.activeQuery(in: composer.text) else { return [] }
@@ -679,13 +681,30 @@ struct Composer: View {
                     }
                     .accessibilityLabel("Hide keyboard")
                     .accessibilityIdentifier("composer.hideKeyboard")
+                    .iconButton()
                 } else {
                     PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
                         Image(systemName: "photo").font(.body.weight(.semibold)).frame(width: 36, height: 36)
                     }
                     .accessibilityLabel("Attach photos")
                     .accessibilityIdentifier("composer.photo")
+                    .iconButton()
                 }
+                #if os(macOS)
+                Button { attachingFiles = true } label: {
+                    Image(systemName: "paperclip").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+                }
+                .accessibilityLabel("Attach files")
+                .accessibilityIdentifier("composer.files")
+                .iconButton()
+                .fileImporter(isPresented: $attachingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+                    guard case .success(let urls) = result, let composer else { return }
+                    let tokens = pasteItems(MacFiles.providers(copying: urls))
+                    guard !tokens.isEmpty else { return }
+                    if !(composer.text.last.map { $0.isWhitespace } ?? true), !composer.text.isEmpty { composer.text += " " }
+                    composer.text += tokens.joined()
+                }
+                #endif
                 Button {
                     guard let composer else { return }
                     if !(composer.text.last.map { $0.isWhitespace } ?? true) { composer.text += " " }
@@ -695,9 +714,10 @@ struct Composer: View {
                 } label: { Image(systemName: "at").font(.body.weight(.semibold)).frame(width: 36, height: 36) }
                     .accessibilityLabel("Mention someone")
                     .accessibilityIdentifier("composer.mention")
+                    .iconButton()
                 ComposerTextView(text: Binding(get: { composer?.text ?? "" }, set: { composer?.text = $0; fixtureTyping() }),
                                  focused: $focused, placeholder: placeholder, plainKeyboard: model.fixture?.plainKeyboard == true,
-                                 onPasteItems: pasteItems)
+                                 onPasteItems: pasteItems, onSubmit: send)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 Button { send() } label: {
@@ -706,6 +726,7 @@ struct Composer: View {
                 .disabled(!canSend)
                 .accessibilityLabel("Send")
                 .accessibilityIdentifier("composer.send")
+                    .iconButton()
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
         }

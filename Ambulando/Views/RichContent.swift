@@ -2,7 +2,9 @@ import AmbulandoCore
 import ImageIO
 import QuickLook
 import SwiftUI
+#if os(iOS)
 import UIKit
+#endif
 
 // MARK: Environment
 
@@ -19,7 +21,7 @@ extension EnvironmentValues {
 /// Code surfaces from `ambulando-tokens.css` (paired background/ink, not action colours).
 enum RichPalette {
     private static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color {
-        Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light) })
+        Color(PlatformColor.dynamic(light, dark))
     }
     static let codeBackground = dynamic(0xF1F5F3, 0x111D29)
     static let codeForeground = dynamic(0x16354B, 0xE8EEF2)
@@ -198,7 +200,7 @@ private struct CodeBlockView: View {
                     .font(.caption2.monospaced().weight(.semibold)).foregroundStyle(RichPalette.codeMuted).lineLimit(1)
                 Spacer()
                 Button {
-                    UIPasteboard.general.string = text
+                    Pasteboard.copy(text)
                     copied = true
                     Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
                 } label: {
@@ -356,23 +358,22 @@ struct RichImage: View {
 /// Decoded, downsampled images shared by chat and documents (bounded by count and decoded bytes).
 final class StorageImageCache: @unchecked Sendable {
     static let shared = StorageImageCache()
-    private let cache: NSCache<NSString, UIImage> = {
-        let cache = NSCache<NSString, UIImage>()
+    private let cache: NSCache<NSString, PlatformImage> = {
+        let cache = NSCache<NSString, PlatformImage>()
         cache.countLimit = 120
         cache.totalCostLimit = 64 * 1024 * 1024
         return cache
     }()
 
-    func image(_ key: String) -> UIImage? { cache.object(forKey: key as NSString) }
+    func image(_ key: String) -> PlatformImage? { cache.object(forKey: key as NSString) }
 
-    func store(_ image: UIImage, key: String) {
-        let cost = Int(image.size.width * image.scale * image.size.height * image.scale * 4)
-        cache.setObject(image, forKey: key as NSString, cost: cost)
+    func store(_ image: PlatformImage, key: String) {
+        cache.setObject(image, forKey: key as NSString, cost: image.decodedBytes)
     }
 
     /// ImageIO thumbnail decode: never inflates the full-size bitmap and never enlarges a small image (shown at its
     /// natural point size, like the web).
-    static func downsample(_ url: URL, maxPixels: CGFloat, scale: CGFloat) -> UIImage? {
+    static func downsample(_ url: URL, maxPixels: CGFloat, scale: CGFloat) -> PlatformImage? {
         let options = [kCGImageSourceShouldCache: false] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(url as CFURL, options) else { return nil }
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
@@ -382,7 +383,7 @@ final class StorageImageCache: @unchecked Sendable {
         let thumbnail = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceShouldCacheImmediately: true,
                          kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: limit] as CFDictionary
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnail) else { return nil }
-        return UIImage(cgImage: image, scale: max(1, scale), orientation: .up)
+        return PlatformImage.bitmap(image, scale: scale)
     }
 }
 
@@ -397,7 +398,7 @@ struct StorageImageView: View {
     var maxHeight: CGFloat = 384
     var maxWidth: CGFloat = 448
 
-    @State private var image: UIImage?
+    @State private var image: PlatformImage?
     @State private var file: URL?
     @State private var preview: URL?
     @State private var attempt = 0
@@ -417,7 +418,7 @@ struct StorageImageView: View {
         Group {
             if let image {
                 Button { preview = file } label: {
-                    Image(uiImage: image).resizable().aspectRatio(contentMode: .fit)
+                    Image(platformImage: image).resizable().aspectRatio(contentMode: .fit)
                         .frame(maxWidth: min(maxWidth, image.size.width), maxHeight: maxHeight, alignment: .leading)
                         .clipShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
                         .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border.opacity(0.3), lineWidth: 1))

@@ -28,19 +28,19 @@ struct SearchView: View {
                     }
                 }
             }
-            .listStyle(.insetGrouped)
+            .groupedList()
             .scrollContentBackground(.hidden)
             .background(Amb.canvas)   // grouped rows (white) on the recessed surface
             .overlay {
                 if hits.isEmpty {
-                    EmptyNote(title: searched.count >= 2 ? "No matches" : "Search this iPhone",
+                    EmptyNote(title: searched.count >= 2 ? "No matches" : "Search this \(Device.name)",
                               systemImage: "magnifyingglass",
-                              detail: "Searches messages, tasks, documents and files saved on this iPhone for the current workspace.")
+                              detail: "Searches messages, tasks, documents and files saved on this \(Device.name) for the current workspace.")
                 }
             }
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Messages, tasks, docs, files")
+            .searchable(text: $query, placement: .drawerAlways, prompt: "Messages, tasks, docs, files")
             .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .navigationDestination(for: WorkRoute.self) { WorkDestination(route: $0, adoptsContext: true) }
             .task(id: query) { await run() }

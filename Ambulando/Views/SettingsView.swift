@@ -31,7 +31,7 @@ struct SettingsView: View {
                     case .locked, .none, .unavailable: EmptyView()
                     }
                     if model.identity.npub != nil {
-                        Button("Remove identity from this iPhone", role: .destructive) { confirmRemove = true }
+                        Button("Remove identity from this \(Device.name)", role: .destructive) { confirmRemove = true }
                     }
                 }
                 if let connection = model.connection {
@@ -62,18 +62,27 @@ struct SettingsView: View {
                     Button("Refresh Nostr profiles") { model.refreshProfiles(force: true) }
                         .disabled(!model.publicProfilesEnabled || model.connection == nil)
                         .accessibilityIdentifier("settings.profiles.refresh")
-                    LabeledContent("Saved on this iPhone", value: "\(model.me.value?.savedProfiles ?? 0)")
+                    LabeledContent("Saved on this \(Device.name)", value: "\(model.me.value?.savedProfiles ?? 0)")
                         .accessibilityIdentifier("settings.profiles.saved")
                 } header: { Text("Nostr profiles") } footer: {
-                    Text("Names and pictures from people's public Nostr profiles are saved on this iPhone and shown offline. A name set in the workspace comes first. Profiles are read from relay.primal.net, nos.lol and purplepag.es, as in the web app, and each picture is fetched from the address in the profile, which sees this iPhone's network address. Nothing is signed or sent with them. Turning this off stops all of these requests; saved names and pictures stay until you disconnect.")
+                    Text("Names and pictures from people's public Nostr profiles are saved on this \(Device.name) and shown offline. A name set in the workspace comes first. Profiles are read from relay.primal.net, nos.lol and purplepag.es, as in the web app, and each picture is fetched from the address in the profile, which sees this \(Device.name)'s network address. Nothing is signed or sent with them. Turning this off stops all of these requests; saved names and pictures stay until you disconnect.")
                 }
+                #if os(iOS)
                 BackgroundSection(live: live)
+                #else
+                Section {
+                    LabeledContent("Live updates", value: live.map(BackgroundSection.liveLabel) ?? "—")
+                        .accessibilityIdentifier("settings.liveStatus")
+                } header: { Text("Updates") } footer: {
+                    Text("While Ambulando is running on this Mac, changes arrive live and unsent work is retried. Closing the window keeps it running; quitting stops updates until it is opened again.")
+                }
+                #endif
                 if let fixture = model.fixture { FixtureControls(fixture: fixture, model: model) }
                 Section {
                     Toggle("Agents", isOn: $showAgents).accessibilityIdentifier("settings.sections.agents")
                     Toggle("Context", isOn: $showContext).accessibilityIdentifier("settings.sections.context")
                 } header: { Text("Sections") } footer: {
-                    Text("Agents and Context are optional sections, off unless you turn them on, as in the web app. They appear in the bar at the bottom.")
+                    Text("Agents and Context are optional sections, off unless you turn them on, as in the web app. They appear in the \(Device.name == "Mac" ? "sidebar" : "bar at the bottom").")
                 }
                 Section("Appearance") {
                     Picker("Theme", selection: $appearance) {
@@ -92,7 +101,7 @@ struct SettingsView: View {
             .scrollContentBackground(.hidden)
             .background(Amb.canvas)   // grouped rows (white) on the recessed surface
             .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task {
                 while !Task.isCancelled {
@@ -109,7 +118,7 @@ struct SettingsView: View {
                 Button("Disconnect", role: .destructive) { Task { await model.disconnect(); dismiss() } }
             } message: {
                 Text((unsent > 0 ? "\(unsent) unsent \(unsent == 1 ? "message" : "messages") will be discarded. " : "")
-                     + "Removes saved workspaces, channels, messages and drafts for this Tower from this iPhone. Nothing on the server changes.")
+                     + "Removes saved workspaces, channels, messages and drafts for this Tower from this \(Device.name). Nothing on the server changes.")
             }
         }
     }
@@ -128,7 +137,7 @@ private struct FixtureControls: View {
                 .accessibilityIdentifier("fixture.storeWorkspaces")
             LabeledContent("Context restores", value: "\(model.contextRestores)").accessibilityIdentifier("fixture.restores")
         } header: { Text("Sample data") } footer: {
-            Text("This build is running on sample data stored on this iPhone. Nothing is sent to a Tower.")
+            Text("This build is running on sample data stored on this \(Device.name). Nothing is sent to a Tower.")
         }
     }
 }

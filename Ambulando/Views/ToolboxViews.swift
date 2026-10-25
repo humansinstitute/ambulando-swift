@@ -36,7 +36,7 @@ struct ToolboxView: View {
                     .font(.caption)
             }
         }
-        .listStyle(.insetGrouped)
+        .groupedList()
         .scrollContentBackground(.hidden)
         .navigationTitle("Toolbox")
         .overlay {
@@ -94,7 +94,7 @@ struct WebContentView: View {
                 ProgressView("Opening…")
             }
         }
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineTitle()
         .task { await resolve() }
     }
 
@@ -153,36 +153,38 @@ struct LabelledWebView: View {
 /// sol `CANVAS_HTML_CSP`.
 private let htmlArtefactCSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; media-src data: blob:; frame-src 'none'; child-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'"
 
-private struct WebViewRepresentable: UIViewRepresentable {
+@MainActor
+private struct WebViewRepresentable {
     let content: LabelledWebView.Content
     @Binding var loading: Bool
     let offerExternal: (URL) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    func makeUIView(context: Context) -> WKWebView {
+    func makeWebView(_ coordinator: Coordinator) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        #if os(iOS)
         configuration.allowsInlineMediaPlayback = true
+        #endif
         let view = WKWebView(frame: .zero, configuration: configuration)
-        view.navigationDelegate = context.coordinator
-        view.uiDelegate = context.coordinator
+        view.navigationDelegate = coordinator
+        view.uiDelegate = coordinator
         view.allowsLinkPreview = false
         switch content {
         case .url(let url):
-            context.coordinator.origin = WebContentPolicy.origin(of: url) ?? ""
+            coordinator.origin = WebContentPolicy.origin(of: url) ?? ""
             view.load(URLRequest(url: url))
         case .html(let html):
-            context.coordinator.origin = "about:blank"
+            coordinator.origin = "about:blank"
             let csp = "<meta http-equiv=\"Content-Security-Policy\" content=\"\(htmlArtefactCSP)\"><meta name=\"referrer\" content=\"no-referrer\">"
             view.loadHTMLString(csp + html, baseURL: nil)
         }
         return view
     }
 
-    func updateUIView(_ view: WKWebView, context: Context) {}
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         let parent: WebViewRepresentable
@@ -221,3 +223,15 @@ private struct WebViewRepresentable: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { parent.loading = false }
     }
 }
+
+#if os(iOS)
+extension WebViewRepresentable: UIViewRepresentable {
+    func makeUIView(context: Context) -> WKWebView { makeWebView(context.coordinator) }
+    func updateUIView(_ view: WKWebView, context: Context) {}
+}
+#else
+extension WebViewRepresentable: NSViewRepresentable {
+    func makeNSView(context: Context) -> WKWebView { makeWebView(context.coordinator) }
+    func updateNSView(_ view: WKWebView, context: Context) {}
+}
+#endif

@@ -19,7 +19,7 @@ struct ConnectView: View {
                     Text("Enter the HTTPS address of your Tower. Ambulando reads its public service descriptor first, then lists the workspaces your identity can access.")
                         .font(.footnote).foregroundStyle(Amb.mutedForeground)
                     TextField("https://your-tower.example", text: $origin)
-                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .urlEntry().autocorrectionDisabled()
                         .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                         .onChange(of: origin) { descriptor = nil; checkError = nil }
                     if let checkError { Notice(tone: .error, text: checkError) }
@@ -64,7 +64,7 @@ struct DescriptorSummary: View {
             Text("Protocols: " + (descriptor.tower?.protocols ?? []).joined(separator: ", ")).font(.caption).foregroundStyle(Amb.mutedForeground)
             Text("Services: " + descriptor.services.map(\.kind).joined(separator: ", ")).font(.caption).foregroundStyle(Amb.mutedForeground)
             Text(descriptor.advertisesFIPS
-                 ? "A FIPS service is advertised, but this iPhone app uses HTTPS only and will not switch transports."
+                 ? "A FIPS service is advertised, but this \(Device.name) app uses HTTPS only and will not switch transports."
                  : "Transport: HTTPS with NIP-98 signed requests.")
                 .font(.caption).foregroundStyle(descriptor.advertisesFIPS ? Amb.warning : Amb.success)
         }

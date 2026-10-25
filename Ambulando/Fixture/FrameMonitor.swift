@@ -1,5 +1,7 @@
 import QuartzCore
+#if os(iOS)
 import UIKit
+#endif
 
 /// Frame pacing during a measurement window (sample-data diagnostics). A `CADisplayLink` callback records the gap
 /// between frames; a gap above 1.5 frame durations is a hitch, counted in Apple's "hitch time ratio" style
@@ -7,13 +9,16 @@ import UIKit
 /// relative numbers for storm-versus-control comparison.
 @MainActor
 final class FrameMonitor: NSObject {
+    #if os(iOS)
     private var link: CADisplayLink?
+    #endif
     private var last: CFTimeInterval?
     private var started: CFTimeInterval = 0
     private(set) var gaps: [(at: Double, gap: Double)] = []
     private var expected = 1.0 / 60
 
     func start() {
+        #if os(iOS)
         stop()
         gaps = []
         last = nil
@@ -21,8 +26,10 @@ final class FrameMonitor: NSObject {
         let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
         link.add(to: .main, forMode: .common)
         self.link = link
+        #endif
     }
 
+    #if os(iOS)
     @objc private func tick(_ link: CADisplayLink) {
         let duration = link.targetTimestamp - link.timestamp
         if duration > 0 { expected = duration }
@@ -30,7 +37,13 @@ final class FrameMonitor: NSObject {
         last = link.timestamp
     }
 
-    func stop() { link?.invalidate(); link = nil }
+    #endif
+
+    func stop() {
+        #if os(iOS)
+        link?.invalidate(); link = nil
+        #endif
+    }
 
     struct Summary {
         let frames: Int
