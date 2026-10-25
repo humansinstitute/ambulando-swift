@@ -39,7 +39,8 @@ public struct CanvasNaplet: Sendable, Equatable, Identifiable {
         /// A document: its title and a short plain-text excerpt of the body Tower included.
         case document(docId: String, excerpt: String)
         case taskList(channelId: String, tasks: [TaskSummary])
-        case taskTree(channelId: String, channelTitle: String?)
+        /// A task tree for a channel: its scope and whether this viewer may create tasks there (Tower's `task.create`).
+        case taskTree(channelId: String, channelTitle: String?, scopeId: String?, canCreate: Bool)
         case chatThread(threadId: String, messages: [MessageSummary])
         /// An HTML artefact: web content, opened in a labelled view.
         case html(fileId: String, versionId: String?)
@@ -180,7 +181,8 @@ public struct CanvasScene: Sendable, Equatable {
             parsed = .taskList(channelId: sourceId, tasks: Array(tasks))
         case "task_tree":
             guard let channel = lowerUUID(content["channel_id"] as? String) ?? sourceId else { return nil }
-            parsed = .taskTree(channelId: channel, channelTitle: content["channel_title"] as? String)
+            parsed = .taskTree(channelId: channel, channelTitle: content["channel_title"] as? String, scopeId: lowerUUID(content["scope_id"] as? String),
+                               canCreate: content["can_create"] as? Bool == true)
         case "chat_thread":
             guard let sourceId else { return nil }
             let messages = ((content["messages"] as? [[String: Any]]) ?? []).suffix(50).compactMap { m -> CanvasNaplet.MessageSummary? in

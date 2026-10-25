@@ -28,7 +28,7 @@ public struct CanvasEditor: Sendable {
 
     /// Naplet source types Tower accepts on `POST /naplets` and this build can offer.
     public enum SourceType: String, Sendable, CaseIterable {
-        case document, taskList = "task_list", chatThread = "chat_thread", html, excalidraw, canvas
+        case document, taskList = "task_list", taskTree = "task_tree", chatThread = "chat_thread", html, excalidraw, canvas
     }
 
     /// Clamps a frame to what Tower will store, rounded to whole points.
@@ -81,6 +81,22 @@ public struct CanvasEditor: Sendable {
         let base = ((try? JSONSerialization.jsonObject(with: naplet.savedLayout)) as? [String: Any]) ?? [:]
         _ = try await send(connection, workspace, method: "PATCH", path: try Self.napletPath(workspace, canvasId, naplet.id),
                            body: ["layout": Self.layoutObject(Self.clamped(layout), base: base), "expected_row_version": naplet.rowVersion], canvasId: canvasId)
+        try await reloadSnapshot(connection, workspace, canvasId: canvasId)
+    }
+
+    /// Patches a naplet's whole saved layout object (move/resize, or view state such as `task_tree`).
+    func patchLayout(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, canvasId: String, naplet: CanvasNaplet, layout: [String: Any]) async throws {
+        guard naplet.isReady else { throw CanvasEditError.locked }
+        _ = try await send(connection, workspace, method: "PATCH", path: try Self.napletPath(workspace, canvasId, naplet.id),
+                           body: ["layout": layout, "expected_row_version": naplet.rowVersion], canvasId: canvasId)
+        try await reloadSnapshot(connection, workspace, canvasId: canvasId)
+    }
+
+    /// Adds a naplet of any Tower source type with a prepared layout object.
+    func addNaplet(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, canvasId: String, sourceType: String, sourceId: String, title: String,
+                   layoutObject: [String: Any]) async throws {
+        let body: [String: Any] = ["source": ["type": sourceType, "id": try TowerAPI.uuid(sourceId)], "layout": layoutObject, "title": try Self.title(title)]
+        _ = try await send(connection, workspace, method: "POST", path: try Self.canvasPath(workspace, canvasId) + "/naplets", body: body, canvasId: canvasId)
         try await reloadSnapshot(connection, workspace, canvasId: canvasId)
     }
 
@@ -244,6 +260,7 @@ extension StoreReader {
         out += try canvases(workspaceId: workspaceId).filter { $0.id != canvasId }.map { .init(type: .canvas, sourceId: $0.id, title: $0.title) }
         out += try docs(workspaceId: workspaceId).map { .init(type: .document, sourceId: $0.id, title: $0.title.isEmpty ? "Untitled document" : $0.title) }
         out += try channels(workspaceId: workspaceId).map { .init(type: .taskList, sourceId: $0.id, title: "\($0.name.isEmpty ? "Channel" : $0.name) tasks") }
+        out += try channels(workspaceId: workspaceId).map { .init(type: .taskTree, sourceId: $0.id, title: "\($0.name.isEmpty ? "Channel" : $0.name) task tree") }
         let threads = try db.prepare("""
         SELECT id, COALESCE(NULLIF(title, ''), NULLIF(latest, ''), 'Conversation') FROM threads
         WHERE workspace_id = ? AND archived = 0 AND deleted = 0 ORDER BY updated_at DESC, id LIMIT 300

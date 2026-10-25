@@ -123,6 +123,9 @@ struct CanvasBoardView: View {
     @State private var renaming = false
     @State private var renameTitle = ""
     @State private var boardSize: CGSize = .zero
+    /// A naplet opened at full size over the board (a task tree's Expand); a route chosen inside opens after it closes.
+    @State private var focused: CanvasNaplet?
+    @State private var focusRoute: WorkRoute?
 
     struct LayoutOverride: Equatable { var layout: CanvasLayout; var version: Int }
 
@@ -203,6 +206,7 @@ struct CanvasBoardView: View {
             Button("Cancel", role: .cancel) {}
         } message: { Text("Only the item on this board is removed; what it shows is not deleted.") }
         .fixtureLabel()
+        .modifier(FocusCover(focused: $focused, route: $focusRoute, content: { naplet in focusedNaplet(naplet, canManage: value.canvas?.canManage == true) }))
         .overlay {
             if let error = snapshot.error {
                 EmptyNote(title: "Canvas cannot be shown", systemImage: "exclamationmark.triangle", detail: error)
@@ -242,8 +246,48 @@ struct CanvasBoardView: View {
                                      live: live, layoutEditing: editing, onSelect: { selected = naplet.id }, onExpand: { open(naplet) }), naplet, vp)
                 .gesture(editGesture(naplet, vp, resize: false), including: movable(naplet) ? .all : .subviews)
                 .task(id: naplet.id) { requestBoardIfNeeded(naplet, value) }
+        } else if let body = interactiveBody(naplet, canManage: value.canvas?.canManage == true, live: live) {
+            placed(NapletWindow(naplet: naplet, selected: selected == naplet.id, interactive: selected == naplet.id && !editing,
+                                onSelect: { selected = naplet.id }, onExpand: openable(naplet) ? { open(naplet) } : nil,
+                                accessory: { EmptyView() }, content: { body }), naplet, vp)
+                .gesture(editGesture(naplet, vp, resize: false), including: movable(naplet) ? .all : .subviews)
         } else {
             cardView(naplet, value, vp)
+        }
+    }
+
+    /// A naplet at full size: its live content with the board's own window title, closed with Done.
+    private func focusedNaplet(_ naplet: CanvasNaplet, canManage: Bool) -> some View {
+        NavigationStack {
+            Group {
+                if let body = interactiveBody(naplet, canManage: canManage, live: true, interactive: true) {
+                    body
+                } else {
+                    EmptyNote(title: "Item unavailable", systemImage: "lock", detail: "It cannot be shown here.")
+                }
+            }
+            .navigationTitle(naplet.title)
+            .inlineTitle()
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { focused = nil }.accessibilityIdentifier("naplet.focus.done") } }
+            .environment(\.pushRoute, PushRouteAction { route in focusRoute = route; focused = nil })
+        }
+    }
+
+    /// The live content of a conversation, document, HTML or task tree naplet (others keep their card).
+    private func interactiveBody(_ naplet: CanvasNaplet, canManage: Bool, live: Bool, interactive focus: Bool = false) -> AnyView? {
+        let interactive = focus || (selected == naplet.id && !editing)
+        switch naplet.content {
+        case .chatThread(let thread, _):
+            return AnyView(ChatNapletBody(threadId: thread, workspace: workspace, store: store, interactive: interactive))
+        case .document(let doc, _):
+            return AnyView(DocNapletBody(docId: doc, workspace: workspace, store: store, interactive: interactive))
+        case .html:
+            return AnyView(HTMLNapletBody(canvasId: canvasId, napletId: naplet.id, workspace: workspace, live: live, interactive: interactive))
+        case .taskTree(let channel, let title, let scope, let canCreate):
+            return AnyView(TaskTreeNapletBody(naplet: naplet, canvasId: canvasId, channelId: channel, channelTitle: title, scopeId: scope, canCreate: canCreate,
+                                              canManage: canManage, workspace: workspace, interactive: interactive))
+        default:
+            return nil
         }
     }
 
@@ -286,7 +330,7 @@ struct CanvasBoardView: View {
 
     /// The board naplets that run the embedded editor: the selected one first, then the largest on screen.
     private func liveBoards(_ naplets: [CanvasNaplet], _ vp: CanvasViewport) -> Set<String> {
-        let boards = naplets.filter { if case .excalidraw = $0.content { true } else { false } }
+        let boards = naplets.filter { switch $0.content { case .excalidraw, .html: true; default: false } }
         let ranked = boards.sorted { a, b in
             if (a.id == selected) != (b.id == selected) { return a.id == selected }
             return a.layout.width * a.layout.height > b.layout.width * b.layout.height
@@ -294,10 +338,14 @@ struct CanvasBoardView: View {
         return Set(ranked.filter { $0.id == selected || $0.layout.width * vp.scale >= Self.liveBoardMinWidth }.prefix(Self.liveBoardLimit).map(\.id))
     }
 
-    /// A selected board that is not being moved takes the touches inside its window.
+    /// A selected live naplet (board, conversation, document, HTML, task tree) that is not being moved takes the touches
+    /// inside its window.
     private func boardActive(_ value: CanvasBoardSnapshot) -> Bool {
-        guard !editing, let id = selected, let naplet = value.scene.naplets.first(where: { $0.id == id }), case .excalidraw = naplet.content else { return false }
-        return true
+        guard !editing, let id = selected, let naplet = value.scene.naplets.first(where: { $0.id == id }) else { return false }
+        switch naplet.content {
+        case .excalidraw, .chatThread, .document, .html, .taskTree: return true
+        default: return false
+        }
     }
 
     // MARK: Geometry
@@ -461,13 +509,17 @@ struct CanvasBoardView: View {
         showAdd = false
         let vp = viewport ?? fitted(value, boardSize)
         viewport = vp
-        let board = choice.type == .excalidraw
+        let board = choice.type == .excalidraw || choice.type == .taskTree
         let width = board ? 640.0 : 380.0, height = board ? 460.0 : 280.0
         let centre = (x: (Double(boardSize.width) / 2 - vp.x) / vp.scale, y: (Double(boardSize.height) / 2 - vp.y) / vp.scale)
         let z = (value.scene.naplets.map(\.layout.z).max() ?? 0) + 1
         let layout = CanvasLayout(x: centre.x - width / 2, y: centre.y - height / 2, width: width, height: height, z: z)
         editing = true
-        run { e, c, w in try await e.addNaplet(c, w, canvasId: canvasId, type: choice.type, sourceId: choice.sourceId, layout: layout) }
+        if choice.type == .taskTree {
+            run { e, c, w in try await e.addTaskTree(c, w, canvasId: canvasId, channelId: choice.sourceId, layout: layout) }
+        } else {
+            run { e, c, w in try await e.addNaplet(c, w, canvasId: canvasId, type: choice.type, sourceId: choice.sourceId, layout: layout) }
+        }
     }
 
     private func rename(_ value: CanvasBoardSnapshot) {
@@ -510,7 +562,10 @@ struct CanvasBoardView: View {
         case .excalidraw: route = .board(workspaceId: w, canvasId: canvasId, napletId: n.id)
         case .html: route = .webContent(workspaceId: w, source: .htmlNaplet(canvasId: canvasId, napletId: n.id, title: n.title))
         case .canvas(let other): route = .canvas(workspaceId: w, canvasId: other)
-        case .taskList(let channel, _), .taskTree(let channel, _):
+        case .taskTree:
+            route = nil
+            focused = n
+        case .taskList(let channel, _):
             // A channel's tasks open in Tasks with that channel as the context (the board position is kept for return).
             route = nil
             if let scope = model.navigation.value.channel(channel)?.scopeId {
@@ -523,6 +578,22 @@ struct CanvasBoardView: View {
     }
 
     @Environment(\.pushRoute) private var pushRoute
+}
+
+/// Presents a naplet at full size; a route chosen inside is pushed on the board's stack once the cover has closed.
+private struct FocusCover<Cover: View>: ViewModifier {
+    @Environment(\.pushRoute) private var pushRoute
+    @Binding var focused: CanvasNaplet?
+    @Binding var route: WorkRoute?
+    @ViewBuilder let content: (CanvasNaplet) -> Cover
+
+    func body(content view: Content) -> some View {
+        view
+            .coverSheet(isPresented: Binding(get: { focused != nil }, set: { if !$0 { focused = nil } })) {
+                if let focused { content(focused) }
+            }
+            .onChange(of: focused) { _, now in if now == nil, let next = route { route = nil; pushRoute(next) } }
+    }
 }
 
 /// Chooses something stored on this device to place on the canvas (sol's add dialog). Tower authorizes it when added.
@@ -578,6 +649,7 @@ struct CanvasAddItemSheet: View {
         switch type {
         case .document: "Documents"
         case .taskList: "Channel tasks"
+        case .taskTree: "Task trees"
         case .chatThread: "Conversations"
         case .html: "Web content"
         case .excalidraw: "Excalidraw boards"
@@ -589,6 +661,7 @@ struct CanvasAddItemSheet: View {
         switch type {
         case .document: "doc.text"
         case .taskList: "checklist"
+        case .taskTree: "point.3.connected.trianglepath.dotted"
         case .chatThread: "bubble.left.and.bubble.right"
         case .html: "globe"
         case .excalidraw: "scribble.variable"
@@ -635,8 +708,8 @@ struct NapletCard: View {
                 if tasks.isEmpty { Text("No tasks").font(.system(size: 13)).foregroundStyle(Amb.mutedForeground) }
             }
             .padding(10)
-        case .taskTree(_, let channel):
-            Text("Task tree for #\(channel ?? "channel"). Opens as the channel's task list on \(Device.name) (the tree graph is web-only).")
+        case .taskTree(_, let channel, _, _):
+            Text("Task tree for #\(channel ?? "channel"). Select it to see and add tasks.")
                 .font(.system(size: 13)).foregroundStyle(Amb.mutedForeground).padding(10)
         case .chatThread(_, let messages):
             VStack(alignment: .leading, spacing: 6) {

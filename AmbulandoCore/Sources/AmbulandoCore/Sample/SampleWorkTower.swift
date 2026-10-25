@@ -335,6 +335,14 @@ public final class SampleWorkTower: @unchecked Sendable {
             return page(rows, key: "tasks", query: query, extra: ["channel_id": p[1]])
         case ("POST", 3, "channels") where p[2] == "tasks": return createTask(channel: p[1], object)
         case ("GET", 2, "tasks"): return table("tasks")[p[1]].map { (200, ["task": $0]) } ?? error(404, "task_not_found")
+        case ("GET", 3, "tasks") where p[2] == "relationships":
+            // Tower `GET /tasks/:t/relationships`: the task and those naming it as parent or predecessor (one page).
+            guard let task = table("tasks")[p[1]] else { return error(404, "task_unavailable") }
+            let related = table("tasks").values.filter { row in
+                let m = row["metadata"] as? [String: Any] ?? [:]
+                return m["parent_task_id"] as? String == p[1] || (m["predecessor_task_ids"] as? [String] ?? []).contains(p[1])
+            }.sorted { ($0["id"] as! String) < ($1["id"] as! String) }
+            return (200, ["workspace_id": workspaceId, "task": task, "tasks": related, "unavailable": false, "has_more": false, "next_cursor": NSNull()])
         case ("PATCH", 2, "tasks"): return patchTask(p[1], object)
         case ("POST", 3, "tasks") where p[2] == "state":
             guard var row = table("tasks")[p[1]] else { return error(404, "task_not_found") }
@@ -541,6 +549,16 @@ public final class SampleWorkTower: @unchecked Sendable {
         row["updated_at"] = now()
     }
 
+    /// Task tree relationships kept from the request (`metadata.parent_task_id`, `metadata.predecessor_task_ids`).
+    static func taskMetadata(_ o: [String: Any], assignee: String?) -> [String: Any] {
+        var metadata: [String: Any] = ["assigned_to_npub": (assignee as Any?) ?? NSNull()]
+        if let m = o["metadata"] as? [String: Any] {
+            if let parent = m["parent_task_id"] as? String { metadata["parent_task_id"] = parent.lowercased() }
+            if let predecessors = m["predecessor_task_ids"] as? [String] { metadata["predecessor_task_ids"] = predecessors.map { $0.lowercased() } }
+        }
+        return metadata
+    }
+
     private func createTask(channel: String, _ o: [String: Any]) -> (Int, Any) {
         let title = (o["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return error(400, "validation_error", ["details": ["fields": [["message": "title must be a non-empty string"]]]]) }
@@ -556,7 +574,7 @@ public final class SampleWorkTower: @unchecked Sendable {
         let assignee = (o["assigned_to_npub"] as? String) ?? nil
         let row: [String: Any] = ["id": id, "workspace_id": workspaceId, "scope_id": NSNull(), "channel_id": channel, "thread_id": NSNull(), "title": title,
                                   "description": o["description"] ?? NSNull(), "state": o["state"] ?? "new", "priority": o["priority"] ?? "sand",
-                                  "metadata": ["assigned_to_npub": (assignee as Any?) ?? NSNull()], "assigned_to_npub": assignee ?? NSNull(), "row_version": 1,
+                                  "metadata": Self.taskMetadata(o, assignee: assignee), "assigned_to_npub": assignee ?? NSNull(), "row_version": 1,
                                   "activity_version": 1, "created_by_actor_npub": actor, "sender_npub": actor, "assignments": [],
                                   "created_at": stamp, "updated_at": stamp]
         put("tasks", id, row)

@@ -819,6 +819,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         let board = Self.sampleBoard()
         let projection = s.seedBoardVersion(fileId: Self.boardFile, versionId: Self.boardVersion, versionNumber: 2, bytes: board)
         boards.seed(fileId: Self.boardFile, bytes: board, canWrite: true, author: Self.ana)
+        s.seedNaplet(canvas: launch, sourceType: "task_tree", sourceId: general, title: "Task Tree",
+                     layout: ["x": 40, "y": 740, "width": 820, "height": 440, "z": 9],
+                     content: ["channel_id": general, "scope_id": a, "channel_title": "general", "can_create": true])
         s.seedNaplet(canvas: launch, sourceType: "excalidraw", sourceId: Self.boardFile, title: "Architecture sketch",
                      layout: ["x": 440, "y": 380, "width": 420, "height": 300, "z": 4], content: projection)
         s.seedNaplet(canvas: launch, sourceType: "document", sourceId: Self.lockedFile, title: "Budget",
