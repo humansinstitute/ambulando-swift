@@ -132,7 +132,7 @@ Theme, names and avatars, chat separators (build 10):
 - A Deck card that was out of sight while records were removed (access lost, archived, deleted) no longer shows them
   again for a moment when you come back to it.
 
-Paste images and files into chat (next build, not yet released; build number set at release):
+Paste images and files into chat (build 11):
 
 - In a channel's or a thread's message box, choose **Paste** (or ⌘V) with an image or file on the clipboard. An
   "Uploading…" placeholder goes in at the cursor and the item uploads to workspace storage. When it finishes, the

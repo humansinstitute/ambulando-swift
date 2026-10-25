@@ -24,6 +24,8 @@ architecture that later packages build on. Implementation status:
   activity, the Toolbox with a labelled web view, and personal pins, on schema v4 (§4.6).
 - Build 10 applies the web's white surfaces and purple highlights (§1.4), caches public Nostr names and avatars on
   schema v5 and adds chat separators (§4.8).
+- Build 11 adds explicit Paste of images and files into channel and thread composers as workspace storage links
+  (§4.1, "Pasted images and files"). No schema change.
 - Device validation and packaging are WP6, as is anything else here without evidence in the parity matrix.
 
 The feature-by-feature status is in [parity-matrix.md](parity-matrix.md); package order and
@@ -213,7 +215,7 @@ Native behaviour:
 - **Disconnect.** Disconnecting deletes the connection's drafts and outbox (cascade) after a warning
   that counts unsent messages.
 
-**Pasted images and files (next build).** Sources: sol `handleMentionComposerPaste`, `handleChatPaste`,
+**Pasted images and files (build 11).** Sources: sol `handleMentionComposerPaste`, `handleChatPaste`,
 `uploadChatFileDraft`, `createStorageMarkdown` / `createStorageFileMarkdown`, `chat-attachments.js`.
 
 - **Paste entry.** The composer field is a `UITextView` wrapper (`ComposerTextView`) because SwiftUI's field has no
