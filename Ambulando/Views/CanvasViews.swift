@@ -3,8 +3,10 @@ import SwiftUI
 
 // Canvas (sol `canvas/page.js`): the viewer's canvases, and a board showing each naplet at its saved position and size
 // over the canvas drawing elements. Pan and zoom are viewer-local and never written back; a naplet is selected with a
-// tap and opened in its native screen. Locked naplets show only their frame. Moving, resizing, adding or removing items
-// stays in the web app in this build.
+// tap and opened in its native screen. Locked naplets show only their frame. Where Tower reports `can_manage`, canvases
+// can be created and renamed and items added, moved, resized and removed (`CanvasEditor`); each change is one confirmed
+// request with Tower's version check, and the board shows the item where it was dragged until Tower answers. Drawing
+// elements and Excalidraw board contents are not edited on this device yet.
 
 struct CanvasListView: View {
     @Environment(AppModel.self) private var model
@@ -36,14 +38,53 @@ struct CanvasListView: View {
             if canvases.loaded && canvases.value.isEmpty {
                 if let error = model.syncError(forKey: key) { EmptyNote(title: "Canvases unavailable", systemImage: "exclamationmark.icloud", detail: error) }
                 else if model.isSyncing(key) { ProgressView("Loading canvases…") }
-                else { EmptyNote(title: "No canvases", systemImage: "rectangle.3.group", detail: model.canRead ? "Canvases shared with you appear here. Create them in the web app." : "Unlock to load canvases.") }
+                else { EmptyNote(title: "No canvases", systemImage: "rectangle.3.group", detail: model.canRead ? "Canvases shared with you appear here. Create one with +." : "Unlock to load canvases.") }
             }
         }
         .refreshable { model.openCanvases(workspace, force: true) }
+        .toolbar { ToolbarItem(placement: .primaryAction) { NewCanvasButton(workspace: workspace) } }
         .task {
             let w = workspace.id, store = store
             canvases.start(store: store, matches: { $0.workspaceId == w && $0.table == .canvases }) { try await store.reader.canvases(workspaceId: w) }
             model.openCanvases(workspace)
+        }
+    }
+}
+
+/// "+" for a new canvas (visible to the whole workspace, as the web's default); the created board opens.
+struct NewCanvasButton: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.pushRoute) private var pushRoute
+    let workspace: WorkspaceRecord
+    @State private var creating = false
+    @State private var title = ""
+    @State private var working = false
+    @State private var failure: String?
+
+    var body: some View {
+        Button { title = ""; creating = true } label: { if working { ProgressView() } else { Image(systemName: "plus") } }
+            .disabled(working || !model.isUnlocked)
+            .accessibilityLabel("New canvas").accessibilityIdentifier("canvas.new")
+            .alert("New canvas", isPresented: $creating) {
+                TextField("Title", text: $title).accessibilityIdentifier("canvas.new.title")
+                Button("Cancel", role: .cancel) {}
+                Button("Create") { create() }.accessibilityIdentifier("canvas.new.create")
+            } message: { Text("Everyone in the workspace can see it.") }
+            .alert("Canvas not created", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(failure ?? "") }
+    }
+
+    private func create() {
+        let name = title, w = workspace.id
+        working = true
+        Task {
+            let result = await model.editCanvas { editor, c, workspace in try await editor.createCanvas(c, workspace, title: name) }
+            working = false
+            switch result {
+            case .success(let canvas): pushRoute(.canvas(workspaceId: w, canvasId: canvas.id))
+            case .failure(let error): failure = error.localizedDescription
+            }
         }
     }
 }
@@ -68,6 +109,21 @@ struct CanvasBoardView: View {
     @State private var showItems = false
     /// An item chosen in the items sheet opens once the sheet has gone (a push during dismissal is dropped).
     @State private var pendingOpen: CanvasNaplet?
+    // Editing (only offered when Tower reports `can_manage`; Tower still decides every write).
+    @State private var editing = false
+    /// Where an item was dragged, shown until the stored snapshot carries a newer version of it (or the write fails).
+    @State private var overrides: [String: LayoutOverride] = [:]
+    /// The frame an item had when the current move or resize began.
+    @State private var dragOrigin: CanvasLayout?
+    @State private var busy = false
+    @State private var editError: String?
+    @State private var removing: CanvasNaplet?
+    @State private var showAdd = false
+    @State private var renaming = false
+    @State private var renameTitle = ""
+    @State private var boardSize: CGSize = .zero
+
+    struct LayoutOverride: Equatable { var layout: CanvasLayout; var version: Int }
 
     var body: some View {
         let value = snapshot.value
@@ -79,38 +135,68 @@ struct CanvasBoardView: View {
                     .onTapGesture { selected = nil }
                 CanvasElementsLayer(elements: value.scene.elements, transform: transform(vp))
                 ForEach(visible(value.scene.naplets, vp, proxy.size)) { naplet in
-                    NapletCard(naplet: naplet, board: value.boards[naplet.id], selected: selected == naplet.id)
-                        .frame(width: naplet.layout.width, height: naplet.layout.height)
-                        .scaleEffect(vp.scale, anchor: .topLeading)
-                        .frame(width: naplet.layout.width * vp.scale, height: naplet.layout.height * vp.scale, alignment: .topLeading)
-                        .offset(x: vp.x + naplet.layout.x * vp.scale, y: vp.y + naplet.layout.y * vp.scale)
-                        .onTapGesture(count: 2) { open(naplet) }
-                        .onTapGesture { selected = naplet.id }
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(accessibilityLabel(naplet))
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityAction { open(naplet) }
-                        .accessibilityIdentifier("naplet.\(naplet.title)")
-                        .task(id: naplet.id) { requestBoardIfNeeded(naplet, value) }
+                    napletView(naplet, value, vp)
+                }
+                if let id = selected, let naplet = value.scene.naplets.first(where: { $0.id == id }), movable(naplet) {
+                    resizeHandle(naplet, vp)
                 }
             }
             .clipped()
             .gesture(panAndZoom(vp))
             .onChange(of: viewport) { _, next in if let next { model.canvasViewports[canvasId] = next } }
+            .onAppear { boardSize = proxy.size }
+            .onChange(of: proxy.size) { _, size in boardSize = size }
         }
+        .onChange(of: value.scene.naplets) { _, naplets in
+            // A newer stored version (this edit or someone else's) replaces the dragged position.
+            let versions = Dictionary(naplets.map { ($0.id, $0.rowVersion) }, uniquingKeysWith: { a, _ in a })
+            overrides = overrides.filter { versions[$0.key] == $0.value.version }
+            if let id = selected, versions[id] == nil { selected = nil }
+        }
+        .onChange(of: canEdit(value)) { _, allowed in if !allowed { editing = false } }
         .safeAreaInset(edge: .bottom, spacing: 0) { selectionBar(value) }
         .safeAreaInset(edge: .top, spacing: 0) { notices(value) }
         .navigationTitle(value.canvas?.title ?? "Canvas")
         .inlineTitle()
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button { withAnimation(.snappy) { viewport = nil; model.canvasViewports[canvasId] = nil } } label: { Image(systemName: "arrow.up.left.and.down.right.magnifyingglass") }
-                    .accessibilityLabel("Fit board").accessibilityIdentifier("canvas.fit")
-                Button { showItems = true } label: { Image(systemName: "list.bullet") }
-                    .accessibilityLabel("Board items").accessibilityIdentifier("canvas.items")
+                if editing {
+                    Button { showAdd = true } label: { Image(systemName: "plus") }
+                        .disabled(busy)
+                        .accessibilityLabel("Add item").accessibilityIdentifier("canvas.add")
+                    Button("Done") { editing = false }.accessibilityIdentifier("canvas.done")
+                } else {
+                    Button { withAnimation(.snappy) { viewport = nil; model.canvasViewports[canvasId] = nil } } label: { Image(systemName: "arrow.up.left.and.down.right.magnifyingglass") }
+                        .accessibilityLabel("Fit board").accessibilityIdentifier("canvas.fit")
+                    Button { showItems = true } label: { Image(systemName: "list.bullet") }
+                        .accessibilityLabel("Board items").accessibilityIdentifier("canvas.items")
+                    if canEdit(value) {
+                        Menu {
+                            Button { editing = true } label: { Label("Edit items", systemImage: "arrow.up.and.down.and.arrow.left.and.right") }
+                                .accessibilityIdentifier("canvas.edit")
+                            Button { editing = true; showAdd = true } label: { Label("Add item…", systemImage: "plus") }
+                            Button { renameTitle = value.canvas?.title ?? ""; renaming = true } label: { Label("Rename canvas…", systemImage: "pencil") }
+                                .accessibilityIdentifier("canvas.rename")
+                        } label: { Image(systemName: "pencil.circle") }
+                            .accessibilityLabel("Edit canvas").accessibilityIdentifier("canvas.editMenu")
+                    }
+                }
             }
         }
         .sheet(isPresented: $showItems, onDismiss: { if let next = pendingOpen { pendingOpen = nil; open(next) } }) { itemsSheet(value) }
+        .sheet(isPresented: $showAdd) {
+            CanvasAddItemSheet(workspace: workspace, canvasId: canvasId, store: store) { choice in add(choice, value) }
+        }
+        .alert("Rename canvas", isPresented: $renaming) {
+            TextField("Title", text: $renameTitle).accessibilityIdentifier("canvas.rename.title")
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") { rename(value) }.accessibilityIdentifier("canvas.rename.save")
+        }
+        .confirmationDialog(removing.map { "Remove “\($0.isReady ? $0.title : "Locked item")” from this canvas?" } ?? "",
+                            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
+            Button("Remove from canvas", role: .destructive) { if let n = removing { remove(n) } }.accessibilityIdentifier("naplet.remove.confirm")
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("Only the item on this board is removed; what it shows is not deleted.") }
         .fixtureLabel()
         .overlay {
             if let error = snapshot.error {
@@ -142,6 +228,26 @@ struct CanvasBoardView: View {
             model.openCanvas(workspace, canvasId: canvasId)
         }
         .refreshable { model.openCanvas(workspace, canvasId: canvasId, force: true) }
+    }
+
+    /// One item at its saved (or just dragged) frame, scaled to the viewport.
+    private func napletView(_ naplet: CanvasNaplet, _ value: CanvasBoardSnapshot, _ vp: CanvasViewport) -> some View {
+        let layout = shown(naplet)
+        let card = NapletCard(naplet: naplet, board: value.boards[naplet.id], selected: selected == naplet.id)
+            .frame(width: layout.width, height: layout.height)
+            .scaleEffect(vp.scale, anchor: .topLeading)
+            .frame(width: layout.width * vp.scale, height: layout.height * vp.scale, alignment: .topLeading)
+            .offset(x: vp.x + layout.x * vp.scale, y: vp.y + layout.y * vp.scale)
+        return card
+            .gesture(editGesture(naplet, vp, resize: false), including: movable(naplet) ? .all : .subviews)
+            .onTapGesture(count: 2) { open(naplet) }
+            .onTapGesture { selected = naplet.id }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityLabel(naplet))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { open(naplet) }
+            .accessibilityIdentifier("naplet.\(naplet.title)")
+            .task(id: naplet.id) { requestBoardIfNeeded(naplet, value) }
     }
 
     /// A board naplet on screen whose scene is not stored yet is fetched now (boards beyond the first batch otherwise
@@ -195,6 +301,19 @@ struct CanvasBoardView: View {
     // MARK: Chrome
 
     @ViewBuilder private func notices(_ value: CanvasBoardSnapshot) -> some View {
+        if let editError {
+            HStack(alignment: .top, spacing: 8) {
+                Notice(tone: .warning, text: editError)
+                Button { self.editError = nil } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).accessibilityLabel("Dismiss")
+            }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .accessibilityIdentifier("canvas.editError")
+        } else if editing {
+            Text(busy ? "Saving…" : "Tap an item to select it. Drag it to move; drag its corner to resize.")
+                .font(.caption).foregroundStyle(Amb.mutedForeground)
+                .frame(maxWidth: .infinity).padding(.vertical, 6).background(.bar)
+                .accessibilityIdentifier("canvas.editing")
+        }
         let unsupported = value.scene.unsupportedElements.sorted { $0.key < $1.key }.map { "\($0.value) × \($0.key)" }
         if !unsupported.isEmpty {
             Notice(tone: .info, text: "Not drawn on \(Device.name): " + unsupported.joined(separator: ", ") + ".")
@@ -212,7 +331,11 @@ struct CanvasBoardView: View {
                     Text(NapletCard.kindLabel(naplet.content)).font(.caption).foregroundStyle(Amb.mutedForeground)
                 }
                 Spacer()
-                if openable(naplet) {
+                if editing {
+                    if busy { ProgressView() }
+                    Button("Remove", role: .destructive) { removing = naplet }
+                        .buttonStyle(.bordered).disabled(busy).accessibilityIdentifier("naplet.remove")
+                } else if openable(naplet) {
                     Button("Open") { open(naplet) }.buttonStyle(.borderedProminent).accessibilityIdentifier("naplet.open")
                 }
             }
@@ -239,6 +362,90 @@ struct CanvasBoardView: View {
 
     private func accessibilityLabel(_ n: CanvasNaplet) -> String {
         n.isReady ? "\(NapletCard.kindLabel(n.content)): \(n.title)" : "Locked item"
+    }
+
+    // MARK: Editing
+
+    private func canEdit(_ value: CanvasBoardSnapshot) -> Bool { value.canvas?.canManage == true && value.stored && model.isUnlocked }
+
+    /// Locked items keep their frame (as on the web, only removal is offered for them).
+    private func movable(_ n: CanvasNaplet) -> Bool { editing && !busy && selected == n.id && n.isReady }
+
+    private func shown(_ n: CanvasNaplet) -> CanvasLayout {
+        if let o = overrides[n.id], o.version == n.rowVersion { return o.layout }
+        return n.layout
+    }
+
+    /// Moves (or, from the corner handle, resizes) the selected item in world units; one write when the finger lifts.
+    private func editGesture(_ naplet: CanvasNaplet, _ vp: CanvasViewport, resize: Bool) -> some Gesture {
+        DragGesture(minimumDistance: 2).onChanged { drag in
+            let origin = dragOrigin ?? shown(naplet)
+            if dragOrigin == nil { dragOrigin = origin }
+            // The fitted view would re-fit around the moved item; keep the board still while editing.
+            if viewport == nil { viewport = vp }
+            let dx = drag.translation.width / vp.scale, dy = drag.translation.height / vp.scale
+            var next = origin
+            if resize { next.width = origin.width + dx; next.height = origin.height + dy } else { next.x = origin.x + dx; next.y = origin.y + dy }
+            overrides[naplet.id] = LayoutOverride(layout: CanvasEditor.clamped(next), version: naplet.rowVersion)
+        }.onEnded { _ in
+            let origin = dragOrigin
+            dragOrigin = nil
+            guard let target = overrides[naplet.id]?.layout, target != origin else { return }
+            run(failed: { overrides[naplet.id] = nil }) { e, c, w in
+                try await e.updateLayout(c, w, canvasId: canvasId, naplet: naplet, to: target)
+            }
+        }
+    }
+
+    private func resizeHandle(_ naplet: CanvasNaplet, _ vp: CanvasViewport) -> some View {
+        let layout = shown(naplet)
+        return Circle().fill(Amb.primary).overlay(Circle().stroke(.white, lineWidth: 2))
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle().inset(by: -12))
+            .offset(x: vp.x + (layout.x + layout.width) * vp.scale - 11, y: vp.y + (layout.y + layout.height) * vp.scale - 11)
+            .gesture(editGesture(naplet, vp, resize: true))
+            .accessibilityLabel("Resize \(naplet.title)")
+            .accessibilityIdentifier("naplet.resize")
+    }
+
+    private func remove(_ naplet: CanvasNaplet) {
+        removing = nil
+        run { e, c, w in try await e.removeNaplet(c, w, canvasId: canvasId, naplet: naplet) }
+    }
+
+    /// Places a new item at the middle of what is on screen, above everything else.
+    private func add(_ choice: CanvasSourceChoice, _ value: CanvasBoardSnapshot) {
+        showAdd = false
+        let vp = viewport ?? fitted(value, boardSize)
+        viewport = vp
+        let board = choice.type == .excalidraw
+        let width = board ? 640.0 : 380.0, height = board ? 460.0 : 280.0
+        let centre = (x: (Double(boardSize.width) / 2 - vp.x) / vp.scale, y: (Double(boardSize.height) / 2 - vp.y) / vp.scale)
+        let z = (value.scene.naplets.map(\.layout.z).max() ?? 0) + 1
+        let layout = CanvasLayout(x: centre.x - width / 2, y: centre.y - height / 2, width: width, height: height, z: z)
+        editing = true
+        run { e, c, w in try await e.addNaplet(c, w, canvasId: canvasId, type: choice.type, sourceId: choice.sourceId, layout: layout) }
+    }
+
+    private func rename(_ value: CanvasBoardSnapshot) {
+        guard let canvas = value.canvas else { return }
+        let title = renameTitle
+        run { e, c, w in try await e.renameCanvas(c, w, canvas: canvas, title: title) }
+    }
+
+    /// One edit at a time, like sol's mutation queue: the next waits for Tower's answer and the refreshed board.
+    private func run(failed: @escaping () -> Void = {}, _ body: @escaping @Sendable (CanvasEditor, ConnectionRecord, WorkspaceRecord) async throws -> Void) {
+        guard !busy else { failed(); return }
+        busy = true; editError = nil
+        Task {
+            let result = await model.editCanvas(body)
+            busy = false
+            if case .failure(let error) = result {
+                failed()
+                editError = error.localizedDescription
+                if error == .canvasUnavailable { editing = false }
+            }
+        }
     }
 
     // MARK: Opening
@@ -273,6 +480,78 @@ struct CanvasBoardView: View {
     }
 
     @Environment(\.pushRoute) private var pushRoute
+}
+
+/// Chooses something stored on this device to place on the canvas (sol's add dialog). Tower authorizes it when added.
+struct CanvasAddItemSheet: View {
+    let workspace: WorkspaceRecord
+    let canvasId: String
+    let store: LocalStore
+    let choose: (CanvasSourceChoice) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var choices: [CanvasSourceChoice] = []
+    @State private var loaded = false
+    @State private var search = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(CanvasEditor.SourceType.allCases, id: \.self) { type in
+                    let rows = filtered.filter { $0.type == type }
+                    if !rows.isEmpty {
+                        Section(Self.sectionTitle(type)) {
+                            ForEach(rows) { choice in
+                                Button { choose(choice) } label: { Label(choice.title, systemImage: Self.icon(type)) }
+                                    .accessibilityIdentifier("canvas.add.\(choice.title)")
+                            }
+                        }
+                    }
+                }
+            }
+            .overlay {
+                if loaded && filtered.isEmpty {
+                    EmptyNote(title: "Nothing to add", systemImage: "tray", detail: search.isEmpty ? "Documents, tasks, conversations and files on this \(Device.name) appear here." : "No match for “\(search)”.")
+                }
+            }
+            .searchable(text: $search)
+            .navigationTitle("Add to canvas")
+            .inlineTitle()
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+        .task {
+            let w = workspace.id, c = canvasId, store = store
+            choices = (try? await store.reader.canvasSourceChoices(workspaceId: w, excludingCanvas: c)) ?? []
+            loaded = true
+        }
+    }
+
+    private var filtered: [CanvasSourceChoice] {
+        let q = search.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? choices : choices.filter { $0.title.localizedCaseInsensitiveContains(q) }
+    }
+
+    static func sectionTitle(_ type: CanvasEditor.SourceType) -> String {
+        switch type {
+        case .document: "Documents"
+        case .taskList: "Channel tasks"
+        case .chatThread: "Conversations"
+        case .html: "Web content"
+        case .excalidraw: "Excalidraw boards"
+        case .canvas: "Canvases"
+        }
+    }
+
+    static func icon(_ type: CanvasEditor.SourceType) -> String {
+        switch type {
+        case .document: "doc.text"
+        case .taskList: "checklist"
+        case .chatThread: "bubble.left.and.bubble.right"
+        case .html: "globe"
+        case .excalidraw: "scribble.variable"
+        case .canvas: "rectangle.3.group"
+        }
+    }
 }
 
 /// One naplet drawn at world size (the board scales it). Each source type shows what Tower projected for this viewer.

@@ -63,6 +63,9 @@ public struct CanvasNaplet: Sendable, Equatable, Identifiable {
     public let sourceType: String
     public let content: Content
     public let rowVersion: Int
+    /// The saved layout object as Tower sent it (JSON), including keys this build does not draw (such as `task_tree`). A
+    /// move or resize patches it, so those keys are kept, as sol merges `{ ...naplet.layout, ...change }`.
+    public let savedLayout: Data
 
     public var isReady: Bool { if case .denied = content { false } else { true } }
 }
@@ -153,8 +156,9 @@ public struct CanvasScene: Sendable, Equatable {
         guard let id = lowerUUID(row["id"] as? String) else { return nil }
         let layout = CanvasLayout(row["layout"], minimum: (220, 160))
         let version = flexibleInt(row["row_version"]) ?? 0
+        let saved = (row["layout"] as? [String: Any]).flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) } ?? Data("{}".utf8)
         guard row["access"] as? String == "ready", let source = row["source"] as? [String: Any], let type = source["type"] as? String else {
-            return CanvasNaplet(id: id, layout: layout, title: "Not available to you", sourceType: "", content: .denied, rowVersion: version)
+            return CanvasNaplet(id: id, layout: layout, title: "Not available to you", sourceType: "", content: .denied, rowVersion: version, savedLayout: saved)
         }
         let sourceId = lowerUUID(source["id"] as? String)
         let content = row["content"] as? [String: Any] ?? [:]
@@ -189,7 +193,7 @@ public struct CanvasScene: Sendable, Equatable {
         case "excalidraw":
             guard let file = lowerUUID(content["file_id"] as? String) ?? sourceId, let versionId = lowerUUID(content["current_version_id"] as? String),
                   let sha = (content["sha256"] as? String)?.lowercased(), sha.count == 64 else {
-                return CanvasNaplet(id: id, layout: layout, title: title, sourceType: type, content: .unknown(type: "excalidraw (incomplete metadata)"), rowVersion: version)
+                return CanvasNaplet(id: id, layout: layout, title: title, sourceType: type, content: .unknown(type: "excalidraw (incomplete metadata)"), rowVersion: version, savedLayout: saved)
             }
             parsed = .excalidraw(BoardReference(fileId: file, versionId: versionId, versionNumber: flexibleInt(content["current_version_number"]) ?? 0,
                                                 sha256: sha, sizeBytes: flexibleInt(content["size_bytes"]) ?? 0, updatedAt: content["updated_at"] as? String))
@@ -199,7 +203,7 @@ public struct CanvasScene: Sendable, Equatable {
         default:
             parsed = .unknown(type: type)
         }
-        return CanvasNaplet(id: id, layout: layout, title: title, sourceType: type, content: parsed, rowVersion: version)
+        return CanvasNaplet(id: id, layout: layout, title: title, sourceType: type, content: parsed, rowVersion: version, savedLayout: saved)
     }
 
     static func element(_ row: [String: Any]) -> CanvasElement? {

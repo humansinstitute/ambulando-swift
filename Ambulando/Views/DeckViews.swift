@@ -539,7 +539,7 @@ struct DeckCanvasCard: View {
 
     var body: some View {
         let key = WorkspaceSync.canvasesKey(workspace.id)
-        DeckCardFrame(title: "Canvas", identifier: "canvas") { EmptyView() } content: {
+        DeckCardFrame(title: "Canvas", identifier: "canvas") { NewCanvasButton(workspace: workspace) } content: {
             if canvases.loaded && canvases.value.isEmpty {
                 if let error = model.syncError(forKey: key) { SyncNote(text: error, tone: .warning) }
                 else if model.isSyncing(key) { DeckNote(text: "Loading canvases…") }
@@ -563,7 +563,7 @@ struct DeckCanvasCard: View {
                 .modifier(DeckRowStyle())
                 .accessibilityIdentifier("canvas.\(canvas.title)")
             }
-            DeckNote(text: "Creating, renaming and sharing canvases is done in the web app.")
+            DeckNote(text: "Create a canvas with +. Sharing settings are changed in the web app.")
         }
         .refreshable { model.openCanvases(workspace, force: true) }
         .task {

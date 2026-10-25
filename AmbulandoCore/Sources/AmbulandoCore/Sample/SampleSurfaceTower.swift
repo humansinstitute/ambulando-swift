@@ -341,8 +341,8 @@ public final class SampleSurfaceTower: @unchecked Sendable {
             return (200, ["workspace_id": workspaceId, "naplet_id": p[3], "title": n["title"] ?? "HTML", "source": n["source"] ?? [:],
                           "content": ["html": html], "versions": []])
         case (_, _, "canvases"):
-            // The native client never writes boards; any such request is recorded above and refused here.
-            return error(403, "permission_denied")
+            // Canvas and naplet writes (recorded above); drawing-element writes are refused as the native client sends none.
+            return canvasWrite(p, method: method, object: object)
         case ("GET", 5, "files"):
             guard !list("denied_records").contains(p[1]), let v = table("board_versions")["\(p[1])/\(p[3])"],
                   let bytes = Data(base64Encoded: v["bytes"] as? String ?? "") else { return error(404, "file_version_object_not_found") }
@@ -372,6 +372,88 @@ public final class SampleSurfaceTower: @unchecked Sendable {
         default:
             return error(404, "not_found")
         }
+    }
+
+    // MARK: Canvas writes (lock held)
+
+    /// `POST /canvases`, `PATCH /canvases/:c`, `POST /canvases/:c/naplets`, `PATCH|DELETE /canvases/:c/naplets/:n`, with
+    /// Tower's checks in its order: visible canvas (404 `canvas_unavailable`), `can_manage` (403), body validation (400),
+    /// source authorization (400 `canvas_source_unavailable`), then `expected_row_version` (409 `stale_row_version`).
+    private func canvasWrite(_ p: [String], method: String, object: [String: Any]) -> (Int, Any) {
+        func title(_ value: Any?) -> String? { (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        func expected() -> Int? { (object["expected_row_version"] as? Int).flatMap { $0 >= 1 ? $0 : nil } }
+        if method == "POST", p.count == 1 {
+            guard let name = title(object["title"]), !name.isEmpty, name.count <= 200 else { return error(400, "validation_error") }
+            let id = UUID().uuidString.lowercased(), stamp = now()
+            let position = (table("canvases").values.compactMap { $0["position"] as? Int }.max() ?? 0) + 1
+            put("canvases", id, ["id": id, "title": name, "position": position, "visibility": object["visibility"] ?? ["mode": "workspace", "actor_ids": [], "group_ids": []],
+                                 "viewport": ["x": 0, "y": 0, "scale": 1], "row_version": 1, "created_at": stamp, "updated_at": stamp, "can_manage": true])
+            return (201, ["workspace_id": workspaceId, "canvas": table("canvases")[id]!])
+        }
+        guard p.count >= 2, var canvas = visibleCanvases().first(where: { $0["id"] as? String == p[1] }) else { return error(404, "canvas_unavailable") }
+        guard canvas["can_manage"] as? Bool == true else { return error(403, "permission_denied") }
+        switch (method, p.count) {
+        case ("PATCH", 2):
+            guard let version = expected() else { return error(400, "validation_error") }
+            if object["title"] != nil { guard let name = title(object["title"]), !name.isEmpty, name.count <= 200 else { return error(400, "validation_error") } }
+            guard version == canvas["row_version"] as? Int else { return error(409, "stale_row_version") }
+            if let name = title(object["title"]) { canvas["title"] = name }
+            if let visibility = object["visibility"] { canvas["visibility"] = visibility }
+            canvas["row_version"] = version + 1; canvas["updated_at"] = now()
+            put("canvases", p[1], canvas)
+            return (200, ["workspace_id": workspaceId, "canvas": canvas])
+        case ("POST", 3) where p[2] == "naplets":
+            let source = object["source"] as? [String: Any] ?? [:]
+            let type = source["type"] as? String ?? "", sourceId = (source["id"] as? String ?? "").lowercased()
+            guard ["document", "task_list", "task_tree", "chat_thread", "html", "excalidraw", "canvas"].contains(type), UUID(uuidString: sourceId) != nil,
+                  !(type == "canvas" && sourceId == p[1]), object["layout"] is [String: Any] else { return error(400, "validation_error") }
+            let label: String
+            if type == "canvas" {
+                guard let other = visibleCanvases().first(where: { $0["id"] as? String == sourceId }) else { return error(400, "canvas_source_unavailable") }
+                label = other["title"] as? String ?? "Canvas"
+            } else {
+                guard let record = readable(sourceId) else { return error(400, "canvas_source_unavailable") }
+                label = record["title"] as? String ?? "Untitled"
+            }
+            let content: [String: Any] = switch type {
+            case "document": ["body": ""]
+            case "task_list": ["tasks": []]
+            case "chat_thread": ["messages": []]
+            default: [:]
+            }
+            let id = UUID().uuidString.lowercased()
+            let row: [String: Any] = ["id": id, "canvas_id": p[1], "source_type": type, "source_id": sourceId, "title": title(object["title"]).flatMap { $0.isEmpty ? nil : $0 } ?? label,
+                                      "layout": Self.napletLayout(object["layout"]), "content": content, "source": ["type": type, "id": sourceId], "row_version": 1]
+            put("naplets", id, row)
+            return (201, ["workspace_id": workspaceId, "naplet": row])
+        case ("PATCH", 4) where p[2] == "naplets", ("DELETE", 4) where p[2] == "naplets":
+            guard let version = expected() else { return error(400, "validation_error") }
+            if method == "PATCH", object["layout"] == nil, object["title"] == nil { return error(400, "validation_error") }
+            guard var naplet = table("naplets")[p[3]], naplet["canvas_id"] as? String == p[1], version == naplet["row_version"] as? Int else {
+                return error(409, "stale_row_version")
+            }
+            if method == "DELETE" {
+                put("naplets", p[3], nil)
+                return (200, ["workspace_id": workspaceId, "deleted": true, "id": p[3]])
+            }
+            if let layout = object["layout"] { naplet["layout"] = Self.napletLayout(layout) }
+            if let name = title(object["title"]), !name.isEmpty { naplet["title"] = name }
+            naplet["row_version"] = version + 1
+            put("naplets", p[3], naplet)
+            return (200, ["workspace_id": workspaceId, "naplet": naplet])
+        default:
+            return error(403, "permission_denied")
+        }
+    }
+
+    /// `normalizeFlightDeckPgCanvasLayout`: rounded, size clamped to 220…1200 × 160…1000, z to 1…100000; `task_tree` kept.
+    static func napletLayout(_ value: Any?) -> [String: Any] {
+        let o = value as? [String: Any] ?? [:]
+        func n(_ key: String, _ fallback: Double) -> Int { Int(((o[key] as? NSNumber)?.doubleValue ?? fallback).rounded()) }
+        var out: [String: Any] = ["x": n("x", 0), "y": n("y", 0), "width": min(1200, max(220, n("width", 360))),
+                                  "height": min(1000, max(160, n("height", 280))), "z": min(100_000, max(1, n("z", 1)))]
+        if let tree = o["task_tree"] { out["task_tree"] = tree }
+        return out
     }
 
     private func visibleCanvases() -> [[String: Any]] {

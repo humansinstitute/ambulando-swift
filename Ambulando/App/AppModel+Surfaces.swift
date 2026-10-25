@@ -47,6 +47,22 @@ extension AppModel {
         withWorkspace(workspace) { sync, c in await sync.refreshCanvas(c, workspace, canvasId: canvasId, force: force) }
     }
 
+    /// Runs one confirmed canvas edit (`CanvasEditor`) for the selected workspace. Errors come back classified for the
+    /// board; a result for a workspace the user has since left is dropped.
+    func editCanvas<T: Sendable>(_ body: @escaping @Sendable (CanvasEditor, ConnectionRecord, WorkspaceRecord) async throws -> T) async -> Result<T, CanvasEditError> {
+        guard let sync, let connection, let workspace = selectedWorkspace else { return .failure(.unexpected("No workspace is selected.")) }
+        guard isUnlocked else { return .failure(.locked) }
+        do {
+            let value = try await body(CanvasEditor(sync: sync), connection, workspace)
+            guard selectedWorkspace?.id == workspace.id else { return .failure(.unexpected("The workspace changed before Tower answered.")) }
+            return .success(value)
+        } catch let error as CanvasEditError {
+            return .failure(error)
+        } catch {
+            return .failure(.unexpected(error.localizedDescription))
+        }
+    }
+
     /// Agents and the activity of the context's channels (bounded by `WorkspaceSync.agentActivityChannelLimit`).
     func openAgents(_ workspace: WorkspaceRecord, channelIds: [String], force: Bool = false) {
         withWorkspace(workspace) { sync, c in await sync.refreshAgents(c, workspace, channelIds: channelIds, force: force) }
