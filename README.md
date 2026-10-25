@@ -17,7 +17,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-Version 0.1.0 (9). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+Version 0.1.0 (10). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -114,12 +114,35 @@ the web app on a phone:
   rename, describe, create or archive scopes you manage). Tower decides every change; a refusal says why. Channel and
   scope access, initial permissions and scope templates are still set in the web app, and the create screens say so.
 
+Theme, names and avatars, chat separators (build 10):
+
+- **Colours like the web app.** Pages, the chat list, the sidebar, the composer and the section bar are white (the web's
+  card colour), and selected things are dark purple: a chosen channel or scope in the sidebar is bold purple on a light
+  fill, and the Messages/Threads switch is solid purple. Dark mode keeps the navy and lavender palette.
+- **Names and avatars.** Chat authors, the thread list, the profile button (top right) and Settings show a name and an
+  avatar for each person. A name set in the workspace comes first; otherwise the person's public Nostr profile names
+  them, and someone with neither shows a short npub. Avatars come from the public profile (or, for an agent, from
+  Tower); without a usable picture the initials are shown. Everything is saved on the iPhone and shown at once,
+  offline too, and refreshed in the background (profiles daily, pictures when they change). Settings › Profile shows
+  where your name comes from and your public profile name. Settings › Nostr profiles can turn the lookups off (saved
+  names and pictures stay) or refresh everyone now.
+- **Chat separators.** In a channel each conversation is a card, ending with its reply count when it has replies. A
+  thread shows its first message, then a "N replies" rule, then the replies. A date label (Today, Yesterday, the
+  weekday or the date) starts each day.
+- A Deck card that was out of sight while records were removed (access lost, archived, deleted) no longer shows them
+  again for a moment when you come back to it.
+
 Security notes:
 
 - Identity import is explicit. The app never searches for, reads or exports keys from other apps or
   the browser.
 - Its Keychain service is `studio.otherstuff.ambulando.native.identity-vault.v1`.
 - Only HTTPS origins are accepted, and redirects are refused.
+- Public profiles are read, never written, from the web app's three public relays (relay.primal.net, nos.lol,
+  purplepag.es) for the people your workspace shows, and each is checked against its author's signature. Pictures are
+  fetched from the HTTPS address in the profile without any login, cookie or Tower data, refusing redirects, local
+  addresses, large files and non-images. The relays and picture hosts can see your network address, as with the web
+  app. Settings › Nostr profiles turns both off.
 - `.fips` endpoints are refused rather than replaced with HTTPS.
 - Every request carries a fresh NIP-98 event over the exact URL and body bytes.
 - Chat sends carry a kind 33358 signature over the exact (trimmed) message body. The request is frozen

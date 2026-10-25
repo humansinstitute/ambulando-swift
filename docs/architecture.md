@@ -5,7 +5,8 @@ used by the Ambulando (Flight Deck) web client in `../sol`. It is a separate
 renderer, not a packaged WebView: navigation, chat, tasks, documents, files and
 inbox are native screens drawing from a local database. It reuses the existing
 Tower HTTPS + NIP-98 contracts. It adds no backend routes and changes no shared
-schema.
+schema. Its only other network peers, as in the web client, are sol's public Nostr relays (read-only kind-0 profile
+queries) and the hosts named in those profiles' pictures (§4.8); both can be turned off in Settings.
 
 This document records the source inventory (WP1) and the **target** native
 architecture that later packages build on. Implementation status:
@@ -21,6 +22,8 @@ architecture that later packages build on. Implementation status:
   responsiveness work in §5.2 (§5.1–§5.3, §6).
 - Build 7 (task 6b035d34) delivers the Context Tree outline, Canvas boards with native Excalidraw rendering, agents and
   activity, the Toolbox with a labelled web view, and personal pins, on schema v4 (§4.6).
+- Build 10 applies the web's white surfaces and purple highlights (§1.4), caches public Nostr names and avatars on
+  schema v5 and adds chat separators (§4.8).
 - Device validation and packaging are WP6, as is anything else here without evidence in the parity matrix.
 
 The feature-by-feature status is in [parity-matrix.md](parity-matrix.md); package order and
@@ -103,6 +106,15 @@ a 44 pt touch target. Brand artwork is the approved `passage-master.png`. The
 app icon is a proportional resample on its original white backing; no geometry
 is redrawn. Icons map Lucide names to the closest SF Symbols. These are native
 symbols, not byte-identical Lucide glyphs.
+
+Build 10 applies the tokens the way `sol/src/styles.css` does, not only their values. The web paints `body`, the
+header, the chat feed, the sidebar and the mobile section bar with `--card` (`#FFFFFF` / dark `#1A2238`); `--background`
+(`#F6F6FA` / `#10162B`) appears only behind a few inputs and nested cards. Natively `Amb.background` is therefore the
+card colour, and `Amb.canvas` the old background, used behind grouped forms (Settings, Search, file details) whose rows
+are drawn on `Amb.card`. Highlights follow the web's two patterns: a selected row is `--muted` with bold `--primary` text
+(`.sidebar-scope-channel-row.active`, `.reaction-pill-active`, Deck filters); an active tab or a fallback avatar is solid
+`--primary` with `--primary-foreground` (`.chat-channel-tab-item.active` → segmented controls via `UIAppearance`,
+`.identity-card-avatar-fallback`). The pale `--accent` stays for mention chips and task chips.
 
 ### 1.5 Native reference
 
@@ -344,6 +356,65 @@ Sources: sol `index.html` (`.mobile-section-switcher`, `.deck-columns-track`, si
   invalid / offline / saved-but-not-refreshed. Results are written to the store from Tower's answer or a fresh list read.
   The personal scope order reads the current `row_version` before `PUT`; a `scope_order_conflict` stores the other
   session's order and is reported, never replayed.
+- **Hidden cards and removed records (build 10)**: the writer emits a `.access` change key whenever it removes stored
+  records because they were deleted or are no longer visible (a scope or channel purge, a removed workspace, tombstones,
+  a removed Context Tree). `ChangeCoalescer.revisions` counts recorded changes per table synchronously, and `LiveQuery`
+  notes the `.access` revision taken just before each read. `start(keepingValue:)` keeps the rows on screen only if that
+  revision is unchanged; otherwise the card starts empty and shows only the fresh read. Ordinary changes (new messages,
+  edits) still resume without a flash. The remaining window is the instant between a writer's commit and its `record`
+  call on the coalescer (the same actor hop), not a delivery batch.
+
+### 4.8 Public profiles, avatars and chat separators (build 10)
+
+Sources: sol `people-profiles-manager.js` (`resolveProfileName`, `resolveProfilePicture`, `getSenderName`,
+`getSenderAvatar`), `profiles.js`, `nostr-relays.js` (`PUBLIC_NOSTR_RELAYS`), `utils/naming.js` (`getInitials`),
+`index.html` channel thread cards and thread panel; Tower `serializeFlightDeckPgActor` (`actor_id`, `npub`, `kind`,
+`display_name` only), `workspace_agents.avatar_url`, the `actor` / `workspace_member_profile` outbox events (already a
+directory refresh). No Tower route or schema was added.
+
+- **Sources.** Names come from Tower first: the member's `display_name`, then the workspace agent's name, then the
+  `created_by_actor_label` on a message. Tower has no picture for people, so the public kind-0 profile supplies avatars
+  and names Tower does not have, as the web client does. Membership stays Tower's: profiles are looked up only for the
+  signer, members, agents and recent message senders of the selected workspace (`profileCandidates`, ≤ 500), and a
+  profile never adds a person to the directory or the mention picker.
+- **Relays (a new network peer).** `RelayProfileSource` opens an ephemeral WebSocket (no cookies, no cache, redirects
+  refused) to each of sol's three public relays and sends one `REQ {kinds:[0], authors:[≤ 50]}` per batch, closing at
+  `EOSE`/`CLOSED` or after 4 s (handshake included); frames over 512 KB are refused. Nothing is signed or published, and
+  no Tower data or credentials are sent; the relays do learn which public keys this iPhone asks about, and its network
+  address, as with the web client. `ProfileEventFilter` accepts an event only if it is kind 0, authored by a requested
+  key, dated 2020-01-01 to now + 15 min, ≤ 64 KB, and passes the NIP-01 id and BIP-340 check (`SignatureVerifier`,
+  swift-secp256k1); the newest `created_at` wins, the lower id on a tie. If no relay answers, the round is an error (the
+  engine backs off) and nothing is recorded as missing.
+- **Cache.** Schema 5 adds `profiles(connection_id, pubkey)` with the bounded fields shown (`display_name`, `name`,
+  picture URL, `nip05`), the event id and time, `found`/`missing` and `checked_at`. Rows belong to the connection (removed
+  with it by foreign key) and are pruned when nobody in that connection's workspaces refers to them (also when a
+  workspace disappears), then to the 2,000 most recently checked. Found profiles are asked again after 24 h, missing
+  ones after 6 h; a forced refresh (Settings › Refresh Nostr profiles) asks everyone and keeps rows until newer ones
+  arrive. `ProfileSync` runs as one deduplicated background-priority job per connection and workspace on the `SyncEngine`
+  (so a refresh for another workspace is never folded into a running one), scheduled in the foreground when the
+  workspace's members or agents change; it never runs in a background refresh window. Turning profiles off cancels
+  every profile job of the connection; a round that returns afterwards stores nothing, because the writer re-reads the
+  switch inside the same transaction that would store it.
+  Screens read `PeopleDirectory` (members, agents and profiles resolved together off the main actor with each snapshot),
+  so a cached name is in the first frame, offline and locked included, and a missing one shows the short npub.
+- **Avatars.** `AvatarStore` fetches an HTTPS picture only if `AvatarURLPolicy` accepts it (no credentials, no IP literal
+  or local host name, ≤ 2,048 characters), through an ephemeral session with no Authorization header, cookies, credential
+  store or HTTP cache and no redirects; ≤ 2 MB (stream cut at the limit), `image/*`, known still-image types, ≤ 40 MP. The
+  first frame is decoded as an ImageIO thumbnail (≤ 192 px, never the full bitmap) and re-encoded as PNG, which drops
+  metadata. Files are named by the URL's SHA-256 under a versioned directory (`AmbulandoAvatars/v1`, other versions
+  deleted), bounded to 400 files / 16 MB; a changed picture is a new URL and file. At most 3 downloads run at once and a
+  URL is fetched once however many rows ask; failures back off (6 h for a bad image, 5 min for network trouble).
+  `AvatarCenter` keeps decoded thumbnails in an `NSCache`, so a row draws a known avatar synchronously; anything else
+  shows initials and loads off the main actor. Turning public profiles off stops the relay job, cancels downloads in
+  flight and refuses new ones (a download whose bytes arrive later is not decoded or saved); saved names and pictures
+  stay until disconnect, which removes both.
+- **Separators.** A channel's messages are drawn as the web's conversation cards (bordered panel per conversation, gap
+  between) with the reply bar (rule + "N replies · last …") inside the card. A thread shows its first message, one
+  labelled rule ("N replies") and the replies without lines between them. Date labels are added above the first
+  message of each day (computed with the snapshot, off the main actor; the label text is resolved at render so
+  "Today" moves at midnight), and a "Today" label above unsent messages that follow older history. Rows keep their ids,
+  so scroll anchoring, live insertion, drafts and text selection are unchanged.
+
 ### 5.1 Chat catch-up (WP3, delivered)
 
 `GET /channels/:c/messages` is the only message list route. It pages forward from the oldest message
