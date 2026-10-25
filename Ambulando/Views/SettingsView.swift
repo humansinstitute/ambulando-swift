@@ -12,10 +12,8 @@ struct SettingsView: View {
     @State private var unsent = 0
     @State private var live: LiveStatus?
 
-    private var version: String {
-        let info = Bundle.main.infoDictionary
-        return "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
-    }
+    /// A value from the installed app's Info.plist (the version and build actually running).
+    private func bundleValue(_ key: String) -> String { Bundle.main.infoDictionary?[key] as? String ?? "Unknown" }
 
     var body: some View {
         NavigationStack {
@@ -91,7 +89,9 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                 }
                 Section {
-                    LabeledContent("Version", value: version)
+                    AboutRow(label: "Version", value: bundleValue("CFBundleShortVersionString"), id: "settings.version")
+                    AboutRow(label: "Build", value: bundleValue("CFBundleVersion"), id: "settings.build")
+                    AboutRow(label: "Platform", value: Device.name, id: "settings.platform")
                     Text("Push notifications and FIPS transport are not part of this build. Tower provides Web Push only; this app uses HTTPS only.")
                         .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 } header: { Text("About") }
@@ -174,5 +174,17 @@ private struct ProfileHeader: View {
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("profile.header")
+    }
+}
+
+/// An About value that can be selected and copied (for reporting which build is installed).
+private struct AboutRow: View {
+    let label: String
+    let value: String
+    let id: String
+
+    var body: some View {
+        LabeledContent(label) { Text(value).textSelection(.enabled) }
+            .accessibilityIdentifier(id)
     }
 }
