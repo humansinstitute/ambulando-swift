@@ -249,7 +249,7 @@ private struct ThreadFocusPanel: View {
         HStack(spacing: 12) {
             Image(systemName: "bubble.left.and.bubble.right").foregroundStyle(Amb.mutedForeground).accessibilityHidden(true)
             Text(title.isEmpty ? "Thread" : title)
-                .font(.headline).foregroundStyle(Amb.foreground).lineLimit(1)
+                .font(.amb(.headline)).foregroundStyle(Amb.foreground).lineLimit(1)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("thread.focus.title")
             Spacer(minLength: 8)
@@ -257,7 +257,7 @@ private struct ThreadFocusPanel: View {
                 PinToggleButton(type: .thread, id: focus.threadId, workspace: workspace)
             }
             Button(action: close) {
-                Image(systemName: "xmark").font(.body.weight(.semibold))
+                Image(systemName: "xmark").font(.amb(.body).weight(.semibold))
                     .frame(width: Amb.touchTarget, height: Amb.touchTarget)
                     .contentShape(Rectangle())
             }
