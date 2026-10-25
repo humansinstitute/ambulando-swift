@@ -119,35 +119,46 @@ struct BrowserView: View {
         .padding(.horizontal, 4)
     }
 
-    /// Everything that is not used on every page: reload, new tab, share, site permission, close and clear.
+    /// Everything that is not used on every page, grouped: the current page, the tab, the site and browsing data.
+    /// Page-level actions (such as saving the page) belong in `pageActions`; the bar itself stays at six controls.
     private var menu: some View {
         Menu {
             if let tab = browser.selected {
-                if tab.loading {
-                    Button { tab.webView.stopLoading() } label: { Label("Stop loading", systemImage: "xmark") }
-                } else if let url = tab.url, !tab.isBlank {
-                    Button { browser.reload(url, in: tab) } label: { Label("Reload", systemImage: "arrow.clockwise") }
-                }
-            }
-            Button { browser.open(nil) } label: { Label("New tab", systemImage: "plus.square.on.square") }
-            if let tab = browser.selected {
-                if let url = tab.url, url.scheme == "https" {
-                    Button { openURL(url) } label: { Label("Open in Safari", systemImage: "safari") }
-                    ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
+                Section { pageActions(tab) }
+                Section {
+                    Button { browser.open(nil) } label: { Label("New tab", systemImage: "plus.square.on.square") }
+                    Button(role: .destructive) { browser.close(tab) } label: { Label("Close tab", systemImage: "xmark") }
                 }
                 if let origin = tab.origin, browser.sites[origin] != nil {
-                    Button(role: .destructive) { browser.forget(origin: origin) } label: {
-                        Label("Forget Nostr permission for \(URL(string: origin)?.host ?? origin)", systemImage: "key.slash")
+                    Section {
+                        Button(role: .destructive) { browser.forget(origin: origin) } label: {
+                            Label("Forget Nostr permission for \(URL(string: origin)?.host ?? origin)", systemImage: "key.slash")
+                        }
                     }
                 }
-                Button(role: .destructive) { browser.close(tab) } label: { Label("Close tab", systemImage: "xmark") }
+            } else {
+                Button { browser.open(nil) } label: { Label("New tab", systemImage: "plus.square.on.square") }
             }
-            Button(role: .destructive) { Task { await browser.clearBrowsingData() } } label: { Label("Clear browsing data", systemImage: "trash") }
+            Section {
+                Button(role: .destructive) { Task { await browser.clearBrowsingData() } } label: { Label("Clear browsing data", systemImage: "trash") }
+            }
         } label: {
             Image(systemName: "ellipsis.circle").barTarget()
         }
         .accessibilityLabel("Browser menu")
         .accessibilityIdentifier("browser.menu")
+    }
+
+    @ViewBuilder private func pageActions(_ tab: BrowserTab) -> some View {
+        if tab.loading {
+            Button { tab.webView.stopLoading() } label: { Label("Stop loading", systemImage: "xmark") }
+        } else if let url = tab.url, !tab.isBlank {
+            Button { browser.reload(url, in: tab) } label: { Label("Reload", systemImage: "arrow.clockwise") }
+        }
+        if let url = tab.url, url.scheme == "https" {
+            ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
+            Button { openURL(url) } label: { Label("Open in Safari", systemImage: "safari") }
+        }
     }
 
     private var startPage: some View {
