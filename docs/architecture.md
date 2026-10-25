@@ -33,6 +33,10 @@ architecture that later packages build on. Implementation status:
   browser tabs through `BrowserModel.launch` (§4.9); HTML naplets keep the sandboxed view. No schema change.
 - Build 15 puts all browser chrome in one compact bottom bar (Ambulando, back, forward, address, tabs, ••• menu) on
   iPhone, iPad and Mac (§4.9). No schema change.
+- Build 16 (Mac build 3) adds canvas create/rename and naplet add, move, resize and remove through Tower's existing
+  canvas routes (`CanvasEditor`, confirmed online writes with `expected_row_version`), ships the Mac revision 2 screens
+  (anchored document comments, content paste, spatial Deck) and the UI-free push modules (not wired to APNs). No
+  schema change.
 - Device validation and packaging are WP6, as is anything else here without evidence in the parity matrix.
 
 The feature-by-feature status is in [parity-matrix.md](parity-matrix.md); package order and

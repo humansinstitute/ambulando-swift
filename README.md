@@ -21,7 +21,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (15); Mac version 0.1.0 (1). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (16); Mac version 0.1.0 (3). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
@@ -181,6 +181,19 @@ One bottom browser bar (build 15):
   Share, Open in Safari, New tab, Close tab, Forget Nostr permission and Clear browsing data are in the menu. Editing
   the address gives the field the whole bar, with Cancel, above the keyboard. The same browser is used on iPhone, iPad
   and Mac.
+
+Canvas editing and the Mac revision (iPhone/iPad build 16, Mac build 3):
+
+- **Create and edit canvases.** "+" on Deck's Canvas card makes a new board. On canvases you can manage, the pencil
+  button lets you rename the board, add documents, tasks, conversations, HTML or board files and other canvases, drag
+  items to move them, drag a corner to resize and remove items (with a confirmation). If someone else changed the board
+  first, nothing is saved; the board refreshes and says so. Drawing tools and Excalidraw editing are not included yet.
+  Same screens on iPhone, iPad and Mac.
+- **Mac (build 3 includes everything from Mac build 2):** document comments anchored to selected text, white document
+  paper with a right-hand comment column, image and file paste into content fields, a persistent top section bar,
+  signed-browser links everywhere and a spatial Deck with Apps and My Agents. See [docs/mac.md](docs/mac.md).
+- Push notifications are **not** turned on: build 16 contains only the app-side groundwork (payload, tap route and
+  signed registration, with no Apple push entitlement and no Tower sender).
 
 Security notes:
 
