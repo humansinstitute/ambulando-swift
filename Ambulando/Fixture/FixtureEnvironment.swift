@@ -23,6 +23,9 @@ final class FixtureEnvironment {
     let sessionKeys: SessionKeyStore
     /// In-process stand-in for the SSE route, fed from the fixture's event log.
     let events: EventStreamTransport
+    /// Sample public profiles and avatars, served without any relay or picture host.
+    let profileSource: ProfileSource
+    let avatarTransport: AvatarTransport
     private let live: Bool
     /// Diagnostic only (`-AmbulandoDiagnosticPlainKeyboard`): turns off autocorrection/predictive text in the composer
     /// to attribute stalls to system text input. Never used for the budget runs.
@@ -66,6 +69,8 @@ final class FixtureEnvironment {
         backgroundCredentials = KeychainBackgroundCredentialStore(service: Self.backgroundService)
         sessionKeys = KeychainSessionKeyStore(service: Self.sessionService)
         events = FixtureEventStream(tower: tower)
+        profileSource = FixtureProfileSource(tower: tower)
+        avatarTransport = FixtureAvatarTransport(tower: tower)
     }
 
     nonisolated static let backgroundService = "studio.otherstuff.ambulando.native.fixture-background.v1"
@@ -244,6 +249,10 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     static let notesChannel = "f1c70000-0000-4000-8000-0000000000c4"
     static let ana = Bech32.encode(hrp: "npub", data: Data(repeating: 0xA1, count: 32))
     static let rick = Bech32.encode(hrp: "npub", data: Data(repeating: 0xB2, count: 32))
+    /// A member without a workspace name: the app names her from her (sample) public profile.
+    static let bea = Bech32.encode(hrp: "npub", data: Data(repeating: 0xC4, count: 32))
+    /// Someone who posted but is no longer listed and has no profile: shown by npub and initials.
+    static let former = Bech32.encode(hrp: "npub", data: Data(repeating: 0xD5, count: 32))
     static let appNpub = Bech32.encode(hrp: "npub", data: Data(repeating: 0xC3, count: 32))
 
     private let lock = NSLock()
@@ -310,18 +319,22 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     }
 
     private static func uuid(_ n: Int, _ prefix: String) -> String { String(format: "\(prefix)-0000-4000-8000-%012d", n) }
-    private static func time(_ n: Int) -> String { String(format: "2026-10-23T%02d:%02d:00.000Z", 8 + n / 60, n % 60) }
+    /// Seeded history spans three days (general #1–13, #14–26, the rest), so chat shows its date separators.
+    private static func time(_ n: Int) -> String {
+        let day = n <= 13 ? 21 : n <= 26 ? 22 : 23
+        return String(format: "2026-10-%02dT%02d:%02d:00.000Z", day, 8 + n / 60, n % 60)
+    }
 
     /// Seeded history: general has 40 conversations (one with replies), design/deploys/notes a few each.
     private var seeded: [[String: Any]] {
         var rows: [[String: Any]] = []
-        func add(_ n: Int, _ workspace: String, _ channel: String, _ body: String, sender: String, label: String, thread: String? = nil) {
+        func add(_ n: Int, _ workspace: String, _ channel: String, _ body: String, sender: String, label: String?, thread: String? = nil) {
             let id = Self.uuid(n, "f1c7aaaa")
             let threadId = thread ?? Self.uuid(n, "f1c7bbbb")
             let source = thread == nil ? id : Self.uuid(Int(thread!.suffix(12))!, "f1c7aaaa")
             rows.append(["id": id, "workspace_id": workspace, "channel_id": channel, "thread_id": threadId, "thread_source_message_id": source,
                          "body": body, "client_request_id": NSNull(), "record_state": "active", "row_version": 1, "sender_npub": sender,
-                         "created_by_actor_label": label, "created_at": Self.time(n), "updated_at": Self.time(n)])
+                         "created_by_actor_label": label.map { $0 as Any } ?? NSNull(), "created_at": Self.time(n), "updated_at": Self.time(n)])
         }
         let topics = ["Walkthrough notes for the passage screens", "Theme tokens are synced with the web app", "Who owns the deploy checklist?",
                       "Draft agenda for Thursday", "Sync storm results look good", "Native chat review", "Docs index needs a refresh",
@@ -336,9 +349,12 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         for (i, text) in ["Looks right on my phone", "Retry kept the same request id", "Ship it"].enumerated() {
             add(100 + i, Self.studio, Self.generalChannel, text, sender: i % 2 == 0 ? Self.rick : Self.ana, label: i % 2 == 0 ? "Rick" : "Ana", thread: thread)
         }
+        add(198, Self.studio, Self.designChannel, "Shared the colour swatches for the new surfaces", sender: Self.bea, label: nil)
+        add(199, Self.studio, Self.designChannel, "Dark mode keeps the same purple highlight", sender: Self.bea, label: nil)
         add(200, Self.studio, Self.designChannel, "Passage mark stays on its white backing", sender: Self.ana, label: "Ana")
         add(202, Self.studio, Self.designChannel, Self.richMessage, sender: Self.rick, label: "Rick")
         add(201, Self.studio, Self.deploysChannel, "Staging is green", sender: Self.rick, label: "Rick")
+        add(205, Self.studio, Self.deploysChannel, "Handing the deploy rota over", sender: Self.former, label: nil)
         add(300, Self.lab, Self.notesChannel, "Lab workspace notes live here", sender: Self.ana, label: "Ana")
         return rows
     }
@@ -395,7 +411,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             return try manage(request, workspace: w, rest: rest)
         case ("GET", 1, "members"):
             let me = actorNpub
-            return (200, ["members": [member(me, "You (sample identity)", "human"), member(Self.ana, "Ana", "human"), member(Self.rick, "Rick", "agent")],
+            return (200, ["members": [member(me, "You (sample identity)", "human"), member(Self.ana, "Ana", "human"), member(Self.rick, "Rick", "agent"),
+                                      member(Self.bea, nil, "human")],
                           "next_cursor": NSNull()])
         case ("GET", 2, "me"):
             return lock.withLock { (200, ["scope_order": scopeOrder(w)]) }
@@ -886,8 +903,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     private func channel(_ id: String, _ w: String, _ s: String, _ name: String, _ position: Double) -> [String: Any] {
         ["id": id, "workspace_id": w, "scope_id": s, "name": name, "kind": "channel", "position": position, "row_version": 1, "updated_at": "2026-10-01T00:00:00.000Z"]
     }
-    private func member(_ npub: String, _ name: String, _ kind: String) -> [String: Any] {
-        ["actor": ["actor_id": UUID().uuidString.lowercased(), "npub": npub, "kind": kind, "display_name": name]]
+    private func member(_ npub: String, _ name: String?, _ kind: String) -> [String: Any] {
+        ["actor": ["actor_id": UUID().uuidString.lowercased(), "npub": npub, "kind": kind, "display_name": name.map { $0 as Any } ?? NSNull()]]
     }
     private func thread(for root: [String: Any]) -> [String: Any] {
         ["id": root["thread_id"]!, "workspace_id": root["workspace_id"]!, "channel_id": root["channel_id"]!, "source_message_id": root["id"]!,
@@ -940,5 +957,66 @@ final class FixtureEventStream: EventStreamTransport, @unchecked Sendable {
             continuation.onTermination = { _ in task.cancel() }
         }
         return (response, EventChunks(stream))
+    }
+}
+
+/// Sample public profiles (sample-data mode only). Real profiles are signed relay events checked by
+/// `ProfileEventFilter`; these are synthetic records for synthetic people, so there is nothing to verify.
+final class FixtureProfileSource: ProfileSource, @unchecked Sendable {
+    static let host = "https://avatars.sample.invalid/"
+    let tower: FixtureTower
+    init(tower: FixtureTower) { self.tower = tower }
+
+    func profiles(pubkeys: [String]) async throws -> [ProfileRecord] {
+        if tower.offline { throw URLError(.notConnectedToInternet) }
+        try await Task.sleep(for: .milliseconds(150))
+        let me = tower.actorNpub
+        let people: [String: (display: String?, name: String?, picture: String?)] = [
+            me: ("Sample Explorer", "explorer", Self.host + "you.png"),
+            FixtureTower.ana: ("Ana Lima", "ana", Self.host + "ana.png"),
+            FixtureTower.bea: ("Bea Ortiz", "bea", Self.host + "bea.png"),
+            // A profile whose picture is not an image: the app keeps Rick's initials.
+            FixtureTower.rick: (nil, "rick", Self.host + "broken.png"),
+        ]
+        let now = Date()
+        return pubkeys.compactMap { pubkey in
+            guard let npub = NostrKeys.npub(publicKeyHex: pubkey), let p = people[npub] else { return nil }
+            return ProfileRecord(pubkey: pubkey, npub: npub, displayName: p.display, name: p.name, picture: p.picture,
+                                 eventId: SHA256Hex.of(npub), eventCreatedAt: 1_792_800_000, status: .found, checkedAt: now)
+        }
+    }
+}
+
+/// Sample avatar host: draws a generic two-tone badge per name; `broken.png` answers bytes that are not an image.
+final class FixtureAvatarTransport: AvatarTransport, @unchecked Sendable {
+    let tower: FixtureTower
+    init(tower: FixtureTower) { self.tower = tower }
+
+    func fetch(_ url: URL, maxBytes: Int) async throws -> (Data, HTTPURLResponse) {
+        if tower.offline { throw URLError(.notConnectedToInternet) }
+        guard url.host == "avatars.sample.invalid" else { throw URLError(.cannotFindHost) }
+        try await Task.sleep(for: .milliseconds(120))
+        let name = url.deletingPathExtension().lastPathComponent
+        let data = name == "broken" ? Data("not an image".utf8) : Self.badge(name)
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "image/png"])!
+        return (data, response)
+    }
+
+    static func badge(_ name: String) -> Data {
+        let palette: [String: (UIColor, UIColor)] = [
+            "you": (UIColor(red: 0.13, green: 0.36, blue: 0.52, alpha: 1), UIColor(red: 0.68, green: 0.82, blue: 0.94, alpha: 1)),
+            "ana": (UIColor(red: 0.75, green: 0.30, blue: 0.05, alpha: 1), UIColor(red: 1.00, green: 0.80, blue: 0.62, alpha: 1)),
+            "bea": (UIColor(red: 0.15, green: 0.38, blue: 0.24, alpha: 1), UIColor(red: 0.64, green: 0.82, blue: 0.71, alpha: 1)),
+        ]
+        let (dark, light) = palette[name] ?? (.darkGray, .lightGray)
+        let size = CGSize(width: 256, height: 256)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            dark.setFill(); context.fill(CGRect(origin: .zero, size: size))
+            light.setFill(); context.cgContext.fillEllipse(in: CGRect(x: 64, y: 40, width: 128, height: 128))
+            context.cgContext.fillEllipse(in: CGRect(x: 24, y: 168, width: 208, height: 176))
+        }
+        return image.pngData() ?? Data()
     }
 }

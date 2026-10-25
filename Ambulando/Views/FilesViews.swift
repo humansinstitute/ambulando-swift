@@ -182,7 +182,7 @@ struct FileDetailView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .background(Amb.background)
+        .background(Amb.canvas)   // grouped rows (white) on the recessed surface
         .fixtureLabel()
         .navigationTitle("File")
         .navigationBarTitleDisplayMode(.inline)

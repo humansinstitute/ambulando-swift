@@ -16,6 +16,8 @@ public enum ProductionStorage {
     public static let sessionService = "studio.otherstuff.ambulando.native.session.v1"
     /// Caches subdirectory for downloaded files (re-downloadable; iOS may purge it).
     public static let fileCacheDirectoryName = "AmbulandoFiles"
+    /// Caches subdirectory for avatar thumbnails (re-downloadable; iOS may purge it).
+    public static let avatarCacheDirectoryName = "AmbulandoAvatars"
 
     public static func dataDirectory(applicationSupport: URL) -> URL {
         applicationSupport.appendingPathComponent(dataDirectoryName, isDirectory: true)

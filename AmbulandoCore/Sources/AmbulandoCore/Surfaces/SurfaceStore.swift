@@ -153,7 +153,7 @@ extension StoreWriter {
     /// Removes a whole scope's tree (the scope is unavailable to this viewer).
     public func removeContextTree(workspaceId: String, scopeId: String) async throws {
         try db.transaction { try purgeScopeSurfaces(workspaceId: workspaceId, scopeId: scopeId) }
-        await emit([ChangeKey(.contextTree, workspaceId)])
+        await emit([ChangeKey(.contextTree, workspaceId), ChangeKey(.access, workspaceId)])
     }
 
     func purgeScopeSurfaces(workspaceId: String, scopeId: String) throws {

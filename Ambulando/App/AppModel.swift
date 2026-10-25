@@ -106,6 +106,17 @@ final class AppModel {
     /// Set when the app runs on deterministic local sample data (UI automation); never a live Tower.
     private(set) var fixture: FixtureEnvironment?
 
+    /// Public Nostr profiles (names and avatars) for the people of the selected workspace; see `AppModel+People`.
+    @ObservationIgnored var profiles: ProfileSync?
+    @ObservationIgnored var avatars: AvatarCenter?
+    /// Settings › Nostr profiles: public relays and picture hosts may be contacted (on by default, as on the web).
+    var publicProfilesEnabled = true
+    /// The signed-in person as shown in the profile button and Settings (from the store; nil before it is read).
+    let me = LiveQuery<AccountProfile?>(initial: nil)
+    /// Members and agents of the selected workspace; a change schedules a profile refresh for them.
+    @ObservationIgnored let profilePeople = LiveQuery<[String]>(initial: [])
+    @ObservationIgnored var lastProfilePeople: [String]?
+
     @ObservationIgnored private(set) var store: LocalStore?
     @ObservationIgnored private(set) var sync: WorkspaceSync?
     @ObservationIgnored private(set) var outbox: OutboxSender?
@@ -255,6 +266,24 @@ final class AppModel {
             self.writes = WriteSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers)
             self.saver = DocumentSaver(store: store, identity: identity, transport: transport)
             self.manager = ScopeChannelManager(store: store, identity: identity, transport: transport)
+            // Debug test runs on a production store (the upgrade check) pass -AmbulandoNoPublicNetwork: no relay or
+            // picture host is contacted.
+            #if DEBUG
+            let offlineProfiles = ProcessInfo.processInfo.arguments.contains("-AmbulandoNoPublicNetwork")
+            #else
+            let offlineProfiles = false
+            #endif
+            let publicProfiles: ProfileSource = offlineProfiles ? UnreachableProfiles() : RelayProfileSource()
+            let publicPictures: AvatarTransport = offlineProfiles ? UnreachableProfiles() : URLSessionAvatarTransport()
+            let profileSource = fixture?.profileSource ?? publicProfiles
+            let avatarTransport = fixture?.avatarTransport ?? publicPictures
+            self.profiles = ProfileSync(store: store, engine: engine, source: profileSource)
+            let avatarRoot = fixture.map { $0.directory.appendingPathComponent("Avatars", isDirectory: true) }
+                ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(ProductionStorage.avatarCacheDirectoryName, isDirectory: true)
+            let avatarStore = AvatarStore(directory: avatarRoot, transport: avatarTransport)
+            self.avatars = AvatarCenter(store: avatarStore)
+            self.publicProfilesEnabled = await ProfileSync.isEnabled(store)
+            if !publicProfilesEnabled { await avatarStore.setEnabled(false) }
             self.fixture = fixture
             if let fixture { try await fixture.prepare(identity: identity, sync: sync, store: store) }
             self.identity = await identity.state
@@ -462,6 +491,9 @@ final class AppModel {
             navigation.stop()
             navigationWorkspaceId = nil
             pins.stop()
+            stopPeople()
+            // Profile rows went with the connection; their pictures go too.
+            await avatars?.clear()
             resetSectionPaths()
             membership = nil; membershipWorkspaceId = nil
             restoringPath = true; chatPath = []; restoringPath = false
@@ -487,6 +519,7 @@ final class AppModel {
         context = .home
         navigation.stop()
         pins.stop()
+        stopPeople()
         navigationWorkspaceId = id
         canvasViewports = [:]
         resetSectionPaths()
@@ -797,7 +830,7 @@ final class AppModel {
     /// Scopes, channels, collapse state and unread channels of the selected workspace for the sidebar and context bar.
     let navigation = LiveQuery<NavigationSnapshot>(initial: NavigationSnapshot())
     /// The workspace `navigation` was started for (nil until it is). Without it the sidebar has nothing to read.
-    @ObservationIgnored private var navigationWorkspaceId: String?
+    @ObservationIgnored private(set) var navigationWorkspaceId: String?
 
     /// What the sidebar and the Chat channel list say about scopes and channels: never an unexplained empty list.
     var navigationState: NavigationLoadState {
@@ -898,6 +931,7 @@ final class AppModel {
         navigationWorkspaceId = workspace
         observeNavigation(connection: connection, workspaceId: workspace)
         observePins(connection: connection, workspaceId: workspace)
+        observePeople(connection: connection, workspaceId: workspace)
     }
 
     private func observeNavigation(connection: ConnectionRecord, workspaceId: String) {

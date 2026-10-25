@@ -612,11 +612,12 @@ final class SurfaceTests: XCTestCase {
             // Back to the build-6 layout: schema 3 without the v4 tables.
             let db = try SQLiteConnection(path: store.path, readOnly: false)
             for table in Schema.v4WorkspaceTables { try db.execute("DROP TABLE \(table)") }
+            try db.execute("DROP TABLE profiles; DROP INDEX messages_sender;")   // schema 5 (build 10)
             try db.execute("PRAGMA user_version = 3")
         }
         let reopened = try LocalStore(directory: directory)
         let version = try await reopened.writer.schemaVersion()
-        XCTAssertEqual(version, 4)
+        XCTAssertEqual(version, Schema.version)
         let connections = try await reopened.reader.connections()
         XCTAssertEqual(connections.map(\.origin), ["https://tower.example"])
         let selected = try await reopened.reader.state("selected.connection")

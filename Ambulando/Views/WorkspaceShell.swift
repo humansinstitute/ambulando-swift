@@ -273,9 +273,17 @@ private struct ShellToolbar: ViewModifier {
                         SyncIndicator()
                         Button { searching = true } label: { Image(systemName: "magnifyingglass") }
                             .accessibilityLabel("Search").accessibilityIdentifier("search")
-                        Button { showSettings = true } label: { Image(systemName: "person.crop.circle") }
-                            .accessibilityLabel("Settings")
-                            .accessibilityIdentifier("settings")
+                        // The profile menu (sol `.avatar-menu` button): the signed-in person's avatar or initials.
+                        Button { showSettings = true } label: {
+                            if let me = model.me.value?.person {
+                                PersonAvatar(person: me, size: 28).overlay(Circle().stroke(Amb.border, lineWidth: 1))
+                            } else {
+                                Image(systemName: "person.crop.circle")
+                            }
+                        }
+                        .accessibilityLabel("Settings")
+                        .accessibilityValue(model.me.value?.person.name ?? "")
+                        .accessibilityIdentifier("settings")
                     }
                 }
             }

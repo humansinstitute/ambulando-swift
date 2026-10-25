@@ -20,6 +20,10 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Group {
+                if let account = model.me.value, let npub = model.identity.npub {
+                    Section("Profile") { ProfileHeader(account: account, npub: npub) }
+                }
                 Section("Identity") {
                     LabeledContent("Public key", value: model.identity.npub.map(shortNpub) ?? "None")
                     switch model.identity {
@@ -51,6 +55,18 @@ struct SettingsView: View {
                         }
                     }
                 }
+                Section {
+                    Toggle("Public Nostr profiles", isOn: Binding(get: { model.publicProfilesEnabled },
+                                                                  set: { on in Task { await model.setPublicProfiles(on) } }))
+                        .accessibilityIdentifier("settings.profiles.toggle")
+                    Button("Refresh Nostr profiles") { model.refreshProfiles(force: true) }
+                        .disabled(!model.publicProfilesEnabled || model.connection == nil)
+                        .accessibilityIdentifier("settings.profiles.refresh")
+                    LabeledContent("Saved on this iPhone", value: "\(model.me.value?.savedProfiles ?? 0)")
+                        .accessibilityIdentifier("settings.profiles.saved")
+                } header: { Text("Nostr profiles") } footer: {
+                    Text("Names and pictures from people's public Nostr profiles are saved on this iPhone and shown offline. A name set in the workspace comes first. Profiles are read from relay.primal.net, nos.lol and purplepag.es, as in the web app, and each picture is fetched from the address in the profile, which sees this iPhone's network address. Nothing is signed or sent with them. Turning this off stops all of these requests; saved names and pictures stay until you disconnect.")
+                }
                 BackgroundSection(live: live)
                 if let fixture = model.fixture { FixtureControls(fixture: fixture, model: model) }
                 Section {
@@ -70,9 +86,11 @@ struct SettingsView: View {
                     Text("Push notifications and FIPS transport are not part of this build. Tower provides Web Push only; this app uses HTTPS only.")
                         .font(.caption).foregroundStyle(Amb.mutedForeground)
                 } header: { Text("About") }
+                }
+                .ambListRows()
             }
             .scrollContentBackground(.hidden)
-            .background(Amb.background)
+            .background(Amb.canvas)   // grouped rows (white) on the recessed surface
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
@@ -112,5 +130,39 @@ private struct FixtureControls: View {
         } header: { Text("Sample data") } footer: {
             Text("This build is running on sample data stored on this iPhone. Nothing is sent to a Tower.")
         }
+    }
+}
+
+/// Avatar, name and where the name comes from (the profile menu header).
+private struct ProfileHeader: View {
+    let account: AccountProfile
+    let npub: String
+
+    private var source: String {
+        switch account.person.nameSource {
+        case .workspace: "Your name in this workspace"
+        case .agent: "Agent name in this workspace"
+        case .message: "Name from Tower"
+        case .nostr: "From your public Nostr profile"
+        case .npub: account.profileCheckedAt == nil ? "Looking for your public profile…" : "No name in this workspace or your public profile"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            PersonAvatar(person: account.person, size: 52)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(account.person.name).font(.headline).foregroundStyle(Amb.foreground).accessibilityIdentifier("profile.name")
+                Text(source).font(.caption).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("profile.source")
+                if let publicName = account.publicName, account.person.nameSource != .nostr, publicName != account.person.name {
+                    Text("Public profile: \(publicName)").font(.caption).foregroundStyle(Amb.mutedForeground)
+                        .accessibilityIdentifier("profile.publicName")
+                }
+                Text(shortNpub(npub)).font(.caption.monospaced()).foregroundStyle(Amb.mutedForeground)
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("profile.header")
     }
 }

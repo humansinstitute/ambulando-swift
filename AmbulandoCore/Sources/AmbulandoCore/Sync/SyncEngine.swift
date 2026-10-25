@@ -133,6 +133,12 @@ public actor SyncEngine {
         resumeIdleWaitersIfIdle()
     }
 
+    /// Cancels every job whose key starts with `prefix` (for example all profile refreshes of a connection).
+    public func cancel(prefix: String) {
+        let keys = Set(queue.map(\.key)).union(reruns.keys).union(delayedUntil.keys).union(running.keys).filter { $0.hasPrefix(prefix) }
+        for key in keys { cancel(key) }
+    }
+
     /// Cancels everything (identity locked, workspace removed, background task expiring).
     public func cancelAll() {
         generation &+= 1

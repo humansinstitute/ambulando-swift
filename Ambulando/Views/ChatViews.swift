@@ -8,20 +8,25 @@ struct ChannelSnapshot: Sendable, Equatable {
     var title = ""
     var posts: [FeedPost] = []
     var pending: [OutboxItem] = []
-    var names: [String: String] = [:]
+    var people = PeopleDirectory()
     var historyComplete = false
     var extras = MessageExtras()
     /// Tower thread titles by thread id, shown on thread roots whose title differs from their text.
     var threadTitles: [String: String] = [:]
+    /// Posts that begin a new day (date separator above them), and the day of the newest post.
+    var dayStarts: [String: ChatDay] = [:]
+    var lastDay: ChatDay?
 }
 
 struct ThreadSnapshot: Sendable, Equatable {
     var title = ""
     var messages: [MessageRecord] = []
     var pending: [OutboxItem] = []
-    var names: [String: String] = [:]
+    var people = PeopleDirectory()
     var archived = false
     var extras = MessageExtras()
+    var dayStarts: [String: ChatDay] = [:]
+    var lastDay: ChatDay?
 }
 
 /// Reactions and unsent edits/deletes for the messages on screen.
@@ -38,14 +43,15 @@ private func messageExtras(_ store: LocalStore, _ workspaceId: String, connectio
     return MessageExtras(reactions: Dictionary(grouping: try await reactions, by: \.targetId), writes: Dictionary(grouping: relevant) { $0.targetId ?? "" })
 }
 
-private func names(_ store: LocalStore, _ workspaceId: String) async throws -> [String: String] {
-    Dictionary(try await store.reader.members(workspaceId: workspaceId).map { ($0.npub, $0.label) }, uniquingKeysWith: { a, _ in a })
+/// Names and avatars for the people of a workspace (Tower directory, agents and cached public profiles).
+private func people(_ store: LocalStore, _ target: ChatTarget) async throws -> PeopleDirectory {
+    try await store.reader.people(connectionId: target.connectionId, workspaceId: target.workspaceId)
 }
 
 private func chatMatches(_ workspaceId: String) -> @Sendable (ChangeKey) -> Bool {
     { key in
-        key.workspaceId == workspaceId && [.messages, .outbox, .members, .threads, .channels, .reactions, .writes].contains(key.table)
-            || (key.table == .outbox && key.workspaceId == nil)
+        key.workspaceId == workspaceId && [.messages, .outbox, .members, .agents, .threads, .channels, .reactions, .writes].contains(key.table)
+            || (key.table == .outbox && key.workspaceId == nil) || key.table == .profiles
     }
 }
 
@@ -193,12 +199,21 @@ struct ChannelView: View {
                 if snapshot.loaded {
                     ChannelSyncNote(key: WorkspaceSync.messagesKey(workspace.id, target.channelId), historyComplete: snapshot.value.historyComplete)
                 }
+                // Each conversation is a card (sol `.channel-thread-card`); a date label starts each day.
+                // One view per element (a lazy stack mis-lays rows whose element yields a varying number of views).
                 ForEach(snapshot.value.posts) { post in
-                    PostRow(post: post, names: snapshot.value.names, workspace: workspace, extras: snapshot.value.extras,
-                            threadTitle: post.message.threadId.flatMap { snapshot.value.threadTitles[$0] })
+                    VStack(spacing: 0) {
+                        if let day = snapshot.value.dayStarts[post.id] { DaySeparator(day: day) }
+                        PostRow(post: post, people: snapshot.value.people, workspace: workspace, extras: snapshot.value.extras,
+                                threadTitle: post.message.threadId.flatMap { snapshot.value.threadTitles[$0] })
+                            .conversationCard()
+                    }
                 }
                 ForEach(snapshot.value.pending) { item in
-                    OutboxRow(item: item, names: snapshot.value.names)
+                    VStack(spacing: 0) {
+                        if item.id == snapshot.value.pending.first?.id, snapshot.value.lastDay != ChatDay.today { DaySeparator(day: .today) }
+                        OutboxRow(item: item, people: snapshot.value.people).conversationCard()
+                    }
                 }
                 if snapshot.loaded && snapshot.value.posts.isEmpty && snapshot.value.pending.isEmpty && snapshot.value.historyComplete {
                     Text("No messages yet. Start a conversation below.")
@@ -232,14 +247,15 @@ struct ChannelView: View {
             async let posts = store.reader.channelFeed(workspaceId: target.workspaceId, channelId: target.channelId, limit: limit)
             async let pending = store.reader.outbox(target: target)
             async let sync = store.reader.channelSync(workspaceId: target.workspaceId, channelId: target.channelId)
-            async let directory = names(store, target.workspaceId)
+            async let directory = people(store, target)
             async let titles = store.reader.threadTitles(workspaceId: target.workspaceId, channelId: target.channelId)
             let rows = try await posts
             MessageDisplayCache.shared.prepare(rows.map(\.message))
             let extras = try await messageExtras(store, target.workspaceId, connectionId: target.connectionId, ids: rows.map(\.id))
+            let days = ChatDay.breaks(rows, id: \.id, time: \.message.createdAt)
             return ChannelSnapshot(title: try await channel?.name ?? "", posts: rows, pending: try await pending,
-                                   names: try await directory, historyComplete: try await sync?.complete ?? false, extras: extras,
-                                   threadTitles: try await titles)
+                                   people: try await directory, historyComplete: try await sync?.complete ?? false, extras: extras,
+                                   threadTitles: try await titles, dayStarts: days.starts, lastDay: days.last)
         }
     }
 }
@@ -260,17 +276,22 @@ struct ThreadView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if let threadId = target.threadId { SyncErrorNote(key: WorkspaceSync.threadKey(workspace.id, threadId)) }
                 if snapshot.value.archived { SyncNote(text: "This thread is archived. Replying reopens it.") }
+                // The first message, a labelled rule, then the replies; a date label starts each day. No line between replies.
                 ForEach(Array(snapshot.value.messages.enumerated()), id: \.element.id) { index, message in
-                    MessageCell(message: message, names: snapshot.value.names, workspace: workspace, extras: snapshot.value.extras)
-                    if index == 0 && snapshot.value.messages.count > 1 {
-                        Text("\(snapshot.value.messages.count - 1) \(snapshot.value.messages.count == 2 ? "reply" : "replies")")
-                            .font(.caption.weight(.semibold)).foregroundStyle(Amb.mutedForeground)
-                            .padding(.horizontal, 16).padding(.vertical, 6)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Amb.muted.opacity(0.5))
+                    VStack(spacing: 0) {
+                        if let day = snapshot.value.dayStarts[message.id] { DaySeparator(day: day) }
+                        MessageCell(message: message, people: snapshot.value.people, workspace: workspace, extras: snapshot.value.extras)
+                        if index == 0 && snapshot.value.messages.count > 1 { RepliesRule(count: snapshot.value.messages.count - 1) }
                     }
                 }
-                ForEach(snapshot.value.pending) { item in OutboxRow(item: item, names: snapshot.value.names) }
+                ForEach(snapshot.value.pending) { item in
+                    VStack(spacing: 0) {
+                        if item.id == snapshot.value.pending.first?.id, !snapshot.value.messages.isEmpty, snapshot.value.lastDay != ChatDay.today {
+                            DaySeparator(day: .today)
+                        }
+                        OutboxRow(item: item, people: snapshot.value.people)
+                    }
+                }
                 if snapshot.loaded && snapshot.value.messages.isEmpty {
                     SyncNote(text: isUnlocked ? "Loading thread…" : "This thread is not saved on this iPhone yet. Unlock to load it.")
                 }
@@ -311,14 +332,16 @@ struct ThreadView: View {
             async let thread = store.reader.thread(workspaceId: target.workspaceId, id: threadId)
             async let messages = store.reader.threadMessages(workspaceId: target.workspaceId, threadId: threadId, limit: 500)
             async let pending = store.reader.outbox(target: target)
-            async let directory = names(store, target.workspaceId)
+            async let directory = people(store, target)
             let rows = try await messages
             MessageDisplayCache.shared.prepare(rows)
             let record = try await thread
             let title = record?.title.map(MentionCodec.plain) ?? rows.first.map { MentionCodec.plain($0.body) } ?? ""
             let extras = try await messageExtras(store, target.workspaceId, connectionId: target.connectionId, ids: rows.map(\.id))
+            let days = ChatDay.breaks(rows, id: \.id, time: \.createdAt)
             return ThreadSnapshot(title: String(title.prefix(60)), messages: rows, pending: try await pending,
-                                  names: try await directory, archived: record?.archived ?? false, extras: extras)
+                                  people: try await directory, archived: record?.archived ?? false, extras: extras,
+                                  dayStarts: days.starts, lastDay: days.last)
         }
     }
 }
@@ -327,7 +350,7 @@ struct ThreadView: View {
 
 struct PostRow: View {
     let post: FeedPost
-    let names: [String: String]
+    let people: PeopleDirectory
     let workspace: WorkspaceRecord
     let extras: MessageExtras
     var threadTitle: String? = nil
@@ -335,35 +358,36 @@ struct PostRow: View {
     var body: some View {
         if let thread = post.message.threadId {
             // Only the message opens the thread; reactions and status lines below it stay separately tappable.
-            MessageCell(message: post.message, names: names, workspace: workspace, extras: extras,
+            MessageCell(message: post.message, people: people, workspace: workspace, extras: extras,
                         route: ChatRoute.thread(workspaceId: workspace.id, channelId: post.message.channelId, threadId: thread),
                         replyCount: post.replyCount, lastReplyAt: post.lastReplyAt, threadTitle: threadTitle)
         } else {
-            MessageCell(message: post.message, names: names, workspace: workspace, extras: extras)
+            MessageCell(message: post.message, people: people, workspace: workspace, extras: extras)
         }
     }
 }
 
 struct MessageRow: View {
     let message: MessageRecord
-    let names: [String: String]
+    let people: PeopleDirectory
     var bodyOverride: String?
     var workspace: WorkspaceRecord?
 
-    private var sender: String {
-        message.senderNpub.flatMap { names[$0] } ?? message.senderLabel ?? message.senderNpub.map(shortNpub) ?? "Unknown"
-    }
+    /// Resolved from the store with the snapshot: workspace name, Tower's label, public profile, else the short npub.
+    private var sender: PersonDisplay { people.person(message.senderNpub, senderLabel: message.senderLabel) }
 
     var body: some View {
         let display = MessageDisplayCache.shared.display(message)
         // Code, tables and images keep their own controls (copy, scroll, open), so such rows contain elements instead
         // of being read as a single combined label.
         let interactive = bodyOverride == nil && (display.blocks.map(RichBlocksInfo.hasControls) ?? false)
+        let sender = sender
         HStack(alignment: .top, spacing: 10) {
-            Avatar(name: sender)
+            PersonAvatar(person: sender)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(sender).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
+                    Text(sender.name).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+                        .accessibilityIdentifier("message.author")
                     Text(display.time).font(.caption).foregroundStyle(Amb.mutedForeground)
                 }
                 if let bodyOverride {
@@ -409,22 +433,17 @@ struct MessageBody: View {
     }
 }
 
+/// Initials only, for rows that know a name but not the person (task and document comments, mention suggestions).
 struct Avatar: View {
     let name: String
-    var body: some View {
-        Text(String(name.first(where: { $0.isLetter || $0.isNumber }) ?? "?").uppercased())
-            .font(.subheadline.weight(.semibold)).foregroundStyle(Amb.accentForeground)
-            .frame(width: 34, height: 34)
-            .background(Amb.accent, in: Circle())
-            .accessibilityHidden(true)
-    }
+    var body: some View { InitialsAvatar(initials: PersonInitials.of(name)) }
 }
 
 /// An unsent message, shown where it will appear, with its delivery state and the actions that apply to it.
 struct OutboxRow: View {
     @Environment(AppModel.self) private var model
     let item: OutboxItem
-    let names: [String: String]
+    let people: PeopleDirectory
 
     private var status: (text: String, icon: String, tone: Color) {
         switch item.state {
@@ -438,10 +457,11 @@ struct OutboxRow: View {
     }
 
     var body: some View {
+        let me = people.person(item.signerNpub)
         HStack(alignment: .top, spacing: 10) {
-            Avatar(name: names[item.signerNpub] ?? "You")
+            PersonAvatar(person: me)
             VStack(alignment: .leading, spacing: 4) {
-                Text(names[item.signerNpub] ?? "You").font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
+                Text(me.nameSource == .npub ? "You" : me.name).font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
                 if !item.body.isEmpty { MessageBody(text: item.body, muted: true) }
                 if !item.attachments.isEmpty {
                     Label("\(item.attachments.count) \(item.attachments.count == 1 ? "photo" : "photos")" + (item.attachments.allSatisfy(\.complete) ? "" : " (uploading)"),
@@ -496,6 +516,9 @@ enum ChatTime {
     private static let lock = NSLock()
 
     static func dayStamp() -> Int { Int(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970 / 86_400) }
+
+    /// The instant of a Tower timestamp (with or without fractional seconds).
+    static func date(_ iso: String) -> Date? { lock.withLock { parser.date(from: iso) ?? plain.date(from: iso) } }
 
     static func label(_ iso: String) -> String {
         let day = dayStamp()
@@ -673,7 +696,7 @@ struct Composer: View {
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
         }
-        .background(.bar)
+        .background(Amb.card)
         .task(id: target) {
             let model = ComposerModel(target: target, store: store)
             composer = model
@@ -764,7 +787,7 @@ struct ChannelThreadsView: View {
         List {
             ForEach(snapshot.value.threads) { thread in
                 NavigationLink(value: ChatRoute.thread(workspaceId: workspace.id, channelId: target.channelId, threadId: thread.id)) {
-                    ThreadSummaryRow(thread: thread, names: snapshot.value.names, unread: snapshot.value.unread.contains(thread.id))
+                    ThreadSummaryRow(thread: thread, people: snapshot.value.people, unread: snapshot.value.unread.contains(thread.id))
                 }
                 .accessibilityIdentifier("threadlist.item")
             }
@@ -781,12 +804,13 @@ struct ChannelThreadsView: View {
         .refreshable { model.openChannel(target.channelId, in: workspace, force: true) }
         .task {
             let w = workspace.id, c = target.channelId, store = store
-            snapshot.start(store: store, matches: { $0.workspaceId == w && [.messages, .threads, .members, .viewStates].contains($0.table) }) {
+            let target = target
+            snapshot.start(store: store, matches: { ($0.workspaceId == w && [.messages, .threads, .members, .agents, .viewStates].contains($0.table)) || $0.table == .profiles }) {
                 async let threads = store.reader.channelThreads(workspaceId: w, channelId: c)
-                async let directory = names(store, w)
+                async let directory = people(store, target)
                 async let states = store.reader.viewStates(workspaceId: w)
                 let unread = Set(try await states.filter { $0.resourceType == .thread && ($0.unread || $0.needsAttention) }.map(\.resourceId))
-                return ChannelThreadsSnapshot(threads: try await threads, names: try await directory, unread: unread)
+                return ChannelThreadsSnapshot(threads: try await threads, people: try await directory, unread: unread)
             }
         }
     }
@@ -794,16 +818,16 @@ struct ChannelThreadsView: View {
 
 struct ChannelThreadsSnapshot: Sendable, Equatable {
     var threads: [ThreadSummary] = []
-    var names: [String: String] = [:]
+    var people = PeopleDirectory()
     var unread: Set<String> = []
 }
 
 struct ThreadSummaryRow: View {
     let thread: ThreadSummary
-    let names: [String: String]
+    let people: PeopleDirectory
     let unread: Bool
 
-    private func person(_ npub: String?) -> String { npub.flatMap { names[$0] } ?? npub.map(shortNpub) ?? "Someone" }
+    private func person(_ npub: String?) -> String { npub == nil ? "Someone" : people.name(npub) }
 
     var body: some View {
         let root = MentionCodec.plain(thread.rootBody).trimmingCharacters(in: .whitespacesAndNewlines)

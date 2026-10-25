@@ -9,6 +9,7 @@ final class UpgradeRetentionUITests: XCTestCase {
     func testUpgradeKeepsIdentityConnectionSelectionDraftAndUnsentMessage() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["AMBULANDO_UPGRADE_CHECK"] == "1", "upgrade check not requested")
         let app = XCUIApplication()
+        app.launchArguments = ["-AmbulandoNoPublicNetwork"]   // no relay or picture host from a test run
         app.launch()   // normal mode: production store and Keychain, no sample data
         func capture(_ name: String) {
             let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
@@ -40,6 +41,10 @@ final class UpgradeRetentionUITests: XCTestCase {
                         .waitForExistence(timeout: 10), "Tower connection kept")
         XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'npub10elfcs4'")).firstMatch.exists, "identity kept")
         XCTAssertTrue(app.buttons["Lock now"].exists, "unlocked by the kept trusted-device session")
+        // Build 10: the profile menu works on the migrated store with no profile fetched (npub and initials, no wait).
+        let header = app.descendants(matching: .any)["profile.header"]
+        XCTAssertTrue(header.waitForExistence(timeout: 10), "profile menu header on the upgraded store")
+        XCTAssertTrue(header.label.contains("npub10elfcs4"), header.label)
         capture("upgrade-settings")
     }
 }

@@ -30,7 +30,7 @@ struct SearchView: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Amb.background)
+            .background(Amb.canvas)   // grouped rows (white) on the recessed surface
             .overlay {
                 if hits.isEmpty {
                     EmptyNote(title: searched.count >= 2 ? "No matches" : "Search this iPhone",

@@ -8,7 +8,7 @@ import SwiftUI
 struct MessageCell: View {
     @Environment(AppModel.self) private var model
     let message: MessageRecord
-    let names: [String: String]
+    let people: PeopleDirectory
     let workspace: WorkspaceRecord
     let extras: MessageExtras
     var route: ChatRoute? = nil
@@ -44,16 +44,20 @@ struct MessageCell: View {
                             }
                             row
                             if replyCount > 0 {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "bubble.left.and.text.bubble.right")
-                                    Text("\(replyCount) \(replyCount == 1 ? "reply" : "replies")")
-                                    if let lastReplyAt { Text("· last \(ChatTime.label(lastReplyAt))").fontWeight(.regular).foregroundStyle(Amb.mutedForeground) }
-                                    Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                // sol `.chat-post-reply-bar.channel-thread-card-open`: a rule, then the reply count in primary.
+                                VStack(spacing: 0) {
+                                    Rectangle().fill(Amb.border).frame(height: 1)
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "bubble.left.and.text.bubble.right")
+                                        Text("\(replyCount) \(replyCount == 1 ? "reply" : "replies")").fontWeight(.bold)
+                                        if let lastReplyAt { Text("· last \(ChatTime.label(lastReplyAt))").fontWeight(.regular).foregroundStyle(Amb.mutedForeground) }
+                                        Spacer(minLength: 4)
+                                        Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                    }
+                                    .font(.caption).foregroundStyle(Amb.primary)
+                                    .padding(.vertical, 8)
                                 }
-                                .font(.caption.weight(.semibold)).foregroundStyle(Amb.primary)
-                                .padding(.horizontal, 10).padding(.vertical, 5)
-                                .background(Amb.accent, in: Capsule())
-                                .padding(.leading, 58).padding(.bottom, 8)
+                                .padding(.leading, 60).padding(.trailing, 16).padding(.bottom, 2)
                             }
                         }
                         .contentShape(Rectangle())
@@ -94,7 +98,7 @@ struct MessageCell: View {
     }
 
     private var row: some View {
-        MessageRow(message: message, names: names, bodyOverride: pendingEdit?.isPending == true ? pendingEdit?.string("body") : nil, workspace: workspace)
+        MessageRow(message: message, people: people, bodyOverride: pendingEdit?.isPending == true ? pendingEdit?.string("body") : nil, workspace: workspace)
             .opacity(pendingDelete?.isPending == true ? 0.45 : 1)
     }
 
@@ -141,8 +145,9 @@ struct ReactionBar: View {
                         HStack(spacing: 4) { Image(systemName: emoji.symbol); Text("\(list.count)") }.font(.caption.weight(.semibold))
                             .foregroundStyle(emoji == .heart ? Amb.destructive : Amb.primary)
                             .padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(mine ? Amb.accent : Amb.muted, in: Capsule())
-                            .overlay(Capsule().stroke(mine ? Amb.primary : Color.clear, lineWidth: 1))
+                            // sol `.reaction-pill` / `.reaction-pill-active`: bordered on white; yours on the muted fill.
+                            .background(mine ? Amb.selectedFill : Amb.card, in: Capsule())
+                            .overlay(Capsule().stroke(mine ? Amb.primary : Amb.border, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("\(emoji.name), \(list.count)\(mine ? ", including you" : "")")

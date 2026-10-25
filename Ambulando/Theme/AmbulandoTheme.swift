@@ -3,11 +3,16 @@ import UIKit
 
 /// Ambulando "perspective passage" tokens, copied from sol/src/ambulando-tokens.css (light / dark).
 enum Amb {
-    private static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color {
-        Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light) })
+    fileprivate static func dynamicUI(_ light: UInt32, _ dark: UInt32) -> UIColor {
+        UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light) }
     }
+    private static func dynamic(_ light: UInt32, _ dark: UInt32) -> Color { Color(dynamicUI(light, dark)) }
 
-    static let background = dynamic(0xF6F6FA, 0x10162B)
+    /// Page surface. The web paints its pages, header, sidebar, chat feed and section bar with `--card` (white in
+    /// light mode; `styles.css` `body { background: var(--card) }`), not with `--background`.
+    static let background = dynamic(0xFFFFFF, 0x1A2238)
+    /// sol `--background`: the recessed grey the web keeps for a few inputs and nested cards.
+    static let canvas = dynamic(0xF6F6FA, 0x10162B)
     static let foreground = dynamic(0x10162B, 0xF5F3FC)
     static let card = dynamic(0xFFFFFF, 0x1A2238)
     static let muted = dynamic(0xEEEFF5, 0x26314A)
@@ -26,6 +31,9 @@ enum Amb {
     static let warningBackground = dynamic(0xFFF3D6, 0x40331C)
     static let info = dynamic(0x215C85, 0xADD2F0)
     static let infoBackground = dynamic(0xE8F1F9, 0x20384C)
+    /// Selected row (sol `.sidebar-scope-channel-row.active`, `.reaction-pill-active`): muted fill, primary text.
+    static let selectedFill = muted
+    static let selectedForeground = primary
     static let brandOrange = Color(UIColor(hex: 0xBF4D0D))
     static let brandNavy = Color(UIColor(hex: 0x10162B))
 
@@ -36,6 +44,17 @@ enum Amb {
     static let editorial = Font.system(.title2, design: .serif).weight(.semibold)   // --font-editorial
     static let heading = Font.headline
     static let code = Font.system(.footnote, design: .monospaced)
+}
+
+extension Amb {
+    /// Segmented controls as the web's active tab (`.chat-channel-tab-item.active`): solid primary, white label.
+    static func applyControlAppearance() {
+        let control = UISegmentedControl.appearance()
+        control.selectedSegmentTintColor = dynamicUI(0x2B1B3C, 0xCBB8FF)          // primary
+        control.setTitleTextAttributes([.foregroundColor: dynamicUI(0xFFFFFF, 0x20123C)], for: .selected)   // primary-foreground
+        control.setTitleTextAttributes([.foregroundColor: dynamicUI(0x10162B, 0xF5F3FC)], for: .normal)     // foreground
+        control.backgroundColor = dynamicUI(0xEEEFF5, 0x26314A)                    // muted
+    }
 }
 
 extension UIColor {
@@ -93,6 +112,8 @@ struct CardModifier: ViewModifier {
 
 extension View {
     func ambCard() -> some View { modifier(CardModifier()) }
+    /// Rows of a grouped list on the theme's card colour (the system grey clashes with the dark navy palette).
+    func ambListRows() -> some View { listRowBackground(Amb.card) }
 }
 
 /// Inline notice using the semantic status palettes.

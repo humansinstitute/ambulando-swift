@@ -4,6 +4,11 @@ public enum StoreTable: String, Sendable, Hashable, CaseIterable {
     case connections, workspaces, scopes, channels, messages, threads, members, drafts, outbox, appState
     case tasks, comments, docs, docBodies, docDrafts, files, folders, viewStates, reactions, writes
     case contextTree, canvases, boards, agents, toolbox, pins
+    /// Public Nostr profiles; connection-scoped, so their change key has no workspace.
+    case profiles
+    /// Not a table: emitted whenever stored records are removed because they were deleted or are no longer visible
+    /// (access loss, archive, removed workspace). A paused screen must not show rows from before such a change.
+    case access
 }
 
 /// A change notification key. `workspaceId == nil` means "not workspace-scoped".
@@ -31,7 +36,7 @@ public struct ConnectionRecord: Sendable, Equatable, Identifiable, Codable {
 }
 
 enum Schema {
-    static let version = 4
+    static let version = 5
 
     static func migrate(_ db: SQLiteConnection) throws {
         let current = try db.userVersion
@@ -104,6 +109,7 @@ enum Schema {
             }
             if current < 3 { try migrateV3(db) }
             if current < 4 { try migrateV4(db) }
+            if current < 5 { try migrateV5(db) }
             try db.execute("PRAGMA user_version = \(version)")
         }
     }
@@ -204,10 +210,14 @@ public actor StoreWriter {
                 try db.prepare("DELETE FROM workspaces WHERE connection_id = ? AND workspace_id = ?").run([.text(connectionId), .text(id)])
                 if try !workspaceStillReferenced(id) { try deleteWorkspaceRows(id) }
             }
+            // People seen only in a removed workspace are forgotten with it.
+            if !gone.isEmpty { _ = try pruneProfileRows(connectionId: connectionId) }
             return gone
         }
         var keys: Set<ChangeKey> = [ChangeKey(.workspaces)]
+        if !removed.isEmpty { keys.formUnion([ChangeKey(.profiles), ChangeKey(.access)]) }
         for id in removed {
+            keys.insert(ChangeKey(.access, id))
             keys.formUnion([ChangeKey(.scopes, id), ChangeKey(.channels, id), ChangeKey(.messages, id), ChangeKey(.threads, id), ChangeKey(.members, id),
                             ChangeKey(.tasks, id), ChangeKey(.comments, id), ChangeKey(.docs, id), ChangeKey(.docBodies, id), ChangeKey(.files, id),
                             ChangeKey(.folders, id), ChangeKey(.viewStates, id), ChangeKey(.reactions, id), ChangeKey(.contextTree, id),
@@ -253,7 +263,7 @@ public actor StoreWriter {
             }
             return (changed, purged)
         }
-        if changed > 0 { await emit(purged ? Self.channelContentKeys(workspaceId).union([ChangeKey(.scopes, workspaceId)]) : [ChangeKey(.scopes, workspaceId), ChangeKey(.channels, workspaceId)]) }
+        if changed > 0 { await emit(purged ? Self.channelContentKeys(workspaceId).union([ChangeKey(.scopes, workspaceId), ChangeKey(.access, workspaceId)]) : [ChangeKey(.scopes, workspaceId), ChangeKey(.channels, workspaceId)]) }
         return changed
     }
 
@@ -287,7 +297,7 @@ public actor StoreWriter {
             }
             return (changed, purged)
         }
-        if changed > 0 { await emit(purged ? Self.channelContentKeys(workspaceId) : [ChangeKey(.channels, workspaceId)]) }
+        if changed > 0 { await emit(purged ? Self.channelContentKeys(workspaceId).union([ChangeKey(.access, workspaceId)]) : [ChangeKey(.channels, workspaceId)]) }
         return changed
     }
 

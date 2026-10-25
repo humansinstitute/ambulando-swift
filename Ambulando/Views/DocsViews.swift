@@ -250,7 +250,7 @@ struct DocumentView: View {
                 .accessibilityLabel("Send comment").accessibilityIdentifier("doccomment.send")
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
-        .background(.bar)
+        .background(Amb.card)
     }
 
     private func start() {

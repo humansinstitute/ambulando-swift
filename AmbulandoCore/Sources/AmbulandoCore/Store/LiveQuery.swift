@@ -19,33 +19,44 @@ public final class LiveQuery<Value: Sendable & Equatable> {
     @ObservationIgnored private let handle = TaskHandle()
     @ObservationIgnored private var generation: UInt64 = 0
     @ObservationIgnored private let initial: Value
+    /// Change revision of the guarded tables taken just before the read that produced `value`.
+    @ObservationIgnored private var loadedRevision: UInt64?
+    @ObservationIgnored private var loadedGuard: Set<StoreTable> = []
     /// Called on the main actor after every successful load of the current query, including an unchanged first one.
     @ObservationIgnored public var onLoad: (@MainActor (Value) -> Void)?
 
     public init(initial: Value) { value = initial; self.initial = initial }
 
+    /// Changes after which kept rows must not be shown again before a fresh read: records were removed because they
+    /// were deleted or are no longer visible to this identity.
+    public static var accessChanges: Set<StoreTable> { [.access] }
+
     /// `keepingValue` resumes a paused query: the rows on screen stay until the fresh read replaces them (no flash, no
-    /// scroll jump). Use it only for the same query that was paused.
-    public func start(store: LocalStore, keepingValue: Bool = false, matches: @escaping @Sendable (ChangeKey) -> Bool,
-                      load: @escaping @Sendable () async throws -> Value) {
-        start(changes: store.changes, keepingValue: keepingValue, matches: matches, load: load)
+    /// scroll jump). Use it only for the same query that was paused. The rows are kept only if none of
+    /// `invalidatedBy` changed since they were read (by default: no records were removed for deletion or access loss);
+    /// otherwise the query starts empty and shows only what the fresh read returns.
+    public func start(store: LocalStore, keepingValue: Bool = false, invalidatedBy: Set<StoreTable> = LiveQuery.accessChanges,
+                      matches: @escaping @Sendable (ChangeKey) -> Bool, load: @escaping @Sendable () async throws -> Value) {
+        start(changes: store.changes, keepingValue: keepingValue, invalidatedBy: invalidatedBy, matches: matches, load: load)
     }
 
-    public func start(changes coalescer: ChangeCoalescer, keepingValue: Bool = false, matches: @escaping @Sendable (ChangeKey) -> Bool,
-                      load: @escaping @Sendable () async throws -> Value) {
+    public func start(changes coalescer: ChangeCoalescer, keepingValue: Bool = false, invalidatedBy: Set<StoreTable> = LiveQuery.accessChanges,
+                      matches: @escaping @Sendable (ChangeKey) -> Bool, load: @escaping @Sendable () async throws -> Value) {
         generation &+= 1
         let current = generation
-        if !keepingValue {
+        let revisions = coalescer.revisions
+        let keep = keepingValue && loaded && loadedRevision == revisions.value(of: invalidatedBy) && loadedGuard == invalidatedBy
+        if !keep {
             value = initial
             loaded = false
             error = nil
         }
         handle.replace(Task { [weak self] in
             let changes = await coalescer.stream()
-            await self?.reload(load, generation: current)
+            await self?.reload(load, generation: current, revisions: revisions, guarding: invalidatedBy)
             for await batch in changes {
                 guard !Task.isCancelled else { return }
-                if batch.contains(where: matches) { await self?.reload(load, generation: current) }
+                if batch.contains(where: matches) { await self?.reload(load, generation: current, revisions: revisions, guarding: invalidatedBy) }
             }
         })
     }
@@ -60,12 +71,17 @@ public final class LiveQuery<Value: Sendable & Equatable> {
     public func stop() {
         generation &+= 1
         handle.replace(nil)
+        loadedRevision = nil
         if value != initial { value = initial }
         if loaded { loaded = false }
         if error != nil { error = nil }
     }
 
-    private func reload(_ load: @escaping @Sendable () async throws -> Value, generation started: UInt64) async {
+    private func reload(_ load: @escaping @Sendable () async throws -> Value, generation started: UInt64,
+                        revisions: ChangeRevisions, guarding tables: Set<StoreTable>) async {
+        // Taken before the read: a removal recorded after this point may be missing from the result, so it must
+        // invalidate these rows if the query is paused and resumed.
+        let revision = revisions.value(of: tables)
         // The read and the equality check both run off the main actor (a snapshot of a busy channel compares
         // hundreds of rows); the main actor only assigns a value that actually changed.
         let result = await Self.fetch(load, previous: value)
@@ -74,6 +90,8 @@ public final class LiveQuery<Value: Sendable & Equatable> {
         switch result {
         case .success(let next):
             if let next { value = next }   // unchanged results never invalidate the view
+            loadedRevision = revision
+            loadedGuard = tables
             if error != nil { error = nil }
             if !loaded { loaded = true }
             onLoad?(value)

@@ -201,9 +201,9 @@ struct DeckInboxCard: View {
                     let on = kinds.contains(kind)
                     Button { if on { kinds.remove(kind) } else { kinds.insert(kind) }; visible = DeckInbox.pageSize } label: {
                         Image(systemName: DeckInbox.icon(kind)).font(.subheadline)
-                            .foregroundStyle(on ? Amb.accentForeground : Amb.mutedForeground)
+                            .foregroundStyle(on ? Amb.selectedForeground : Amb.mutedForeground)
                             .frame(width: 36, height: 30)
-                            .background(on ? Amb.accent : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+                            .background(on ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                             .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl).stroke(Amb.border, lineWidth: 0.8))
                     }
                     .buttonStyle(.plain)

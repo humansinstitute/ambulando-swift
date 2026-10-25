@@ -71,7 +71,8 @@ final class LifecycleUITests: XCTestCase {
         XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 15))
         app.buttons["settings"].tap()
         let toggle = app.switches["settings.backgroundRefresh"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        // Settings is a lazy list; the Profile and Nostr profiles sections (build 10) sit above this one.
+        XCTAssertTrue(app.scrollTo(toggle))
         for _ in 0..<4 where !toggle.isHittable { app.swipeUp() }
         XCTAssertEqual(toggle.value as? String, "0")
         toggle.switches.firstMatch.exists ? toggle.switches.firstMatch.tap() : toggle.tap()
@@ -90,7 +91,7 @@ final class LifecycleUITests: XCTestCase {
         XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 15), "unlocking returns to the workspace")
         app.buttons["settings"].tap()
         let again = app.switches["settings.backgroundRefresh"]
-        XCTAssertTrue(again.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.scrollTo(again))
         for _ in 0..<4 where !again.isHittable { app.swipeUp() }
         XCTAssertEqual(again.value as? String, "1", "the user's choice is kept and the key is provisioned again on unlock")
     }

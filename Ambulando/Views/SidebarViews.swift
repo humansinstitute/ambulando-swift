@@ -78,9 +78,10 @@ struct WorkspaceAvatar: View {
     let label: String
     var size: CGFloat = 28
     var body: some View {
-        Text(initials).font(.system(size: size * 0.42, weight: .semibold)).foregroundStyle(Amb.accentForeground)
+        // sol `.sidebar-workspace-avatar-fallback`: solid primary with its foreground.
+        Text(initials).font(.system(size: size * 0.42, weight: .semibold)).foregroundStyle(Amb.primaryForeground)
             .frame(width: size, height: size)
-            .background(Amb.accent, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+            .background(Amb.primary, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
             .accessibilityHidden(true)
     }
     private var initials: String {
@@ -154,11 +155,12 @@ private struct SidebarContent: View {
                     Button { model.chooseInSidebar(.home) } label: {
                         HStack(spacing: 8) {
                             WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 24)
-                            Text("Home").font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
+                            Text("Home").font(.subheadline.weight(context.isHome ? .bold : .semibold))
+                                .foregroundStyle(context.isHome ? Amb.selectedForeground : Amb.foreground)
                             Spacer()
                         }
                         .padding(.horizontal, 10).padding(.vertical, 7)
-                        .background(context.isHome ? Amb.accent : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
+                        .background(context.isHome ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
                         .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border, lineWidth: 1))
                         .contentShape(Rectangle())
                     }
@@ -199,7 +201,7 @@ private struct SidebarContent: View {
                                     .lineLimit(1)
                                     .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
                                     .padding(.horizontal, 4)
-                                    .background(context.scopeId == group.id && context.channelId == nil ? Amb.accent : Color.clear,
+                                    .background(context.scopeId == group.id && context.channelId == nil ? Amb.selectedFill : Color.clear,
                                                 in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                                     .contentShape(Rectangle())
                             }
@@ -306,14 +308,15 @@ private struct ChannelRow: View {
                 } else {
                     Text("#").font(.subheadline).foregroundStyle(Amb.mutedForeground).frame(width: 14)
                 }
-                Text(label).font(.subheadline.weight(unread ? .semibold : .regular))
-                    .foregroundStyle(active ? Amb.accentForeground : unread ? Amb.foreground : Amb.mutedForeground).lineLimit(1)
+                // sol `.sidebar-scope-channel-row.active`: muted fill, primary bold label.
+                Text(label).font(.subheadline.weight(active ? .bold : unread ? .semibold : .regular))
+                    .foregroundStyle(active ? Amb.selectedForeground : unread ? Amb.foreground : Amb.mutedForeground).lineLimit(1)
                 Spacer(minLength: 0)
                 if unread { Circle().fill(Amb.brandOrange).frame(width: 7, height: 7).accessibilityHidden(true) }
             }
             .padding(.leading, 28).padding(.trailing, 10)
             .frame(minHeight: 36)
-            .background(active ? Amb.accent : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+            .background(active ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

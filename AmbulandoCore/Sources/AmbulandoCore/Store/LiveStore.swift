@@ -31,6 +31,7 @@ extension StoreWriter {
                 case .reaction(let id): try run("DELETE FROM reactions WHERE workspace_id = ? AND id = ?", id, .reactions)
                 }
             }
+            if removed > 0 { keys.insert(ChangeKey(.access, workspaceId)) }
             return (removed, keys)
         }
         await emit(keys)

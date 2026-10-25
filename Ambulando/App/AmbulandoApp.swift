@@ -6,6 +6,8 @@ struct AmbulandoApp: App {
     @AppStorage("appearance") private var appearance = AppearancePreference.system.rawValue
     @Environment(\.scenePhase) private var scenePhase
 
+    init() { Amb.applyControlAppearance() }
+
     var body: some Scene {
         WindowGroup {
             RootView()

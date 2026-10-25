@@ -343,7 +343,7 @@ struct TaskDetailView: View {
                 .accessibilityLabel("Send comment").accessibilityIdentifier("comment.send")
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
-        .background(.bar)
+        .background(Amb.card)
     }
 
     private func label(for item: WriteItem) -> String {
