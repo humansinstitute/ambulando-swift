@@ -5,6 +5,8 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @AppStorage("appearance") private var appearance = AppearancePreference.system.rawValue
+    @AppStorage(AppMode.agentsPreference) private var showAgents = false
+    @AppStorage(AppMode.contextPreference) private var showContext = false
     @State private var confirmRemove = false
     @State private var confirmDisconnect = false
     @State private var unsent = 0
@@ -51,6 +53,12 @@ struct SettingsView: View {
                 }
                 BackgroundSection(live: live)
                 if let fixture = model.fixture { FixtureControls(fixture: fixture, model: model) }
+                Section {
+                    Toggle("Agents", isOn: $showAgents).accessibilityIdentifier("settings.sections.agents")
+                    Toggle("Context", isOn: $showContext).accessibilityIdentifier("settings.sections.context")
+                } header: { Text("Sections") } footer: {
+                    Text("Agents and Context are optional sections, off unless you turn them on, as in the web app. They appear in the bar at the bottom.")
+                }
                 Section("Appearance") {
                     Picker("Theme", selection: $appearance) {
                         ForEach(AppearancePreference.allCases) { Text($0.label).tag($0.rawValue) }

@@ -26,7 +26,7 @@ final class RichContentUITests: XCTestCase {
 
     func testRichMessageRendersHeadingListCodeTableAndMention() {
         let app = launch()
-        if app.tabBars.buttons["Chat"].exists { app.tabBars.buttons["Chat"].tap() }
+        app.section("Chat")
         let design = app.buttons["channel.design"]
         XCTAssertTrue(design.waitForExistence(timeout: 15))
         design.tap()
@@ -45,7 +45,7 @@ final class RichContentUITests: XCTestCase {
 
     func testMarkdownDocumentLoadsStoredImage() {
         let app = launch()
-        app.tabBars.buttons["Docs"].tap()
+        app.section("Docs")
         let doc = app.buttons["doc.Release board (Markdown)"]
         XCTAssertTrue(doc.waitForExistence(timeout: 15))
         doc.tap()

@@ -44,7 +44,10 @@ final class NavigationLoadUITests: XCTestCase {
         XCTAssertTrue(workspaceLabel(app).contains("Lab (sample)"), workspaceLabel(app))
         capture(app, "navload-no-choice-sidebar")
         app.buttons["sidebar.channel.notes"].tap()
-        XCTAssertTrue(app.navigationBars["#notes"].waitForExistence(timeout: 10), "a sidebar channel opens in Chat")
+        // As on the web, a sidebar choice opens Deck for the channel; Chat then shows it.
+        XCTAssertTrue(app.staticTexts["Inbox: #notes"].waitForExistence(timeout: 10), "Deck opens for the chosen channel")
+        app.section("Chat")
+        XCTAssertTrue(app.navigationBars["#notes"].waitForExistence(timeout: 10), "Chat shows the chosen channel")
 
         // Relaunch: still no stored workspace choice; the saved scopes and the chosen channel come back.
         app.terminate()

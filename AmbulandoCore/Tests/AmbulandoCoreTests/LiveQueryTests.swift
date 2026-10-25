@@ -49,6 +49,32 @@ final class LiveQueryTests: XCTestCase {
         XCTAssertFalse(query.loaded)
     }
 
+    /// A paused query (a Deck card out of sight) keeps its rows, ignores changes, and resumes without flashing empty.
+    func testPauseKeepsRowsAndResumeKeepsThemUntilTheFreshRead() async throws {
+        let store = try LocalStore(directory: temporaryDirectory(), coalesceInterval: .milliseconds(10))
+        let w = Fixtures.workspaceId
+        let query = LiveQuery<[String]>(initial: [])
+        let load: @Sendable () async throws -> [String] = { try await store.reader.scopes(workspaceId: w).map(\.name) }
+        try await store.writer.upsertScopes(workspaceId: w, [try ScopeRecord(raw: Fixtures.json(Fixtures.scope(Fixtures.scopeA, name: "Alpha")))], complete: false)
+        query.start(store: store, matches: { $0.table == .scopes }, load: load)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(query.value, ["Alpha"])
+        query.pause()
+        XCTAssertEqual(query.value, ["Alpha"], "rows stay while paused")
+        XCTAssertTrue(query.loaded)
+        try await store.writer.upsertScopes(workspaceId: w, [try ScopeRecord(raw: Fixtures.json(Fixtures.scope(Fixtures.scopeB, name: "Beta")))], complete: false)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(query.value, ["Alpha"], "no reads while paused")
+        query.start(store: store, keepingValue: true, matches: { $0.table == .scopes }) {
+            try await Task.sleep(for: .milliseconds(100))
+            return try await load()
+        }
+        XCTAssertEqual(query.value, ["Alpha"], "resuming keeps the rows until the fresh read")
+        XCTAssertTrue(query.loaded)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(Set(query.value), ["Alpha", "Beta"])
+    }
+
     func testReloadsOnlyForMatchingChanges() async throws {
         let store = try LocalStore(directory: temporaryDirectory(), coalesceInterval: .milliseconds(10))
         let query = LiveQuery<[String]>(initial: [])

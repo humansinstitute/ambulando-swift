@@ -22,7 +22,7 @@ final class WorkFlowUITests: XCTestCase {
         add(shot)
     }
 
-    private func tab(_ app: XCUIApplication, _ name: String) { app.tabBars.buttons[name].tap() }
+    private func tab(_ app: XCUIApplication, _ name: String) { app.section(name) }
 
     private func input(_ app: XCUIApplication, _ id: String) -> XCUIElement {
         let any = app.descendants(matching: .any)[id]
@@ -42,30 +42,53 @@ final class WorkFlowUITests: XCTestCase {
         return XCTWaiter().wait(for: [expectation(for: predicate, evaluatedWith: element)], timeout: timeout) == .completed
     }
 
-    func testInboxOpenMarksReadAndDoneClearsTask() {
+    /// Deck's Inbox (the web's activity feed, not an unread-only list): opening marks read, Mark done finishes a review
+    /// task, and read state survives relaunch.
+    func testDeckInboxOpenMarksReadAndDoneFinishesAReviewTask() {
         let app = launch()
-        tab(app, "Inbox")
-        XCTAssertTrue(app.staticTexts["Needs you"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["Review the native inbox"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Native app plan"].exists)
-        capture(app, "wp4-inbox")
-        // Opening a document marks it read; back in the inbox it is gone.
-        app.staticTexts["Native app plan"].tap()
+        tab(app, "Deck")
+        app.deckCard("inbox")
+        // Hide conversations with the type toggle (web Inbox record types), then search: rows are lazy.
+        let chats = app.buttons["deck.inbox.type.chat"].firstMatch
+        XCTAssertTrue(chats.waitForExistence(timeout: 10))
+        chats.tap()
+        let search = app.textFields["deck.inbox.search"].firstMatch
+        search.tap(); search.typeText("Native app plan\n")
+        let plan = app.buttons.matching(NSPredicate(format: "identifier == 'deck.inbox.item' AND label CONTAINS 'Native app plan'")).firstMatch
+        XCTAssertTrue(plan.waitForExistence(timeout: 15))
+        XCTAssertTrue(plan.label.contains("unread"), plan.label)
+        capture(app, "deck-inbox")
+        // Opening a document marks it read; it stays in the feed (activity), without the unread mark.
+        plan.tap()
         XCTAssertTrue(app.staticTexts["doc.title"].waitForExistence(timeout: 10))
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(waitGone(app.staticTexts["Native app plan"]))
-        // Done on the assigned task: state change plus read.
-        let task = app.staticTexts["Review the native inbox"]
-        task.swipeLeft()
-        app.buttons["Done"].tap()
-        XCTAssertTrue(waitGone(task))
+        let readPlan = app.buttons.matching(NSPredicate(format: "identifier == 'deck.inbox.item' AND label CONTAINS 'Native app plan' AND NOT (label CONTAINS 'unread')")).firstMatch
+        XCTAssertTrue(readPlan.waitForExistence(timeout: 10), "read state shown after Back")
+        // The review task: clear the search and find it.
+        search.tap()
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20) + "Review the native\n")
+        let review = app.buttons.matching(NSPredicate(format: "identifier == 'deck.inbox.item' AND label CONTAINS 'Review the native inbox'")).firstMatch
+        XCTAssertTrue(review.waitForExistence(timeout: 15))
+        XCTAssertTrue(review.label.contains("unread"), review.label)
+        // Mark done on the unread review task (web Deck): it leaves the feed once done and read.
+        let done = app.buttons["deck.inbox.done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        done.tap()
+        XCTAssertTrue(waitGone(review), "a done, read task leaves Deck's Inbox")
         tab(app, "Tasks")
-        XCTAssertTrue(app.staticTexts["Done · 2"].waitForExistence(timeout: 10), "the task moved to Done")
+        XCTAssertTrue(app.scrollTo(app.staticTexts["Done · 2"]), "the task moved to Done")
         app.terminate()
         let again = launch(reset: false)
-        tab(again, "Inbox")
-        XCTAssertTrue(again.staticTexts["Unread"].waitForExistence(timeout: 15), "thread still unread")
-        XCTAssertFalse(again.staticTexts["Review the native inbox"].exists, "read state survives relaunch")
+        tab(again, "Deck")
+        again.deckCard("inbox")
+        let field = again.textFields["deck.inbox.search"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        field.tap(); field.typeText("Review the native\n")
+        XCTAssertTrue(again.descendants(matching: .any)["deck.inbox.empty"].firstMatch.waitForExistence(timeout: 15), "done and read survive relaunch")
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20) + "Inbox counts mentions\n")
+        XCTAssertTrue(again.buttons.matching(NSPredicate(format: "identifier == 'deck.inbox.item' AND label CONTAINS 'unread'")).firstMatch.waitForExistence(timeout: 15),
+                      "the unread conversation is still unread")
     }
 
     func testTaskCreateStateCommentAndEdit() {

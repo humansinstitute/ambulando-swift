@@ -633,11 +633,21 @@ struct Composer: View {
                 ComposerAttachments(attachments: $composer.attachments, staging: model.staging)
             }
             HStack(alignment: .bottom, spacing: 8) {
-                PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
-                    Image(systemName: "photo").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+                // While typing the keyboard covers the section bar: this slot puts the keyboard away (same frame, so the row
+                // does not re-lay-out on focus). Photos can be attached again once it is down.
+                if focused {
+                    Button { focused = false } label: {
+                        Image(systemName: "keyboard.chevron.compact.down").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+                    }
+                    .accessibilityLabel("Hide keyboard")
+                    .accessibilityIdentifier("composer.hideKeyboard")
+                } else {
+                    PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
+                        Image(systemName: "photo").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+                    }
+                    .accessibilityLabel("Attach photos")
+                    .accessibilityIdentifier("composer.photo")
                 }
-                .accessibilityLabel("Attach photos")
-                .accessibilityIdentifier("composer.photo")
                 Button {
                     guard let composer else { return }
                     if !(composer.text.last.map { $0.isWhitespace } ?? true) { composer.text += " " }

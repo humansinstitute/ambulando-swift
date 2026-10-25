@@ -28,10 +28,13 @@ final class UpgradeRetentionUITests: XCTestCase {
         app.openSidebar()
         XCTAssertTrue(app.buttons["sidebar.channel.upgrade-general"].exists)
         XCTAssertTrue(app.buttons["sidebar.workspace"].label.contains("Upgrade Studio"))
-        // Build 7 surfaces open on the migrated store (schema 4 tables created empty; nothing synced from the invalid origin).
-        XCTAssertTrue(app.buttons["sidebar.surface.canvas"].exists && app.buttons["sidebar.surface.context"].exists)
         capture("upgrade-sidebar")
         app.buttons["sidebar.backdrop"].firstMatch.tap()
+        // Build 9 sections on the migrated store (schema 4 tables created empty; nothing synced from the invalid origin).
+        XCTAssertTrue(app.buttons["section.deck"].waitForExistence(timeout: 5) && app.buttons["section.chat"].isSelected
+                      && app.buttons["section.toolbox"].exists, "the saved Chat section is restored in the new section bar")
+        XCTAssertTrue(app.buttons["section.agents"].exists && app.buttons["section.context"].exists,
+                      "Agents and Context, in the sidebar before the upgrade, stay visible as sections")
         app.buttons["settings"].tap()
         XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'https://tower.example.invalid'")).firstMatch
                         .waitForExistence(timeout: 10), "Tower connection kept")

@@ -1,29 +1,6 @@
 import AmbulandoCore
 import Foundation
 
-/// Workspace surfaces opened from the sidebar's Workspace section (sol's Canvas deck column, Context, Agents and
-/// Toolbox sections). Each is shown over the tabs and shares the sidebar context.
-enum Surface: String, Codable, CaseIterable, Identifiable {
-    case canvas, context, agents, toolbox
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .canvas: "Canvas"
-        case .context: "Context"
-        case .agents: "Agents"
-        case .toolbox: "Toolbox"
-        }
-    }
-    var systemImage: String {
-        switch self {
-        case .canvas: "rectangle.3.group"
-        case .context: "point.3.connected.trianglepath.dotted"
-        case .agents: "sparkles"
-        case .toolbox: "wrench.and.screwdriver"
-        }
-    }
-}
-
 /// What a labelled web view shows: a Toolbox WApp's own UI, an HTML naplet, or a Context Tree artifact page.
 enum WebContentSource: Hashable, Codable {
     case wapp(id: String)
@@ -53,14 +30,7 @@ struct PinsSnapshot: Sendable, Equatable {
 }
 
 extension AppModel {
-    // MARK: Surfaces
-
-    func openSurface(_ next: Surface) {
-        sidebarOpen = false
-        surface = next
-    }
-
-    func closeSurface() { surface = nil }
+    // MARK: Surfaces (Canvas, Context, Agents, Toolbox)
 
     func openContextTree(_ workspace: WorkspaceRecord, scopeId: String, force: Bool = false) {
         withWorkspace(workspace) { sync, c in await sync.refreshContextTree(c, workspace, scopeId: scopeId, force: force) }

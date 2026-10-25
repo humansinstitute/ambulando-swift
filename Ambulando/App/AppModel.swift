@@ -43,8 +43,6 @@ enum WorkRoute: Hashable {
     }
 }
 
-/// The app's modes, each reading the shared context (Inbox and Search span the workspace and say where results are).
-enum AppMode: String, CaseIterable, Codable { case inbox, chat, tasks, docs, files }
 
 /// App-wide state on the main actor. It owns no network or database work itself: it forwards
 /// intents to `WorkspaceSync`/`OutboxSender` via `SyncEngine` (sole network owner) and reads the store via `LiveQuery`.
@@ -79,14 +77,31 @@ final class AppModel {
     private(set) var context: WorkContext = .home
     /// The sidebar drawer (workspace, scopes and channels), reachable from every mode.
     var sidebarOpen = false
-    /// A workspace surface (Canvas, Context, Agents, Toolbox) shown over the tabs, or nil for the tabs themselves.
-    var surface: Surface?
+    /// Navigation inside each section other than Chat (Chat keeps `chatPath`). Kept while the app runs, so switching
+    /// sections returns to the same screen; a workspace switch or a new sidebar choice starts the context-bound ones over.
+    var deckPath: [WorkRoute] = []
+    var tasksPath: [WorkRoute] = []
+    var docsPath: [WorkRoute] = []
+    var filesPath: [WorkRoute] = []
+    var agentsPath: [WorkRoute] = []
+    var contextPath: [WorkRoute] = []
+    var toolboxPath: [WorkRoute] = []
+    /// The member's role and permissions in the selected workspace (`GET /me`), for showing management controls.
+    var membership: WorkspaceMembership?
+    @ObservationIgnored var membershipWorkspaceId: String?
+    @ObservationIgnored private(set) var manager: ScopeChannelManager?
     /// The viewer's personal pins in the selected workspace (sidebar "Pinned").
     let pins = LiveQuery<PinsSnapshot>(initial: PinsSnapshot())
     /// Viewer-local board positions by canvas, so returning to a board keeps where it was (never written to Tower).
     @ObservationIgnored var canvasViewports: [String: CanvasViewport] = [:]
-    /// The current mode (tab). Opening a record from Inbox or Search may switch it.
-    var mode: AppMode = .chat
+    /// The current section (bottom bar). Opening a record from Search or a mention may switch it.
+    var mode: AppMode = .chat {
+        didSet { if mode != oldValue, lockedView != mode { lockedView = nil } }
+    }
+    /// The section kept on sidebar choices (in memory, cleared when another section opens, as on the web).
+    var lockedView: AppMode?
+    /// Bumped when a sidebar choice opens Deck; Deck then shows its Inbox card.
+    var deckInboxRequests = 0
     var notice: String?
     /// Set when the app runs on deterministic local sample data (UI automation); never a live Tower.
     private(set) var fixture: FixtureEnvironment?
@@ -239,6 +254,7 @@ final class AppModel {
             self.outbox = OutboxSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers)
             self.writes = WriteSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers)
             self.saver = DocumentSaver(store: store, identity: identity, transport: transport)
+            self.manager = ScopeChannelManager(store: store, identity: identity, transport: transport)
             self.fixture = fixture
             if let fixture { try await fixture.prepare(identity: identity, sync: sync, store: store) }
             self.identity = await identity.state
@@ -247,6 +263,12 @@ final class AppModel {
             backgroundRefreshEnabled = try await store.reader.state(Self.backgroundPreferenceKey) == "on"
             lastBackgroundReport = WorkspaceSync.decodeReport(try await store.reader.state(BackgroundRefreshReport.stateKey))
             let connections = try await store.reader.connections()
+            // Agents and Context are optional sections, off by default as on the web. An install upgraded from builds
+            // 7–8 had both in its sidebar, so they stay visible there unless the user turns them off.
+            // (Sample-data mode leaves the web default.)
+            for key in [AppMode.agentsPreference, AppMode.contextPreference] where fixture == nil && UserDefaults.standard.object(forKey: key) == nil {
+                UserDefaults.standard.set(!connections.isEmpty, forKey: key)
+            }
             let selected = try await store.reader.state("selected.connection")
             connection = connections.first { $0.id == selected } ?? connections.first
             if let connection {
@@ -344,7 +366,8 @@ final class AppModel {
             pins.stop()
             context = .home
             restoringPath = true; chatPath = []; restoringPath = false
-            surface = nil
+            resetSectionPaths()
+            membership = nil; membershipWorkspaceId = nil
             canvasViewports = [:]
             Task { await liveStream?.stop() }
         }
@@ -439,7 +462,8 @@ final class AppModel {
             navigation.stop()
             navigationWorkspaceId = nil
             pins.stop()
-            surface = nil
+            resetSectionPaths()
+            membership = nil; membershipWorkspaceId = nil
             restoringPath = true; chatPath = []; restoringPath = false
         } catch { notice = error.localizedDescription }
     }
@@ -465,6 +489,8 @@ final class AppModel {
         pins.stop()
         navigationWorkspaceId = id
         canvasViewports = [:]
+        resetSectionPaths()
+        membership = nil; membershipWorkspaceId = nil
         Task {
             if persist { try? await store.writer.setState("selected.workspace:\(connection.id)", id) }
             await restoreContext()

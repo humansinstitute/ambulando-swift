@@ -48,6 +48,19 @@ struct ContextBar: View {
             .accessibilityLabel(contextDescription(nav, context))
             .accessibilityHint("Opens scopes and channels")
             .accessibilityIdentifier("context.bar")
+            // sol `.view-lock-button`: keep this section when choosing a scope or channel (otherwise Deck opens).
+            if model.canLockCurrentView {
+                let locked = model.isCurrentViewLocked
+                Button { model.toggleCurrentViewLock() } label: {
+                    Image(systemName: locked ? "lock.fill" : "lock.open").font(.caption.weight(.semibold))
+                        .foregroundStyle(locked ? Amb.primary : Amb.mutedForeground)
+                        .frame(width: 30, height: 28).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(locked ? "Unlock \(model.mode.title) view" : "Keep \(model.mode.title) when changing scope or channel")
+                .accessibilityAddTraits(locked ? .isSelected : [])
+                .accessibilityIdentifier("context.lock")
+            }
         }
         .padding(.horizontal, 16).padding(.vertical, 7)
         .background(Amb.background)
@@ -121,6 +134,16 @@ struct SidebarDrawer: View {
 
 private struct SidebarContent: View {
     @Environment(AppModel.self) private var model
+    @State private var sheet: SidebarSheet?
+    /// A channel created in the New channel sheet, opened in Chat once the sheet has gone (as the web selects it).
+    @State private var created: ChannelRecord?
+
+    private func openCreated() {
+        guard let channel = created else { return }
+        created = nil
+        model.selectContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id))
+        model.show(.chat)
+    }
 
     var body: some View {
         let nav = model.navigation.value
@@ -128,7 +151,7 @@ private struct SidebarContent: View {
         VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    Button { model.selectContext(.home) } label: {
+                    Button { model.chooseInSidebar(.home) } label: {
                         HStack(spacing: 8) {
                             WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 24)
                             Text("Home").font(.subheadline.weight(.semibold)).foregroundStyle(Amb.foreground)
@@ -146,9 +169,6 @@ private struct SidebarContent: View {
                     .padding(.bottom, 8)
 
                     NavigationStatus(state: model.navigationState, compact: true)
-
-                    SidebarPinnedSection()
-                    SidebarWorkspaceSection()
 
                     let unread = SidebarNavigation.unreadChannels(nav.groups, unreadChannelIds: nav.unread)
                     if !unread.isEmpty {
@@ -173,7 +193,7 @@ private struct SidebarContent: View {
                             .buttonStyle(.plain)
                             .accessibilityLabel("\(collapsed ? "Expand" : "Collapse") \(group.scope.name) channels")
                             .accessibilityIdentifier("sidebar.collapse.\(group.scope.name)")
-                            Button { model.selectContext(WorkContext(scopeId: group.id)) } label: {
+                            Button { model.chooseInSidebar(WorkContext(scopeId: group.id)) } label: {
                                 Text(group.scope.name)
                                     .font(.footnote.weight(.heavy)).foregroundStyle(context.scopeId == group.id && context.channelId == nil ? Amb.primary : Amb.mutedForeground)
                                     .lineLimit(1)
@@ -187,6 +207,16 @@ private struct SidebarContent: View {
                             .accessibilityLabel("Open \(group.scope.name) home")
                             .accessibilityAddTraits(context.scopeId == group.id && context.channelId == nil ? .isSelected : [])
                             .accessibilityIdentifier("sidebar.scope.\(group.scope.name)")
+                            // sol `.sidebar-scope-add-channel`: shown where the member may create channels in the scope.
+                            if ManagementPermissions.canCreateChannel(in: group.scope, membership: model.membership) {
+                                Button { sheet = .newChannel(group.scope) } label: {
+                                    Image(systemName: "plus").font(.caption.weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                        .frame(width: 30, height: 32).contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Create channel in \(group.scope.name)")
+                                .accessibilityIdentifier("sidebar.addChannel.\(group.scope.name)")
+                            }
                         }
                         .padding(.top, 6)
                         if !collapsed {
@@ -194,15 +224,58 @@ private struct SidebarContent: View {
                                 Text("No channels visible").font(.caption).foregroundStyle(Amb.mutedForeground).padding(.leading, 34).padding(.vertical, 4)
                             }
                             ForEach(group.channels) { channel in
-                                ChannelRow(channel: channel, label: nav.label(channel), unread: nav.unread.contains(channel.id),
-                                           active: context.channelId == channel.id, identifierPrefix: "sidebar.channel")
+                                HStack(spacing: 0) {
+                                    ChannelRow(channel: channel, label: nav.label(channel), unread: nav.unread.contains(channel.id),
+                                               active: context.channelId == channel.id, identifierPrefix: "sidebar.channel")
+                                    // sol `.sidebar-scope-channel-menu`: Channel settings on every channel.
+                                    Button { sheet = .channelSettings(channel) } label: {
+                                        Image(systemName: "ellipsis").font(.caption.weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                            .frame(width: 30, height: 36).contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Channel settings for \(nav.label(channel))")
+                                    .accessibilityIdentifier("sidebar.channelSettings.\(nav.label(channel))")
+                                }
                             }
                         }
+                    }
+                    if !nav.groups.isEmpty {
+                        // sol `.sidebar-manage-scopes-footer`.
+                        Button { sheet = .manageScopes } label: {
+                            Label("Manage scopes", systemImage: "slider.horizontal.3").font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Amb.primary).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                                .padding(.horizontal, 10).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 10)
+                        .accessibilityIdentifier("sidebar.manageScopes")
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 12)
             }
             WorkspaceFooter()
+        }
+        .onAppear { model.loadMembership() }
+        .sheet(item: $sheet, onDismiss: openCreated) { sheet in
+            switch sheet {
+            case .newChannel(let scope): NewChannelSheet(scope: scope) { created = $0 }
+            case .channelSettings(let channel): ChannelSettingsSheet(channelId: channel.id)
+            case .manageScopes: ScopeManagementSheet()
+            }
+        }
+    }
+}
+
+/// Management sheets opened from the sidebar.
+enum SidebarSheet: Identifiable {
+    case newChannel(ScopeRecord)
+    case channelSettings(ChannelRecord)
+    case manageScopes
+    var id: String {
+        switch self {
+        case .newChannel(let scope): "new:\(scope.id)"
+        case .channelSettings(let channel): "settings:\(channel.id)"
+        case .manageScopes: "scopes"
         }
     }
 }
@@ -226,7 +299,7 @@ private struct ChannelRow: View {
     let identifierPrefix: String
 
     var body: some View {
-        Button { model.selectContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id)) } label: {
+        Button { model.chooseInSidebar(WorkContext(scopeId: channel.scopeId, channelId: channel.id)) } label: {
             HStack(spacing: 6) {
                 if SidebarNavigation.isDirectMessageChannel(channel) {
                     Image(systemName: "person.2").font(.caption).foregroundStyle(Amb.mutedForeground).frame(width: 14)

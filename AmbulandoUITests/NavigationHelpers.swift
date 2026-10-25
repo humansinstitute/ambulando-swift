@@ -32,7 +32,32 @@ extension XCUIApplication {
         XCTAssertEqual(row.value as? String, want, "\(id) set", file: file, line: line)
     }
 
-    /// Chooses a channel in the sidebar; Chat shows its conversation and the other modes filter to it.
+    /// Scrolls the current list until `element` exists (rows of lazy lists below the fold are not in the tree).
+    @MainActor func scrollTo(_ element: XCUIElement, maxSwipes: Int = 6) -> Bool {
+        if element.waitForExistence(timeout: 10) { return true }
+        for _ in 0..<maxSwipes {
+            swipeUp()
+            if element.waitForExistence(timeout: 2) { return true }
+        }
+        return false
+    }
+
+    /// Opens a section from the bottom bar (Deck, Chat, Tasks, Docs, Files, Agents, Context, Toolbox).
+    @MainActor func section(_ name: String, file: StaticString = #filePath, line: UInt = #line) {
+        let button = buttons["section.\(name.lowercased())"].firstMatch
+        XCTAssertTrue(button.waitForExistence(timeout: 10), "section \(name) in the bar", file: file, line: line)
+        button.tap()
+    }
+
+    /// Shows one of Deck's cards with its dot (Deck must be open).
+    @MainActor func deckCard(_ card: String, file: StaticString = #filePath, line: UInt = #line) {
+        let dot = buttons["deck.page.\(card)"].firstMatch
+        XCTAssertTrue(dot.waitForExistence(timeout: 10), "Deck card \(card)", file: file, line: line)
+        dot.tap()
+    }
+
+    /// Chooses a channel in the sidebar. As on the web, Deck then opens for it (unless the current Chat, Tasks, Docs or
+    /// Files view is locked); every section reads inside the chosen channel.
     @MainActor func selectSidebarChannel(_ name: String) {
         openSidebar()
         let row = buttons["sidebar.channel.\(name)"].firstMatch

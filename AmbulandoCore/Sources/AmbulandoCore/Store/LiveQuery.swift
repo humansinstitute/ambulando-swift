@@ -24,17 +24,22 @@ public final class LiveQuery<Value: Sendable & Equatable> {
 
     public init(initial: Value) { value = initial; self.initial = initial }
 
-    public func start(store: LocalStore, matches: @escaping @Sendable (ChangeKey) -> Bool, load: @escaping @Sendable () async throws -> Value) {
-        start(changes: store.changes, matches: matches, load: load)
+    /// `keepingValue` resumes a paused query: the rows on screen stay until the fresh read replaces them (no flash, no
+    /// scroll jump). Use it only for the same query that was paused.
+    public func start(store: LocalStore, keepingValue: Bool = false, matches: @escaping @Sendable (ChangeKey) -> Bool,
+                      load: @escaping @Sendable () async throws -> Value) {
+        start(changes: store.changes, keepingValue: keepingValue, matches: matches, load: load)
     }
 
-    public func start(changes coalescer: ChangeCoalescer, matches: @escaping @Sendable (ChangeKey) -> Bool,
+    public func start(changes coalescer: ChangeCoalescer, keepingValue: Bool = false, matches: @escaping @Sendable (ChangeKey) -> Bool,
                       load: @escaping @Sendable () async throws -> Value) {
         generation &+= 1
         let current = generation
-        value = initial
-        loaded = false
-        error = nil
+        if !keepingValue {
+            value = initial
+            loaded = false
+            error = nil
+        }
         handle.replace(Task { [weak self] in
             let changes = await coalescer.stream()
             await self?.reload(load, generation: current)
@@ -43,6 +48,12 @@ public final class LiveQuery<Value: Sendable & Equatable> {
                 if batch.contains(where: matches) { await self?.reload(load, generation: current) }
             }
         })
+    }
+
+    /// Stops reloading but keeps the current rows (a screen that is out of sight; resume with `keepingValue`).
+    public func pause() {
+        generation &+= 1
+        handle.replace(nil)
     }
 
     /// Stops reloading and returns to the initial value, so rows of a workspace that is no longer shown never render.

@@ -128,7 +128,7 @@ public enum SidebarNavigation {
         return title.isEmpty ? String(channel.id.prefix(8)) : title
     }
 
-    static func participants(_ channel: ChannelRecord) -> [String] {
+    public static func participants(_ channel: ChannelRecord) -> [String] {
         let details = ChannelDetails(raw: channel.raw)
         if !details.participants.isEmpty { return Array(Set(details.participants)).sorted() }
         if details.description.lowercased().hasPrefix("dm:") {

@@ -22,7 +22,7 @@ final class NavigationUITests: XCTestCase {
         add(shot)
     }
 
-    private func tab(_ app: XCUIApplication, _ name: String) { app.tabBars.buttons[name].tap() }
+    private func tab(_ app: XCUIApplication, _ name: String) { app.section(name) }
 
     private func contextLabel(_ app: XCUIApplication) -> String { app.buttons["context.bar"].firstMatch.label }
 
@@ -36,7 +36,11 @@ final class NavigationUITests: XCTestCase {
         XCTAssertTrue(app.buttons["sidebar.workspace"].exists, "workspace switcher in the sidebar")
         capture(app, "nav-sidebar")
         app.buttons["sidebar.channel.design"].tap()
-        XCTAssertTrue(app.navigationBars["#design"].waitForExistence(timeout: 10), "Chat opens the chosen channel")
+        // As on the web, a sidebar choice opens Deck for the new context (its Inbox card).
+        XCTAssertTrue(app.staticTexts["Inbox: #design"].waitForExistence(timeout: 10), "Deck opens on the chosen channel's Inbox")
+        XCTAssertTrue(app.buttons["section.deck"].isSelected)
+        tab(app, "Chat")
+        XCTAssertTrue(app.navigationBars["#design"].waitForExistence(timeout: 10), "Chat shows the chosen channel")
         XCTAssertTrue(contextLabel(app).contains("design"), contextLabel(app))
         capture(app, "nav-chat-design")
 
@@ -53,16 +57,21 @@ final class NavigationUITests: XCTestCase {
         XCTAssertTrue(app.buttons["file.palette.png"].waitForExistence(timeout: 15))
         XCTAssertFalse(app.buttons["file.sync-results.txt"].exists)
 
-        // A scope: its channels' records; Home: everything.
+        // A scope: its channels' records; Home: everything. Locking Tasks keeps it on a sidebar choice (web view lock).
         tab(app, "Tasks")
+        let lock = app.buttons["context.lock"].firstMatch
+        XCTAssertTrue(lock.waitForExistence(timeout: 5))
+        lock.tap()
+        XCTAssertTrue(lock.isSelected, "Tasks is locked")
         app.openSidebar()
         app.buttons["sidebar.scope.Operations"].tap()
+        XCTAssertTrue(app.buttons["section.tasks"].isSelected, "the locked section stays")
         XCTAssertTrue(app.buttons["task.Rotate staging certificates"].waitForExistence(timeout: 15))
         XCTAssertFalse(app.buttons["task.Passage mark spacing"].exists)
         XCTAssertTrue(contextLabel(app).contains("Operations"))
         app.buttons["context.home"].tap()
         XCTAssertTrue(app.buttons["task.Passage mark spacing"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.buttons["task.Rotate staging certificates"].exists)
+        XCTAssertTrue(app.scrollTo(app.buttons["task.Rotate staging certificates"]), "Home lists every scope's tasks")
 
         // The selection is kept across relaunch (per connection and workspace).
         app.selectSidebarChannel("deploys")
@@ -96,18 +105,27 @@ final class NavigationUITests: XCTestCase {
         XCTAssertTrue(app.buttons["thread.3"].firstMatch.waitForExistence(timeout: 10), "thread roots show their replies in the message list")
     }
 
-    func testInboxIsGlobalAndOpeningFollowsTheRecordContext() {
+    /// Deck reads the sidebar context like the web's Deck; opening a record from it returns to the same card.
+    func testDeckFollowsTheContextAndBackReturnsToTheSameCard() {
         let app = launch(reset: true)
         XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 15))
         app.selectSidebarChannel("deploys")
-        tab(app, "Inbox")
-        XCTAssertFalse(app.buttons["context.bar"].exists, "the Inbox spans the workspace")
-        let review = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Review the native inbox'")).firstMatch
-        XCTAssertTrue(review.waitForExistence(timeout: 15), "an item from #general is listed while #deploys is selected")
+        XCTAssertTrue(app.staticTexts["Inbox: #deploys"].waitForExistence(timeout: 10))
+        let review = app.buttons.matching(NSPredicate(format: "identifier == 'deck.inbox.item' AND label CONTAINS 'Review the native inbox'")).firstMatch
+        XCTAssertFalse(review.waitForExistence(timeout: 3), "a #general task is not in #deploys' Inbox")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier == 'deck.inbox.item' AND label CONTAINS 'Rotate staging certificates'")).firstMatch.waitForExistence(timeout: 10))
+        app.buttons["context.home"].firstMatch.tap()
+        // Home lists every scope; search finds the #general task among the workspace's activity (rows are lazy).
+        let search = app.textFields["deck.inbox.search"].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.tap(); search.typeText("Review the native\n")
+        XCTAssertTrue(review.waitForExistence(timeout: 15), "Home lists every scope")
         review.tap()
         XCTAssertTrue(app.staticTexts["Review the native inbox"].firstMatch.waitForExistence(timeout: 10))
-        tab(app, "Tasks")
-        XCTAssertTrue(app.buttons["task.Write release notes for build 3"].waitForExistence(timeout: 15), "the context followed the opened record")
-        XCTAssertTrue(contextLabel(app).contains("general"), contextLabel(app))
+        XCTAssertTrue(app.buttons["section.deck"].isSelected, "the record opened on top of Deck")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(review.waitForExistence(timeout: 10), "Back returns to Deck's Inbox")
+        XCTAssertTrue(app.buttons["deck.page.inbox"].isSelected)
+        XCTAssertEqual(search.value as? String, "Review the native", "the search is kept on return")
     }
 }

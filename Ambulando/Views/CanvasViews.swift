@@ -265,8 +265,7 @@ struct CanvasBoardView: View {
             route = nil
             if let scope = model.navigation.value.channel(channel)?.scopeId {
                 model.selectContext(WorkContext(scopeId: scope, channelId: channel))
-                model.closeSurface()
-                model.mode = .tasks
+                model.show(.tasks)
             } else { model.notice = "This channel is not available on this iPhone." }
         case .unknown, .denied: route = nil
         }

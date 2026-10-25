@@ -67,7 +67,8 @@ final class ChatFlowUITests: XCTestCase {
         let composer = field(app)
         composer.tap()
         composer.typeText("Unsent draft for general")
-        app.selectSidebarChannel("design")                          // another channel from the sidebar
+        app.selectSidebarChannel("design")                          // another channel from the sidebar (opens Deck, as on the web)
+        app.section("Chat")
         XCTAssertTrue(app.navigationBars["#design"].waitForExistence(timeout: 10))
         XCTAssertEqual(value(field(app)).contains("Unsent draft"), false, "drafts are per channel")
         app.showChannels()

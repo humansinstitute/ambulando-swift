@@ -1,6 +1,7 @@
 import XCTest
 
-/// Context Tree, Canvas (naplets, a board, a locked item), agents, Toolbox and personal pins on local sample data
+/// Context Tree, Canvas (naplets, a board, a locked item), agents, Toolbox and personal pins as sections and Deck cards on
+/// local sample data
 /// (`-AmbulandoUITestFixture`, `SampleSurfaceTower`). Not evidence of live Tower behaviour.
 @MainActor
 final class SurfacesUITests: XCTestCase {
@@ -8,7 +9,8 @@ final class SurfacesUITests: XCTestCase {
 
     private func launch(reset: Bool = true) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-AmbulandoUITestFixture"] + (reset ? ["-AmbulandoFixtureReset"] : [])
+        // Agents and Context are optional sections (off by default, as on the web); these tests turn them on.
+        app.launchArguments = ["-AmbulandoUITestFixture", "-sections.agents", "YES", "-sections.context", "YES"] + (reset ? ["-AmbulandoFixtureReset"] : [])
         app.launch()
         XCTAssertTrue(app.staticTexts["Sample data on this iPhone. Not connected to a Tower."].waitForExistence(timeout: 15))
         XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 15))
@@ -23,10 +25,12 @@ final class SurfacesUITests: XCTestCase {
     }
 
     private func openSurface(_ app: XCUIApplication, _ name: String) {
-        app.openSidebar()
-        let row = app.buttons["sidebar.surface.\(name)"].firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 5))
-        row.tap()
+        if name == "canvas" {
+            app.section("Deck")
+            app.deckCard("canvas")
+        } else {
+            app.section(name)
+        }
     }
 
     private func back(_ app: XCUIApplication) { app.navigationBars.buttons.element(boundBy: 0).tap() }
@@ -106,8 +110,10 @@ final class SurfacesUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Checking the outbox retry states"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'direct Autopilot connection'")).firstMatch.exists, "pipelines are labelled unavailable")
         capture(app, "agents")
-        // Choosing a channel in the sidebar keeps the Agents surface and narrows it.
+        // Choosing a channel in the sidebar opens Deck (web); Agents then reads inside it.
         app.selectSidebarChannel("design")
+        XCTAssertTrue(app.buttons["section.deck"].isSelected)
+        app.section("Agents")
         XCTAssertTrue(app.buttons["context.bar"].firstMatch.label.contains("design"))
         XCTAssertFalse(app.staticTexts["Checking the outbox retry states"].waitForExistence(timeout: 3), "#general activity is not shown in #design")
 
@@ -122,20 +128,20 @@ final class SurfacesUITests: XCTestCase {
         XCTAssertTrue(label.label.contains("Web content · https://timesheets.sample.invalid"), label.label)
         capture(app, "toolbox-web")
         back(app)
-        app.buttons["surface.close"].firstMatch.tap()
-        XCTAssertTrue(app.tabBars.buttons["Chat"].waitForExistence(timeout: 5), "closing the surface returns to the tabs")
+        app.section("Chat")
+        XCTAssertTrue(app.navigationBars["#design"].waitForExistence(timeout: 5), "Chat is one tap away and shows the shared context")
         XCTAssertTrue(app.buttons["context.bar"].firstMatch.label.contains("design"), "the context is shared")
     }
 
-    func testPinsShowInTheSidebarAndPinUnpinFromARecord() {
+    func testPinsShowOnDecksPinnedCardAndPinUnpinFromARecord() {
         let app = launch()
-        app.openSidebar()
-        XCTAssertTrue(app.buttons["sidebar.pin.design"].waitForExistence(timeout: 15), "seeded channel pin")
-        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sidebar.pin.'")).count >= 2)
-        capture(app, "pins-sidebar")
-        app.buttons["sidebar.backdrop"].firstMatch.tap()
+        app.section("Deck")
+        app.deckCard("pinned")
+        XCTAssertTrue(app.buttons["deck.pinned.design"].waitForExistence(timeout: 15), "seeded channel pin")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'deck.pinned.'")).count >= 2)
+        capture(app, "pins-deck")
 
-        app.tabBars.buttons["Tasks"].tap()
+        app.section("Tasks")
         let task = app.buttons["task.Review the native inbox"].firstMatch
         XCTAssertTrue(task.waitForExistence(timeout: 15))
         task.tap()
@@ -145,24 +151,29 @@ final class SurfacesUITests: XCTestCase {
         pin.tap()
         XCTAssertTrue(app.buttons["Unpin"].waitForExistence(timeout: 10), "shows the pin at once")
         back(app)
-        app.openSidebar()
-        XCTAssertTrue(app.buttons["sidebar.pin.Review the native inbox"].waitForExistence(timeout: 15), "the pin reaches the sidebar")
+        app.section("Deck")
+        XCTAssertTrue(app.buttons["deck.pinned.Review the native inbox"].waitForExistence(timeout: 15), "the pin reaches Deck")
         capture(app, "pins-added")
-        app.buttons["sidebar.backdrop"].firstMatch.tap()
+        // A channel pin opens Chat in that channel.
+        app.buttons["deck.pinned.design"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["#design"].waitForExistence(timeout: 10))
+        app.section("Tasks")
+        app.buttons["context.home"].firstMatch.tap()   // the channel pin made #design the context
         task.tap()
         XCTAssertTrue(app.buttons["Unpin"].waitForExistence(timeout: 10))
         app.buttons["Unpin"].firstMatch.tap()
         XCTAssertTrue(app.buttons["Pin"].waitForExistence(timeout: 10))
         back(app)
-        app.openSidebar()
-        let gone = app.buttons["sidebar.pin.Review the native inbox"].firstMatch
+        app.section("Deck")
+        let gone = app.buttons["deck.pinned.Review the native inbox"].firstMatch
         let predicate = NSPredicate(format: "exists == false")
         wait(for: [expectation(for: predicate, evaluatedWith: gone)], timeout: 10)
 
         // Pins survive relaunch (read again through the record-sync feed).
         app.terminate()
         let again = launch(reset: false)
-        again.openSidebar()
-        XCTAssertTrue(again.buttons["sidebar.pin.design"].waitForExistence(timeout: 15))
+        again.section("Deck")
+        again.deckCard("pinned")
+        XCTAssertTrue(again.buttons["deck.pinned.design"].waitForExistence(timeout: 15))
     }
 }

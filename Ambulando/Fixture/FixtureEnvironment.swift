@@ -261,6 +261,12 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     private var requests: [String: [String: Any]] = [:]
     /// Tower outbox event log (`GET /events`, the SSE stand-in), persisted with the posted messages.
     private var eventLog: [[String: Any]] = []
+    /// Scope and channel management (created, renamed, reordered, archived; personal order), persisted like the messages.
+    /// Writes to the Operations scope and its channels are refused with 403, as for a member without Manage access.
+    private var managed: [String: Any] = [:]
+    private let manageFile: URL
+    /// The next scope-order save meets an edit from another session (`-AmbulandoFixtureScopeOrderConflict`).
+    var scopeOrderConflict = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureScopeOrderConflict")
     private var _offline = false, _rejectNext = false
     private var _actor = ""
 
@@ -273,6 +279,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
 
     init(file: URL) {
         self.file = file
+        manageFile = file.deletingLastPathComponent().appendingPathComponent("fixture-manage.json")
+        if let data = try? Data(contentsOf: manageFile), let saved = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] { managed = saved }
         work = SampleWorkTower(workspaceId: Self.studio, towerOrigin: FixtureEnvironment.origin,
                                file: file.deletingLastPathComponent().appendingPathComponent("fixture-work.json"))
         labWork = SampleWorkTower(workspaceId: Self.lab, towerOrigin: FixtureEnvironment.origin, objectHost: "objects-lab.sample.invalid",
@@ -375,23 +383,22 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         case ("GET", 1, "scopes") where failScopes:
             return (500, ["error": "Internal error", "code": "internal_error", "status": 500])
         case ("GET", 1, "scopes"):
-            let scopes = w == Self.studio ? [scope(Self.scopeAmbulando, w, "Ambulando"), scope(Self.scopeOps, w, "Operations")]
-                                          : [scope(Self.scopeResearch, w, "Research")]
-            return (200, ["scopes": scopes, "next_cursor": NSNull()])
-        case ("GET", 3, "scopes"):
-            let channels: [[String: Any]] = switch rest[1] {
-            case Self.scopeAmbulando: [channel(Self.generalChannel, w, rest[1], "general", 1), channel(Self.designChannel, w, rest[1], "design", 2)]
-            case Self.scopeOps: [channel(Self.deploysChannel, w, rest[1], "deploys", 1)]
-            case Self.scopeResearch: [channel(Self.notesChannel, w, rest[1], "notes", 1)]
-            default: []
-            }
-            return (200, ["channels": channels, "next_cursor": NSNull()])
+            return lock.withLock { (200, ["scopes": scopeRows(w), "next_cursor": NSNull()]) }
+        case ("GET", 3, "scopes") where rest[2] == "channels":
+            return lock.withLock { (200, ["channels": channelRows(w, scope: rest[1]), "next_cursor": NSNull()]) }
+        case ("GET", 1, "me"):
+            return (200, ["actor": ["actor_id": "f1c70000-0000-4000-8000-0000000000e1", "npub": actorNpub], "membership": ["role": "member"],
+                          "permissions": ["channel.create", "channel.manage", "channel.read", "channel.write", "scope.create", "workspace.read"]])
+        case ("POST", 3, "scopes") where rest[2] == "channels", ("POST", 1, "scopes"), ("PATCH", 2, "scopes"), ("DELETE", 2, "scopes"),
+             ("PATCH", 2, "channels"), ("DELETE", 2, "channels"), ("POST", 3, "channels") where rest.last == "reorder" || rest.count == 2,
+             ("PUT", 2, "me"):
+            return try manage(request, workspace: w, rest: rest)
         case ("GET", 1, "members"):
             let me = actorNpub
             return (200, ["members": [member(me, "You (sample identity)", "human"), member(Self.ana, "Ana", "human"), member(Self.rick, "Rick", "agent")],
                           "next_cursor": NSNull()])
         case ("GET", 2, "me"):
-            return (200, ["scope_order": ["scope_ids": w == Self.studio ? [Self.scopeOps, Self.scopeAmbulando] : [], "row_version": 1]])
+            return lock.withLock { (200, ["scope_order": scopeOrder(w)]) }
         case ("GET", 3, "channels") where rest[2] == "messages":
             return lock.withLock {
                 let all = allMessages().filter { $0["workspace_id"] as? String == w && $0["channel_id"] as? String == rest[1]
@@ -428,6 +435,150 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             return try revise(request, id: rest[1], query: query)
         default:
             return (404, ["code": "not_found"])
+        }
+    }
+
+    // MARK: Scope and channel management (caller holds `lock` for the *Rows helpers)
+
+    private func manageList(_ key: String) -> [[String: Any]] { managed[key] as? [[String: Any]] ?? [] }
+    private func manageMap(_ key: String) -> [String: [String: Any]] { managed[key] as? [String: [String: Any]] ?? [:] }
+    private var archived: Set<String> { Set(managed["archived"] as? [String] ?? []) }
+    private func persistManaged() { if let data = try? JSONSerialization.data(withJSONObject: managed) { try? data.write(to: manageFile, options: .atomic) } }
+
+    private func scopeRows(_ w: String) -> [[String: Any]] {
+        let base = w == Self.studio ? [scope(Self.scopeAmbulando, w, "Ambulando"), scope(Self.scopeOps, w, "Operations")]
+                                    : [scope(Self.scopeResearch, w, "Research")]
+        let edits = manageMap("scopeEdits")
+        return (base + manageList("scopes").filter { $0["workspace_id"] as? String == w })
+            .filter { !archived.contains($0["id"] as? String ?? "") }
+            .map { row in
+                var row = row
+                let id = row["id"] as? String ?? ""
+                for (k, v) in edits[id] ?? [:] { row[k] = v }
+                row["can_manage"] = id != Self.scopeOps
+                return row
+            }
+    }
+
+    private func channelRows(_ w: String, scope s: String) -> [[String: Any]] {
+        let base: [[String: Any]] = switch s {
+        case Self.scopeAmbulando: [channel(Self.generalChannel, w, s, "general", 1), channel(Self.designChannel, w, s, "design", 2)]
+        case Self.scopeOps: [channel(Self.deploysChannel, w, s, "deploys", 1)]
+        case Self.scopeResearch: [channel(Self.notesChannel, w, s, "notes", 1)]
+        default: []
+        }
+        let edits = manageMap("channelEdits"), gone = archived
+        let created: [[String: Any]] = manageList("channels").filter { $0["workspace_id"] as? String == w && $0["scope_id"] as? String == s }
+        var rows: [[String: Any]] = []
+        for original in base + created {
+            let id = original["id"] as? String ?? ""
+            guard !gone.contains(id) else { continue }
+            var row = original
+            for (k, v) in edits[id] ?? [:] { row[k] = v }
+            rows.append(row)
+        }
+        func key(_ row: [String: Any]) -> (Double, String) { ((row["position"] as? Double) ?? 0, (row["id"] as? String) ?? "") }
+        return rows.sorted { key($0) < key($1) }
+    }
+
+    private func scopeOrder(_ w: String) -> [String: Any] {
+        if let saved = (managed["scopeOrder"] as? [String: Any])?[w] as? [String: Any] { return saved }
+        return ["scope_ids": w == Self.studio ? [Self.scopeOps, Self.scopeAmbulando] : [], "row_version": 1]
+    }
+
+    private func channelScope(_ w: String, _ id: String) -> String? {
+        for scope in scopeRows(w) { if let s = scope["id"] as? String, channelRows(w, scope: s).contains(where: { $0["id"] as? String == id }) { return s } }
+        return nil
+    }
+
+    private func editChannel(_ id: String, _ values: [String: Any]) {
+        var edits = manageMap("channelEdits")
+        var row = edits[id] ?? [:]
+        for (k, v) in values { row[k] = v }
+        row["updated_at"] = ISO8601DateFormatter.fixture.string(from: Date())
+        edits[id] = row
+        managed["channelEdits"] = edits
+    }
+
+    private func manage(_ request: URLRequest, workspace w: String, rest: [String]) throws -> (Int, Any) {
+        let body = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:]
+        let method = request.httpMethod ?? "GET"
+        let forbidden: (Int, Any) = (403, ["code": "forbidden", "error": "Permission denied"])
+        return lock.withLock {
+            defer { persistManaged() }
+            let now = ISO8601DateFormatter.fixture.string(from: Date())
+            switch (method, rest.count, rest.first) {
+            case ("POST", 3, "scopes"):
+                let s = rest[1]
+                guard scopeRows(w).contains(where: { $0["id"] as? String == s }) else { return (404, ["code": "scope_not_found"]) }
+                if s == Self.scopeOps { return forbidden }
+                let name = (body["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return (400, ["code": "validation_error", "details": ["fields": [["message": "name must be a non-empty string"]]]]) }
+                if channelRows(w, scope: s).contains(where: { $0["name"] as? String == name }) { return (409, ["code": "duplicate_channel"]) }
+                var row = channel(UUID().uuidString.lowercased(), w, s, name, Double(channelRows(w, scope: s).count + 1))
+                row["kind"] = body["kind"] ?? "channel"; row["metadata"] = body["metadata"] ?? [:]
+                row["description"] = body["description"] ?? NSNull(); row["participant_npubs"] = body["participant_npubs"] ?? NSNull()
+                row["updated_at"] = now
+                managed["channels"] = manageList("channels") + [row]
+                return (201, ["channel": row])
+            case ("POST", 1, "scopes"):
+                let name = (body["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if scopeRows(w).contains(where: { $0["name"] as? String == name }) { return (409, ["code": "duplicate_scope"]) }
+                var row = scope(UUID().uuidString.lowercased(), w, name)
+                row["description"] = body["description"] ?? NSNull(); row["updated_at"] = now
+                managed["scopes"] = manageList("scopes") + [row]
+                return (201, ["scope": row])
+            case ("PATCH", 2, "scopes"), ("DELETE", 2, "scopes"):
+                let s = rest[1]
+                guard var row = scopeRows(w).first(where: { $0["id"] as? String == s }) else { return (404, ["code": "scope_not_found"]) }
+                if s == Self.scopeOps { return forbidden }
+                if method == "DELETE" { managed["archived"] = Array(archived.union([s])); return (200, ["scope": row]) }
+                var edits = manageMap("scopeEdits")
+                edits[s] = ["name": body["name"] ?? row["name"]!, "description": body["description"] ?? NSNull(), "updated_at": now]
+                managed["scopeEdits"] = edits
+                for (k, v) in edits[s]! { row[k] = v }
+                return (200, ["scope": row])
+            case ("PATCH", 2, "channels"), ("DELETE", 2, "channels"), ("POST", 3, "channels"):
+                let c = rest[1]
+                guard let s = channelScope(w, c), let row = channelRows(w, scope: s).first(where: { $0["id"] as? String == c }) else {
+                    return (404, ["code": "channel_not_found"])
+                }
+                if s == Self.scopeOps { return forbidden }
+                if method == "DELETE" { managed["archived"] = Array(archived.union([c])); return (200, ["channel": row]) }
+                if method == "POST" {
+                    var siblings = channelRows(w, scope: s)
+                    let moved = siblings.remove(at: siblings.firstIndex { $0["id"] as? String == c }!)
+                    siblings.insert(moved, at: min(max(0, ((body["position"] as? Int) ?? 1) - 1), siblings.count))
+                    for (i, sibling) in siblings.enumerated() { editChannel(sibling["id"] as! String, ["position": Double(i + 1)]) }
+                    return (200, ["channel": channelRows(w, scope: s).first { $0["id"] as? String == c }!, "changed": true])
+                }
+                var values: [String: Any] = [:]
+                if let name = body["name"] as? String {
+                    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if channelRows(w, scope: s).contains(where: { $0["name"] as? String == trimmed && $0["id"] as? String != c }) { return (409, ["code": "duplicate_channel"]) }
+                    values["name"] = trimmed
+                }
+                if let metadata = body["metadata"] as? [String: Any] {
+                    values["metadata"] = ((row["metadata"] as? [String: Any]) ?? [:]).merging(metadata) { $1 }
+                }
+                editChannel(c, values)
+                return (200, ["channel": channelRows(w, scope: s).first { $0["id"] as? String == c }!])
+            case ("PUT", 2, "me"):
+                var order = scopeOrder(w)
+                var version = order["row_version"] as? Int ?? 1
+                if scopeOrderConflict {
+                    scopeOrderConflict = false
+                    version += 1
+                    order = ["scope_ids": [Self.scopeAmbulando, Self.scopeOps], "row_version": version]
+                    var all = managed["scopeOrder"] as? [String: Any] ?? [:]; all[w] = order; managed["scopeOrder"] = all
+                }
+                guard body["expected_row_version"] as? Int == version else { return (409, ["code": "scope_order_conflict"]) }
+                order = ["scope_ids": body["scope_ids"] as? [String] ?? [], "row_version": version + 1]
+                var all = managed["scopeOrder"] as? [String: Any] ?? [:]; all[w] = order; managed["scopeOrder"] = all
+                return (200, ["scope_order": order])
+            default:
+                return (404, ["code": "not_found"])
+            }
         }
     }
 
