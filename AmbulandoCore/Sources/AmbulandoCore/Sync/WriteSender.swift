@@ -27,11 +27,14 @@ public struct WriteSender: Sendable {
     public let staging: URL
     /// Background transfers for presigned uploads (nil: uploads run in-process).
     public let transfers: BackgroundTransfers?
+    /// Called after Tower accepted a notification change, so the inbox job can pick up the item versions it produced
+    /// (the one sync owner schedules it; the sender never reads the inbox itself).
+    public let afterNotificationWrite: (@Sendable (ConnectionRecord, String) async -> Void)?
 
     public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport, staging: URL,
-                transfers: BackgroundTransfers? = nil) {
+                transfers: BackgroundTransfers? = nil, afterNotificationWrite: (@Sendable (ConnectionRecord, String) async -> Void)? = nil) {
         self.store = store; self.engine = engine; self.identity = identity; self.transport = transport; self.staging = staging
-        self.transfers = transfers
+        self.transfers = transfers; self.afterNotificationWrite = afterNotificationWrite
     }
 
     public static func key(_ connection: ConnectionRecord) -> String { "writes:\(connection.id)" }
@@ -86,6 +89,7 @@ public struct WriteSender: Sendable {
             switch outcome {
             case .done(let ack):
                 try await store.writer.acknowledgeWrite(id: item.id, workspaceId: item.workspaceId, ack)
+                if item.kind == .notificationState || item.kind == .notificationBulk { await afterNotificationWrite?(connection, item.workspaceId) }
                 if item.kind == .fileUpload || item.kind == .docCreate, let staged = item.string("staged") { try? FileManager.default.removeItem(at: staging.appendingPathComponent(staged)) }
             case .retryable(let status, let code, let message):
                 try await store.writer.markWrite(id: item.id, state: .retrying, status: status, code: code, error: message, countAttempt: true)
@@ -323,6 +327,12 @@ public struct WriteSender: Sendable {
         case .pinSet:
             return try await setPin(item, api: api, send: send)
 
+        case .notificationState:
+            return try await setNotificationState(item, api: api)
+
+        case .notificationBulk:
+            return try await bulkNotificationState(item, api: api)
+
         case .fileUpload, .docCreate:
             guard let channel = p["channel_id"] as? String, let staged = p["staged"] as? String, let contentType = p["content_type"] as? String,
                   let name = p["file_name"] as? String else { return .permanent(status: nil, code: nil, message: "Missing upload.") }
@@ -392,6 +402,105 @@ public struct WriteSender: Sendable {
             try await store.writer.updateWritePayload(id: item.id, merging: ["expected_row_version": expected, "mutation_id": mutation])
         }
         return .conflict(message: "Your pin changed on another device; tap Retry to apply this change.")
+    }
+
+    /// One notification's read/dismiss/archive state, as the person saw it.
+    ///
+    /// The write carries the row version and change sequence of the *rendered* item and a `mutation_id`; Tower replays a known
+    /// id and refuses a different request under it (`mutation_id_reused`: a rejection of this action, not a replay).
+    /// On `state_conflict` the current item is adopted, and then:
+    /// - already in the wanted state: done;
+    /// - the card's content moved on (newer activity folded in) and the change would hide it (read, dismiss, archive): *not*
+    ///   applied. The newer card stays as it is and the person is told;
+    /// - only user-state changed elsewhere, or the change restores visibility (unread, undismiss, unarchive): the intent is
+    ///   applied once to the current version with a fresh id.
+    func setNotificationState(_ item: WriteItem, api: TowerAPI) async throws -> WriteOutcome {
+        let p = item.payloadObject
+        guard let id = item.targetId, let patch = p["patch"] as? [String: Any], var expected = p["expected_row_version"] as? Int,
+              var observed = p["observed_change_seq"] as? Int, var mutation = p["mutation_id"] as? String else {
+            return .permanent(status: nil, code: nil, message: "Missing notification change.")
+        }
+        let seenDigest = p["seen_digest"] as? String
+        let read = patch["read"] as? Bool, dismissed = patch["dismissed"] as? Bool, archived = patch["archived"] as? Bool
+        // Reading, dismissing or archiving takes something off the person's list of things to look at.
+        let hides = read == true || dismissed == true || archived == true
+        func satisfied(_ current: NotificationItem) -> Bool {
+            (read == nil || current.isRead == read) && (dismissed == nil || current.isDismissed == dismissed) && (archived == nil || current.isArchived == archived)
+        }
+        let connection = item.connectionId, workspace = item.workspaceId
+        func revert() async { try? await store.writer.clearNotificationPending(connectionId: connection, workspaceId: workspace, ids: [id]) }
+        for attempt in 0..<2 {
+            let reply = try await api.patchNotification(workspaceId: workspace, appNpub: item.appNpub, id: id, mutationId: mutation, expectedRowVersion: expected,
+                                                        observedChangeSeq: hides ? observed : nil, read: read, dismissed: dismissed, archived: archived)
+            switch reply {
+            case .item(let updated):
+                if let base = p["base_row_version"] as? Int, let seenDigest {
+                    try? await store.writer.chainNotificationWrites(connectionId: connection, workspaceId: workspace, id: id, after: item.id,
+                                                                    base: base, seenDigest: seenDigest, rowVersion: updated.rowVersion, changeSeq: updated.changeSeq)
+                }
+                var a = WriteAcknowledgement(); a.notifications = [updated]; return .done(a)
+            case .stateConflict(let current):
+                guard let current else {
+                    await revert()
+                    return .retryable(status: 409, code: "state_conflict", message: "This notification changed elsewhere; will check again.")
+                }
+                if satisfied(current) { var a = WriteAcknowledgement(); a.notifications = [current]; return .done(a) }
+                try await store.writer.storeServerNotification(connectionId: connection, workspaceId: workspace, current)
+                let moved = seenDigest != nil && current.activityDigest != seenDigest
+                if (hides && moved) || attempt > 0 {
+                    await revert()
+                    return .conflict(message: hides && moved
+                        ? "New activity arrived on this notification before your change reached Tower, so it was left as it is."
+                        : "This notification kept changing, so your change was not applied.")
+                }
+                expected = current.rowVersion
+                observed = current.changeSeq
+                mutation = UUID().uuidString.lowercased()
+                try await store.writer.updateWritePayload(id: item.id, merging: ["expected_row_version": expected, "observed_change_seq": observed, "mutation_id": mutation])
+            case .mutationIdReused:
+                await revert()
+                return .permanent(status: 409, code: "mutation_id_reused", message: "Tower rejected this change because its request id was already used for a different change. Nothing was applied.")
+            case .gone:
+                // The item was removed (retention, access); the replayed tombstone takes it off the screen.
+                await revert()
+                return .done(WriteAcknowledgement())
+            case .refused(let status, let code):
+                let outcome = Self.classify(status: status, body: (try? JSONSerialization.data(withJSONObject: ["code": code ?? ""])) ?? Data(),
+                                            attempts: item.attempts + 1, what: "change this notification")
+                if case .permanent = outcome { await revert() }
+                return outcome
+            }
+        }
+        await revert()
+        return .conflict(message: "This notification kept changing, so your change was not applied.")
+    }
+
+    /// "Mark all read" and the like, bounded by the sequence the user was shown (`up_to_seq`): anything newer stays unread.
+    func bulkNotificationState(_ item: WriteItem, api: TowerAPI) async throws -> WriteOutcome {
+        let p = item.payloadObject
+        guard let op = p["op"] as? String, let mutation = p["mutation_id"] as? String else { return .permanent(status: nil, code: nil, message: "Missing notification change.") }
+        let pending = (p["pending_ids"] as? [String]) ?? []
+        for _ in 0..<1 {
+            let outcome = try await api.bulkNotifications(workspaceId: item.workspaceId, appNpub: item.appNpub, mutationId: mutation, op: op,
+                                                          ids: p["ids"] as? [String], upToSeq: p["up_to_seq"] as? Int, view: p["view"] as? String,
+                                                          category: p["category"] as? String)
+            switch outcome {
+            case .done:
+                var a = WriteAcknowledgement(); a.confirmedNotificationIds = pending; return .done(a)
+            case .refused(let reply):
+                if case .mutationIdReused = reply {
+                    try? await store.writer.clearNotificationPending(connectionId: item.connectionId, workspaceId: item.workspaceId, ids: pending)
+                    return .permanent(status: 409, code: "mutation_id_reused", message: "Tower rejected this change because its request id was already used for a different change. Nothing was applied.")
+                }
+                var status = 409, code: String?
+                if case .refused(let s, let c) = reply { status = s; code = c }
+                let result = Self.classify(status: status, body: (try? JSONSerialization.data(withJSONObject: ["code": code ?? ""])) ?? Data(),
+                                           attempts: item.attempts + 1, what: "change these notifications")
+                if case .permanent = result { try? await store.writer.clearNotificationPending(connectionId: item.connectionId, workspaceId: item.workspaceId, ids: pending) }
+                return result
+            }
+        }
+        return .retryable(status: 409, code: "mutation_id_reused", message: "Will check again.")
     }
 
     func deletedLocal(_ workspaceId: String, _ id: String) async throws -> [MessageRecord] {

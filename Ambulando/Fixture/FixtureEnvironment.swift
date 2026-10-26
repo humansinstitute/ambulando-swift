@@ -325,6 +325,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     let labSurfaces: SampleSurfaceTower
     /// Board File versions (list, read, save with a stale-base check) and their canvas projection.
     let boards: SampleBoardTower
+    /// The Studio workspace's notification inbox (the Lab workspace has none: Tower answers 404, "backend not supported").
+    let notifications: SampleNotificationTower
     private var posted: [[String: Any]] = []
     /// Edits and deletions of messages, by id (persisted with the posted messages).
     private var revised: [String: [String: Any]] = [:]
@@ -358,6 +360,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         surfaces = SampleSurfaceTower(workspaceId: Self.studio, file: file.deletingLastPathComponent().appendingPathComponent("fixture-surfaces.json"))
         labSurfaces = SampleSurfaceTower(workspaceId: Self.lab, file: file.deletingLastPathComponent().appendingPathComponent("fixture-surfaces-lab.json"))
         boards = SampleBoardTower(workspaceId: Self.studio, file: file.deletingLastPathComponent().appendingPathComponent("fixture-boards.json"))
+        notifications = SampleNotificationTower(workspaceId: Self.studio, file: file.deletingLastPathComponent().appendingPathComponent("fixture-notifications.json"))
         // Pins and references resolve against the sample tasks, documents and channels the other routes serve.
         let work = work
         boards.objectBytes = { id in work.completedObjectBytes(id) }
@@ -450,6 +453,10 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         guard request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Nostr ") == true else { return (401, ["code": "unauthorized"]) }
         if offline { throw URLError(.notConnectedToInternet) }
         // Surface routes first: their ownership is exact (board versions live under `/files/:f/versions/:v/object`).
+        if let handled = try notifications.handle(request) {
+            if request.httpMethod == "PATCH" || request.httpMethod == "POST" { lock.withLock { emitLocked(workspace: Self.studio, channel: nil, type: "notification_item", id: nil, rowVersion: nil, operation: "state"); persist() } }
+            return handled
+        }
         if let handled = try boards.handle(request) ?? surfaces.handle(request) ?? labSurfaces.handle(request) ?? work.handle(request) ?? labWork.handle(request) {
             return boards.project(handled, for: request)
         }
@@ -823,10 +830,35 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             w.seedDoc(scope: a, channel: design, title: "Release board (Markdown)", body: Data(markdown.utf8), contentType: "text/markdown")
         }
 
+        seedNotificationsIfNeeded(task: review, doc: plan)
         w.seedViewState(type: "task", resource: review, scope: a, channel: general, activity: 3, viewed: 1, attention: 3)
         w.seedViewState(type: "document", resource: plan, scope: a, channel: general, activity: 2, viewed: 1)
         w.seedViewState(type: "thread", resource: Self.uuid(39, "f1c7bbbb"), scope: a, channel: general, activity: 4, viewed: 2)
         w.markSeeded()
+    }
+
+    /// A realistic inbox: a mention in a conversation (three updates), an assignment, a document comment tag, a direct message,
+    /// an object from another app (no screen here: generic detail) and one already read. Inbox "started" with these.
+    func seedNotificationsIfNeeded(task: String, doc: String) {
+        guard !notifications.seeded else { return }
+        let general = Self.generalChannel, thread = Self.uuid(39, "f1c7bbbb")
+        notifications.add(category: "chat_thread", title: "New replies in a conversation", body: "Native chat review", kind: .thread(channel: general, thread: thread), read: true)
+        notifications.add(category: "comment_tag", title: "Ana tagged you in a comment", body: "Native app plan", kind: .doc(doc))
+        notifications.add(category: "dm", title: "Ana sent you a message", body: "Can you look at the outbox states?", kind: .thread(channel: general, thread: Self.uuid(38, "f1c7bbbb")))
+        notifications.add(category: "task_assignment", title: "Ana assigned you a task", body: "Review the native inbox", kind: .task(task))
+        notifications.add(category: "capture_delivery_failed", title: "Blinkers needs attention", body: "Capture delivery failed", kind: .appObject(app: "blinkers", label: "Blinkers"))
+        notifications.add(category: "mention", title: "Ana mentioned you", body: "Native chat review", kind: .thread(channel: general, thread: thread), updates: 3)
+        notifications.markSeeded()
+    }
+
+    /// Another member mentions the signed-in person (a live notification, with its event hint).
+    func simulateNotification() {
+        let general = Self.generalChannel, thread = Self.uuid(39, "f1c7bbbb")
+        lock.withLock {
+            notifications.add(category: "mention", title: "Rick mentioned you", body: "Live mention \(notifications.head)", kind: .thread(channel: general, thread: thread))
+            emitLocked(workspace: Self.studio, channel: nil, type: "notification_item", id: nil, rowVersion: nil, operation: "created")
+            persist()
+        }
     }
 
     static let canvasDoc = "f1c70000-0000-4000-8000-0000000000d7"

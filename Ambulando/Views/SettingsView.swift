@@ -86,6 +86,7 @@ struct SettingsView: View {
                 }
                 #endif
                 if let fixture = model.fixture { FixtureControls(fixture: fixture, model: model) }
+                NotificationSettingsSection()
                 Section {
                     Toggle("Agents", isOn: $showAgents).accessibilityIdentifier("settings.sections.agents")
                     Toggle("Context", isOn: $showContext).accessibilityIdentifier("settings.sections.context")
@@ -102,7 +103,7 @@ struct SettingsView: View {
                     AboutRow(label: "Version", value: bundleValue("CFBundleShortVersionString"), id: "settings.version")
                     AboutRow(label: "Build", value: bundleValue("CFBundleVersion"), id: "settings.build")
                     AboutRow(label: "Platform", value: Device.name, id: "settings.platform")
-                    Text("Push notifications and FIPS transport are not part of this build. Tower provides Web Push only; this app uses HTTPS only.")
+                    Text("Alerts outside the app and FIPS transport are not part of this build. This app uses HTTPS only; notifications are read from Tower's inbox.")
                         .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 } header: { Text("About") }
                 }
@@ -144,6 +145,7 @@ private struct FixtureControls: View {
             Toggle("Simulate offline", isOn: $fixture.offline).accessibilityIdentifier("fixture.offline")
             Toggle("Reject next send", isOn: $fixture.rejectNextSend).accessibilityIdentifier("fixture.reject")
             Toggle("Fail scope lists", isOn: $fixture.failScopes).accessibilityIdentifier("fixture.failScopes")
+            Button("Simulate incoming notification") { fixture.tower.simulateNotification() }.accessibilityIdentifier("fixture.notification")
             Button("Store workspace list again") { Task { await model.fixtureStoreWorkspacesAgain() } }
                 .accessibilityIdentifier("fixture.storeWorkspaces")
             LabeledContent("Context restores", value: "\(model.contextRestores)").accessibilityIdentifier("fixture.restores")

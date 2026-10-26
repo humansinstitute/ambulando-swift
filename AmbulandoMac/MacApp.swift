@@ -76,6 +76,7 @@ final class MacUI {
     var sidebarVisible = true
     var showSettings = false
     var showSearch = false
+    var showNotifications = false
     var showUnlock = false
 }
 

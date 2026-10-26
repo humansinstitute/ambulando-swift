@@ -302,6 +302,7 @@ private struct ShellToolbar: ViewModifier {
     #endif
     @Binding var showSettings: Bool
     @State private var searching = false
+    @State private var notifying = false
     /// A conversation chosen in Search, focused once the sheet has gone (one presentation at a time on iOS).
     @State private var searchedThread: ThreadFocus?
     func body(content: Content) -> some View {
@@ -314,6 +315,11 @@ private struct ShellToolbar: ViewModifier {
                         .environment(\.focusThread, FocusThreadAction { searchedThread = $0; searching = false })
                 }
             }
+            .sheet(isPresented: $notifying) {
+                if let workspace = model.selectedWorkspace, let store = model.store {
+                    NotificationsView(workspace: workspace, store: store)
+                }
+            }
             .toolbar {
                 #if os(iOS)
                 // The Mac's sidebar is a window column with its own toolbar toggle.
@@ -324,6 +330,7 @@ private struct ShellToolbar: ViewModifier {
                         SyncIndicator()
                         Button { search() } label: { Image(systemName: "magnifyingglass") }
                             .accessibilityLabel("Search").accessibilityIdentifier("search")
+                        NotificationsButton { showNotifications() }
                         BrowserButton()
                         // The profile menu (sol `.avatar-menu` button): the signed-in person's avatar or initials.
                         Button { showSettings = true } label: {
@@ -340,6 +347,15 @@ private struct ShellToolbar: ViewModifier {
                 }
             }
             .inlineTitle()
+    }
+
+    /// The Mac's notifications sheet belongs to the window, like Search.
+    private func showNotifications() {
+        #if os(macOS)
+        ui.showNotifications = true
+        #else
+        notifying = true
+        #endif
     }
 
     /// The Mac's search sheet belongs to the window (⌘F opens the same one).

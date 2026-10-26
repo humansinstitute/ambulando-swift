@@ -19,6 +19,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Notifications (iPhone/iPad build 25, Mac build 15)
+
+- A bell with the unread count opens Tower's durable notification inbox: Unread / All / Archived, category filter, read, unread,
+  archive, dismiss with Undo, *Mark all read*, and open the thread, task, document or file (a plain card for anything else).
+  Settings › Notifications shows the inbox state and per-category inbox switches. Read state is shared with other apps and
+  separate from Deck's Inbox and Needs You. Alerts outside the app are **not** available (Tower has no sender yet). See
+  [docs/notifications.md](docs/notifications.md).
+
 ## Text attachments, browser favourites and bounded Mac threads (iPhone/iPad build 24, Mac build 14)
 
 - **Long pastes become text attachments.** A paste over 2,500 Unicode code points, or one that would take the inline

@@ -121,6 +121,10 @@ final class AppModel {
     @ObservationIgnored private(set) var manager: ScopeChannelManager?
     /// The viewer's personal pins in the selected workspace (sidebar "Pinned").
     let pins = LiveQuery<PinsSnapshot>(initial: PinsSnapshot())
+    /// The selected workspace's notification inbox state for the toolbar bell (unread count and whether Tower has one).
+    let notificationBadge = LiveQuery<NotificationSnapshot>(initial: NotificationSnapshot())
+    /// Read, dismiss and archive for notifications; goes through the durable write queue (see `NotificationActions`).
+    @ObservationIgnored private(set) var notificationActions: NotificationActions?
     /// Viewer-local board positions by canvas, so returning to a board keeps where it was (never written to Tower).
     @ObservationIgnored var canvasViewports: [String: CanvasViewport] = [:]
     /// Excalidraw board sessions (drafts, saves) shared by the inline and full-screen editors.
@@ -323,7 +327,13 @@ final class AppModel {
             self.fileCache = FileCache(root: fixture.map { $0.directory.appendingPathComponent("FileCache", isDirectory: true) }
                 ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(ProductionStorage.fileCacheDirectoryName, isDirectory: true))
             self.outbox = OutboxSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers)
-            self.writes = WriteSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers)
+            self.writes = WriteSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers,
+                                      afterNotificationWrite: { connection, workspaceId in
+                // The sync job is the only reader of the inbox: it picks up the item versions Tower produced.
+                guard let workspace = try? await store.reader.workspaces(connectionId: connection.id).first(where: { $0.id == workspaceId }) else { return }
+                await sync.refreshNotifications(connection, workspace, priority: .background)
+            })
+            self.notificationActions = self.writes.map { NotificationActions(store: store, writes: $0) }
             self.saver = DocumentSaver(store: store, identity: identity, transport: transport)
             let pasted = ComposerUploadTransfer(engine: engine, identity: identity, transport: transport, transfers: transfers)
             self.uploads = ComposerUploads(store: store, staging: staging) { [weak self] job in
@@ -472,6 +482,7 @@ final class AppModel {
             navigationWorkspaceId = nil
             navigation.stop()
             pins.stop()
+            notificationBadge.stop()
             context = .home
             restoringPath = true; chatPath = []; focusedThread = nil; restoringPath = false
             resetSectionPaths()
@@ -574,6 +585,7 @@ final class AppModel {
             navigation.stop()
             navigationWorkspaceId = nil
             pins.stop()
+            notificationBadge.stop()
             stopPeople()
             // Profile rows went with the connection; their pictures go too.
             await avatars?.clear()
@@ -602,6 +614,7 @@ final class AppModel {
         context = .home
         navigation.stop()
         pins.stop()
+        notificationBadge.stop()
         stopPeople()
         navigationWorkspaceId = id
         canvasViewports = [:]
@@ -626,6 +639,7 @@ final class AppModel {
             if let workspace = selectedWorkspace {
                 await sync.refreshWorkspace(connection, workspace, priority: .visible, force: force)
                 await sync.refreshPins(connection, workspace, priority: .background, force: force)
+                await sync.refreshNotifications(connection, workspace, priority: force ? .visible : .background, force: force)
                 // Pull to refresh also replays missed events (edits/deletions older than the last page).
                 if force { await sync.catchUpEvents(connection, workspace, priority: .visible, force: true) }
             }
@@ -1042,6 +1056,7 @@ final class AppModel {
         navigationWorkspaceId = workspace
         observeNavigation(connection: connection, workspaceId: workspace)
         observePins(connection: connection, workspaceId: workspace)
+        observeNotificationBadge(connection: connection, workspaceId: workspace)
         observePeople(connection: connection, workspaceId: workspace)
     }
 

@@ -69,6 +69,11 @@ struct MacWorkspaceShell: View {
                 SearchView(workspace: workspace, store: store).frame(minWidth: 620, idealWidth: 720, minHeight: 520, idealHeight: 680)
             }
         }
+        .sheet(isPresented: $ui.showNotifications) {
+            if let workspace = model.selectedWorkspace, let store = model.store {
+                NotificationsView(workspace: workspace, store: store).frame(minWidth: 520, idealWidth: 600, minHeight: 480, idealHeight: 680)
+            }
+        }
         .sheet(isPresented: $ui.showUnlock) {
             NavigationStack {
                 Group {

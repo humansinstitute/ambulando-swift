@@ -19,6 +19,10 @@ public enum WriteKind: String, Sendable, Codable, CaseIterable {
     case fileUpload = "file.upload"
     /// Pin or unpin a thread, task, document or channel for this viewer (`PUT /me/pins/:type/:id`).
     case pinSet = "pin.set"
+    /// Read, dismiss or archive one notification (`PATCH …/notifications/items/:id`, compare-and-set).
+    case notificationState = "notification.state"
+    /// Mark many notifications read/unread/dismissed/archived up to an observed sequence (`POST …/notifications/bulk`).
+    case notificationBulk = "notification.bulk"
 }
 
 public enum WriteState: String, Sendable, Codable {
@@ -77,6 +81,10 @@ public struct WriteAcknowledgement: Sendable {
     public var files: [FileRecord] = []
     public var docs: [DocRecord] = []
     public var pins: [PinRecord] = []
+    /// Notification items Tower returned, stored (and their pending local change dropped) with the retired write.
+    public var notifications: [NotificationItem] = []
+    /// Notification ids whose pending local change Tower accepted without returning items (a bulk change).
+    public var confirmedNotificationIds: [String] = []
     public init() {}
 }
 
@@ -131,6 +139,7 @@ extension StoreWriter {
     /// Tower accepted the write: store what it returned and retire the row together.
     public func acknowledgeWrite(id: String, workspaceId: String, _ ack: WriteAcknowledgement) async throws {
         var keys: Set<ChangeKey> = [ChangeKey(.writes, workspaceId)]
+        let owner = try writeConnection(id)   // read before the row is retired
         try db.transaction {
             if !ack.tasks.isEmpty { _ = try writeTasks(ack.tasks.filter { $0.workspaceId == workspaceId }); keys.insert(ChangeKey(.tasks, workspaceId)) }
             if !ack.messages.isEmpty { _ = try writeMessages(ack.messages.filter { $0.workspaceId == workspaceId }, keys: &keys) }
@@ -156,6 +165,12 @@ extension StoreWriter {
         if !ack.comments.isEmpty { try await upsertComments(workspaceId: workspaceId, ack.comments) }
         if !ack.files.isEmpty { try await upsertFiles(workspaceId: workspaceId, ack.files) }
         if !ack.viewStates.isEmpty { try await upsertViewStates(workspaceId: workspaceId, ack.viewStates) }
+        if !ack.notifications.isEmpty || !ack.confirmedNotificationIds.isEmpty {
+            if let owner {
+                for item in ack.notifications where item.workspaceId == workspaceId { try await acknowledgeNotification(connectionId: owner, workspaceId: workspaceId, item) }
+                if !ack.confirmedNotificationIds.isEmpty { try await confirmNotificationPending(connectionId: owner, workspaceId: workspaceId, ids: ack.confirmedNotificationIds) }
+            }
+        }
     }
 
     public func discardWrite(id: String) async throws {
@@ -182,6 +197,12 @@ extension StoreWriter {
         for id in ids { try await updateWritePayload(id: id, merging: ["ambiguous": true]) }
         try db.prepare("UPDATE writes SET state = ? WHERE state = ?").run([.text(WriteState.queued.rawValue), .text(WriteState.sending.rawValue)])
         if !ids.isEmpty { await emit([ChangeKey(.writes)]) }
+    }
+
+    private func writeConnection(_ id: String) throws -> String? {
+        let s = try db.prepare("SELECT connection_id FROM writes WHERE id = ?")
+        try s.bind([.text(id)])
+        return try s.step() ? s.text(0) : nil
     }
 
     private func writeWorkspace(_ id: String) throws -> String? {

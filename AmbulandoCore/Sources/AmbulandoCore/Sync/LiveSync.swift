@@ -267,6 +267,7 @@ extension WorkspaceSync {
         try await store.writer.saveEventCursor(connectionId: connection.id, workspaceId: workspace.id, head)
         await refreshWorkspace(connection, workspace, priority: .background)
         await refreshInbox(connection, workspace, priority: .background)
+        await refreshNotifications(connection, workspace, priority: .background)
         let feed = await live.feed(workspace.id)
         let visible = await feed.visibleChannelId
         for channel in try await store.reader.channels(workspaceId: workspace.id) {
@@ -310,7 +311,7 @@ extension WorkspaceSync {
         case .message(let c, _), .thread(let c, _), .channelMessages(let c), .reactions(let c, _): c == visible ? 0 : 2
         case .channelTasks(let c), .channelDocs(let c), .channelFiles(let c): c == visible ? 1 : 3
         case .task, .doc: 2
-        case .inbox, .pins: 3
+        case .inbox, .pins, .notifications: 3
         case .agentActivity(let c): c == visible ? 1 : 3
         case .canvas, .contextReferences: 3
         case .structure, .directory, .access, .canvases, .contextTree, .agents, .toolbox: 4
@@ -423,6 +424,8 @@ extension WorkspaceSync {
             do {
                 try await store.writer.replaceAgentActivities(workspaceId: w, channelId: channel, try await api.agentActivities(workspaceId: w, appNpub: app, channelId: channel))
             } catch where lost(error) { try await store.writer.replaceAgentActivities(workspaceId: w, channelId: channel, []) }
+        case .notifications:
+            await refreshNotifications(connection, workspace, priority: .background)
         case .toolbox:
             let page = try await api.personalWapps(workspaceId: w, appNpub: app)
             try await store.writer.replacePersonalWapps(connectionId: connection.id, workspaceId: w, page.wapps, complete: page.complete)

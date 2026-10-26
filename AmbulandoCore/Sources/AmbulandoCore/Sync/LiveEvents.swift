@@ -146,6 +146,8 @@ public struct EventPlan: Sendable, Equatable {
         case agentActivity(channelId: String)
         /// The viewer's Toolbox (personal WApps).
         case toolbox
+        /// The viewer's durable notification inbox changed (an actor-private hint without content).
+        case notifications
     }
 
     public enum Tombstone: Sendable, Hashable {
@@ -241,6 +243,9 @@ public struct EventPlan: Sendable, Equatable {
                 plan.refreshes.insert(.agents)
             case "personal_wapp":
                 plan.refreshes.insert(.toolbox)
+            case "notification_item":
+                // A hint only: the inbox job fetches `changes` with the stored sequence.
+                plan.refreshes.insert(.notifications)
             default:
                 if accessTypes.contains(e.entityType) { plan.refreshes.formUnion([.access, .structure, .directory]) }
                 else if directoryTypes.contains(e.entityType) { plan.refreshes.insert(.directory) }

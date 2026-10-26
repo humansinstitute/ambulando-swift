@@ -55,6 +55,9 @@ struct AmbulandoCommands: Commands {
             Button("Search…") { ui.showSearch = true }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(!ready || model.selectedWorkspace == nil)
+            Button("Notifications…") { ui.showNotifications = true }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(!ready || model.selectedWorkspace == nil)
             Button("Browser") { model.browser.show() }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
                 .disabled(!ready)

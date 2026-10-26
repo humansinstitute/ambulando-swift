@@ -30,7 +30,8 @@ final class FakeChatTower: @unchecked Sendable {
 
     func inject(_ fault: Fault) { lock.withLock { faults.append(fault) } }
     var recordedPosts: [Post] { lock.withLock { posts } }
-    var recordedGets: [URLRequest] { lock.withLock { gets } }
+    /// Record reads only: the notification inbox job (its own keyed read, covered by NotificationTests) is not one.
+    var recordedGets: [URLRequest] { lock.withLock { gets.filter { !($0.url?.path.contains("/notifications") ?? false) } } }
     var messageCount: Int { lock.withLock { messages.count } }
 
     private func timestamp() -> String {

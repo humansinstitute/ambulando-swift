@@ -4,6 +4,8 @@ public enum StoreTable: String, Sendable, Hashable, CaseIterable {
     case connections, workspaces, scopes, channels, messages, threads, members, drafts, outbox, appState
     case tasks, comments, docs, docBodies, docDrafts, files, folders, viewStates, reactions, writes
     case contextTree, canvases, boards, agents, toolbox, pins
+    /// The durable notification inbox (`notification_items`, `notification_sync`).
+    case notifications
     /// Public Nostr profiles; connection-scoped, so their change key has no workspace.
     case profiles
     /// Not a table: emitted whenever stored records are removed because they were deleted or are no longer visible
@@ -57,7 +59,7 @@ public struct ConnectionRecord: Sendable, Equatable, Identifiable, Codable {
 }
 
 enum Schema {
-    static let version = 6
+    static let version = 7
 
     static func migrate(_ db: SQLiteConnection) throws {
         let current = try db.userVersion
@@ -132,6 +134,7 @@ enum Schema {
             if current < 4 { try migrateV4(db) }
             if current < 5 { try migrateV5(db) }
             if current < 6 { try migrateV6(db) }
+            if current < 7 { try migrateV7(db) }
             try db.execute("PRAGMA user_version = \(version)")
         }
     }
@@ -204,7 +207,7 @@ public actor StoreWriter {
     }
 
     func deleteWorkspaceRows(_ workspaceId: String) throws {
-        for table in ["scopes", "channels", "messages", "threads", "members", "channel_sync"] + Schema.v3WorkspaceTables + Schema.v4WorkspaceTables {
+        for table in ["scopes", "channels", "messages", "threads", "members", "channel_sync"] + Schema.v3WorkspaceTables + Schema.v4WorkspaceTables + Schema.v7WorkspaceTables {
             try db.prepare("DELETE FROM \(table) WHERE workspace_id = ?").run([.text(workspaceId)])
         }
     }
@@ -243,7 +246,7 @@ public actor StoreWriter {
             keys.formUnion([ChangeKey(.scopes, id), ChangeKey(.channels, id), ChangeKey(.messages, id), ChangeKey(.threads, id), ChangeKey(.members, id),
                             ChangeKey(.tasks, id), ChangeKey(.comments, id), ChangeKey(.docs, id), ChangeKey(.docBodies, id), ChangeKey(.files, id),
                             ChangeKey(.folders, id), ChangeKey(.viewStates, id), ChangeKey(.reactions, id), ChangeKey(.contextTree, id),
-                            ChangeKey(.canvases, id), ChangeKey(.boards, id), ChangeKey(.agents, id), ChangeKey(.toolbox, id), ChangeKey(.pins, id)])
+                            ChangeKey(.canvases, id), ChangeKey(.boards, id), ChangeKey(.agents, id), ChangeKey(.toolbox, id), ChangeKey(.pins, id), ChangeKey(.notifications, id)])
         }
         await emit(keys)
     }
