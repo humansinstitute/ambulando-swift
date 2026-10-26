@@ -327,7 +327,7 @@ The background remains inactive only while a modal is shown.
 
 The reusable, **Debug-only** in-process AppKit harness runs against the actual Mac app window. It requires both launch
 flags below, uses a fresh fixture database and memory-only test credentials, and never connects to Tower or reads the
-normal account. It exits nonzero on an assertion failure or after a 90-second timeout. The same visible-composer
+normal account. It exits nonzero on an assertion failure or after a 180-second timeout. The same visible-composer
 assertion fails on the old presenter. Release builds contain no harness code.
 
 ```sh
@@ -345,3 +345,26 @@ is emitted as a `SNAPSHOT_BASE64 <name> <PNG base64>` line in the log; ordinary 
 
 These checks exercise AppKit hit testing and accessibility actions inside the process. They do not establish external
 hardware mouse/keyboard delivery, a real-account Tower round trip, Intel execution, or notarization.
+
+The post-save checks require the accepted message to render, then create twelve replies in the same fixture thread
+and twelve other inbox conversations while resizing and expanding/restoring the open panel. The replies are fetched
+through the normal sync transport and must reach both the local store and the rendered thread. The reply composer
+must accept an unsent draft, the panel must close, and Chat navigation must respond. Four further create/send/close
+cycles include multiline Markdown and tables. Each completed thread emits `POST_SAVE_PASS` with reply count and its
+maximum measured response interval. A 100 ms main-actor heartbeat spans submission and rendering; a delay of two
+seconds fails the run, and an independent watchdog bounds a main actor that never resumes. These are responsiveness
+guards, not frame-rate measurements or proof that shorter hitches cannot occur.
+
+To reduce an intermittent failure, add `-AmbulandoMacPostSaveOnly` to skip the earlier cancel/fullscreen/outside-click
+sequence and run five create/send/close cycles. Add `-AmbulandoMacPostSaveStatic` to omit window resizing and modal
+expand/restore, and/or `-AmbulandoMacPostSaveNoSync` to omit the added member replies/inbox conversations. Normal send,
+thread/channel refresh and query paths still run in the latter control. `POST_SAVE_STEP` records the active options
+and the last attempted sizing/sync step. All modes still require both fixture and Mac regression launch flags above.
+
+Keep a post-save beachball separate from the build 11 presentation input trap. A short stackshot in AttributeGraph,
+RootGeometry or `sizeThatFits` identifies sampled layout work, but does not by itself establish a deadlock, a callback
+loop, or a specific expensive view. A passing fixture run cannot establish that a historical real-account hang is
+fixed. Preserve failed-run logs as well as passes; report an earlier assertion failure separately if it prevents the
+post-save checks from running. For a reproducible stall, retain the last action/heartbeat, capture a process sample
+while stalled, and reduce the fixture to the smallest triggering content/update sequence before changing production
+layout. Operational reports, logs and captures belong in ignored `tmp/docs/handoffs/`, not tracked product docs.

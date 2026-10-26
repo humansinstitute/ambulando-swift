@@ -29,7 +29,7 @@ final class MacRegressionSessionStore: MacRegressionMemory<SessionKey>, SessionK
 @MainActor
 enum MacThreadRegression {
     static func run(model: AppModel) async {
-        DispatchQueue.global().asyncAfter(deadline: .now() + 90) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 180) {
             fputs("FAIL: Mac interaction regression timed out\n", stderr)
             exit(2)
         }
@@ -41,10 +41,29 @@ enum MacThreadRegression {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         try? await Task.sleep(for: .seconds(2))
+        // Runs across send/accept/render as well as the explicit sizing checks. The independent
+        // process watchdog above still terminates a main actor that never resumes.
+        let heartbeat = Task { @MainActor in
+            while !Task.isCancelled {
+                let start = ContinuousClock.now
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                let elapsed = start.duration(to: .now)
+                let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+                if seconds >= 2 {
+                    print("FAIL: main actor heartbeat delayed \(seconds)s"); fflush(stdout); exit(1)
+                }
+                if seconds > 0.5 { print("HEARTBEAT_SLOW seconds=\(seconds)"); fflush(stdout) }
+            }
+        }
+        defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
             try press(window, "section.deck")
             await settle()
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacPostSaveOnly") {
+                try await repeatedSends(window, model: model, count: 5)
+                print("PASS: isolated repeated post-save interactions"); fflush(stdout); exit(0)
+            }
             try press(window, "deck.inbox.new")
             await settle()
             print("After +: composing=\(model.composingThread), focusedThread=\(model.focusedThread != nil), composerVisible=\(find(window, "deck.compose") != nil), backgroundAccessible=\(find(window, "section.deck") != nil), attachedSheet=\(window.attachedSheet != nil)")
@@ -113,6 +132,7 @@ enum MacThreadRegression {
             }
             try require(model.focusedThread != nil && !model.composingThread, "submit must open the accepted new thread")
             try require(find(window, "thread.focus.close") != nil, "created thread must be interactive")
+            try await postSave(window, model: model, expected: "Thread regression draft")
             try snapshot(window, model: model, name: "submitted-thread")
             try press(window, "thread.focus.close")
             await settle()
@@ -128,6 +148,7 @@ enum MacThreadRegression {
             try press(window, "deck.compose.cancel")
             await settle()
             try require(find(window, "section.deck") != nil, "final cancel restores background")
+            try await repeatedSends(window, model: model, count: 4)
             print("PASS: +, mention, draft, cancel, navigation, reopen, resize, modal expand/restore, submit, close, fresh composer (see GAP lines for optional pointer checks)")
         } catch {
             print("FAIL: \(error)")
@@ -139,7 +160,104 @@ enum MacThreadRegression {
         exit(0)
     }
 
+    static func repeatedSends(_ window: NSWindow, model: AppModel, count: Int) async throws {
+        for cycle in 1...count {
+            try press(window, "deck.inbox.new")
+            await settle()
+            let body = "Post-save regression \(cycle)\n\n| Item | Status |\n| --- | --- |\n| Layout | Saved |\n\n" + String(repeating: "A realistic multiline update with **formatting**, text and a [link](https://example.com).\n\n", count: cycle * 3)
+            try type(window, body)
+            await settle()
+            try press(window, "composer.send")
+            for _ in 0..<30 {
+                if model.focusedThread != nil { break }
+                await settle()
+            }
+            try await postSave(window, model: model, expected: "Post-save regression \(cycle)")
+            try press(window, "thread.focus.close")
+            await settle()
+            try click(window, "section.chat")
+            await settle()
+            try require(model.mode == .chat, "repeated post-save navigation must respond")
+            try press(window, "section.deck")
+            await settle()
+        }
+    }
+
     struct Failure: Error, CustomStringConvertible { let description: String }
+    /// Exercise production sync/read/render paths, never insert local rows or toggle modal state to simulate success.
+    static func postSave(_ window: NSWindow, model: AppModel, expected: String) async throws {
+        guard let focus = model.focusedThread, let channel = focus.channelId,
+              let workspace = model.selectedWorkspace, let fixture = model.fixture, let store = model.store else {
+            throw Failure(description: "Missing accepted fixture thread")
+        }
+        try require(!model.composingThread, "accepted send must leave composing state")
+        for _ in 0..<20 {
+            if containsText(window, expected) && find(window, "message") != nil { break }
+            await settle()
+        }
+        try require(containsText(window, expected) && find(window, "message") != nil, "saved message must actually render")
+        try snapshot(window, model: model, name: "post-save-" + focus.threadId)
+        let before = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: focus.threadId, limit: 500).count
+        let marker = "Concurrent reply \(expected)"
+        let replyCount = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacPostSaveNoSync") ? 0 : 12
+        let resizing = !ProcessInfo.processInfo.arguments.contains("-AmbulandoMacPostSaveStatic")
+        let updates = Task.detached {
+            for index in 0..<replyCount {
+                let n = index + 1
+                fixture.tower.postAsMember(channel: channel, body: "\(marker) \(n)", threadId: focus.threadId)
+                fixture.tower.postAsMember(channel: channel, body: "Background inbox update \(n)")
+                try? await Task.sleep(for: .milliseconds(180))
+            }
+        }
+        defer { updates.cancel() }
+        var maxDelay = 0.0
+        for step in 0..<12 {
+            let start = ContinuousClock.now
+            print("POST_SAVE_STEP step=\(step) resizing=\(resizing) replies=\(replyCount)"); fflush(stdout)
+            if resizing {
+                window.setContentSize(step.isMultiple(of: 2) ? NSSize(width: 900, height: 600) : NSSize(width: 1440, height: 900))
+                if step.isMultiple(of: 3) { try press(window, "thread.focus.expand") }
+            }
+            model.openThread(focus.threadId, channelId: channel, in: workspace)
+            model.openChannel(channel, in: workspace, force: true)
+            try? await Task.sleep(for: .milliseconds(250))
+            let elapsed = start.duration(to: .now)
+            let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+            maxDelay = max(maxDelay, seconds)
+            try require(seconds < 2, "post-save main actor stalled for \(seconds)s")
+            try require(model.focusedThread == focus && find(window, "thread.focus.close") != nil, "sync must retain interactive focused thread")
+        }
+        await updates.value
+        for _ in 0..<20 {
+            model.openThread(focus.threadId, channelId: channel, in: workspace)
+            await settle()
+            let rows = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: focus.threadId, limit: 500)
+            if rows.count == before + replyCount && (replyCount == 0 || containsText(window, marker)) { break }
+        }
+        let rows = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: focus.threadId, limit: 500)
+        try require(rows.count == before + replyCount, "all concurrent replies must reach local store through sync")
+        try require(replyCount == 0 || containsText(window, marker), "synced reply must render in actual thread")
+        try type(window, "Unsent responsiveness probe")
+        await settle()
+        try require(try textView(window).string == "Unsent responsiveness probe", "post-save reply composer must accept input")
+        for _ in 0..<12 {
+            let start = ContinuousClock.now
+            try? await Task.sleep(for: .milliseconds(250))
+            let elapsed = start.duration(to: .now)
+            let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+            maxDelay = max(maxDelay, seconds)
+            try require(seconds < 2, "sustained post-save response stalled")
+        }
+        print("POST_SAVE_PASS thread=\(focus.threadId) replies=\(replyCount) maxResponseSeconds=\(maxDelay)"); fflush(stdout)
+    }
+
+    static func containsText(_ object: Any, _ text: String, depth: Int = 0) -> Bool {
+        guard depth < 60 else { return false }
+        for attribute in ["AXValue", "AXDescription"] {
+            if let string = value(object, attribute) as? String, string.contains(text) { return true }
+        }
+        return children(object).contains { containsText($0, text, depth: depth + 1) }
+    }
     static func require(_ condition: Bool, _ message: String) throws {
         guard condition else { throw Failure(description: message) }
     }
