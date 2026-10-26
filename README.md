@@ -19,13 +19,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
-## Notifications (iPhone/iPad build 26, Mac build 16)
+## Notifications (iPhone/iPad build 27, Mac build 17)
 
 - A bell with the unread count opens Tower's durable notification inbox: Unread / All / Archived, category filter, read, unread,
   archive, dismiss with Undo, *Mark all read*, and open the thread, task, document or file (a plain card for anything else).
   Settings › Notifications shows the inbox state and per-category inbox switches. Read state is shared with other apps and
   separate from Deck's Inbox and Needs You. Alerts outside the app are **not** available (Tower has no sender yet). See
-  [docs/notifications.md](docs/notifications.md).
+  [docs/notifications.md](docs/notifications.md). Build 27: a listing that keeps restarting (expired cursor or changing
+  rules) now stops after two restarts per job and retries later, staying not-ready instead of looping.
 
 ## Text attachments, browser favourites and bounded Mac threads (iPhone/iPad build 24, Mac build 14)
 
@@ -87,7 +88,7 @@ large pasted crash reports. The iPhone/iPad composer is unchanged. See [Mac vali
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (26); Mac version 0.1.0 (16). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (27); Mac version 0.1.0 (17). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
