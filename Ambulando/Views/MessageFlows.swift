@@ -26,14 +26,12 @@ extension AppModel {
     func autopilotURL(for message: MessageRecord, in workspace: WorkspaceRecord) async -> URL? {
         guard let session = AutopilotSessionLink.sessionId(in: message.raw) else { return nil }
         if let address = AutopilotSessionLink.address(inWorkspace: workspace.raw), let url = AutopilotSessionLink.url(sessionId: session, autopilot: address) { return url }
-        // Otherwise the workspace's configured Autopilot agent address.
+        // Otherwise the address of the agent that wrote the message (never another agent's).
         guard let store, let connection else { return nil }
         let saved = try? await store.reader.state(WorkspaceSync.personalAgentsKey(connection.id, workspace.id))
         let launchers = saved.flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode([PersonalAgentLauncher].self, from: $0) } ?? []
-        for launcher in launchers {
-            if let url = AutopilotSessionLink.url(sessionId: session, autopilot: launcher.address) { return url }
-        }
-        return nil
+        guard let address = AutopilotSessionLink.address(forSender: message.senderNpub, launchers: launchers) else { return nil }
+        return AutopilotSessionLink.url(sessionId: session, autopilot: address)
     }
 }
 

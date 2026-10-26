@@ -22,6 +22,13 @@ public enum AutopilotSessionLink {
         return parts?.url
     }
 
+    /// The address of the agent that wrote the message, from the personal agent launchers: only that agent's own address is
+    /// ever used, so a session link never opens another agent's host.
+    public static func address(forSender sender: String?, launchers: [PersonalAgentLauncher]) -> String? {
+        guard let sender, !sender.isEmpty else { return nil }
+        return launchers.first { $0.npub == sender && !$0.address.isEmpty }?.address
+    }
+
     /// The workspace's Autopilot address from the workspace record's metadata (`wingman_harness_url` / `autopilot_url`).
     public static func address(inWorkspace raw: Data) -> String? {
         guard let object = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] else { return nil }

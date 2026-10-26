@@ -80,7 +80,7 @@ UTF-16 positions; Markdown uses source lines/quotes. Unknown formats stay in the
 lease, permission and version enforcement; a local draft does not grant write access. Mac keeps its existing inline Edit
 and native reader selection flow; no shared API or web/backend changes are required.
 
-## Interface parity pass (iPhone build 20, Mac build 9)
+## Interface parity pass (iPhone build 21, Mac build 10)
 
 | Web behaviour | Native | Status |
 | --- | --- | --- |

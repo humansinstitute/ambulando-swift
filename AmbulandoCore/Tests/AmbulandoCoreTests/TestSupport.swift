@@ -47,6 +47,8 @@ final class StubTransport: HTTPTransport, @unchecked Sendable {
 
     func setHandler(_ handler: @escaping Handler) { lock.withLock { self.handler = handler } }
     var recorded: [URLRequest] { lock.withLock { requests } }
+    /// The current handler's answer, without recording the request (for a wrapper transport that handles only some routes).
+    func handlerResult(_ request: URLRequest) throws -> (Int, Any) { let current = lock.withLock { handler }; return try current(request) }
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let current = lock.withLock { requests.append(request); return handler }

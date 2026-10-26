@@ -169,6 +169,13 @@ public struct ThreadRecord: Sendable, Equatable, Identifiable {
         let latest: String?; let record_state: String?; let row_version: Int?; let updated_at: String?
     }
 
+    /// The agent a branched thread keeps talking to (`metadata.inherited_agent_recipient_npub`).
+    public var inheritedAgentRecipient: String? {
+        let object = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any]
+        let npub = ((object?["metadata"] as? [String: Any])?["inherited_agent_recipient_npub"] as? String)?.trimmingCharacters(in: .whitespaces)
+        return npub?.isEmpty == false ? npub : nil
+    }
+
     public init(raw: Data) throws {
         let dto = try JSONDecoder().decode(DTO.self, from: raw)
         guard UUID(uuidString: dto.id) != nil, UUID(uuidString: dto.channel_id) != nil else { throw TowerError.malformed("thread") }

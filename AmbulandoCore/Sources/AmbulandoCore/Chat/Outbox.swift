@@ -13,7 +13,9 @@ public enum OutboxRequest {
 
     /// Builds the exact JSON bytes for `POST /channels/:c/messages`, including the kind 33358 instruction signature over
     /// `body` with the workspace, channel and (for replies) thread tags. These bytes are frozen and reused for every retry.
-    public static func build(_ item: OutboxItem, signer: EventSigner) async throws -> Data {
+    /// `inheritedAgentRecipient` is a branched thread's agent (`metadata.inherited_agent_recipient_npub`): a reply that
+    /// names nobody still goes to that agent through `metadata.agent_direct_recipient_npub`, as the web sends it.
+    public static func build(_ item: OutboxItem, signer: EventSigner, inheritedAgentRecipient: String? = nil) async throws -> Data {
         let signed = try await MessageInstructionSignature.sign(body: item.body, workspaceId: item.workspaceId, channelId: item.channelId,
                                                                  threadId: item.threadId, signer: signer)
         guard signed.signerNpub == item.signerNpub else { throw IdentityError.signerMismatch }
@@ -28,7 +30,12 @@ public enum OutboxRequest {
         guard wire.count == item.attachments.count, item.attachments.allSatisfy(\.complete) else { throw FileTransferError.notAttachable }
         // Storage links in the body are attachments too (sol `mergeChatStorageAttachments`).
         let attachments = StorageMarkdown.merged(wire, body: item.body)
-        if !attachments.isEmpty { object["metadata"] = ["attachments": attachments.map(\.requestObject)] }
+        var metadata: [String: Any] = [:]
+        if !attachments.isEmpty { metadata["attachments"] = attachments.map(\.requestObject) }
+        if item.mentions.isEmpty, item.threadId != nil, let inheritedAgentRecipient, !inheritedAgentRecipient.isEmpty {
+            metadata["agent_direct_recipient_npub"] = inheritedAgentRecipient
+        }
+        if !metadata.isEmpty { object["metadata"] = metadata }
         return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 
@@ -181,7 +188,8 @@ public struct OutboxSender: Sendable {
                     if !permanent { nextRetry = min(nextRetry ?? .max, item.attempts + 1) }
                     continue
                 }
-                let built = try await OutboxRequest.build(ready, signer: identity)
+                let inherited = ready.threadId == nil ? nil : try await store.reader.thread(workspaceId: ready.workspaceId, id: ready.threadId!)?.inheritedAgentRecipient
+                let built = try await OutboxRequest.build(ready, signer: identity, inheritedAgentRecipient: inherited)
                 try await store.writer.freezeOutbox(id: item.id, request: built)
                 request = try await store.reader.outboxItem(id: item.id)?.request
             }
