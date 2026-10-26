@@ -124,10 +124,12 @@ private struct DeckCardFrame<Actions: View, Content: View>: View {
 
 private struct DeckRowStyle: ViewModifier {
     var unread = false
+    var tint: Color? = nil
     func body(content: Content) -> some View {
         content
             .padding(.horizontal, 12).padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .background((tint ?? .clear).opacity(0.06), in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
             .background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
             .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(unread ? Amb.brandOrange.opacity(0.7) : Amb.border, lineWidth: unread ? 1.2 : 0.8))
     }
@@ -193,8 +195,6 @@ struct DeckInboxCard: View {
         .onChange(of: model.identity) { _, state in if case .unlocked = state { refresh(context) } }
         #if os(iOS)
         .fullScreenCover(isPresented: $composingThread, onDismiss: openCreatedThread) { DeckThreadComposer(workspace: workspace, store: store, onCreated: { createdThread = $0 }) }
-        #else
-        .sheet(isPresented: $composingThread, onDismiss: openCreatedThread) { DeckThreadComposer(workspace: workspace, store: store, onCreated: { createdThread = $0 }).frame(minWidth: 600, minHeight: 440) }
         #endif
     }
 
@@ -246,7 +246,13 @@ struct DeckInboxCard: View {
     }
 
     private var newThreadButton: some View {
-        Button { composingThread = true } label: {
+        Button {
+            #if os(macOS)
+            model.composingThread = true
+            #else
+            composingThread = true
+            #endif
+        } label: {
             Image(systemName: "plus").font(.amb(.body).weight(.semibold)).frame(width: 30, height: 30)
         }
         .accessibilityLabel("New thread")
@@ -270,11 +276,12 @@ struct DeckInboxCard: View {
         HStack(alignment: .top, spacing: 8) {
             ThreadRouteLink(route: route(item)) {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: DeckInbox.icon(item.kind)).font(.amb(.subheadline)).foregroundStyle(item.isUnread ? Amb.brandOrange : Amb.primary)
-                        .frame(width: 20).padding(.top, 2)
+                    Image(systemName: DeckInbox.icon(item.kind)).font(.amb(.subheadline)).foregroundStyle(DeckInbox.tint(item.kind))
+                        .frame(width: 28, height: 28)
+                        .background(DeckInbox.tint(item.kind).opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
-                            Text(kicker(item, labels)).font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                            Text(kicker(item, labels)).font(.amb(.caption).weight(.semibold)).foregroundStyle(DeckInbox.tint(item.kind)).lineLimit(1)
                             Spacer(minLength: 4)
                             Text(ChatTime.label(item.activityAt)).font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
                         }
@@ -304,7 +311,7 @@ struct DeckInboxCard: View {
                 }
             }
         }
-        .modifier(DeckRowStyle(unread: item.isUnread))
+        .modifier(DeckRowStyle(unread: item.isUnread, tint: DeckInbox.tint(item.kind)))
     }
 
     private func kicker(_ item: DeckActivity.Item, _ labels: [String: String]) -> String {
@@ -420,6 +427,16 @@ enum DeckInbox {
         case .task: "checklist"
         case .document: "doc.text"
         case .file: "paperclip"
+        }
+    }
+
+    /// A quiet colour per record type, so chats, tasks, documents and files can be told apart at a glance.
+    static func tint(_ kind: DeckActivity.Kind) -> Color {
+        switch kind {
+        case .chat: Amb.info
+        case .task: Amb.warning
+        case .document: Amb.success
+        case .file: Amb.mutedForeground
         }
     }
 
@@ -676,11 +693,12 @@ struct DeckHelloCard: View {
                 // A browser tab over Deck (signing through `window.nostr`); **Ambulando** returns to this card.
                 if let url = wapp.safeLaunchURL {
                     Button { model.browser.launch(url) } label: {
-                        Label(wapp.title, systemImage: "app.dashed").font(.amb(.subheadline)).foregroundStyle(Amb.foreground)
-                            .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        AppLauncherCard(title: wapp.title, subtitle: wapp.description ?? "WApp", sources: wapp.logoCandidates, workspace: workspace)
                     }
                     .buttonStyle(.plain)
-                    .modifier(DeckRowStyle())
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(wapp.title), \(wapp.description ?? "WApp")")
+                    .accessibilityHint("Opens in the browser")
                     .accessibilityIdentifier("deck.app.\(wapp.title)")
                 }
             }
@@ -706,6 +724,35 @@ struct DeckHelloCard: View {
         guard let scope = nav.scope(model.context.scopeId) else { return "All workspace activity" }
         if let channel = nav.channel(model.context.channelId) { return "\(scope.name) / \(nav.label(channel))" }
         return scope.name
+    }
+}
+
+/// An app as a card with its logo, title and description (the web's launcher pill), as on the desktop Deck.
+struct AppLauncherCard: View {
+    let title: String
+    let subtitle: String
+    let sources: [LauncherLogoSource]
+    let workspace: WorkspaceRecord
+
+    var body: some View {
+        HStack(spacing: 12) {
+            LauncherLogoView(sources: sources, initials: PersonInitials.of(title), workspace: workspace, size: 44)
+                .frame(width: 44, height: 44)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Amb.border, lineWidth: 2))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.amb(.subheadline).weight(.bold)).foregroundStyle(Amb.itemHeading).lineLimit(1)
+                Text(subtitle).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(2).multilineTextAlignment(.leading)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
+        }
+        .padding(.leading, 10).padding(.trailing, 12).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
+        .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border, lineWidth: 1))
+        .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
+        .contentShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
     }
 }
 
@@ -746,9 +793,9 @@ private struct MacDeckDashboard: View {
 }
 
 private extension View {
+    /// The web's Deck columns are open surfaces (no outer box or shadow); only their cards are bordered.
     func desktopDeckPanel() -> some View {
-        background(Amb.card, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Amb.border, lineWidth: 1))
+        background(Amb.card)
     }
 }
 
@@ -973,69 +1020,120 @@ struct DeckThreadComposer: View {
     @Environment(\.dismiss) private var dismiss
     let workspace: WorkspaceRecord
     let store: LocalStore
+    /// Mac: the modal's expand / restore state (the composer fills the window when expanded).
+    var expanded: Binding<Bool>? = nil
     let onCreated: (ThreadFocus) -> Void
     @State private var channelId: String?
     @State private var requestId: String?
     @State private var sent = LiveQuery<MessageRecord?>(initial: nil)
     @State private var pending = LiveQuery<OutboxItem?>(initial: nil)
 
+    private func close() {
+        #if os(macOS)
+        model.composingThread = false
+        #else
+        dismiss()
+        #endif
+    }
+
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                let nav = model.navigation.value
-                let channels = nav.channels(in: model.context)
-                Picker("Channel", selection: $channelId) {
-                    Text("Choose channel").tag(Optional<String>.none)
-                    ForEach(channels) { Text("#\(nav.label($0))").tag(Optional($0.id)) }
-                }
-                .disabled(requestId != nil)
-                .accessibilityIdentifier("deck.compose.channel")
-                if let channelId, let connection = model.connection {
-                    Text("New conversation").font(.amb(.headline))
-                    Text("Write the first message to start a thread.").foregroundStyle(Amb.mutedForeground)
-                    Spacer(minLength: 0)
-                    if requestId == nil {
-                        Composer(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId),
-                                 workspace: workspace, store: store, placeholder: "Start a new thread…", onEnqueued: { requestId = $0 })
-                            .id(channelId)
-                    } else {
-                        Text(pending.value?.lastError ?? "Starting thread… Your message is saved on this device.")
-                            .accessibilityIdentifier("deck.compose.pending")
+        #if os(macOS)
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "square.and.pencil").foregroundStyle(Amb.mutedForeground).accessibilityHidden(true)
+                Text("New thread").font(.amb(.headline)).foregroundStyle(Amb.foreground).accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 8)
+                if let expanded {
+                    Button { expanded.wrappedValue.toggle() } label: {
+                        Image(systemName: expanded.wrappedValue ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                            .font(.amb(.body).weight(.semibold)).frame(width: Amb.touchTarget, height: Amb.touchTarget).contentShape(Rectangle())
                     }
-                } else {
-                    Text(channels.isEmpty ? "No channels in this context." : "Choose a channel here to start your thread.")
-                    Spacer()
+                    .buttonStyle(.plain).foregroundStyle(Amb.mutedForeground)
+                    .help(expanded.wrappedValue ? "Restore size" : "Full screen")
+                    .accessibilityLabel(expanded.wrappedValue ? "Restore size" : "Expand to full screen")
+                    .accessibilityIdentifier("deck.compose.expand")
                 }
-            }
-            .padding()
-            .background(Amb.background)
-            .navigationTitle("New thread")
-            .inlineTitle()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(requestId == nil ? "Cancel" : "Close") { dismiss() }.accessibilityIdentifier("deck.compose.cancel")
+                Button(action: close) {
+                    Image(systemName: "xmark").font(.amb(.body).weight(.semibold)).frame(width: Amb.touchTarget, height: Amb.touchTarget).contentShape(Rectangle())
                 }
+                .buttonStyle(.plain).foregroundStyle(Amb.foreground)
+                .keyboardShortcut(.cancelAction)
+                .help("Close (Esc)")
+                .accessibilityLabel(requestId == nil ? "Cancel" : "Close")
+                .accessibilityIdentifier("deck.compose.cancel")
             }
-            .onAppear {
-                let channels = model.navigation.value.channels(in: model.context)
-                channelId = model.context.channelId.flatMap { id in channels.contains(where: { $0.id == id }) ? id : nil } ?? channels.first?.id
-            }
-            .task(id: requestId) {
-                guard let requestId else { return }
-                let w = workspace.id, store = store
-                sent.start(store: store, matches: { $0.workspaceId == w && $0.table == .messages }) {
-                    try await store.reader.sentMessage(workspaceId: w, clientRequestId: requestId)
+            .padding(.leading, 18).padding(.trailing, 6).padding(.vertical, 4)
+            .background(Amb.card)
+            Divider()
+            form
+        }
+        .background(Amb.background)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isModal)
+        .accessibilityIdentifier("deck.compose")
+        #else
+        NavigationStack {
+            form
+                .navigationTitle("New thread")
+                .inlineTitle()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(requestId == nil ? "Cancel" : "Close") { close() }.accessibilityIdentifier("deck.compose.cancel")
+                    }
                 }
-                pending.start(store: store, matches: { $0.workspaceId == w && $0.table == .outbox }) {
-                    try await store.reader.outboxItem(id: requestId)
-                }
-            }
-            .onChange(of: sent.value) { _, message in
-                guard let message, let threadId = message.threadId else { return }
-                onCreated(ThreadFocus(workspaceId: workspace.id, channelId: message.channelId, threadId: threadId))
-                dismiss()
-            }
         }
         .accessibilityIdentifier("deck.compose")
+        #endif
+    }
+
+    private var form: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            let nav = model.navigation.value
+            let channels = nav.channels(in: model.context)
+            Picker("Channel", selection: $channelId) {
+                Text("Choose channel").tag(Optional<String>.none)
+                ForEach(channels) { Text("#\(nav.label($0))").tag(Optional($0.id)) }
+            }
+            .disabled(requestId != nil)
+            .accessibilityIdentifier("deck.compose.channel")
+            if let channelId, let connection = model.connection {
+                Text("New conversation").font(.amb(.headline))
+                Text("Write the first message to start a thread.").foregroundStyle(Amb.mutedForeground)
+                Spacer(minLength: 0)
+                if requestId == nil {
+                    Composer(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId),
+                             workspace: workspace, store: store, placeholder: "Start a new thread…", onEnqueued: { requestId = $0 })
+                        .id(channelId)
+                } else {
+                    Text(pending.value?.lastError ?? "Starting thread… Your message is saved on this device.")
+                        .accessibilityIdentifier("deck.compose.pending")
+                }
+            } else {
+                Text(channels.isEmpty ? "No channels in this context." : "Choose a channel here to start your thread.")
+                Spacer()
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Amb.background)
+        .onAppear {
+            let channels = model.navigation.value.channels(in: model.context)
+            channelId = model.context.channelId.flatMap { id in channels.contains(where: { $0.id == id }) ? id : nil } ?? channels.first?.id
+        }
+        .task(id: requestId) {
+            guard let requestId else { return }
+            let w = workspace.id, store = store
+            sent.start(store: store, matches: { $0.workspaceId == w && $0.table == .messages }) {
+                try await store.reader.sentMessage(workspaceId: w, clientRequestId: requestId)
+            }
+            pending.start(store: store, matches: { $0.workspaceId == w && $0.table == .outbox }) {
+                try await store.reader.outboxItem(id: requestId)
+            }
+        }
+        .onChange(of: sent.value) { _, message in
+            guard let message, let threadId = message.threadId else { return }
+            onCreated(ThreadFocus(workspaceId: workspace.id, channelId: message.channelId, threadId: threadId))
+            close()
+        }
     }
 }

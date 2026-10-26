@@ -69,32 +69,68 @@ struct MessageCell: View {
                     row
                 }
             }
+            .overlay(alignment: .topTrailing) { messageControls }
             ReactionBar(reactions: reactions, me: model.identity.npub) { toggle($0) }
                 .padding(.leading, 60).padding(.trailing, 16)
             ForEach(writes.filter { [.messageEdit, .messageDelete].contains($0.kind) }) { item in
                 WriteStatusLine(item: item, label: item.kind == .messageEdit ? "Edit" : "Delete").padding(.leading, 60).padding(.trailing, 16).padding(.bottom, 6)
             }
         }
-        .contextMenu {
-            Menu {
-                ForEach(ReactionEmoji.allCases, id: \.self) { emoji in
-                    Button { toggle(emoji.rawValue) } label: { Label(emoji.name, systemImage: emoji.symbol) }
-                        .accessibilityIdentifier("react.\(emoji.rawValue)")
-                }
-            } label: { Label("React", systemImage: "face.smiling") }
-                .accessibilityIdentifier("message.react")
-            Button { Pasteboard.copy(MentionCodec.plain(message.body)) } label: { Label("Copy", systemImage: "doc.on.doc") }
-            if mine && !message.deleted {
-                Button { editing = true } label: { Label("Edit", systemImage: "pencil") }.accessibilityIdentifier("message.edit")
-                Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }.accessibilityIdentifier("message.delete")
-            }
-        }
+        .contextMenu { actions }
         .sheet(isPresented: $editing) { MessageEditSheet(message: message, workspace: workspace, currentBody: pendingEdit?.string("body") ?? message.body) }
         .confirmationDialog("Delete this message for everyone?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 model.submit(WriteIntent(kind: .messageDelete, targetId: message.id, payload: ["row_version": message.rowVersion]), in: workspace)
             }
         }
+    }
+
+    /// The message's actions, shared by the visible ⋮ menu and the long-press / right-click menu.
+    @ViewBuilder private var actions: some View {
+        Menu {
+            ForEach(ReactionEmoji.allCases, id: \.self) { emoji in
+                Button { toggle(emoji.rawValue) } label: { Label(emoji.name, systemImage: emoji.symbol) }
+                    .accessibilityIdentifier("react.\(emoji.rawValue)")
+            }
+        } label: { Label("React", systemImage: "face.smiling") }
+            .accessibilityIdentifier("message.react")
+        Button { Pasteboard.copy(MentionCodec.plain(message.body)) } label: { Label("Copy message", systemImage: "doc.on.doc") }
+            .accessibilityIdentifier("message.copy")
+        Button { Pasteboard.copy(Self.reference(for: message)) } label: { Label("FD Ref", systemImage: "link") }
+            .accessibilityIdentifier("message.ref")
+        if mine && !message.deleted {
+            Button { editing = true } label: { Label("Edit", systemImage: "pencil") }.accessibilityIdentifier("message.edit")
+            Button(role: .destructive) { confirmDelete = true } label: { Label("Delete message", systemImage: "trash") }.accessibilityIdentifier("message.delete")
+        }
+    }
+
+    /// Flight Deck reference to this message, as the web's "FD Ref" copies it.
+    static func reference(for message: MessageRecord) -> String {
+        "@[Chat message](mention:chat:\(message.channelId)#\(message.id))"
+    }
+
+    /// What is true of this stored message: it came from Tower, unless a change to it is still waiting or was refused.
+    private var sync: MessageSyncState {
+        let changes = writes.filter { [.messageEdit, .messageDelete].contains($0.kind) }
+        if changes.contains(where: { !$0.isPending }) { return .failed }
+        if changes.contains(where: \.isPending) { return .pending }
+        return .synced
+    }
+
+    private var messageControls: some View {
+        HStack(spacing: 4) {
+            SyncDot(state: sync)
+            Menu { actions } label: {
+                Image(systemName: "ellipsis").font(.amb(.footnote).weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                    .frame(width: 28, height: 28).contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel("Message actions")
+            .accessibilityIdentifier("message.actions")
+        }
+        .padding(.top, 6).padding(.trailing, 10)
     }
 
     private var row: some View {
@@ -269,6 +305,43 @@ struct ComposerAttachments: View {
     }
 }
 
+/// Images and files already uploaded for this draft (their storage Markdown sits after the typed text): a thumbnail
+/// for each image that opens full size, a named chip for each file, and a button to remove either.
+struct ComposerUploadedThumbnails: View {
+    let text: String
+    let workspace: WorkspaceRecord
+    let remove: (String) -> Void
+
+    var body: some View {
+        let items = StorageMarkdown.rawReferences(in: text).map(\.attachment)
+        if !items.isEmpty {
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(items, id: \.storageObjectId) { item in
+                        ZStack(alignment: .topTrailing) {
+                            Group {
+                                if item.kind == "image" {
+                                    StorageImageView(objectId: item.storageObjectId, alt: item.filename, workspace: workspace, maxHeight: 64, maxWidth: 96)
+                                } else {
+                                    Label(item.filename, systemImage: "paperclip").font(.amb(.footnote)).lineLimit(1)
+                                        .padding(8).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+                                }
+                            }
+                            .padding(.top, 6).padding(.trailing, 6)
+                            Button { remove(item.storageObjectId) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.white, .black.opacity(0.6)) }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Remove \(item.filename)")
+                                .accessibilityIdentifier("composer.uploaded.remove")
+                        }
+                    }
+                }
+                .padding(.horizontal, 12).padding(.top, 4)
+            }
+            .accessibilityIdentifier("composer.uploaded")
+        }
+    }
+}
+
 /// Images and files pasted into this composer while they upload: what is happening, and Retry / Remove. Only uploads
 /// whose placeholder is still in the text are shown.
 struct ComposerPastedUploads: View {
@@ -337,5 +410,28 @@ extension PendingAttachment {
             guard let png = try? ImagePrivacy.strippedPNG(data) else { return nil }
             return try? ImagePrivacy.stage(png, in: staging, filename: "photo.png")
         }.value
+    }
+}
+
+enum MessageSyncState { case synced, pending, failed }
+
+/// The small dot beside a message: green when Tower holds it (as the web shows), amber while a change waits to send, red
+/// when Tower refused it.
+struct SyncDot: View {
+    let state: MessageSyncState
+
+    private var details: (Color, String) {
+        switch state {
+        case .synced: (Amb.success, "Synced to Tower")
+        case .pending: (Amb.warning, "Waiting to sync to Tower")
+        case .failed: (Amb.destructive, "Not synced: Tower did not accept the change")
+        }
+    }
+
+    var body: some View {
+        Circle().fill(details.0).frame(width: 8, height: 8)
+            .help(details.1)
+            .accessibilityLabel(details.1)
+            .accessibilityIdentifier("message.sync.\(state)")
     }
 }

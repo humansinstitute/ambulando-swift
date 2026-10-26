@@ -38,6 +38,49 @@ public enum StorageMarkdown {
         return found
     }
 
+    /// The storage references written in `text`, each with the exact Markdown that wrote it (first occurrence of each object).
+    public static func rawReferences(in text: String) -> [(raw: String, attachment: MessageAttachment)] {
+        let ns = text as NSString
+        var seen = Set<String>(), found: [(String, MessageAttachment)] = []
+        for match in reference.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let raw = ns.substring(with: match.range)
+            guard let item = references(in: raw).first, seen.insert(item.storageObjectId.lowercased()).inserted else { continue }
+            found.append((raw, item))
+        }
+        return found
+    }
+
+    /// `text` without its storage references (and the line break that led into each), so the field shows what was typed
+    /// while uploads show as thumbnails.
+    public static func strippingReferences(from text: String) -> String {
+        guard text.contains("storage://") else { return text }
+        let ns = text as NSString
+        var out = ns as String
+        for match in reference.matches(in: text, range: NSRange(location: 0, length: ns.length)).reversed() {
+            var range = match.range
+            // Only the one line break `composing` puts before a reference: spaces the user typed stay.
+            if range.location > 0, (out as NSString).character(at: range.location - 1) == 10 {
+                range = NSRange(location: range.location - 1, length: range.length + 1)
+            }
+            out = (out as NSString).replacingCharacters(in: range, with: "")
+        }
+        return out
+    }
+
+    /// The field text the user edited, with the earlier references of `original` kept after it (one per line).
+    public static func composing(visible: String, keeping original: String) -> String {
+        let refs = rawReferences(in: original).map(\.raw)
+        guard !refs.isEmpty else { return visible }
+        return (visible.isEmpty ? "" : visible + "\n") + refs.joined(separator: "\n")
+    }
+
+    /// `text` without the reference to one object.
+    public static func removing(objectId: String, from text: String) -> String {
+        let keep = rawReferences(in: text).filter { $0.attachment.storageObjectId.lowercased() != objectId.lowercased() }.map(\.raw)
+        let visible = strippingReferences(from: text)
+        return (visible.isEmpty || keep.isEmpty ? visible : visible + "\n") + keep.joined(separator: "\n")
+    }
+
     /// Attachments plus the body's storage references not already among them (sol `mergeChatStorageAttachments`).
     public static func merged(_ attachments: [MessageAttachment], body: String) -> [MessageAttachment] {
         var seen = Set(attachments.map { $0.storageObjectId.lowercased() })

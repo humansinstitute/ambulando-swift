@@ -113,6 +113,37 @@ public enum MentionCodec {
         return (text, mentions)
     }
 
+    /// The picked mentions whose `@Label` is still in the text (what the composer shows as pills).
+    public static func present(_ mentions: [Mention], in text: String) -> [Mention] {
+        mentions.filter { visibleRange(of: $0, in: text) != nil }
+    }
+
+    /// `text` without one mention's `@Label` and the single space after it.
+    public static func removing(_ mention: Mention, from text: String) -> String {
+        guard var range = visibleRange(of: mention, in: text) else { return text }
+        if range.upperBound < text.endIndex, text[range.upperBound] == " " { range = range.lowerBound..<text.index(after: range.upperBound) }
+        var out = text
+        out.removeSubrange(range)
+        return out
+    }
+
+    /// One Backspace that deleted a character of a picked mention (`old` became `new`) removes the whole mention, as a pill
+    /// would be removed. Nil when the edit was something else (typing, a paste, deleting a space after the name).
+    public static func wholeMentionDeletion(old: String, new: String, mentions: [Mention]) -> String? {
+        guard new.count == old.count - 1 else { return nil }
+        let a = Array(old), b = Array(new)
+        var prefix = 0
+        while prefix < b.count, a[prefix] == b[prefix] { prefix += 1 }
+        let deleted = prefix   // index in `old` of the removed character
+        guard Array(a[(deleted + 1)...]) == Array(b[deleted...]) else { return nil }
+        for mention in mentions {
+            guard let range = visibleRange(of: mention, in: old) else { continue }
+            let lower = old.distance(from: old.startIndex, to: range.lowerBound), upper = old.distance(from: old.startIndex, to: range.upperBound)
+            if deleted >= lower, deleted < upper { return removing(mention, from: old) }
+        }
+        return nil
+    }
+
     /// The `@query` being typed at the end of the composer, if any (drives the picker).
     public static func activeQuery(in text: String) -> String? {
         guard let at = text.lastIndex(of: "@") else { return nil }

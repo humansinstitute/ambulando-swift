@@ -534,6 +534,7 @@ struct OutboxRow: View {
                 }
             }
             Spacer(minLength: 0)
+            SyncDot(state: item.state == .failed ? .failed : .pending).padding(.top, 4)
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .background(item.state == .failed ? Amb.destructiveBackground.opacity(0.5) : Color.clear)
@@ -628,9 +629,32 @@ final class ComposerModel {
         edited = false
     }
 
+    /// What the field shows: the typed text without uploaded images and files, which appear as thumbnails above it.
+    /// Editing keeps them (after the typed text) until a thumbnail is removed.
+    var visibleText: String {
+        get { StorageMarkdown.strippingReferences(from: text) }
+        set {
+            // Backspace inside a picked name removes the whole name, as a pill is removed.
+            let typed = MentionCodec.wholeMentionDeletion(old: visibleText, new: newValue, mentions: mentions) ?? newValue
+            let next = StorageMarkdown.composing(visible: typed, keeping: text)
+            if next != text { text = next }
+        }
+    }
+
+    /// Picked people and agents still named in the text: shown as pills above the field.
+    var presentMentions: [Mention] { MentionCodec.present(mentions, in: text) }
+
+    func removeMention(_ mention: Mention) {
+        text = MentionCodec.removing(mention, from: text)
+        mentions.removeAll { $0 == mention }
+    }
+
+    func removeUploaded(_ objectId: String) { text = StorageMarkdown.removing(objectId: objectId, from: text) }
+
     func pick(_ mention: Mention) {
         if !mentions.contains(mention) { mentions.append(mention) }
-        text = MentionCodec.complete(text, with: mention)
+        // The typed text only: uploads kept after it must not hide the `@query` being completed.
+        visibleText = MentionCodec.complete(visibleText, with: mention)
     }
 
     private func chain(_ operation: @escaping @Sendable () async -> Void) {
@@ -707,25 +731,48 @@ struct Composer: View {
     @State private var storedDraft = LiveQuery<Draft?>(initial: nil)
     @State private var photos: [PhotosPickerItem] = []
     @State private var focused = false
+    /// The row of the mention list that Return or Tab picks (Up and Down move it).
+    @State private var highlighted = 0
+    /// Escape closes the list for the text as it stands; typing more opens it again.
+    @State private var dismissedAt: String?
     #if os(macOS)
     @State private var attachingFiles = false
     #endif
 
     private var suggestions: [MentionCandidate] {
-        guard let composer, let query = MentionCodec.activeQuery(in: composer.text) else { return [] }
+        guard let composer, composer.visibleText != dismissedAt, let query = MentionCodec.activeQuery(in: composer.visibleText) else { return [] }
         let q = query.lowercased()
-        return Array(members.value.filter { q.isEmpty || $0.member.label.lowercased().contains(q) }.prefix(6))
+        let matches = members.value.filter { q.isEmpty || $0.member.label.lowercased().contains(q) }
+        // Names starting with what was typed come first.
+        let ranked = matches.filter { $0.member.label.lowercased().hasPrefix(q) } + matches.filter { !$0.member.label.lowercased().hasPrefix(q) }
+        return Array(ranked.prefix(6))
+    }
+
+    /// Keys from the text field while the mention list is open. Returns whether the key was used.
+    private func mentionKey(_ key: ComposerKey) -> Bool {
+        let list = suggestions
+        guard !list.isEmpty, let composer else { return false }
+        let index = min(highlighted, list.count - 1)
+        switch key {
+        case .up: highlighted = (index - 1 + list.count) % list.count
+        case .down: highlighted = (index + 1) % list.count
+        case .enter, .tab: composer.pick(Mention(member: list[index].member)); highlighted = 0
+        case .escape: dismissedAt = composer.visibleText
+        }
+        return true
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if !suggestions.isEmpty, let composer {
-                MentionPicker(members: suggestions) { composer.pick(Mention(member: $0.member)) }
+                MentionPicker(members: suggestions, highlighted: min(highlighted, suggestions.count - 1)) { composer.pick(Mention(member: $0.member)) }
             }
             Divider().overlay(Amb.border)
             if let composer {
                 @Bindable var composer = composer
+                ComposerMentionPills(mentions: composer.presentMentions, people: members.value) { composer.removeMention($0) }
                 ComposerAttachments(attachments: $composer.attachments, staging: model.staging)
+                ComposerUploadedThumbnails(text: composer.text, workspace: workspace) { composer.removeUploaded($0) }
                 if let uploads = model.uploads {
                     ComposerPastedUploads(uploads: uploads, target: target, text: composer.text)
                 }
@@ -765,17 +812,18 @@ struct Composer: View {
                 #endif
                 Button {
                     guard let composer else { return }
-                    if !(composer.text.last.map { $0.isWhitespace } ?? true) { composer.text += " " }
-                    composer.text += "@"
+                    if !(composer.visibleText.last.map { $0.isWhitespace } ?? true) { composer.visibleText += " " }
+                    composer.visibleText += "@"
                     focused = true
                     model.refreshDirectory(workspace)
                 } label: { Image(systemName: "at").font(.amb(.body).weight(.semibold)).frame(width: 36, height: 36) }
                     .accessibilityLabel("Mention someone")
                     .accessibilityIdentifier("composer.mention")
                     .iconButton()
-                ComposerTextView(text: Binding(get: { composer?.text ?? "" }, set: { composer?.text = $0; fixtureTyping() }),
+                ComposerTextView(text: Binding(get: { composer?.visibleText ?? "" }, set: { composer?.visibleText = $0; fixtureTyping() }),
                                  focused: $focused, placeholder: placeholder, plainKeyboard: model.fixture?.plainKeyboard == true,
-                                 onPasteItems: pasteItems, onSubmit: send)
+                                 onPasteItems: pasteItems, onSubmit: send, onPickerKey: mentionKey, pickerOpen: !suggestions.isEmpty,
+                                 mentionTokens: composer?.presentMentions.map(\.visible) ?? [])
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 Button { send() } label: {
@@ -809,6 +857,7 @@ struct Composer: View {
             }
         }
         .onChange(of: storedDraft.value) { _, draft in composer?.adopt(draft) }
+        .onChange(of: MentionCodec.activeQuery(in: composer?.visibleText ?? "")) { _, _ in highlighted = 0 }
         .onChange(of: photos) { _, items in
             guard !items.isEmpty, let staging = model.staging else { return }
             photos = []
@@ -860,6 +909,7 @@ struct MentionCandidate: Identifiable, Equatable, Sendable {
 
 struct MentionPicker: View {
     let members: [MentionCandidate]
+    var highlighted = 0
     let pick: (MentionCandidate) -> Void
 
     var body: some View {
@@ -876,9 +926,11 @@ struct MentionPicker: View {
                         Spacer()
                     }
                     .padding(.horizontal, 14).padding(.vertical, 6)
+                    .background(candidate.id == members[min(highlighted, members.count - 1)].id ? Amb.selectedFill : Color.clear)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(candidate.id == members[min(highlighted, members.count - 1)].id ? .isSelected : [])
                 .accessibilityIdentifier("mention.\(member.label)")
             }
         }
@@ -979,5 +1031,40 @@ struct PushedFixtureLabel: ViewModifier {
     let enabled: Bool
     func body(content: Content) -> some View {
         if enabled { content.fixtureLabel() } else { content }
+    }
+}
+
+/// People and agents picked for this message, as pills above the field (as on the web). Each is removable here, or with
+/// Backspace in the field. The visible `@Name` and the structured mention are kept together by the composer.
+struct ComposerMentionPills: View {
+    let mentions: [Mention]
+    let people: [MentionCandidate]
+    let remove: (Mention) -> Void
+
+    var body: some View {
+        if !mentions.isEmpty {
+            ScrollView(.horizontal) {
+                HStack(spacing: 6) {
+                    ForEach(mentions, id: \.npub) { mention in
+                        HStack(spacing: 6) {
+                            if let person = people.first(where: { $0.member.npub == mention.npub })?.person { PersonAvatar(person: person).scaleEffect(0.6).frame(width: 20, height: 20) }
+                            Text(mention.label).font(.amb(.footnote).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+                            Button { remove(mention) } label: { Image(systemName: "xmark").font(.amb(.caption2).weight(.bold)).foregroundStyle(Amb.mutedForeground) }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Remove \(mention.label)")
+                                .accessibilityIdentifier("composer.mention.remove")
+                        }
+                        .padding(.leading, 6).padding(.trailing, 8).padding(.vertical, 3)
+                        .background(Amb.card, in: Capsule())
+                        .overlay(Capsule().stroke(Amb.border, lineWidth: 1))
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel("Mentioning \(mention.label)")
+                        .accessibilityIdentifier("composer.mention.pill")
+                    }
+                }
+                .padding(.horizontal, 12).padding(.top, 8)
+            }
+            .accessibilityIdentifier("composer.mentions")
+        }
     }
 }

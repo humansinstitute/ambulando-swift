@@ -278,7 +278,17 @@ private struct TableBlockView: View {
     @Environment(\.documentSelection) private var selection
     #endif
 
+    /// One width per column from its longest cell, so wrapped text gets a stable measured width.
+    private var widths: [CGFloat] {
+        let count = rows.map(\.count).max() ?? 0
+        return (0..<count).map { c in
+            let longest = rows.map { c < $0.count ? $0[c].map(\.text).joined().count : 0 }.max() ?? 0
+            return min(260, max(56, CGFloat(longest) * 7.5))
+        }
+    }
+
     var body: some View {
+        let widths = widths
         ScrollView(.horizontal) {
             Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { r, row in
@@ -289,9 +299,11 @@ private struct TableBlockView: View {
                                 .font(r == 0 ? .amb(.subheadline).weight(.semibold) : .amb(.subheadline))
                                 .foregroundStyle(Amb.foreground)
                                 .textSelection(.enabled)
+                                /* fixed column width first, then let height follow the wrapped text, so rows never collapse onto each other */
+                                .frame(width: widths[c], alignment: .topLeading)
                                 .fixedSize(horizontal: false, vertical: true)
-                                .frame(minWidth: 48, maxWidth: 260, maxHeight: .infinity, alignment: .topLeading)
                                 .padding(.horizontal, 9).padding(.vertical, 7)
+                                .frame(maxHeight: .infinity, alignment: .topLeading)
                                 .background(r == 0 ? Amb.card : Color.clear)
                                 .overlay(Rectangle().stroke(Amb.border, lineWidth: 0.5))
                         }

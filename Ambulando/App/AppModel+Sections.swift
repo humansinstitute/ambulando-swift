@@ -144,6 +144,17 @@ extension AppModel {
         case "thread":
             // Focused over the current screen; the view fetches the conversation when it is not stored yet.
             focusThread(ThreadFocus(workspaceId: workspace, channelId: nil, threadId: record))
+        case "chat", "message":
+            // The web's "FD Ref" for a message: `<channel>#<message>` (or just the message). Its conversation opens when
+            // it has one; otherwise the channel does.
+            let parts = record.split(separator: "#", maxSplits: 1).map(String.init)
+            let channelId = parts.count == 2 ? parts[0] : nil, messageId = parts.last ?? record
+            Task { @MainActor in
+                let stored = try? await store?.reader.message(workspaceId: workspace, id: messageId)
+                let channel = stored?.channelId ?? channelId
+                if let channel { openInChat(channelId: channel, threadId: stored?.threadId ?? (stored == nil ? nil : messageId)) }
+                else { focusThread(ThreadFocus(workspaceId: workspace, channelId: nil, threadId: messageId)) }
+            }
         default:
             return
         }

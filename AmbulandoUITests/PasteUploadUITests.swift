@@ -64,6 +64,10 @@ final class PasteUploadUITests: XCTestCase {
         return false
     }
 
+    private func uploadedStrip(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: "composer.uploaded").firstMatch
+    }
+
     func testPasteTextThenImageUploadsToStorageWithoutSending() {
         let app = launch()
         openChannel(app, "general")
@@ -80,9 +84,11 @@ final class PasteUploadUITests: XCTestCase {
         // An image: placeholder at the caret, then the storage Markdown the web inserts.
         UIPasteboard.general.image = samplePNG()
         paste(app, into: composer)
-        XCTAssertTrue(waitFor(composer, contains: "](storage://"), "image link inserted: \(value(composer))")
+        // The upload shows as a thumbnail above the field (removable), not as Markdown in the text.
+        XCTAssertTrue(uploadedStrip(app).waitForExistence(timeout: 20), "uploaded image shown above the field: \(value(composer))")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Remove message-image-'")).firstMatch.exists, "thumbnail can be removed")
         let text = value(composer)
-        XCTAssertTrue(text.contains("![message-image-"), text)
+        XCTAssertFalse(text.contains("storage://"), "no raw Markdown in the field: \(text)")
         XCTAssertTrue(text.hasPrefix("Hi plain words"), "earlier text kept: \(text)")
         XCTAssertFalse(text.contains("[ Uploading"), text)
 
@@ -137,12 +143,12 @@ final class PasteUploadUITests: XCTestCase {
         let retry = app.buttons["composer.upload.retry"].firstMatch
         XCTAssertTrue(retry.waitForExistence(timeout: 10))
         retry.tap()
-        XCTAssertTrue(waitFor(back, contains: "](storage://"), "retried upload inserted: \(value(back))")
+        XCTAssertTrue(uploadedStrip(app).waitForExistence(timeout: 20), "retried upload shown as a thumbnail: \(value(back))")
         XCTAssertTrue(value(back).hasSuffix("still typing"), value(back))
         XCTAssertTrue(app.buttons["composer.send"].isEnabled)
 
         app.showChannels()
         openChannel(app, "deploys")
-        XCTAssertFalse(value(field(app)).contains("storage://"), "the result went only to #general, not #deploys")
+        XCTAssertFalse(uploadedStrip(app).exists, "the result went only to #general, not #deploys")
     }
 }

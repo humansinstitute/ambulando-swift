@@ -1,5 +1,38 @@
 import AmbulandoCore
 import SwiftUI
+
+/// Keys the composer hands to the open mention list.
+enum ComposerKey { case up, down, enter, tab, escape }
+
+/// Picked people and agents drawn as inline pills inside the text: a tinted capsule-like background and the primary colour
+/// on each `@Name`, while the characters stay ordinary text (so editing, undo and the structured mention stay in step).
+enum MentionStyling {
+    @MainActor
+    static func apply(to storage: NSTextStorage, tokens: [String], base: PlatformColor, highlight: PlatformColor, fill: PlatformColor) {
+        let full = NSRange(location: 0, length: storage.length)
+        guard full.length > 0 else { return }
+        storage.beginEditing()
+        storage.removeAttribute(.backgroundColor, range: full)
+        storage.addAttribute(.foregroundColor, value: base, range: full)
+        let text = storage.string as NSString
+        for token in Set(tokens) where !token.isEmpty {
+            var search = NSRange(location: 0, length: text.length)
+            while true {
+                let found = text.range(of: token, options: [], range: search)
+                if found.location == NSNotFound { break }
+                let end = NSMaxRange(found)
+                // Not a longer name (`@Rick` inside `@Rickety`).
+                let trailing = end < text.length ? text.substring(with: NSRange(location: end, length: 1)) : " "
+                if trailing.rangeOfCharacter(from: .alphanumerics) == nil {
+                    storage.addAttributes([.backgroundColor: fill, .foregroundColor: highlight], range: found)
+                }
+                search = NSRange(location: end, length: text.length - end)
+            }
+        }
+        storage.endEditing()
+    }
+}
+
 #if os(iOS)
 import UIKit
 
@@ -15,6 +48,11 @@ struct ComposerTextView: UIViewRepresentable {
     let onPasteItems: ([NSItemProvider]) -> [String]
     /// Return sends on the Mac; the iPhone keyboard's Return always inserts a new line.
     var onSubmit: (() -> Void)? = nil
+    /// Hardware-keyboard keys while the mention list is open (`pickerOpen`); returns whether the key was used.
+    var onPickerKey: ((ComposerKey) -> Bool)? = nil
+    var pickerOpen = false
+    /// `@Name` texts of the picked mentions, drawn as inline pills.
+    var mentionTokens: [String] = []
 
     static let maxLines: CGFloat = 6
 
@@ -39,6 +77,8 @@ struct ComposerTextView: UIViewRepresentable {
     func updateUIView(_ view: PasteAwareTextView, context: Context) {
         context.coordinator.parent = self
         view.onPasteItems = onPasteItems
+        view.onPickerKey = onPickerKey
+        view.pickerOpen = pickerOpen
         view.placeholder = placeholder
         // Only a change made outside the keyboard (a mention, a finished upload, a restored draft) is written back.
         // SwiftUI can update in the middle of a keystroke: before `textViewDidChange` reports the new character, or
@@ -55,6 +95,7 @@ struct ComposerTextView: UIViewRepresentable {
             }
             context.coordinator.reported = text
         }
+        styleMentions(view)
         let correction: UITextAutocorrectionType = plainKeyboard ? .no : .default
         if view.autocorrectionType != correction {
             view.autocorrectionType = correction
@@ -67,6 +108,14 @@ struct ComposerTextView: UIViewRepresentable {
         } else if !focused, view.isFirstResponder {
             DispatchQueue.main.async { view.resignFirstResponder() }
         }
+    }
+
+    fileprivate func styleMentions(_ textView: UITextView) {
+        // Long pasted text is left alone unless a name was styled before (nothing to add or take away).
+        guard let view = textView as? PasteAwareTextView, view.textStorage.length > 0, !mentionTokens.isEmpty || view.mentionStyled else { return }
+        view.mentionStyled = !mentionTokens.isEmpty
+        MentionStyling.apply(to: view.textStorage, tokens: mentionTokens, base: UIColor(Amb.foreground), highlight: UIColor(Amb.primary), fill: UIColor(Amb.accent))
+        view.typingAttributes = [.font: view.font ?? UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor(Amb.foreground)]
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView view: PasteAwareTextView, context: Context) -> CGSize? {
@@ -95,6 +144,7 @@ struct ComposerTextView: UIViewRepresentable {
             parent.text = reported
             reporting = false
             (view as? PasteAwareTextView)?.refreshPlaceholder()
+            parent.styleMentions(view)
         }
 
         func textViewDidBeginEditing(_ view: UITextView) { if !parent.focused { parent.focused = true } }
@@ -104,6 +154,34 @@ struct ComposerTextView: UIViewRepresentable {
 
 final class PasteAwareTextView: UITextView {
     var onPasteItems: (([NSItemProvider]) -> [String])?
+    var onPickerKey: ((ComposerKey) -> Bool)?
+    var pickerOpen = false
+    var mentionStyled = false
+
+    /// While the mention list is open a hardware keyboard's arrows, Return, Tab and Escape drive it.
+    override var keyCommands: [UIKeyCommand]? {
+        guard pickerOpen else { return super.keyCommands }
+        let pairs: [(String, ComposerKey)] = [(UIKeyCommand.inputUpArrow, .up), (UIKeyCommand.inputDownArrow, .down), ("\r", .enter),
+                                              ("\t", .tab), (UIKeyCommand.inputEscape, .escape)]
+        return pairs.map { input, _ in
+            let command = UIKeyCommand(input: input, modifierFlags: [], action: #selector(pickerCommand(_:)))
+            command.wantsPriorityOverSystemBehavior = true
+            return command
+        }
+    }
+
+    @objc private func pickerCommand(_ command: UIKeyCommand) {
+        let key: ComposerKey?
+        switch command.input {
+        case UIKeyCommand.inputUpArrow: key = .up
+        case UIKeyCommand.inputDownArrow: key = .down
+        case "\r": key = .enter
+        case "\t": key = .tab
+        case UIKeyCommand.inputEscape: key = .escape
+        default: key = nil
+        }
+        if let key { _ = onPickerKey?(key) }
+    }
     private let placeholderLabel = UILabel()
 
     var placeholder: String {
@@ -174,6 +252,11 @@ struct ComposerTextView: NSViewRepresentable {
     let plainKeyboard: Bool
     let onPasteItems: ([NSItemProvider]) -> [String]
     var onSubmit: (() -> Void)? = nil
+    /// Arrow, Return, Tab and Escape keys while the mention list is open; returns whether the key was used.
+    var onPickerKey: ((ComposerKey) -> Bool)? = nil
+    var pickerOpen = false
+    /// `@Name` texts of the picked mentions, drawn as inline pills.
+    var mentionTokens: [String] = []
     var fixedHeight: CGFloat? = nil
     /// Read while the parent draws, so a text size change (`TextScale`) reaches `updateNSView`.
     private let textScale = TextScale.shared.factor
@@ -236,6 +319,7 @@ struct ComposerTextView: NSViewRepresentable {
             }
             context.coordinator.reported = text
         }
+        styleMentions(view)
         view.isAutomaticSpellingCorrectionEnabled = !plainKeyboard
         view.isAutomaticQuoteSubstitutionEnabled = !plainKeyboard
         view.isAutomaticDashSubstitutionEnabled = !plainKeyboard
@@ -247,6 +331,13 @@ struct ComposerTextView: NSViewRepresentable {
         } else if !focused, isFirst {
             DispatchQueue.main.async { view.window?.makeFirstResponder(nil) }
         }
+    }
+
+    fileprivate func styleMentions(_ textView: NSTextView) {
+        guard let view = textView as? PasteAwareTextView, let storage = view.textStorage, storage.length > 0, !mentionTokens.isEmpty || view.mentionStyled else { return }
+        view.mentionStyled = !mentionTokens.isEmpty
+        MentionStyling.apply(to: storage, tokens: mentionTokens, base: NSColor(Amb.foreground), highlight: NSColor(Amb.primary), fill: NSColor(Amb.accent))
+        view.typingAttributes = [.font: view.font ?? NSFont.preferredFont(forTextStyle: .body), .foregroundColor: NSColor(Amb.foreground)]
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView scroll: NSScrollView, context: Context) -> CGSize? {
@@ -273,6 +364,7 @@ struct ComposerTextView: NSViewRepresentable {
             reporting = true
             parent.text = reported
             reporting = false
+            parent.styleMentions(view)
             view.needsDisplay = true
             view.enclosingScrollView?.invalidateIntrinsicContentSize()
         }
@@ -281,6 +373,17 @@ struct ComposerTextView: NSViewRepresentable {
         func textDidEndEditing(_ notification: Notification) { if parent.focused { parent.focused = false } }
 
         func textView(_ view: NSTextView, doCommandBy selector: Selector) -> Bool {
+            if parent.pickerOpen, !view.hasMarkedText(), let onKey = parent.onPickerKey {
+                let key: ComposerKey? = switch selector {
+                case #selector(NSResponder.moveUp(_:)): .up
+                case #selector(NSResponder.moveDown(_:)): .down
+                case #selector(NSResponder.insertNewline(_:)): .enter
+                case #selector(NSResponder.insertTab(_:)): .tab
+                case #selector(NSResponder.cancelOperation(_:)): .escape
+                default: nil
+                }
+                if let key, onKey(key) { return true }
+            }
             guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
             let flags = NSApp.currentEvent?.modifierFlags ?? []
             if flags.contains(.shift) || flags.contains(.option) {
@@ -299,6 +402,7 @@ final class PasteAwareTextView: NSTextView {
     var onPasteItems: (([NSItemProvider]) -> [String])?
     var onSubmit: (() -> Void)?
     var onFocusChange: ((Bool) -> Void)?
+    var mentionStyled = false
     override func setAccessibilityFocused(_ focused: Bool) {
         if focused { window?.makeKeyAndOrderFront(nil); window?.makeFirstResponder(self) }
         else { super.setAccessibilityFocused(false) }

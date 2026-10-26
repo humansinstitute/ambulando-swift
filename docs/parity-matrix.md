@@ -79,3 +79,14 @@ is attached to the canonical version. Quotes reopen their passage after reload. 
 UTF-16 positions; Markdown uses source lines/quotes. Unknown formats stay in the read-only renderer. Tower retains edit
 lease, permission and version enforcement; a local draft does not grant write access. Mac keeps its existing inline Edit
 and native reader selection flow; no shared API or web/backend changes are required.
+
+## Interface parity pass (iPhone build 19, Mac build 8)
+
+| Web behaviour | Native | Status |
+| --- | --- | --- |
+| Message ⋮ menu: Get it done, Resend, Edit, Rename thread, Branch from here, Copy message, Autopilot Link, FD Ref, Archive, Delete | ⋮ menu and long-press: React, Copy message, FD Ref (`@[Chat message](mention:chat:<channel>#<message>)`, opens the message's conversation or channel), Edit, Delete (own messages) | Partly native. **Not native:** Get it done (task-creation flow), Branch from here (thread branch route), Autopilot Link (session link), Rename/Archive thread |
+| Green / amber / red sync dot per message | Same colours: stored message = synced to Tower; unsent message and pending edit/delete = amber; refused = red | Native |
+| Upload thumbnails above the composer | Thumbnails (images open full size) and file chips above the field, removable | Native |
+| @ list with arrow keys and Enter; pills | Up/Down/Return/Tab/Esc (Mac keyboard and hardware keyboards), pills row, inline highlight, Backspace removes the whole name | Native |
+| Thread / New thread modal: outside click, expand | Desktop and iPad card: outside click closes, light backdrop, expand/restore on Mac | Native |
+| Apps as cards | iPhone Hello and Links shows cards with logos | Native |

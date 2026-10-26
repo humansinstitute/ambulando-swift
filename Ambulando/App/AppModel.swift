@@ -84,6 +84,8 @@ final class AppModel {
             persistChatPath()
         }
     }
+    /// Mac: the New thread composer is open over the current section (a window-filling modal, like the focused thread).
+    var composingThread = false
     /// The conversation shown in the focused thread view over the current section (see `ThreadFocus`); persisted per
     /// connection and workspace so relaunch reopens it. Sync never sets it.
     var focusedThread: ThreadFocus? {

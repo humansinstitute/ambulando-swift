@@ -121,7 +121,7 @@ private struct ThreadFocusPresenter: ViewModifier {
     @Environment(AppModel.self) private var model
 
     func body(content: Content) -> some View {
-        let focused = model.focusedThread != nil
+        let focused = model.focusedThread != nil || model.composingThread
         #if os(iOS)
         content
             .background(BackgroundAccessibility(hidden: focused))
@@ -136,6 +136,7 @@ private struct ThreadFocusPresenter: ViewModifier {
             .allowsHitTesting(!focused)
             .accessibilityHidden(focused)
             .overlay { if focused { ThreadFocusContainer() } }
+            .overlay { if model.composingThread && !focused { NewThreadContainer() } }
             .modifier(ThreadFocusLifecycle())
         #endif
     }
@@ -195,6 +196,8 @@ private struct ThreadFocusContainer: View {
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
+    /// Desktop and iPad: the card fills the window (edge to edge, no rounded card) until restored.
+    @State private var expanded = false
 
     private var card: Bool {
         #if os(iOS)
@@ -208,25 +211,19 @@ private struct ThreadFocusContainer: View {
         Group {
             if let focus = model.focusedThread {
                 if card {
-                    GeometryReader { proxy in
-                        ThreadFocusPanel(focus: focus)
-                            .id(focus.id)
-                            .frame(width: min(proxy.size.width - 96, 1120), height: max(proxy.size.height - 40, 320))
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Amb.border, lineWidth: 1))
-                            .shadow(color: .black.opacity(0.28), radius: 28, y: 10)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ModalCard(expanded: expanded) {
+                        ThreadFocusPanel(focus: focus, expanded: $expanded).id(focus.id)
                     }
                     #if os(macOS)
-                    .background(ThreadFocusBackdrop())
+                    .background(ThreadFocusBackdrop { model.focusedThread = nil })
                     #endif
                 } else {
-                    ThreadFocusPanel(focus: focus).id(focus.id)
+                    ThreadFocusPanel(focus: focus, expanded: .constant(false)).id(focus.id)
                 }
             }
         }
         #if os(iOS)
-        .presentationBackground { if card { ThreadFocusBackdrop() } else { Amb.background } }
+        .presentationBackground { if card { ThreadFocusBackdrop { model.focusedThread = nil } } else { Amb.background } }
         // Links open in-app browser tabs above the thread (the shell's own browser cover cannot present over this one).
         .fullScreenCover(isPresented: Binding(get: { model.browser.presented }, set: { model.browser.presented = $0 })) {
             BrowserView().environment(model)
@@ -235,16 +232,60 @@ private struct ThreadFocusContainer: View {
     }
 }
 
-/// The dimmed, blurred app behind the card. It takes every tap so nothing behind can be used; it does not close the
-/// thread, so a stray tap never loses the reader's place.
-private struct ThreadFocusBackdrop: View {
+/// The card (or, expanded, the whole window) both desktop modals share: this thread view and the new thread composer.
+struct ModalCard<Content: View>: View {
+    let expanded: Bool
+    @ViewBuilder let content: () -> Content
+
     var body: some View {
-        Rectangle().fill(.ultraThinMaterial)
-            .overlay(Color.black.opacity(0.32))
+        GeometryReader { proxy in
+            let radius: CGFloat = expanded ? 0 : 14
+            content()
+                .frame(width: expanded ? proxy.size.width : min(proxy.size.width - 96, 1120),
+                       height: expanded ? proxy.size.height : max(proxy.size.height - 40, 320))
+                .clipShape(RoundedRectangle(cornerRadius: radius))
+                .overlay(RoundedRectangle(cornerRadius: radius).stroke(Amb.border, lineWidth: expanded ? 0 : 1))
+                .shadow(color: .black.opacity(expanded ? 0 : 0.28), radius: 28, y: 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(.easeInOut(duration: 0.18), value: expanded)
+        }
+    }
+}
+
+#if os(macOS)
+/// The New thread composer as a window-filling modal (same card, backdrop, expand and outside-click close as a thread).
+private struct NewThreadContainer: View {
+    @Environment(AppModel.self) private var model
+    @State private var expanded = false
+
+    var body: some View {
+        Group {
+            if let workspace = model.selectedWorkspace, let store = model.store {
+                ModalCard(expanded: expanded) {
+                    DeckThreadComposer(workspace: workspace, store: store, expanded: $expanded, onCreated: { focus in
+                        model.composingThread = false
+                        model.focusThread(focus)
+                    })
+                }
+            }
+        }
+        .background(ThreadFocusBackdrop { model.composingThread = false })
+    }
+}
+#endif
+
+/// A light dim over the screen the thread was opened from, which stays visible through it. Clicking or tapping outside the
+/// card closes the thread; the reader's place in it is kept and the section underneath is untouched.
+private struct ThreadFocusBackdrop: View {
+    let dismiss: () -> Void
+    var body: some View {
+        Color.black.opacity(0.22)
             .ignoresSafeArea()
             .contentShape(Rectangle())
-            .onTapGesture {}
-            .accessibilityHidden(true)
+            .onTapGesture(perform: dismiss)
+            .accessibilityLabel("Close thread")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier("thread.focus.backdrop")
     }
 }
 
@@ -253,6 +294,7 @@ private struct ThreadFocusBackdrop: View {
 private struct ThreadFocusPanel: View {
     @Environment(AppModel.self) private var model
     let focus: ThreadFocus
+    @Binding var expanded: Bool
     @State private var title = ""
 
     var body: some View {
@@ -295,6 +337,18 @@ private struct ThreadFocusPanel: View {
             if let workspace = model.selectedWorkspace, workspace.id == focus.workspaceId {
                 PinToggleButton(type: .thread, id: focus.threadId, workspace: workspace)
             }
+            #if os(macOS)
+            Button { expanded.toggle() } label: {
+                Image(systemName: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right").font(.amb(.body).weight(.semibold))
+                    .frame(width: Amb.touchTarget, height: Amb.touchTarget)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Amb.mutedForeground)
+            .help(expanded ? "Restore size" : "Full screen")
+            .accessibilityLabel(expanded ? "Restore size" : "Expand to full screen")
+            .accessibilityIdentifier("thread.focus.expand")
+            #endif
             Button(action: close) {
                 Image(systemName: "xmark").font(.amb(.body).weight(.semibold))
                     .frame(width: Amb.touchTarget, height: Amb.touchTarget)

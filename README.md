@@ -19,6 +19,22 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Interface parity fixes (iPhone build 19, Mac build 8)
+
+- Chat tables keep a measured width per column, so wrapped cell text no longer overlaps between rows.
+- Uploaded images and files leave the text field and appear as removable thumbnails above it (images open full size).
+  Their Markdown stays after the typed text and is sent with the message exactly as before.
+- Picked people and agents show as pills above the field and as highlighted `@Name` text. Up/Down move through the
+  `@` list, Return or Tab picks, Esc closes it, and Backspace inside a picked name removes it whole. The visible name and
+  the structured `mentions` entry are still derived from one value.
+- Every message has a visible ⋮ menu (React, Copy message, FD Ref, Edit and Delete for your own messages) and a dot:
+  green when Tower holds the message, amber while an edit or delete waits to send, red when Tower refused it.
+- Desktop thread and New thread modals: click outside to close, a light dim over the screen behind, and an expand /
+  restore button. New thread fills the window on Mac like the thread view.
+- Deck: inbox rows carry a quiet colour per type (chats blue, tasks amber, documents green); desktop panels are open
+  surfaces as on the web; iPhone **Apps** are cards with logos and descriptions.
+- Not built (need Tower/Autopilot flows outside this client): **Get it done**, **Branch from here** and **Autopilot Link**.
+
 ## Mac layout stability (build 7)
 
 Mac sidebar hiding keeps the split-view columns alive so Canvas and its live naplets retain their view state while
@@ -27,7 +43,7 @@ large pasted crash reports. The iPhone/iPad composer is unchanged. See [Mac vali
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (18); Mac version 0.1.0 (7). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (19); Mac version 0.1.0 (8). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
