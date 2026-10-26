@@ -37,7 +37,7 @@ public struct WorkspaceSync: Sendable {
     /// Discovery job: authoritative workspace list for the connection, then each workspace's scopes.
     public func discover(_ connection: ConnectionRecord, priority: SyncPriority = .visible, force: Bool = false) async {
         let sync = self
-        await engine.enqueue("discover:\(connection.id)", priority: priority, force: force) {
+        await engine.enqueue("discover:\(connection.id)", priority: priority, force: force, retries: SyncBackoff.readRetries) {
             try await sync.identity.requireReader(npub: connection.signerNpub)
             let origin = try TowerOrigin(connection.origin)
             let workspaces = try await sync.api(origin: origin).workspaces()
@@ -52,7 +52,7 @@ public struct WorkspaceSync: Sendable {
     /// Scopes job for one workspace; on success schedules one channel job per scope.
     public func refreshWorkspace(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, priority: SyncPriority = .visible, force: Bool = false) async {
         let sync = self
-        await engine.enqueue("scopes:\(workspace.id)", priority: priority, force: force) {
+        await engine.enqueue("scopes:\(workspace.id)", priority: priority, force: force, retries: SyncBackoff.readRetries) {
             try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             let scopes = try await api.scopes(workspaceId: workspace.id, appNpub: workspace.appNpub)

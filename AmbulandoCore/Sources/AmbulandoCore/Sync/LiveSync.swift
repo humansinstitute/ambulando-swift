@@ -383,6 +383,8 @@ extension WorkspaceSync {
         case .inbox:
             let states = try await api.viewStates(workspaceId: w, appNpub: app)
             try await store.writer.upsertViewStates(workspaceId: w, states, complete: true)
+            // The same snapshot the Inbox job reads: a connection failure recorded for that job is now obsolete.
+            await engine.clearConnectionFailure(Self.inboxKey(w))
         case .structure:
             // Scopes/channels are re-listed as their own coalescing job (also run on every foreground resume).
             await refreshWorkspace(connection, workspace, priority: .background)

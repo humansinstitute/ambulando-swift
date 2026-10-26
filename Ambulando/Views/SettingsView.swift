@@ -1,5 +1,6 @@
 import AmbulandoCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -37,6 +38,7 @@ struct SettingsView: View {
                         LabeledContent("Tower", value: connection.origin)
                         LabeledContent("Transport", value: "HTTPS + NIP-98")
                         LabeledContent("Workspaces", value: "\(model.workspaces.value.count)")
+                        ConnectionStatusRow()
                         Button("Refresh now") { model.refresh(force: true) }.disabled(model.identity.npub == nil)
                         Button("Disconnect and clear local data", role: .destructive) {
                             Task { unsent = await model.unsentCount(); confirmDisconnect = true }
@@ -52,6 +54,12 @@ struct SettingsView: View {
                             Text(message).font(.amb(.caption)).foregroundStyle(Amb.destructive)
                         }
                     }
+                }
+                Section {
+                    ShareLink(item: DiagnosticsExport(model: model), preview: SharePreview("Ambulando diagnostics"))
+                        .accessibilityIdentifier("settings.diagnostics.export")
+                } header: { Text("Diagnostics") } footer: {
+                    Text("Export diagnostics shares a short text log of recent connection attempts: times (UTC), the kind of request, how long it took and the error code. It contains no keys, messages or names, and nothing is sent unless you share it.")
                 }
                 Section {
                     Toggle("Public Nostr profiles", isOn: Binding(get: { model.publicProfilesEnabled },
@@ -186,5 +194,35 @@ private struct AboutRow: View {
     var body: some View {
         LabeledContent(label) { Text(value).textSelection(.enabled) }
             .accessibilityIdentifier(id)
+    }
+}
+
+/// Connection status with Retry: the one place connection trouble is spelled out, instead of raw errors on each screen.
+private struct ConnectionStatusRow: View {
+    @Environment(AppModel.self) private var model
+    var body: some View {
+        let status = model.connectionStatus
+        LabeledContent("Status") {
+            HStack(spacing: 6) {
+                if status == .reconnecting { ProgressView().controlSize(.small) }
+                Text(status.label).foregroundStyle(status == .lost ? Amb.warning : Amb.foreground)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("settings.connection.status")
+        if status != .connected {
+            Button("Retry") { model.retryConnection() }
+                .accessibilityIdentifier("settings.connection.retry")
+        }
+    }
+}
+
+/// The diagnostics text, built when the share sheet asks for it.
+private struct DiagnosticsExport: Transferable {
+    let model: AppModel
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(exportedContentType: .plainText) { item in
+            Data(await item.model.diagnosticsText().utf8)
+        }
     }
 }

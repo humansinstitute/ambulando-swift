@@ -425,6 +425,8 @@ struct SyncIndicator: View {
     var body: some View {
         if !model.syncStatus.running.isEmpty || !model.syncStatus.queued.isEmpty {
             ProgressView().controlSize(.small).accessibilityLabel("Syncing")
+        } else if model.connectionStatus == .lost {
+            Image(systemName: "wifi.exclamationmark").foregroundStyle(Amb.warning).accessibilityLabel("Connection lost; see Settings")
         } else if model.lastSyncError != nil {
             Image(systemName: "exclamationmark.icloud").foregroundStyle(Amb.warning).accessibilityLabel("Sync problem; see Settings")
         }

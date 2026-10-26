@@ -168,7 +168,7 @@ final class AppModel {
     /// System background session for presigned object-store transfers (nil in sample-data mode).
     @ObservationIgnored private(set) var transferBackend: URLSessionTransferBackend?
     @ObservationIgnored private(set) var transfers: BackgroundTransfers?
-    @ObservationIgnored private var isActive = false
+    @ObservationIgnored private(set) var isActive = false
     /// The user's choice to keep a read-only credential for refresh while locked (persisted; revoked by manual lock).
     private(set) var backgroundRefreshEnabled = false
     /// The read-only credential is loaded right now (enabled and not revoked by a manual lock since the last unlock).
@@ -204,6 +204,15 @@ final class AppModel {
         }
     }
     @ObservationIgnored private let pathMonitor = NWPathMonitor()
+    /// Whether the latest Tower request failed to get a response (timeout, dropped or missing network, gateway error).
+    var connectionFailing = false
+    @ObservationIgnored let health = ConnectionHealth()
+    @ObservationIgnored private(set) var diagnostics: DiagnosticsLog?
+    @ObservationIgnored var lastRecoveryTrigger = Date.distantPast
+    @ObservationIgnored var probeTask: Task<Void, Never>?
+    @ObservationIgnored var healthTask: Task<Void, Never>?
+    /// The five probes of a lost connection were used; only a foreground, network-return or Retry trigger starts them again.
+    @ObservationIgnored var probesSpent = false
     @ObservationIgnored private var restoringPath = false
 
     let workspaces = LiveQuery<[WorkspaceRecord]>(initial: [])
@@ -273,8 +282,18 @@ final class AppModel {
                 await identity.loadBackgroundRead()
                 return (store, identity)
             }.value
-            let transport: HTTPTransport = fixture?.tower ?? URLSessionTransport()
+            let diagnostics = DiagnosticsLog(fileURL: directory.appendingPathComponent("Diagnostics", isDirectory: true).appendingPathComponent("connection-log.json"))
+            self.diagnostics = diagnostics
+            let transport: HTTPTransport = ObservedTransport(fixture?.tower ?? URLSessionTransport(), health: health, log: diagnostics)
             let engine = SyncEngine(maxConcurrent: 3, reservedForeground: 1)
+            await engine.setEventHandler { event in
+                let (outcome, note): (String, String) = switch event.kind {
+                case .retryScheduled(let attempt, let of, let delayMs): ("retry-scheduled", "attempt \(attempt) of \(of) in \(delayMs)ms")
+                case .retriesExhausted: ("gave-up", "automatic retries used up; waiting for foreground, network return or Retry")
+                case .recovered(let failures): ("recovered", "after \(failures) failed \(failures == 1 ? "attempt" : "attempts")")
+                }
+                Task { await diagnostics.record(DiagnosticEntry(kind: "retry", endpoint: event.family, outcome: outcome, note: note)) }
+            }
             if fixture == nil {
                 // Recreated at every launch with the same identifier so iOS can deliver results of earlier transfers.
                 let transferDirectory = directory.appendingPathComponent("Transfers", isDirectory: true)
@@ -363,9 +382,11 @@ final class AppModel {
                 for await snapshot in await engine.statusStream() {
                     guard let self else { return }
                     if snapshot != self.syncStatus { self.syncStatus = snapshot }
+                    if !snapshot.connectionFailures.isEmpty { self.startProbes() }
                     try? await Task.sleep(for: .milliseconds(250))
                 }
             }
+            watchHealth()
             watchNetwork()
             observeProtectedData()
             phase = .ready
@@ -381,7 +402,10 @@ final class AppModel {
     private func watchNetwork() {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             guard path.status == .satisfied else { return }
-            Task { @MainActor in self?.kickOutbox(force: true) }
+            Task { @MainActor in
+                self?.kickOutbox(force: true)
+                self?.recoverConnection(reason: "network-return")
+            }
         }
         pathMonitor.start(queue: DispatchQueue(label: "studio.otherstuff.ambulando.native.path", qos: .utility))
     }
@@ -611,6 +635,7 @@ final class AppModel {
             refresh(force: false)
             kickOutbox()
             startLive()
+            recoverConnection(reason: "foreground")
         }
     }
 
@@ -630,12 +655,13 @@ final class AppModel {
     /// finishing time iOS grants, and ask for the next opportunistic refresh.
     func sceneDidEnterBackground() {
         isActive = false
+        probeTask?.cancel(); probeTask = nil
         Task { await liveStream?.stop() }
         scheduleBackgroundRefresh()
         finishPendingWorkInBackground()
     }
 
-    private func startLive() {
+    func startLive() {
         guard isActive, let liveStream, let connection, canRead else { return }
         Task {
             // At launch the observed workspace list may not have loaded yet; read the selection from the store.

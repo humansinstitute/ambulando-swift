@@ -29,7 +29,7 @@ extension WorkspaceSync {
         guard let channels = try? await channelIds(workspace, scopeId: scopeId) else { return }
         let sync = self
         for channel in channels {
-            await engine.enqueue(Self.tasksKey(workspace.id, channel), priority: priority, force: force) {
+            await engine.enqueue(Self.tasksKey(workspace.id, channel), priority: priority, force: force, retries: SyncBackoff.readRetries) {
                 try await sync.identity.requireReader(npub: connection.signerNpub)
                 let tasks = try await sync.api(origin: try TowerOrigin(connection.origin)).channelTasks(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channel)
                 try Task.checkCancellation()
@@ -60,7 +60,7 @@ extension WorkspaceSync {
         guard let channels = try? await channelIds(workspace, scopeId: scopeId) else { return }
         let sync = self
         for channel in channels {
-            await engine.enqueue(Self.docsKey(workspace.id, channel), priority: priority, force: force) {
+            await engine.enqueue(Self.docsKey(workspace.id, channel), priority: priority, force: force, retries: SyncBackoff.readRetries) {
                 try await sync.identity.requireReader(npub: connection.signerNpub)
                 let page = try await sync.api(origin: try TowerOrigin(connection.origin)).channelDocs(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channel)
                 try Task.checkCancellation()
@@ -94,7 +94,7 @@ extension WorkspaceSync {
         guard let channels = try? await channelIds(workspace, scopeId: scopeId) else { return }
         let sync = self
         for channel in channels {
-            await engine.enqueue(Self.filesKey(workspace.id, channel), priority: priority, force: force) {
+            await engine.enqueue(Self.filesKey(workspace.id, channel), priority: priority, force: force, retries: SyncBackoff.readRetries) {
                 try await sync.identity.requireReader(npub: connection.signerNpub)
                 let api = sync.api(origin: try TowerOrigin(connection.origin))
                 let files = try await api.channelFiles(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channel)
@@ -113,7 +113,7 @@ extension WorkspaceSync {
     /// View states (unread and attention), then the few records they point at that are not stored yet.
     public func refreshInbox(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, priority: SyncPriority = .visible, force: Bool = false) async {
         let sync = self
-        await engine.enqueue(Self.inboxKey(workspace.id), priority: priority, force: force) {
+        await engine.enqueue(Self.inboxKey(workspace.id), priority: priority, force: force, retries: SyncBackoff.readRetries) {
             try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             let states = try await api.viewStates(workspaceId: workspace.id, appNpub: workspace.appNpub)

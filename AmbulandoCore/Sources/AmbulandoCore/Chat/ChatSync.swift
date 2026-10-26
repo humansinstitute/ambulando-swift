@@ -16,7 +16,7 @@ extension WorkspaceSync {
     public func catchUpChannel(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, channelId: String,
                                priority: SyncPriority = .visible, force: Bool = false) async {
         let sync = self
-        await engine.enqueue(Self.messagesKey(workspace.id, channelId), priority: priority, force: force) {
+        await engine.enqueue(Self.messagesKey(workspace.id, channelId), priority: priority, force: force, retries: SyncBackoff.readRetries) {
             try await sync.identity.requireReader(npub: connection.signerNpub)
             try await sync.runChannelCatchUp(connection, workspace, channelId: channelId, fromStart: force)
         }

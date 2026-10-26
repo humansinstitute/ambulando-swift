@@ -106,7 +106,9 @@ extension WorkspaceSync {
     /// The latest failure of a sidebar job, discovery first (without it nothing below can load).
     public static func navigationError(_ snapshot: SyncSnapshot, connectionId: String, workspaceId: String?) -> String? {
         if let error = snapshot.errors["discover:\(connectionId)"] { return error }
-        return snapshot.errors.filter { isNavigationKey($0.key, connectionId: connectionId, workspaceId: workspaceId) }
-            .sorted { $0.key < $1.key }.first?.value
+        if let error = snapshot.errors.filter({ isNavigationKey($0.key, connectionId: connectionId, workspaceId: workspaceId) })
+            .sorted(by: { $0.key < $1.key }).first?.value { return error }
+        // A connection failure is one plain sentence here; Settings carries the status and Retry.
+        return snapshot.connectionFailures.contains { isNavigationKey($0, connectionId: connectionId, workspaceId: workspaceId) } ? "Connection lost." : nil
     }
 }

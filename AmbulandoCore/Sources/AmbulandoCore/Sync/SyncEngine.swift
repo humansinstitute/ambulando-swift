@@ -7,7 +7,18 @@ public enum SyncPriority: Int, Sendable, Comparable {
     public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
 }
 
+/// What the engine did about a failing job, for the local diagnostics log. `key` is the job family (the part before
+/// the first colon), never a workspace or record identifier.
+public struct SyncEvent: Sendable, Equatable {
+    public enum Kind: Sendable, Equatable { case retryScheduled(attempt: Int, of: Int, delayMs: Int), retriesExhausted, recovered(afterFailures: Int) }
+    public let family: String
+    public let kind: Kind
+}
+
 public enum SyncBackoff {
+    /// Automatic reruns after a transient read failure: 2 s, 4 s, 8 s (±20 %), then wait for a foreground, network-return or manual retry.
+    public static let readRetries = 3
+
     /// 2 s, 4 s, 8 s … capped at 300 s, with ±20 % jitter (`random` in 0...1).
     public static func delay(failures: Int, random: Double) -> Duration {
         guard failures > 0 else { return .zero }
@@ -22,11 +33,19 @@ public struct SyncSnapshot: Sendable, Equatable {
     public var queued: Set<String> = []
     /// Waiting for a scheduled retry time; not shown as active syncing.
     public var scheduled: Set<String> = []
+    /// Latest failure per key, excluding connection failures (`connectionFailures`): those are shown as one simple
+    /// connection status, never as a raw transport message.
     public var errors: [String: String] = [:]
+    /// Keys whose latest failure was transient (timeout, dropped or missing network, gateway unavailable) and not yet recovered.
+    public var connectionFailures: Set<String> = []
+    /// Keys waiting for an automatic retry after a transient failure (a subset of `scheduled`/`queued`).
+    public var retrying: Set<String> = []
     public var isIdle: Bool { running.isEmpty && queued.isEmpty }
 
-    public init(running: Set<String> = [], queued: Set<String> = [], scheduled: Set<String> = [], errors: [String: String] = [:]) {
+    public init(running: Set<String> = [], queued: Set<String> = [], scheduled: Set<String> = [], errors: [String: String] = [:],
+                connectionFailures: Set<String> = [], retrying: Set<String> = []) {
         self.running = running; self.queued = queued; self.scheduled = scheduled; self.errors = errors
+        self.connectionFailures = connectionFailures; self.retrying = retrying
     }
 }
 
@@ -43,6 +62,9 @@ public actor SyncEngine {
 
     private struct Job {
         let key: String; var priority: SyncPriority; var work: Work; let sequence: UInt64
+        /// Automatic retries left after a transient failure; reads only (a write is never replayed by the engine).
+        var retries = 0
+        var attempt = 0
         /// Called when the job is removed without running (cancelled, or replaced by a newer job of its key).
         var dropped: (@Sendable () -> Void)? = nil
     }
@@ -59,6 +81,8 @@ public actor SyncEngine {
     private var notBefore: [String: ContinuousClock.Instant] = [:]      // failure backoff
     private var delayedUntil: [String: ContinuousClock.Instant] = [:]   // requested delay (scheduled retry)
     private var errors: [String: String] = [:]
+    private var connectionFailures: Set<String> = []
+    private var onEvent: (@Sendable (SyncEvent) -> Void)?
     private var sequence: UInt64 = 0
     private var generation: UInt64 = 0
     private var idleWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
@@ -74,7 +98,8 @@ public actor SyncEngine {
     public var snapshot: SyncSnapshot {
         let now = clock.now
         let waiting = Set(queue.map(\.key).filter { readyAt($0).map { $0 > now } ?? false })
-        return SyncSnapshot(running: Set(running.keys), queued: Set(queue.map(\.key)).subtracting(waiting), scheduled: waiting, errors: errors)
+        return SyncSnapshot(running: Set(running.keys), queued: Set(queue.map(\.key)).subtracting(waiting), scheduled: waiting, errors: errors,
+                            connectionFailures: connectionFailures, retrying: Set(queue.filter { $0.attempt > 0 }.map(\.key)))
     }
 
     public func statusStream() -> AsyncStream<SyncSnapshot> {
@@ -89,17 +114,32 @@ public actor SyncEngine {
     private func removeObserver(_ id: UUID) { observers[id] = nil }
     private func publish() { let s = snapshot; for o in observers.values { o.yield(s) } }
 
-    /// Adds or coalesces a keyed job. `delay` schedules it for later (an automatic retry); a delayed request never
-    /// postpones one already pending without delay, and an immediate request cancels an earlier delay.
-    public func enqueue(_ key: String, priority: SyncPriority = .background, force: Bool = false, delay: Duration? = nil,
-                        _ work: @escaping Work) {
-        enqueue(key, priority: priority, force: force, delay: delay, work: work, dropped: nil)
+    /// Receives retry and recovery events (diagnostics). Not called for jobs without `retries`.
+    public func setEventHandler(_ handler: (@Sendable (SyncEvent) -> Void)?) { onEvent = handler }
+
+    /// A fresh result for `key` arrived by another path (a live event refetched the same data): its connection failure is obsolete.
+    public func clearConnectionFailure(_ key: String) {
+        guard connectionFailures.remove(key) != nil else { return }
+        errors[key] = nil
+        failures[key] = nil
+        notBefore[key] = nil
+        publish()
     }
 
-    private func enqueue(_ key: String, priority: SyncPriority, force: Bool, delay: Duration?, work: @escaping Work,
+    /// Adds or coalesces a keyed job. `delay` schedules it for later (an automatic retry); a delayed request never
+    /// postpones one already pending without delay, and an immediate request cancels an earlier delay.
+    /// `retries` is the number of automatic, backed-off reruns after a transient connection failure (a timeout, a dropped
+    /// or missing network, a 502/503/504). Only for idempotent reads: each rerun calls `work` again, so it signs afresh.
+    public func enqueue(_ key: String, priority: SyncPriority = .background, force: Bool = false, delay: Duration? = nil,
+                        retries: Int = 0, _ work: @escaping Work) {
+        enqueue(key, priority: priority, force: force, delay: delay, retries: retries, work: work, dropped: nil)
+    }
+
+    private func enqueue(_ key: String, priority: SyncPriority, force: Bool, delay: Duration?, retries: Int = 0, work: @escaping Work,
                          dropped: (@Sendable () -> Void)?) {
         sequence &+= 1
-        let job = Job(key: key, priority: priority, work: work, sequence: sequence, dropped: dropped)
+        var job = Job(key: key, priority: priority, work: work, sequence: sequence, dropped: dropped)
+        job.retries = max(0, retries)
         if force { notBefore[key] = nil }
         let pendingImmediately = (reruns[key] != nil || queue.contains { $0.key == key }) && delayedUntil[key] == nil
         if let delay, !force {
@@ -112,13 +152,14 @@ public actor SyncEngine {
         }
         if running[key] != nil {
             var rerun = job
-            if let existing = reruns[key] { rerun.priority = max(existing.priority, priority); existing.dropped?() }
+            if let existing = reruns[key] { rerun.priority = max(existing.priority, priority); rerun.retries = max(existing.retries, retries); existing.dropped?() }
             reruns[key] = rerun
         } else if let index = queue.firstIndex(where: { $0.key == key }) {
             queue[index].dropped?()
             queue[index].work = work
             queue[index].dropped = dropped
             queue[index].priority = max(queue[index].priority, priority)
+            queue[index].retries = max(queue[index].retries, retries)
         } else {
             queue.append(job)
         }
@@ -140,6 +181,7 @@ public actor SyncEngine {
         queue.removeAll { $0.key == key }
         reruns.removeValue(forKey: key)?.dropped?()
         delayedUntil[key] = nil
+        if connectionFailures.remove(key) != nil { errors[key] = nil }
         running[key]?.cancel()
         publish()
         resumeIdleWaitersIfIdle()
@@ -159,6 +201,8 @@ public actor SyncEngine {
         queue.removeAll()
         reruns.removeAll()
         delayedUntil.removeAll()
+        for key in connectionFailures { errors[key] = nil }
+        connectionFailures.removeAll()
         for task in running.values { task.cancel() }
         publish()
         resumeIdleWaitersIfIdle()
@@ -189,7 +233,7 @@ public actor SyncEngine {
                                                  _ work: @escaping @Sendable () async throws -> T) async throws -> T {
         let result = OneShot<T>()
         return try await withTaskCancellationHandler {
-            await enqueue(key, priority: priority, force: true, delay: nil, work: {
+            await enqueue(key, priority: priority, force: true, delay: nil, retries: 0, work: {
                 do { result.resume(.success(try await work())) } catch { result.resume(.failure(error)) }
             }, dropped: { result.resume(.failure(CancellationError())) })
             return try await result.value()
@@ -224,25 +268,52 @@ public actor SyncEngine {
             var failure: Error?
             do { try await work() } catch { failure = error }
             SyncSignposts.end(interval)
-            await self?.finish(key, error: failure, generation: started)
+            await self?.finish(job, error: failure, generation: started)
         }
     }
 
-    private func finish(_ key: String, error: Error?, generation started: UInt64) {
+    private func finish(_ job: Job, error: Error?, generation started: UInt64) {
+        let key = job.key
         running[key] = nil
         runningPriority[key] = nil
+        let family = key.split(separator: ":").first.map(String.init) ?? key
+        var retry: Job?
         if let error, !(error is CancellationError), !Task.isCancelled, !((error as? URLError)?.code == .cancelled) {
             let count = (failures[key] ?? 0) + 1
             failures[key] = count
-            notBefore[key] = clock.now + SyncBackoff.delay(failures: count, random: random())
-            errors[key] = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            let wait = SyncBackoff.delay(failures: count, random: random())
+            notBefore[key] = clock.now + wait
+            if ConnectionFailure.isTransient(error) {
+                connectionFailures.insert(key)
+                errors[key] = nil
+                // Retried only while this generation is current, nothing newer is already waiting for the key, and budget remains.
+                // The automatic budget is per outage: once a key has failed this many times in a row, later forced attempts (probe,
+                // foreground, network return, Retry) run once each instead of starting another retry sequence.
+                if job.retries > 0, count <= SyncBackoff.readRetries + 1, started == generation, reruns[key] == nil, !queue.contains(where: { $0.key == key }) {
+                    var next = job
+                    next.retries -= 1; next.attempt += 1
+                    sequence &+= 1
+                    retry = next
+                    onEvent?(SyncEvent(family: family, kind: .retryScheduled(attempt: next.attempt, of: next.attempt + next.retries,
+                                                                            delayMs: Int(wait.components.seconds * 1000 + wait.components.attoseconds / 1_000_000_000_000_000))))
+                } else if job.retries == 0, job.attempt > 0 {
+                    onEvent?(SyncEvent(family: family, kind: .retriesExhausted))
+                }
+            } else {
+                connectionFailures.remove(key)
+                errors[key] = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            }
         } else if error == nil {
+            if job.attempt > 0 || connectionFailures.contains(key) { onEvent?(SyncEvent(family: family, kind: .recovered(afterFailures: failures[key] ?? 0))) }
             failures[key] = nil
             notBefore[key] = nil
             errors[key] = nil
+            connectionFailures.remove(key)
         }
         if let rerun = reruns.removeValue(forKey: key) {
             if started == generation { queue.append(rerun) } else { rerun.dropped?() }
+        } else if let retry {
+            queue.append(retry)
         }
         pump()
         publish()
