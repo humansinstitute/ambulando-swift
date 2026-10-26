@@ -89,6 +89,8 @@ final class BrowserModel {
     private(set) var prompt: NIP07Prompt?
     private(set) var locked = true
     private(set) var sites: [String: NIP07SitePermission] = [:]
+    /// Sites saved to the new-tab page, kept on this device apart from website data and Nostr permissions.
+    private(set) var favourites = BrowserFavourites()
 
     /// Sample-data mode: this HTML answers for `sampleOrigin` instead of the network.
     @ObservationIgnored var samplePage: (url: URL, html: String)?
@@ -97,6 +99,9 @@ final class BrowserModel {
     @ObservationIgnored private var contentController: WKUserContentController?
     @ObservationIgnored private var delegate: BrowserWebDelegate?
     @ObservationIgnored private var handler: BrowserScriptHandler?
+    @ObservationIgnored private var favouritesStore: LocalStore?
+    /// Favourites writes run one after another, so the stored list is always the latest.
+    @ObservationIgnored private var favouritesWrite: Task<Void, Never>?
 
     var selected: BrowserTab? { tabs.first { $0.id == selectedId } ?? tabs.last }
 
@@ -126,6 +131,90 @@ final class BrowserModel {
         self.broker = broker
         self.locked = locked
         self.sites = saved
+        favouritesStore = store
+        favourites = BrowserFavourites.decode(try? await store.reader.state(BrowserFavourites.stateKey))
+    }
+
+    // MARK: Favourites
+
+    /// Adds the tab's page to the favourites (or removes it if it is one), then looks for the icon the page advertises.
+    func toggleFavourite(_ tab: BrowserTab) {
+        guard let url = tab.url else { return }
+        if let saved = favourites.favourite(for: url) {
+            removeFavourite(saved.id)
+            return
+        }
+        let saved: BrowserFavourite
+        do { saved = try favourites.add(title: tab.title, url: url) } catch {
+            tab.refusal = (error as? BrowserFavouriteError)?.message
+            return
+        }
+        persistFavourites()
+        Task { [weak self, weak tab] in
+            guard let tab, tab.url.map(BrowserFavourites.canonical) == BrowserFavourites.canonical(url),
+                  let icon = await Self.siteIcon(in: tab.webView), let self else { return }
+            self.favourites.setSiteIcon(icon, for: saved.id)
+            self.persistFavourites()
+        }
+    }
+
+    /// Saves an edited favourite, or a new one typed on the start page. Throws the reason it was refused.
+    func saveFavourite(_ favourite: BrowserFavourite) throws {
+        if favourites.items.contains(where: { $0.id == favourite.id }) {
+            try favourites.update(favourite)
+        } else {
+            let added = try favourites.add(title: favourite.title, url: favourite.url)
+            var edited = favourite
+            edited.id = added.id
+            do { try favourites.update(edited) } catch { favourites.remove(added.id); throw error }
+        }
+        persistFavourites()
+    }
+
+    func removeFavourite(_ id: UUID) {
+        favourites.remove(id)
+        persistFavourites()
+    }
+
+    func moveFavourites(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        favourites.move(fromOffsets: offsets, toOffset: destination)
+        persistFavourites()
+    }
+
+    func moveFavourite(_ id: UUID, by step: Int) {
+        guard let index = favourites.items.firstIndex(where: { $0.id == id }) else { return }
+        favourites.move(id, to: index + step)
+        persistFavourites()
+    }
+
+    /// Opens a favourite in the tab showing the start page (or a new tab if there is none).
+    func openFavourite(_ favourite: BrowserFavourite) {
+        if let tab = selected, tab.isBlank { load(favourite.url, in: tab) } else { open(favourite.url) }
+    }
+
+    private func persistFavourites() {
+        guard let store = favouritesStore else { return }
+        let text = favourites.encoded(), previous = favouritesWrite
+        favouritesWrite = Task {
+            await previous?.value
+            try? await store.writer.setState(BrowserFavourites.stateKey, text)
+        }
+    }
+
+    /// The icon the page names for home screens (`apple-touch-icon`), else its largest `icon`, else `/favicon.ico`.
+    /// Run in Ambulando's own script world, so the page cannot replace the functions used; the links themselves are the
+    /// page's, so only an HTTPS address is kept (`BrowserFavourites.setSiteIcon`).
+    private static func siteIcon(in webView: WKWebView) async -> URL? {
+        let script = """
+        (() => {
+          const links = [...document.querySelectorAll('link[rel][href]')].map(l => ({ rel: l.rel.toLowerCase(), href: l.href, size: parseInt((l.sizes && l.sizes.value || '0').split('x')[0]) || 0 }));
+          const touch = links.filter(l => l.rel.includes('apple-touch-icon')).sort((a, b) => b.size - a.size)[0];
+          const icon = links.filter(l => l.rel.split(/\\s+/).includes('icon')).sort((a, b) => b.size - a.size)[0];
+          return (touch || icon || {}).href || (location.origin + '/favicon.ico');
+        })()
+        """
+        guard let found = try? await webView.evaluateJavaScript(script, contentWorld: .defaultClient) as? String else { return nil }
+        return URL(string: found)
     }
 
     // MARK: Tabs

@@ -100,6 +100,13 @@ public enum TextAttachmentPolicy {
         return lines
     }
 
+    /// Swift's UTF-8 decoder keeps a leading BOM scalar. Foundation's String(data:encoding:) consumes it, which
+    /// would silently change pasted files. The byte round-trip also rejects malformed UTF-8 instead of replacement.
+    public static func exactUTF8(_ data: Data) -> String? {
+        let text = String(decoding: data, as: UTF8.self)
+        return Data(text.utf8) == data ? text : nil
+    }
+
     /// The exact bytes of a pasted text: UTF-8 with nothing normalised or added.
     public static func fileBytes(_ text: String) -> Data { Data(text.utf8) }
 }

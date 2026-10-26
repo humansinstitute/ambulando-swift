@@ -62,6 +62,23 @@ final class TextAttachmentTests: XCTestCase {
         XCTAssertEqual(pages.page(containing: pages.codePoints - 1), pages.pageCount - 1)
     }
 
+    func testUTF8DataReaderPreservesBOMRatherThanConsumingItAsAnEncodingSignature() throws {
+        let bytes = Data(("\u{FEFF}" + String(repeating: "é😀e\u{301}\r\n", count: 8_000)).utf8)
+        let pages = try XCTUnwrap(TextPages(data: bytes))
+        XCTAssertEqual(pages.data, bytes)
+        XCTAssertEqual(TextAttachmentPolicy.exactUTF8(bytes)?.unicodeScalars.first?.value, 0xFEFF)
+        XCTAssertNil(TextAttachmentPolicy.exactUTF8(Data([0xEF, 0xBB, 0xBF, 0xFF])))
+    }
+
+    func testCanonicallyEquivalentUnicodeEditsStillPreserveTheChosenBytes() {
+        var pages = TextPages(text: "e\u{301}\r\n")
+        pages.replace(page: 0, with: "é\r\n")
+        XCTAssertEqual(pages.data, Data("é\r\n".utf8))
+        let a = TextPages(text: "a\u{301}\u{327}"), b = TextPages(text: "a\u{327}\u{301}")
+        XCTAssertEqual(a.byteCount, b.byteCount)
+        XCTAssertNotEqual(a, b, "Unicode canonical equivalence is not byte identity for a plain-text file")
+    }
+
     func testInvalidUTF8IsNotEditableText() {
         XCTAssertNil(TextPages(data: Data([0x66, 0xFF, 0xFE])))
         XCTAssertNotNil(TextPages(data: Data("ok".utf8)))
@@ -88,7 +105,7 @@ final class TextAttachmentTests: XCTestCase {
         XCTAssertThrowsError(try TextAttachmentStaging.read(a, in: dir))
     }
 
-    func testReplacingContentKeepsIdentityAndDropsTheOldFile() throws {
+    func testReplacingContentKeepsIdentityAndRetainsPreviousBytesForDurableTransition() throws {
         let dir = temporaryDirectory()
         var a = try TextAttachmentStaging.stage(text: "one", name: "Pasted text.txt", source: .paste, in: dir)
         a.objectId = "x"; a.complete = true
@@ -98,7 +115,7 @@ final class TextAttachmentTests: XCTestCase {
         XCTAssertEqual(b.text?.lines, 2)
         XCTAssertNil(b.objectId)
         XCTAssertFalse(b.complete, "an edited attachment uploads again")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent(a.staged).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent(a.staged).path))
         XCTAssertEqual(try TextAttachmentStaging.read(b, in: dir), Data("two\nthree".utf8))
     }
 
@@ -184,6 +201,105 @@ final class TextAttachmentTests: XCTestCase {
         XCTAssertNil(list.first?.textAttachment)
     }
 
+    func testOversizedPageReplacementRemainsBoundedAndExact() {
+        var pages = TextPages(text: "prefix\r\n")
+        let replacement = "\u{FEFF}" + String(repeating: "界😀x", count: 450_000) + "\r\nend"
+        pages.replace(page: 0, with: replacement)
+        XCTAssertEqual(pages.data, Data(replacement.utf8))
+        XCTAssertTrue(pages.pages.allSatisfy { $0.unicodeScalars.count <= TextPages.pageScalars + TextPages.lookahead + 1 })
+        let snapshot = pages
+        pages.replace(page: 0, with: pages.page(0))
+        XCTAssertEqual(pages, snapshot, "a no-op edit preserves BOM, CRLF and all other pages")
+    }
+
+    func testSentEditJournalSurvivesRelaunchWithStableUploadConflictAndBinding() async throws {
+        let h = try await ChatHarness.make()
+        let root = temporaryDirectory()
+        let message = MessageRecord(workspaceId: ws, id: msg, channelId: Fixtures.channel1, body: "", createdAt: "2026-10-26T00:00:00Z")
+        let attachment = MessageAttachment(kind: "file", storageObjectId: orig, filename: "Original.txt", mimeType: textAttachmentContentType, sizeBytes: 1)
+        var intent = PendingTextEdit(connection: h.connection, workspaceId: ws, message: message, attachment: attachment,
+            bytes: Data("\u{FEFF}mine\r\n😀".utf8), filename: "Renamed.txt", lineage: nil, baseVersionId: nil)
+        let journal = TextEditJournal(root: root)
+        try await journal.save(intent)
+        intent.prepared = PreparedObject(objectId: "66666666-6666-4666-8666-666666666666", uploadURL: "https://tower.example/api/v4/storage/66666666-6666-4666-8666-666666666666")
+        intent.lineage = TextLineage(fileId: file, displayName: "Someone else.txt", currentVersionId: v2)
+        intent.conflict = TextVersionRef(id: v2, versionId: v2, number: 2, storageObjectId: orig, sizeBytes: 1, sha256: nil, createdAt: nil, author: nil)
+        try await journal.save(intent)
+        let reopened = TextEditJournal(root: root)
+        let recovered = try await reopened.load(connection: h.connection, workspaceId: ws, messageId: msg, objectId: orig)
+        XCTAssertEqual(recovered, intent)
+        let other = ConnectionRecord(origin: try TowerOrigin("https://another.example"), signerNpub: TestKeys.npub, towerNpub: nil)
+        let crossed = try await reopened.load(connection: other, workspaceId: ws, messageId: msg, objectId: orig)
+        XCTAssertNil(crossed)
+        try await reopened.remove(intent)
+        let cleared = try await reopened.load(connection: h.connection, workspaceId: ws, messageId: msg, objectId: orig)
+        XCTAssertNil(cleared)
+    }
+
+    func testConflictKeepsOriginalBaseUntilExplicitRebaseAndRejectsStaleAutosave() async throws {
+        let h = try await ChatHarness.make()
+        let journal = TextEditJournal.shared(root: temporaryDirectory())
+        let message = MessageRecord(workspaceId: ws, id: msg, channelId: Fixtures.channel1, body: "", createdAt: "2026-10-26T00:00:00Z")
+        let attachment = MessageAttachment(kind: "file", storageObjectId: orig, filename: "Original.txt", mimeType: textAttachmentContentType, sizeBytes: 1)
+        let original = TextLineage(fileId: file, displayName: "Original.txt", currentVersionId: v1)
+        let canonical = TextLineage(fileId: file, displayName: "Other.txt", currentVersionId: v2)
+        let local = PendingTextEdit(connection: h.connection, workspaceId: ws, message: message, attachment: attachment,
+            bytes: Data("mine".utf8), filename: "Mine.txt", lineage: original, baseVersionId: v1)
+        var conflict = local
+        conflict.prepared = PreparedObject(objectId: "66666666-6666-4666-8666-666666666666", uploadURL: "https://tower.example/api/v4/storage/66666666-6666-4666-8666-666666666666")
+        conflict.conflictLineage = canonical
+        try await journal.save(conflict)
+        // An autosave that started before prepare completed must not roll upload identity/base backwards.
+        do { try await journal.save(local); XCTFail("stale local save must be rejected") } catch {}
+        let reloadedValue = try await journal.load(connection: h.connection, workspaceId: ws, messageId: msg, objectId: orig)
+        let reloaded = try XCTUnwrap(reloadedValue)
+        XCTAssertEqual(reloaded.baseVersionId, v1)
+        XCTAssertEqual(reloaded.lineage, original)
+        XCTAssertEqual(reloaded.canonicalConflict, canonical)
+        XCTAssertThrowsError(try reloaded.updatingLocal(bytes: Data("different".utf8), filename: "Mine.txt"), "uncertain prepared command is immutable")
+        let unchanged = try reloaded.updatingLocal(bytes: reloaded.bytes, filename: reloaded.filename)
+        XCTAssertEqual(unchanged.baseVersionId, v1)
+        let rebased = reloaded.rebasing(on: canonical, versionId: v2)
+        XCTAssertEqual(rebased.baseVersionId, v2)
+        XCTAssertNotEqual(rebased.mutationId, reloaded.mutationId)
+        XCTAssertEqual(rebased.prepared, reloaded.prepared)
+        try await journal.save(rebased)
+        do { try await journal.remove(reloaded); XCTFail("old completion must not remove new rebased command") } catch {}
+        let afterValue = try await journal.load(connection: h.connection, workspaceId: ws, messageId: msg, objectId: orig)
+        XCTAssertEqual(afterValue, rebased)
+        let notSubmitted = try local.updatingLocal(bytes: Data("new local text".utf8), filename: "New.txt")
+        XCTAssertEqual(notSubmitted.baseVersionId, v1)
+        XCTAssertEqual(notSubmitted.lineage, original)
+        XCTAssertEqual(notSubmitted.mutationId, local.mutationId)
+    }
+
+    func testAcceptedPhaseCannotBeRolledBackByLatePreparedCallback() async throws {
+        let h = try await ChatHarness.make(), journal = TextEditJournal(root: temporaryDirectory())
+        let message = MessageRecord(workspaceId: ws, id: msg, channelId: Fixtures.channel1, body: "", createdAt: "2026-10-26T00:00:00Z")
+        let attachment = MessageAttachment(kind: "file", storageObjectId: orig, filename: "Original.txt", mimeType: textAttachmentContentType, sizeBytes: 1)
+        var intent = PendingTextEdit(connection: h.connection, workspaceId: ws, message: message, attachment: attachment,
+            bytes: Data("mine".utf8), filename: "Mine.txt", lineage: nil, baseVersionId: nil)
+        intent.prepared = PreparedObject(objectId: "66666666-6666-4666-8666-666666666666", uploadURL: "https://tower.example/api/v4/storage/66666666-6666-4666-8666-666666666666")
+        var accepted = intent
+        accepted.acceptedLineage = TextLineage(fileId: file, displayName: "Old.txt", currentVersionId: v1, rowVersion: 1)
+        try await journal.save(accepted)
+        do { try await journal.save(intent); XCTFail("late upload callback must not erase accepted content phase") } catch {}
+        let recovered = try await journal.load(connection: h.connection, workspaceId: ws, messageId: msg, objectId: orig)
+        XCTAssertEqual(recovered?.acceptedLineage, accepted.acceptedLineage)
+    }
+
+    func testJournalWriteFailureDoesNotClaimSuccessOrRemovePriorEdit() async throws {
+        let h = try await ChatHarness.make()
+        let root = temporaryDirectory().appendingPathComponent("not-a-directory")
+        try Data("occupied".utf8).write(to: root)
+        let journal = TextEditJournal(root: root)
+        let message = MessageRecord(workspaceId: ws, id: msg, channelId: Fixtures.channel1, body: "", createdAt: "2026-10-26T00:00:00Z")
+        let attachment = MessageAttachment(kind: "file", storageObjectId: orig, filename: "Original.txt", mimeType: textAttachmentContentType, sizeBytes: 1)
+        let edit = PendingTextEdit(connection: h.connection, workspaceId: ws, message: message, attachment: attachment, bytes: Data("mine".utf8), filename: "Mine.txt", lineage: nil, baseVersionId: nil)
+        do { try await journal.save(edit); XCTFail("storage failure must reach the caller before networking") } catch {}
+        XCTAssertEqual(try Data(contentsOf: root), Data("occupied".utf8))
+    }
+
     // MARK: Versions and lineage
 
     private func api(_ handler: @escaping StubTransport.Handler) async throws -> (TowerAPI, StubTransport) {
@@ -206,6 +322,92 @@ final class TextAttachmentTests: XCTestCase {
             }
             return next(request) ?? (404, ["code": "not_found"])
         }
+    }
+
+    func testLostContentReplyReusesJournaledObjectAfterRelaunch() async throws {
+        let h = try await ChatHarness.make()
+        let counter = TextEditTestCounter()
+        let transport = StubTransport(storageHandler { request in
+            if request.httpMethod == "POST", request.url!.path.hasSuffix("/channels/\(Fixtures.channel1)/files") {
+                let n = counter.next()
+                if n == 1 { return (503, ["code": "reply_lost"]) }
+                return (200, ["file": ["id": file, "display_name": "Mine.txt", "current_version_id": v1, "row_version": 1],
+                    "current_version": ["id": v1, "version_number": 1, "storage_object_id": "66666666-6666-4666-8666-666666666666"]])
+            }
+            return nil
+        })
+        let cache = FileCache(root: temporaryDirectory())
+        let sync = WorkspaceSync(store: h.store, engine: h.engine, identity: h.identity, transport: transport)
+        let service = TextAttachmentService(sync: sync, connection: h.connection, workspace: h.workspace, cache: cache)
+        let message = MessageRecord(workspaceId: ws, id: msg, channelId: Fixtures.channel1, body: "", createdAt: "2026-10-26T00:00:00Z")
+        let attachment = MessageAttachment(kind: "file", storageObjectId: orig, filename: "Original.txt", mimeType: textAttachmentContentType, sizeBytes: 1)
+        let intent = PendingTextEdit(connection: h.connection, workspaceId: ws, message: message, attachment: attachment,
+            bytes: Data("edited".utf8), filename: "Mine.txt", lineage: nil, baseVersionId: nil)
+        do { _ = try await service.saveDurably(intent); XCTFail("lost response should retain intent") } catch {}
+        let recoveredValue = try await service.recover(message: message, attachment: attachment)
+        let recovered = try XCTUnwrap(recoveredValue)
+        XCTAssertEqual(recovered.mutationId, intent.mutationId)
+        XCTAssertNotNil(recovered.prepared)
+        let relaunched = TextAttachmentService(sync: sync, connection: h.connection, workspace: h.workspace, cache: cache)
+        _ = try await relaunched.saveDurably(recovered)
+        let requests = transport.recorded
+        XCTAssertEqual(requests.filter { $0.url!.path.hasSuffix("/storage/prepare") }.count, 1)
+        let posts = requests.filter { $0.httpMethod == "POST" && $0.url!.path.hasSuffix("/channels/\(Fixtures.channel1)/files") }
+        XCTAssertEqual(posts.count, 2)
+        XCTAssertEqual(posts.first?.httpBody, posts.last?.httpBody, "same uploaded object is replayed after accepted/lost response")
+        let cleared = try await relaunched.recover(message: message, attachment: attachment)
+        XCTAssertNil(cleared)
+    }
+
+    func testMissingJournaledObjectNeverAllocatesAnotherObjectForTheSameMutation() async throws {
+        let (api, transport) = try await api { _ in (404, ["code": "not_found"]) }
+        let prepared = PreparedObject(objectId: "66666666-6666-4666-8666-666666666666", uploadURL: "https://tower.example/api/v4/storage/66666666-6666-4666-8666-666666666666")
+        do {
+            _ = try await api.saveTextEdit(workspaceId: ws, appNpub: Fixtures.appNpub, channelId: Fixtures.channel1,
+                origin: (msg, orig, "Original.txt"), lineage: nil, baseVersionId: nil, bytes: Data("edited".utf8), filename: "Mine.txt",
+                clientMutationId: "stable-mutation", prepared: prepared)
+            XCTFail("missing durable upload identity needs recovery, not silent reallocation")
+        } catch {}
+        XCTAssertFalse(transport.recorded.contains { $0.url!.path.hasSuffix("/storage/prepare") })
+        XCTAssertFalse(transport.recorded.contains { $0.httpMethod == "POST" })
+    }
+
+    func testAcceptedVersionWithFailedRenameRetriesOnlyRename() async throws {
+        let h = try await ChatHarness.make()
+        let counter = TextEditTestCounter()
+        let transport = StubTransport(storageHandler { request in
+            if request.httpMethod == "POST", request.url!.path.hasSuffix("/files/\(file)/versions") {
+                return (201, ["file": ["id": file, "display_name": "Old.txt", "current_version_id": v2, "row_version": 2],
+                    "version": ["id": v2, "version_number": 2, "storage_object_id": "66666666-6666-4666-8666-666666666666"]])
+            }
+            if request.httpMethod == "PATCH", request.url!.path.hasSuffix("/files/\(file)") {
+                let body = try! JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                XCTAssertEqual(body["display_name"] as? String, "Renamed.txt")
+                XCTAssertEqual(body["row_version"] as? Int, 2)
+                if counter.next() == 1 { return (503, ["code": "offline"]) }
+                return (200, ["file": ["id": file, "display_name": "Renamed.txt", "current_version_id": v2, "row_version": 3]])
+            }
+            return nil
+        })
+        let cache = FileCache(root: temporaryDirectory())
+        let service = TextAttachmentService(sync: WorkspaceSync(store: h.store, engine: h.engine, identity: h.identity, transport: transport),
+            connection: h.connection, workspace: h.workspace, cache: cache)
+        let message = MessageRecord(workspaceId: ws, id: msg, channelId: Fixtures.channel1, body: "", createdAt: "2026-10-26T00:00:00Z")
+        let attachment = MessageAttachment(kind: "file", storageObjectId: orig, filename: "Original.txt", mimeType: textAttachmentContentType, sizeBytes: 1)
+        let intent = PendingTextEdit(connection: h.connection, workspaceId: ws, message: message, attachment: attachment,
+            bytes: Data("edited".utf8), filename: "Renamed.txt", lineage: TextLineage(fileId: file, displayName: "Old.txt", currentVersionId: v1), baseVersionId: v1)
+        do { _ = try await service.saveDurably(intent); XCTFail("name remains pending") } catch {}
+        let pendingValue = try await service.recover(message: message, attachment: attachment)
+        let pending = try XCTUnwrap(pendingValue)
+        XCTAssertEqual(pending.acceptedLineage?.currentVersionId, v2)
+        XCTAssertEqual(pending.filename, "Renamed.txt")
+        let result = try await service.saveDurably(pending)
+        guard case .saved(let renamed, _) = result else { return XCTFail("retry completes name") }
+        XCTAssertEqual(renamed.displayName, "Renamed.txt")
+        XCTAssertEqual(transport.recorded.filter { $0.httpMethod == "POST" && $0.url!.path.hasSuffix("/versions") }.count, 1)
+        XCTAssertEqual(transport.recorded.filter { $0.url!.path.hasSuffix("/storage/prepare") }.count, 1)
+        XCTAssertEqual(transport.recorded.filter { $0.httpMethod == "PATCH" }.count, 2)
+        XCTAssertEqual(attachment.filename, "Original.txt")
     }
 
     func testFirstEditCreatesLineageFileAndLaterEditUsesVersions() async throws {
@@ -280,7 +482,10 @@ final class TextAttachmentTests: XCTestCase {
 
     func testLineageIsFoundByBothIdsNeverBySiblingOrAge() async throws {
         let (api, _) = try await api { request in
-            request.url!.path.hasSuffix("/files") ? (200, ["files": [lineageRow("99999999-9999-4999-8999-999999999999", msg: msg, storage: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertEqual(query.first(where: { $0.name == "origin_message_id" })?.value, msg)
+            XCTAssertNotNil(query.first(where: { $0.name == "origin_storage_object_id" })?.value)
+            return request.url!.path.hasSuffix("/files") ? (200, ["files": [lineageRow("99999999-9999-4999-8999-999999999999", msg: msg, storage: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
                                                                      lineageRow(file, msg: msg, storage: orig)]]) : (404, [:])
         }
         let found = try await api.textLineage(workspaceId: ws, appNpub: Fixtures.appNpub, channelId: Fixtures.channel1, originMessageId: msg, originStorageObjectId: orig)
@@ -289,4 +494,10 @@ final class TextAttachmentTests: XCTestCase {
                                              originStorageObjectId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
         XCTAssertNil(none)
     }
+}
+
+private final class TextEditTestCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func next() -> Int { lock.withLock { count += 1; return count } }
 }

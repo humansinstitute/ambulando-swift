@@ -1,7 +1,7 @@
 import Foundation
 
 /// One readable version of a sent text attachment: the original on the message, or a later file version.
-public struct TextVersionRef: Sendable, Equatable, Identifiable {
+public struct TextVersionRef: Sendable, Equatable, Identifiable, Codable {
     public let id: String
     /// nil for the original attachment on the signed message (it has no file version).
     public let versionId: String?
@@ -27,10 +27,15 @@ public struct TextVersionRef: Sendable, Equatable, Identifiable {
 }
 
 /// The Tower file that holds the edit history of one sent text attachment.
-public struct TextLineage: Sendable, Equatable {
+public struct TextLineage: Sendable, Equatable, Codable {
     public let fileId: String
     public let displayName: String
     public let currentVersionId: String?
+    public let rowVersion: Int?
+
+    public init(fileId: String, displayName: String, currentVersionId: String?, rowVersion: Int? = nil) {
+        self.fileId = fileId; self.displayName = displayName; self.currentVersionId = currentVersionId; self.rowVersion = rowVersion
+    }
 }
 
 public enum TextSaveOutcome: Sendable, Equatable {
@@ -54,7 +59,7 @@ public enum TextVersionError: LocalizedError, Equatable, Sendable {
 extension TowerAPI {
     private func fileLineage(_ file: [String: Any]) -> TextLineage? {
         guard let id = lowerUUID(file["id"] as? String) else { return nil }
-        return TextLineage(fileId: id, displayName: (file["display_name"] as? String) ?? "Pasted text.txt", currentVersionId: lowerUUID(file["current_version_id"] as? String))
+        return TextLineage(fileId: id, displayName: (file["display_name"] as? String) ?? "Pasted text.txt", currentVersionId: lowerUUID(file["current_version_id"] as? String), rowVersion: flexibleInt(file["row_version"]))
     }
 
     private func classify(_ status: Int, _ body: Data) throws -> [String: Any] {
@@ -69,9 +74,15 @@ extension TowerAPI {
 
     /// The file whose lineage metadata names this message attachment, found by matching both ids (never by name or age).
     public func textLineage(workspaceId: String, appNpub: String, channelId: String, originMessageId: String, originStorageObjectId: String) async throws -> TextLineage? {
-        let listed = try await channelFiles(workspaceId: workspaceId, appNpub: appNpub, channelId: channelId)
+        let data = try await client.request(path: Self.base(workspaceId) + "/channels/" + Self.uuid(channelId) + "/files",
+            query: [URLQueryItem(name: "origin_message_id", value: Self.uuid(originMessageId)),
+                    URLQueryItem(name: "origin_storage_object_id", value: Self.uuid(originStorageObjectId))], appNpub: appNpub)
+        guard let object = (try JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let rows = object["files"] as? [[String: Any]] else { throw TextVersionError.malformed }
+        let files = try rows.map { try FileRecord(raw: rawJSON($0)) }
+        guard files.allSatisfy({ $0.workspaceId == workspaceId && $0.channelId == channelId }) else { throw TextVersionError.malformed }
         let message = originMessageId.lowercased(), storage = originStorageObjectId.lowercased()
-        for file in listed.files where !file.archived {
+        for file in files where !file.archived {
             guard let o = (try? JSONSerialization.jsonObject(with: file.raw)) as? [String: Any],
                   let lineage = (o["metadata"] as? [String: Any])?["text_attachment_lineage"] as? [String: Any],
                   (lineage["origin_message_id"] as? String)?.lowercased() == message,
@@ -96,6 +107,27 @@ extension TowerAPI {
         return bytes
     }
 
+    /// The content version is already accepted. Retry only this optimistic rename, never the version upload.
+    public func renameTextFile(workspaceId: String, appNpub: String, lineage: TextLineage, filename: String,
+                               refreshBase: Bool, onCanonical: @Sendable (TextLineage) async throws -> Void) async throws -> TextLineage {
+        let path = try Self.base(workspaceId) + "/files/" + Self.uuid(lineage.fileId)
+        var canonical = lineage
+        if canonical.rowVersion == nil || refreshBase {
+            let data = try await client.request(path: path, appNpub: appNpub)
+            guard let object = (try JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let row = object["file"] as? [String: Any], let found = fileLineage(row) else { throw TextVersionError.malformed }
+            canonical = found
+            try await onCanonical(canonical)
+        }
+        if canonical.displayName == filename { return canonical }
+        guard let row = canonical.rowVersion else { throw TextVersionError.malformed }
+        let reply = try await client.exchange(method: "PATCH", path: path, appNpub: appNpub,
+            jsonBody: rawJSON(["display_name": filename, "row_version": row]))
+        let object = try classify(reply.status, reply.body)
+        guard let file = (object["file"] as? [String: Any]).flatMap(fileLineage), file.displayName == filename else { throw TextVersionError.malformed }
+        return file
+    }
+
     /// Saves an edit of a sent text attachment as a new version; nothing already sent or saved is overwritten.
     ///
     /// The bytes upload as a new storage object first (`prepared` resumes an earlier attempt). Without a lineage file
@@ -106,7 +138,7 @@ extension TowerAPI {
                              lineage: TextLineage?, baseVersionId: String?, bytes: Data, filename: String, clientMutationId: String,
                              prepared: PreparedObject? = nil, onPrepared: @Sendable (PreparedObject) async throws -> Void = { _ in }) async throws -> TextSaveOutcome {
         let objectId = try await store(workspaceId: workspaceId, appNpub: appNpub, bytes: bytes, contentType: textAttachmentContentType,
-                                       fileName: filename, prepared: prepared, onPrepared: onPrepared)
+                                       fileName: filename, prepared: prepared, allowReplacingMissingPrepared: false, onPrepared: onPrepared)
         if let lineage {
             guard let baseVersionId else { throw TextVersionError.malformed }
             let body = try rawJSON(["base_version_id": baseVersionId, "storage_object_id": objectId, "client_mutation_id": clientMutationId])

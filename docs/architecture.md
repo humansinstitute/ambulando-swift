@@ -493,6 +493,17 @@ directory refresh). No Tower route or schema was added.
     are native alerts naming the host.
   - Website data lives in its own persistent `WKWebsiteDataStore(forIdentifier:)`, separate from the HTML-artefact
     view's non-persistent store; the browser menu clears it.
+  - **Favourites** (`BrowserFavourites` in `AmbulandoCore/Browser`, views in `BrowserFavouritesViews.swift`). The •••
+    menu's page actions offer *Add to Favourites* or *Remove from Favourites* for HTTPS pages. A blank tab's start page
+    shows the favourites as a grid over Nostr Browser's default background: `BrowserStartBackground` is nbrowser's
+    `app/assets/app-selector/voxel-beach.png`, byte-identical, under the same 20% `#291c3d` tint. Tap opens in that
+    tab. The context menu offers Edit, Move Earlier/Later and Remove; **Add** saves a typed address; **Edit** opens a
+    reorderable, deletable list. A tile's icon is the user's picture first (Photos, or a file on Mac; re-encoded by
+    ImageIO as a PNG of at most 256 px without metadata), then the user's text (up to three characters, such as an
+    emoji), then the site's own `apple-touch-icon`/`icon`/`/favicon.ico` (read in Ambulando's script world when the
+    page is saved; HTTPS only), then the title's initial. Stored per device in `app_state` `browser.favourites.v1`
+    (versioned JSON, at most 120, de-duplicated by canonical URL). Clearing browsing data, forgetting a site's
+    permission, removing the identity or disconnecting leave the favourites alone.
   - `window.nostr`: a document-start script in the page world, top frame of HTTPS pages only, calls a
     `WKScriptMessageHandlerWithReply`. The handler answers only the main frame whose `securityOrigin` equals the tab's
     committed origin; requests carry the tab's document number (bumped on every main-frame commit). `NIP07Broker`

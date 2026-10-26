@@ -1,11 +1,19 @@
 import AmbulandoCore
 import PhotosUI
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// A sent message with its reactions, attachments and the actions Tower allows: react (anyone who can write here),
 /// edit and delete (the author; edits are signed kind 33358 revisions). Unsent edits and deletes show on the message
 /// until Tower accepts them.
-struct MessageCell: View {
+struct MessageCell: View, Equatable {
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.message == rhs.message && lhs.people == rhs.people && lhs.workspace == rhs.workspace && lhs.extras == rhs.extras
+            && lhs.route == rhs.route && lhs.replyCount == rhs.replyCount && lhs.lastReplyAt == rhs.lastReplyAt && lhs.threadTitle == rhs.threadTitle
+    }
+
     @Environment(AppModel.self) private var model
     let message: MessageRecord
     let people: PeopleDirectory
@@ -150,6 +158,11 @@ struct MessageCell: View {
     private var messageControls: some View {
         HStack(spacing: 4) {
             SyncDot(state: sync)
+            #if os(macOS)
+            NativeMessageActions(items: nativeActions).frame(width: 28, height: 28)
+                .accessibilityLabel("Message actions")
+                .accessibilityIdentifier("message.actions")
+            #else
             Menu { actions } label: {
                 Image(systemName: "ellipsis").font(.amb(.footnote).weight(.bold)).foregroundStyle(Amb.mutedForeground)
                     .frame(width: 28, height: 28).contentShape(Rectangle())
@@ -159,9 +172,36 @@ struct MessageCell: View {
             .fixedSize()
             .accessibilityLabel("Message actions")
             .accessibilityIdentifier("message.actions")
+            #endif
         }
         .padding(.top, 6).padding(.trailing, 10)
     }
+
+    #if os(macOS)
+    private var nativeActions: [NativeMessageAction] {
+        var items = [NativeMessageAction("React", "face.smiling", children: ReactionEmoji.allCases.map { emoji in
+            NativeMessageAction(emoji.name, emoji.symbol) { toggle(emoji.rawValue) }
+        })]
+        if !message.deleted {
+            items.append(NativeMessageAction("Get it done", "checkmark.circle") { gettingItDone = true })
+        }
+        if message.threadId != nil && !message.deleted {
+            items.append(NativeMessageAction("Branch from here", "arrow.triangle.branch") {
+                model.branch(from: message, in: workspace, recipient: agentSender)
+            })
+        }
+        items.append(NativeMessageAction("Copy message", "doc.on.doc") { Pasteboard.copy(MentionCodec.plain(message.body)) })
+        if AutopilotSessionLink.sessionId(in: message.raw) != nil {
+            items.append(NativeMessageAction("Autopilot Link", "arrow.up.forward.app") { Task { await openAutopilot() } })
+        }
+        items.append(NativeMessageAction("FD Ref", "link") { Pasteboard.copy(Self.reference(for: message)) })
+        if mine && !message.deleted {
+            items.append(NativeMessageAction("Edit", "pencil") { editing = true })
+            items.append(NativeMessageAction("Delete message", "trash") { confirmDelete = true })
+        }
+        return items
+    }
+    #endif
 
     private var row: some View {
         MessageRow(message: message, people: people, bodyOverride: pendingEdit?.isPending == true ? pendingEdit?.string("body") : nil, workspace: workspace)
@@ -302,10 +342,10 @@ struct ComposerAttachments: View {
     @State private var thumbnails: [String: PlatformImage] = [:]
 
     var body: some View {
-        if !attachments.isEmpty {
+        if attachments.contains(where: { $0.text == nil }) {
             ScrollView(.horizontal) {
                 HStack(spacing: 8) {
-                    ForEach(attachments) { a in
+                    ForEach(attachments.filter { $0.text == nil }) { a in
                         ZStack(alignment: .topTrailing) {
                             Group {
                                 if let image = thumbnails[a.id] { Image(platformImage: image).resizable().scaledToFill() } else { Color(Amb.muted) }
@@ -465,3 +505,68 @@ struct SyncDot: View {
             .accessibilityIdentifier("message.sync.\(state)")
     }
 }
+
+#if os(macOS)
+/// An ordinary stable AppKit button. SwiftUI's popup adaptor eagerly updates menu/accessibility content during
+/// layout transactions; incoming replies must not rebuild that native menu graph on every unchanged message.
+/// Keep the button identity and current actions, and construct the menu only on explicit user interaction.
+private struct NativeMessageAction {
+    let title: String
+    let symbol: String
+    var children: [Self] = []
+    var perform: (() -> Void)?
+
+    init(_ title: String, _ symbol: String, children: [Self] = [], perform: (() -> Void)? = nil) {
+        self.title = title; self.symbol = symbol; self.children = children; self.perform = perform
+    }
+}
+
+private struct NativeMessageActions: NSViewRepresentable {
+    let items: [NativeMessageAction]
+
+    func makeCoordinator() -> Coordinator { Coordinator(items: items) }
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(title: "", target: context.coordinator, action: #selector(Coordinator.open(_:)))
+        button.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .bold))
+        button.imagePosition = .imageOnly
+        button.isBordered = false
+        button.contentTintColor = .secondaryLabelColor
+        button.image?.isTemplate = true
+        button.setAccessibilityLabel("Message actions")
+        button.setAccessibilityHelp("Opens the message action menu")
+        button.setAccessibilityIdentifier("message.actions")
+        button.identifier = NSUserInterfaceItemIdentifier("message.actions")
+        return button
+    }
+    func updateNSView(_ button: NSButton, context: Context) { context.coordinator.items = items }
+
+    final class Coordinator: NSObject {
+        var items: [NativeMessageAction]
+        init(items: [NativeMessageAction]) { self.items = items }
+
+        @objc func open(_ button: NSButton) {
+            let menu = makeMenu(items)
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY), in: button)
+        }
+        private func makeMenu(_ actions: [NativeMessageAction]) -> NSMenu {
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+            for action in actions {
+                let item = NSMenuItem(title: action.title, action: #selector(invoke(_:)), keyEquivalent: "")
+                item.target = self
+                item.image = NSImage(systemSymbolName: action.symbol, accessibilityDescription: nil)
+                item.representedObject = Action(perform: action.perform)
+                if !action.children.isEmpty { item.submenu = makeMenu(action.children) }
+                menu.addItem(item)
+            }
+            return menu
+        }
+        @objc private func invoke(_ item: NSMenuItem) { (item.representedObject as? Action)?.perform?() }
+    }
+    private final class Action {
+        let perform: (() -> Void)?
+        init(perform: (() -> Void)?) { self.perform = perform }
+    }
+}
+#endif

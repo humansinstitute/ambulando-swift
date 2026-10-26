@@ -33,8 +33,31 @@ enum MentionStyling {
     }
 }
 
+/// A paste that became an attachment instead of text: the composer's text and selection are untouched, and Undo/Redo
+/// remove and restore the attachment.
+struct TextPasteResult {
+    let undo: () -> Void
+    let redo: () -> Void
+}
+
+/// Receives pasted (or dropped) text and its selection in the field; returns a result when it took the text as a file,
+/// nil to let the text go in as usual.
+typealias TextPasteHandler = (String, NSRange) -> TextPasteResult?
+
+enum InlineLimit {
+    /// Whether an edit replacing `replaced` with `insert` is allowed: any edit that does not grow the text, or one that
+    /// stays within the inline limits. Counts are Unicode code points and UTF-8 bytes, as the policy defines them.
+    static func allows(insert: String, replacing replaced: String, in current: String) -> Bool {
+        let added = TextAttachmentPolicy.codePoints(insert), removed = TextAttachmentPolicy.codePoints(replaced)
+        if added <= removed, insert.utf8.count <= replaced.utf8.count { return true }
+        return TextAttachmentPolicy.typingFits(insert: insert, replacing: replaced, existingCodePoints: TextAttachmentPolicy.codePoints(current),
+                                               existingUTF8Bytes: current.utf8.count)
+    }
+}
+
 #if os(iOS)
 import UIKit
+import UniformTypeIdentifiers
 
 /// The composer's text box: a text view that grows to six lines. Over SwiftUI's field it adds one thing: an explicit
 /// Paste (edit menu or ⌘V) of images or files goes to `onPasteItems`, which returns the upload placeholders to insert
@@ -53,6 +76,9 @@ struct ComposerTextView: UIViewRepresentable {
     var pickerOpen = false
     /// `@Name` texts of the picked mentions, drawn as inline pills.
     var mentionTokens: [String] = []
+    var onPasteText: TextPasteHandler? = nil
+    /// Direct typing may not grow the text past the inline limit (10,000 characters).
+    var limitsInline = false
 
     static let maxLines: CGFloat = 6
 
@@ -77,6 +103,7 @@ struct ComposerTextView: UIViewRepresentable {
     func updateUIView(_ view: PasteAwareTextView, context: Context) {
         context.coordinator.parent = self
         view.onPasteItems = onPasteItems
+        view.onPasteText = onPasteText
         view.onPickerKey = onPickerKey
         view.pickerOpen = pickerOpen
         view.placeholder = placeholder
@@ -147,6 +174,21 @@ struct ComposerTextView: UIViewRepresentable {
             parent.styleMentions(view)
         }
 
+        func textView(_ view: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            // Composition (marked text) is never interrupted; a finished commit is the user's text.
+            guard parent.limitsInline, view.markedTextRange == nil else { return true }
+            let current = view.text ?? ""
+            let ns = current as NSString
+            guard range.location != NSNotFound, NSMaxRange(range) <= ns.length else { return true }
+            // A large block arriving as an edit (a drop, dictation, a service) is handled like a paste.
+            if TextAttachmentPolicy.codePoints(text) > TextAttachmentPolicy.pasteFileThreshold,
+               let result = parent.onPasteText?(text, range) {
+                (view as? PasteAwareTextView)?.registerAttachmentUndo(result)
+                return false
+            }
+            return InlineLimit.allows(insert: text, replacing: ns.substring(with: range), in: current)
+        }
+
         func textViewDidBeginEditing(_ view: UITextView) { if !parent.focused { parent.focused = true } }
         func textViewDidEndEditing(_ view: UITextView) { if parent.focused { parent.focused = false } }
     }
@@ -154,6 +196,7 @@ struct ComposerTextView: UIViewRepresentable {
 
 final class PasteAwareTextView: UITextView {
     var onPasteItems: (([NSItemProvider]) -> [String])?
+    var onPasteText: TextPasteHandler?
     var onPickerKey: ((ComposerKey) -> Bool)?
     var pickerOpen = false
     var mentionStyled = false
@@ -229,12 +272,35 @@ final class PasteAwareTextView: UITextView {
     }
 
     override func paste(_ sender: Any?) {
-        guard let onPasteItems, pasteboardOffersItems else { return super.paste(sender) }
-        let tokens = onPasteItems(UIPasteboard.general.itemProviders)
-        guard !tokens.isEmpty else { return super.paste(sender) }
-        // Through the normal text input path: replaces the selection, moves the caret after it, and can be undone.
-        insertText(tokens.joined())
-        delegate?.textViewDidChange?(self)
+        if let onPasteItems, pasteboardOffersItems {
+            let tokens = onPasteItems(UIPasteboard.general.itemProviders)
+            if !tokens.isEmpty {
+                // Through the normal text input path: replaces the selection, moves the caret after it, and can be undone.
+                insertText(tokens.joined())
+                delegate?.textViewDidChange?(self)
+                return
+            }
+        }
+        // Text is read only inside this explicit Paste. A long one becomes a file and the field is left as it is.
+        if let onPasteText, isEditable, UIPasteboard.general.hasStrings {
+            let pasteboard = UIPasteboard.general
+            let exact = pasteboard.data(forPasteboardType: UTType.utf8PlainText.identifier).flatMap(TextAttachmentPolicy.exactUTF8)
+            if let string = exact ?? pasteboard.string, let result = onPasteText(string, selectedRange) {
+                registerAttachmentUndo(result)
+                return
+            }
+        }
+        super.paste(sender)
+    }
+
+    /// Undo removes the attachment a paste created; Redo brings it back (and registers Undo again).
+    func registerAttachmentUndo(_ result: TextPasteResult) {
+        undoManager?.registerUndo(withTarget: self) { view in
+            result.undo()
+            view.undoManager?.registerUndo(withTarget: view) { again in result.redo(); again.registerAttachmentUndo(result) }
+            view.undoManager?.setActionName("Paste as Attachment")
+        }
+        undoManager?.setActionName("Paste as Attachment")
     }
 }
 #else
@@ -257,6 +323,8 @@ struct ComposerTextView: NSViewRepresentable {
     var pickerOpen = false
     /// `@Name` texts of the picked mentions, drawn as inline pills.
     var mentionTokens: [String] = []
+    var onPasteText: TextPasteHandler? = nil
+    var limitsInline = false
     var fixedHeight: CGFloat? = nil
     /// Read while the parent draws, so a text size change (`TextScale`) reaches `updateNSView`.
     private let textScale = TextScale.shared.factor
@@ -296,6 +364,7 @@ struct ComposerTextView: NSViewRepresentable {
         guard let view = scroll.documentView as? PasteAwareTextView else { return }
         context.coordinator.parent = self
         view.onPasteItems = onPasteItems
+        view.onPasteText = onPasteText
         view.onSubmit = onSubmit
         view.onFocusChange = { focused in
             DispatchQueue.main.async {
@@ -372,6 +441,18 @@ struct ComposerTextView: NSViewRepresentable {
         func textDidBeginEditing(_ notification: Notification) { if !parent.focused { parent.focused = true } }
         func textDidEndEditing(_ notification: Notification) { if parent.focused { parent.focused = false } }
 
+        func textView(_ view: NSTextView, shouldChangeTextIn range: NSRange, replacementString text: String?) -> Bool {
+            guard parent.limitsInline, let text, !view.hasMarkedText() else { return true }
+            let current = view.string
+            let ns = current as NSString
+            guard range.location != NSNotFound, NSMaxRange(range) <= ns.length else { return true }
+            if TextAttachmentPolicy.codePoints(text) > TextAttachmentPolicy.pasteFileThreshold, let result = parent.onPasteText?(text, range) {
+                (view as? PasteAwareTextView)?.registerAttachmentUndo(result)
+                return false
+            }
+            return InlineLimit.allows(insert: text, replacing: ns.substring(with: range), in: current)
+        }
+
         func textView(_ view: NSTextView, doCommandBy selector: Selector) -> Bool {
             if parent.pickerOpen, !view.hasMarkedText(), let onKey = parent.onPickerKey {
                 let key: ComposerKey? = switch selector {
@@ -400,6 +481,7 @@ struct ComposerTextView: NSViewRepresentable {
 
 final class PasteAwareTextView: NSTextView {
     var onPasteItems: (([NSItemProvider]) -> [String])?
+    var onPasteText: TextPasteHandler?
     var onSubmit: (() -> Void)?
     var onFocusChange: ((Bool) -> Void)?
     var mentionStyled = false
@@ -459,6 +541,25 @@ final class PasteAwareTextView: NSTextView {
         return true
     }
 
+    /// Pasted or dropped text that the composer takes as a file: the field keeps its text and selection.
+    private func takeLongText(from pasteboard: NSPasteboard) -> Bool {
+        guard isEditable, let onPasteText else { return false }
+        let exact = pasteboard.data(forType: .string).flatMap(TextAttachmentPolicy.exactUTF8)
+        guard let string = exact ?? pasteboard.string(forType: .string), let result = onPasteText(string, selectedRange()) else { return false }
+        registerAttachmentUndo(result)
+        return true
+    }
+
+    func registerAttachmentUndo(_ result: TextPasteResult) {
+        breakUndoCoalescing()
+        undoManager?.registerUndo(withTarget: self) { view in
+            result.undo()
+            view.undoManager?.registerUndo(withTarget: view) { again in result.redo(); again.registerAttachmentUndo(result) }
+            view.undoManager?.setActionName("Paste as Attachment")
+        }
+        undoManager?.setActionName("Paste as Attachment")
+    }
+
     // AppKit disables Paste for an image-only clipboard in a plain-text NSTextView before dispatching paste(_:).
     // Keep the action available without inspecting the clipboard; the explicit action decides attachment vs text.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -481,19 +582,20 @@ final class PasteAwareTextView: NSTextView {
     }
 
     override func paste(_ sender: Any?) {
-        if !insertUploads(from: .general) { super.paste(sender) }
+        if !insertUploads(from: .general), !takeLongText(from: .general) { super.paste(sender) }
     }
 
     override func pasteAsPlainText(_ sender: Any?) {
-        if !insertUploads(from: .general) { super.pasteAsPlainText(sender) }
+        if !insertUploads(from: .general), !takeLongText(from: .general) { super.pasteAsPlainText(sender) }
     }
 
     override func pasteAsRichText(_ sender: Any?) {
-        if !insertUploads(from: .general) { super.pasteAsRichText(sender) }
+        if !insertUploads(from: .general), !takeLongText(from: .general) { super.pasteAsRichText(sender) }
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         if insertUploads(from: sender.draggingPasteboard) { return true }
+        if takeLongText(from: sender.draggingPasteboard) { return true }
         return super.performDragOperation(sender)
     }
 }

@@ -37,7 +37,7 @@ final class BrowserUITests: XCTestCase {
         let open = app.buttons["browser.open"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 5))
         open.tap()
-        XCTAssertTrue(app.otherElements["browser.start"].waitForExistence(timeout: 10) || app.staticTexts["Enter an address below"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["browser.start"].firstMatch.waitForExistence(timeout: 10))
         let address = app.textFields["browser.address"]
         XCTAssertTrue(address.waitForExistence(timeout: 5))
         address.tap()

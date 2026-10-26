@@ -19,6 +19,11 @@ struct ChannelSnapshot: Sendable, Equatable {
 }
 
 struct ThreadSnapshot: Sendable, Equatable {
+    var order: [String] = []
+    var windowStart = 0
+    var hasEarlier = false
+    var hasNewer = false
+    var pageIdentity = 0
     var title = ""
     var messages: [MessageRecord] = []
     var pending: [OutboxItem] = []
@@ -33,6 +38,10 @@ struct ThreadSnapshot: Sendable, Equatable {
 struct MessageExtras: Sendable, Equatable {
     var reactions: [String: [ReactionRecord]] = [:]
     var writes: [String: [WriteItem]] = [:]
+
+    func forMessage(_ id: String) -> Self {
+        Self(reactions: reactions[id].map { [id: $0] } ?? [:], writes: writes[id].map { [id: $0] } ?? [:])
+    }
 }
 
 private func messageExtras(_ store: LocalStore, _ workspaceId: String, connectionId: String, ids: [String]) async throws -> MessageExtras {
@@ -50,7 +59,7 @@ private func people(_ store: LocalStore, _ target: ChatTarget) async throws -> P
 
 private func chatMatches(_ workspaceId: String) -> @Sendable (ChangeKey) -> Bool {
     { key in
-        key.workspaceId == workspaceId && [.messages, .outbox, .members, .agents, .threads, .channels, .reactions, .writes].contains(key.table)
+        (key.workspaceId == workspaceId || key.workspaceId == nil) && [.messages, .outbox, .members, .agents, .threads, .channels, .reactions, .writes].contains(key.table)
             || (key.table == .outbox && key.workspaceId == nil) || key.table == .profiles
     }
 }
@@ -303,6 +312,8 @@ struct ThreadView: View {
     @State private var snapshot = LiveQuery<ThreadSnapshot>(initial: ThreadSnapshot())
     @State private var atNewest = true
     @State private var visibleRows = VisibleRows()
+    @State private var windowAnchor: String?
+    @State private var pageIdentity = 0
     /// Where the reader left this thread last time it was open (nil: open at the newest message).
     @State private var resumeAt: String?
 
@@ -310,13 +321,21 @@ struct ThreadView: View {
         self.target = target
         self.workspace = workspace
         self.store = store
-        _resumeAt = State(initialValue: ReadingPositions.shared.anchor(for: target))
+        let saved = ReadingPositions.shared.anchor(for: target)
+        _resumeAt = State(initialValue: saved)
+        _atNewest = State(initialValue: saved == nil)
+        #if os(macOS)
+        _windowAnchor = State(initialValue: saved)
+        #endif
     }
 
     var body: some View {
         VStack(spacing: 0) {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            ThreadMessageStack {
+                #if os(macOS)
+                if snapshot.value.hasEarlier { pageButton(earlier: true) }
+                #endif
                 if let threadId = target.threadId { SyncErrorNote(key: WorkspaceSync.threadKey(workspace.id, threadId)) }
                 if snapshot.value.archived { SyncNote(text: "This thread is archived. Replying reopens it.") }
                 // The first message, a labelled rule, then the replies; a date label starts each day. No line between replies.
@@ -325,14 +344,18 @@ struct ThreadView: View {
                         if let day = snapshot.value.dayStarts[message.id] { DaySeparator(day: day) }
                         #if os(macOS)
                         // A faint line shows where one message ends and the next begins (not under the replies rule).
-                        if index > 1 { Rectangle().fill(Amb.border.opacity(0.45)).frame(height: 1).padding(.horizontal, 24) }
+                        if index > 0 && !(index == 1 && snapshot.value.messages[0].isThreadRoot) { Rectangle().fill(Amb.border.opacity(0.45)).frame(height: 1).padding(.horizontal, 24) }
                         #endif
-                        MessageCell(message: message, people: snapshot.value.people, workspace: workspace, extras: snapshot.value.extras)
+                        MessageCell(message: message, people: snapshot.value.people, workspace: workspace, extras: snapshot.value.extras.forMessage(message.id)).equatable()
+                        #if os(macOS)
+                        if message.isThreadRoot && snapshot.value.order.count > 1 { RepliesRule(count: snapshot.value.order.count - 1) }
+                        #else
                         if index == 0 && snapshot.value.messages.count > 1 { RepliesRule(count: snapshot.value.messages.count - 1) }
+                        #endif
                     }
                     .onScrollVisibilityChange(threshold: 0.3) { [visibleRows] in visibleRows.set(message.id, $0) }
                 }
-                ForEach(snapshot.value.pending) { item in
+                ForEach(snapshot.value.hasNewer ? [] : snapshot.value.pending) { item in
                     VStack(spacing: 0) {
                         if item.id == snapshot.value.pending.first?.id, !snapshot.value.messages.isEmpty, snapshot.value.lastDay != ChatDay.today {
                             DaySeparator(day: .today)
@@ -343,18 +366,43 @@ struct ThreadView: View {
                 if snapshot.loaded && snapshot.value.messages.isEmpty {
                     SyncNote(text: isUnlocked ? "Loading thread…" : "This thread is not saved on this \(Device.name) yet. Unlock to load it.")
                 }
+                #if os(macOS)
+                if snapshot.value.hasNewer { pageButton(earlier: false) }
+                #endif
             }
             .padding(.bottom, 8)
+            #if !os(macOS)
             NewestSentinel(visible: $atNewest)
+            #endif
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .modifier(FollowLatest(lastId: snapshot.value.pending.last?.id ?? snapshot.value.messages.last?.id,
-                               pendingCount: snapshot.value.pending.count, nearBottom: atNewest,
-                               resumeAt: resumeAt.flatMap { id in snapshot.value.messages.contains { $0.id == id } ? id : nil }))
+                               pendingCount: snapshot.value.pending.count, nearBottom: atNewest && !snapshot.value.hasNewer,
+                               resumeAt: (pageIdentity > 0 ? windowAnchor : resumeAt).flatMap { id in snapshot.value.messages.contains { $0.id == id } ? id : nil }))
+        #if os(macOS)
+        // Directly measured pages have accurate geometry; a newly inserted visibility sentinel can miss its
+        // first callback after page replacement, leaving a latest page incorrectly marked as older reading.
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height <= 80
+        } action: { _, newest in
+            atNewest = newest && !snapshot.value.hasNewer
+        }
+        .onScrollPhaseChange { _, phase in
+            if phase == .interacting, windowAnchor == nil, snapshot.loaded {
+                windowAnchor = snapshot.value.messages.first?.id
+            }
+            if phase == .idle, snapshot.loaded, atNewest, !snapshot.value.hasNewer { windowAnchor = nil }
+        }
+        .id(snapshot.value.pageIdentity)
+        #endif
         .scrollDismissesKeyboard(.interactively)
         .refreshable { if let thread = target.threadId { model.openThread(thread, channelId: target.channelId, in: workspace) } }
-            Composer(target: target, workspace: workspace, store: store, placeholder: "Reply")
+            Composer(target: target, workspace: workspace, store: store, placeholder: "Reply", onEnqueued: { _ in
+                #if os(macOS)
+                if windowAnchor != nil { windowAnchor = nil; pageIdentity += 1 }
+                #endif
+            })
         }
         .tabletReadingWidth()
         .background(Amb.background)
@@ -362,7 +410,7 @@ struct ThreadView: View {
         .navigationTitle(snapshot.value.title.isEmpty ? "Thread" : snapshot.value.title)
         .inlineTitle()
         .preference(key: ThreadTitleKey.self, value: snapshot.value.title)
-        .task { start() }
+        .task(id: windowAnchor) { start() }
         .onAppear {
             if let thread = target.threadId {
                 model.openThread(thread, channelId: target.channelId, in: workspace)
@@ -373,31 +421,73 @@ struct ThreadView: View {
             if let thread = target.threadId { model.refreshReactions(workspace, scope: thread, messageIds: ids) }
         }
         .onDisappear {
-            let first = atNewest ? nil : snapshot.value.messages.first { visibleRows.ids.contains($0.id) }?.id
+            let first = atNewest && !snapshot.value.hasNewer ? nil : snapshot.value.messages.first { visibleRows.ids.contains($0.id) }?.id
             ReadingPositions.shared.record(target, firstVisible: first)
         }
     }
+
+    #if os(macOS)
+    private func pageButton(earlier: Bool) -> some View {
+        Button(earlier ? "Earlier replies" : "Newer replies") {
+            let value = snapshot.value
+            let next = earlier ? max(0, value.windowStart - 50) : value.windowStart + 50
+            windowAnchor = !earlier && next >= max(0, value.order.count - 50) ? nil : value.order.indices.contains(next) ? value.order[next] : nil
+            atNewest = false
+            pageIdentity += 1
+        }
+        .accessibilityIdentifier(earlier ? "thread.earlier" : "thread.newer")
+        .font(.amb(.footnote).weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
+        .accessibilityHint("Messages \(snapshot.value.windowStart + 1) through \(snapshot.value.windowStart + snapshot.value.messages.count) of \(snapshot.value.order.count)")
+    }
+    #endif
 
     private var isUnlocked: Bool { if case .unlocked = model.identity { true } else { false } }
 
     private func start() {
         guard let threadId = target.threadId else { return }
-        let target = target, store = store
-        snapshot.start(store: store, matches: chatMatches(target.workspaceId)) {
+        let target = target, store = store, anchor = windowAnchor, page = pageIdentity
+        let selectedStart = anchor.flatMap { snapshot.value.order.firstIndex(of: $0) }
+        let fallbackStart = selectedStart ?? snapshot.value.windowStart
+        let fallback = selectedStart.map { Array(snapshot.value.order.dropFirst($0)) } ?? snapshot.value.messages.map(\.id)
+        snapshot.start(store: store, keepingValue: true, matches: { key in
+            chatMatches(target.workspaceId)(key) && key.affectsThread(workspaceId: target.workspaceId, channelId: target.channelId, threadId: threadId)
+                || (key.table == .access && (key.workspaceId == nil || key.workspaceId == target.workspaceId))
+        }) {
             async let thread = store.reader.thread(workspaceId: target.workspaceId, id: threadId)
             async let messages = store.reader.threadMessages(workspaceId: target.workspaceId, threadId: threadId, limit: 500)
             async let pending = store.reader.outbox(target: target)
             async let directory = people(store, target)
-            let rows = try await messages
+            let history = try await messages
+            #if os(macOS)
+            let window = ThreadMessageWindow(history, anchor: anchor, fallback: fallback, fallbackStart: fallbackStart)
+            #else
+            let window = ThreadMessageWindow(history, size: 500)
+            #endif
+            let rows = window.messages
             MessageDisplayCache.shared.prepare(rows)
             let record = try await thread
-            let title = record?.title.map(MentionCodec.plain) ?? rows.first.map { MentionCodec.plain($0.body) } ?? ""
+            let title = record?.title.map(MentionCodec.plain) ?? history.first.map { MentionCodec.plain($0.body) } ?? ""
             let extras = try await messageExtras(store, target.workspaceId, connectionId: target.connectionId, ids: rows.map(\.id))
             let days = ChatDay.breaks(rows, id: \.id, time: \.createdAt)
-            return ThreadSnapshot(title: String(title.prefix(60)), messages: rows, pending: try await pending,
+            return ThreadSnapshot(order: window.order, windowStart: window.start, hasEarlier: window.hasEarlier, hasNewer: window.hasNewer,
+                                  pageIdentity: page, title: String(title.prefix(60)), messages: rows, pending: try await pending,
                                   people: try await directory, archived: record?.archived ?? false, extras: extras,
                                   dayStarts: days.starts, lastDay: days.last)
         }
+    }
+}
+
+/// Mac lazy row estimates can keep invalidating native text/control layout while sync changes the content during
+/// resizing. The Mac renders a 50-message page over its 500-message history, with explicit older/newer navigation.
+/// Channel history remains lazy/paginated, and the iPhone keeps its existing lazy thread layout.
+private struct ThreadMessageStack<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        #if os(macOS)
+        VStack(alignment: .leading, spacing: 0, content: content)
+        #else
+        LazyVStack(alignment: .leading, spacing: 0, content: content)
+        #endif
     }
 }
 
@@ -435,7 +525,7 @@ struct MessageRow: View {
         let display = MessageDisplayCache.shared.display(message)
         // Code, tables and images keep their own controls (copy, scroll, open), so such rows contain elements instead
         // of being read as a single combined label.
-        let interactive = bodyOverride == nil && (display.blocks.map(RichBlocksInfo.hasControls) ?? false)
+        let interactive = !display.attachments.isEmpty || (bodyOverride == nil && (display.blocks.map(RichBlocksInfo.hasControls) ?? false))
         let sender = sender
         HStack(alignment: .top, spacing: 10) {
             PersonAvatar(person: sender)
@@ -451,7 +541,13 @@ struct MessageRow: View {
                     if let blocks = display.blocks { RichBlocksView(blocks: blocks, workspace: workspace) } else { MessageBody(plain: message.body) }
                 }
                 if let workspace {
-                    ForEach(display.attachments, id: \.storageObjectId) { AttachmentView(attachment: $0, workspace: workspace) }
+                    ForEach(display.attachments, id: \.storageObjectId) { attachment in
+                        if attachment.textAttachment != nil {
+                            SentTextAttachmentCard(message: message, attachment: attachment, workspace: workspace)
+                        } else {
+                            AttachmentView(attachment: attachment, workspace: workspace)
+                        }
+                    }
                 }
             }
             Spacer(minLength: 0)
@@ -609,6 +705,7 @@ enum ChatTime {
 final class ComposerModel {
     var text = "" { didSet { if text != oldValue { edited = true; scheduleSave() } } }
     private(set) var mentions: [Mention] = []
+    private(set) var persistenceFailure: String?
     @ObservationIgnored let target: ChatTarget
     @ObservationIgnored private let store: LocalStore
     @ObservationIgnored private var edited = false
@@ -624,17 +721,19 @@ final class ComposerModel {
         guard let draft = try? await store.reader.draft(target), !edited else { return }
         mentions = draft.mentions
         text = draft.text
+        attachments = draft.attachments
         edited = false
     }
 
     /// A draft written to the store by someone other than this composer (for example "Edit" on a message that was
     /// not sent) is adopted when the composer is empty, so the text appears where the user is looking.
     func adopt(_ draft: Draft?) {
-        guard let draft, text.isEmpty, !draft.text.isEmpty else { return }
+        guard let draft, text.isEmpty, attachments.isEmpty, !draft.text.isEmpty || !draft.attachments.isEmpty else { return }
         // Stored times are rounded to milliseconds, so anything within 1 ms of the send counts as before it.
         if let sentAt, (draft.updatedAt ?? .distantPast) <= sentAt.addingTimeInterval(0.001) { return }
         mentions = draft.mentions
         text = draft.text
+        attachments = draft.attachments
         edited = false
     }
 
@@ -683,12 +782,27 @@ final class ComposerModel {
     func saveNow() {
         debounce?.cancel()
         debounce = nil
-        let draft = Draft(text: text, mentions: mentions.filter { text.contains($0.visible) }), target = target, store = store
-        chain { try? await store.writer.saveDraft(target, draft) }
+        let draft = Draft(text: text, mentions: mentions.filter { text.contains($0.visible) }, attachments: attachments), target = target, store = store
+        chain { [weak self] in
+            do { try await store.writer.saveDraft(target, draft); await MainActor.run { self?.persistenceFailure = nil } }
+            catch { await MainActor.run { self?.persistenceFailure = "This draft could not be saved on this device. Keep it open and retry before closing." } }
+        }
     }
 
-    /// Photos chosen for the next message (already stripped and staged on the device).
-    var attachments: [PendingAttachment] = []
+    /// Replace the draft metadata only after SQLite accepted it. The old staged bytes remain recoverable on failure.
+    func commitAttachment(_ replacement: PendingAttachment) async throws {
+        debounce?.cancel(); debounce = nil
+        await tail?.value
+        var next = attachments
+        guard let index = next.firstIndex(where: { $0.id == replacement.id }) else { throw TextAttachmentError.missing }
+        next[index] = replacement
+        try await store.writer.saveDraft(target, Draft(text: text, mentions: mentions.filter { text.contains($0.visible) }, attachments: next))
+        attachments = next
+    }
+
+    /// Photos and pasted text files chosen for the next message, already staged on the device. They are part of the
+    /// durable draft, so they survive relaunch and a change of conversation.
+    var attachments: [PendingAttachment] = [] { didSet { if attachments != oldValue { edited = true; scheduleSave() } } }
 
     /// Hands the composed text to the outbox (which clears the stored draft in the same transaction).
     func send(with outbox: OutboxSender, connection: ConnectionRecord, workspace: WorkspaceRecord,
@@ -709,7 +823,15 @@ final class ComposerModel {
             }
             catch {
                 // The outbox write failed (for example, storage full): put the text back rather than lose it.
-                await MainActor.run { [weak self] in if self?.text.isEmpty == true { self?.mentions = mentions; self?.text = text } }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.sentAt = nil
+                    self.text = self.text.isEmpty ? text : text + "\n" + self.text
+                    for mention in mentions where !self.mentions.contains(mention) { self.mentions.append(mention) }
+                    for attachment in attachments where !self.attachments.contains(where: { $0.id == attachment.id }) { self.attachments.append(attachment) }
+                    self.persistenceFailure = "The message could not be queued. Its text and attachments are back in this draft."
+                    self.saveNow()
+                }
             }
         }
     }
@@ -739,6 +861,8 @@ struct Composer: View {
     @State private var members = LiveQuery<[MentionCandidate]>(initial: [])
     @State private var storedDraft = LiveQuery<Draft?>(initial: nil)
     @State private var photos: [PhotosPickerItem] = []
+    @State private var openAttachment: TextAttachmentSubject?
+    @State private var pasteNotice: String?
     @State private var focused = false
     /// The row of the mention list that Return or Tab picks (Up and Down move it).
     @State private var highlighted = 0
@@ -781,14 +905,30 @@ struct Composer: View {
                 @Bindable var composer = composer
                 ComposerMentionPills(mentions: composer.presentMentions, people: members.value) { composer.removeMention($0) }
                 ComposerAttachments(attachments: $composer.attachments, staging: model.staging)
+                ComposerTextCards(attachments: $composer.attachments, staging: model.staging) { openAttachment = .draft($0) }
+                if let left = TextAttachmentPolicy.remaining(codePoints: TextAttachmentPolicy.codePoints(composer.visibleText)) {
+                    Text(left >= 0 ? "\(left) characters left" : "\(-left) characters over")
+                        .font(.amb(.caption)).foregroundStyle(left > 100 ? Amb.mutedForeground : Amb.destructive)
+                        .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 14).padding(.top, 4)
+                        .accessibilityIdentifier("composer.counter")
+                }
+                if let error = composer.persistenceFailure {
+                    Text(error).font(.amb(.caption)).foregroundStyle(Amb.destructive).padding(.horizontal, 14).padding(.top, 4)
+                        .accessibilityIdentifier("composer.persistence.error")
+                    Button("Retry saving draft") { composer.saveNow() }.font(.amb(.caption))
+                }
+                if let pasteNotice {
+                    Text(pasteNotice).font(.amb(.caption)).foregroundStyle(Amb.destructive).padding(.horizontal, 14).padding(.top, 4)
+                        .accessibilityIdentifier("composer.paste.notice")
+                }
                 ComposerUploadedThumbnails(text: composer.text, workspace: workspace) { composer.removeUploaded($0) }
                 if let uploads = model.uploads {
                     ComposerPastedUploads(uploads: uploads, target: target, text: composer.text)
                 }
             }
             HStack(alignment: .bottom, spacing: 8) {
-                // While typing the keyboard covers the section bar: this slot puts the keyboard away (same frame, so the row
-                // does not re-lay-out on focus). Photos can be attached again once it is down.
+                // While typing the on-screen keyboard covers the section bar: this button puts it away. It sits beside the
+                // photo button rather than replacing it, so photos can be attached mid-sentence.
                 if focused {
                     Button { focused = false } label: {
                         Image(systemName: "keyboard.chevron.compact.down").font(.body.weight(.semibold)).frame(width: 36, height: 36)
@@ -796,14 +936,13 @@ struct Composer: View {
                     .accessibilityLabel("Hide keyboard")
                     .accessibilityIdentifier("composer.hideKeyboard")
                     .iconButton()
-                } else {
-                    PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
-                        Image(systemName: "photo").font(.body.weight(.semibold)).frame(width: 36, height: 36)
-                    }
-                    .accessibilityLabel("Attach photos")
-                    .accessibilityIdentifier("composer.photo")
-                    .iconButton()
                 }
+                PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
+                    Image(systemName: "photo").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+                }
+                .accessibilityLabel("Attach photos")
+                .accessibilityIdentifier("composer.photo")
+                .iconButton()
                 #if os(macOS)
                 Button { attachingFiles = true } label: {
                     Image(systemName: "paperclip").font(.amb(.body).weight(.semibold)).frame(width: 36, height: 36)
@@ -832,7 +971,7 @@ struct Composer: View {
                 ComposerTextView(text: Binding(get: { composer?.visibleText ?? "" }, set: { composer?.visibleText = $0; fixtureTyping() }),
                                  focused: $focused, placeholder: placeholder, plainKeyboard: model.fixture?.plainKeyboard == true,
                                  onPasteItems: pasteItems, onSubmit: send, onPickerKey: mentionKey, pickerOpen: !suggestions.isEmpty,
-                                 mentionTokens: composer?.presentMentions.map(\.visible) ?? [])
+                                 mentionTokens: composer?.presentMentions.map(\.visible) ?? [], onPasteText: pasteText, limitsInline: true)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 Button { send() } label: {
@@ -866,6 +1005,11 @@ struct Composer: View {
             }
         }
         .onChange(of: storedDraft.value) { _, draft in composer?.adopt(draft) }
+        .textAttachmentModal(item: $openAttachment) { subject in
+            TextAttachmentModal(subject: subject, workspace: workspace) { next in
+                guard let composer else { throw TextAttachmentError.missing }; try await composer.commitAttachment(next)
+            }
+        }
         .onChange(of: MentionCodec.activeQuery(in: composer?.visibleText ?? "")) { _, _ in highlighted = 0 }
         .onChange(of: photos) { _, items in
             guard !items.isEmpty, let staging = model.staging else { return }
@@ -900,6 +1044,34 @@ struct Composer: View {
     private func pasteItems(_ providers: [NSItemProvider]) -> [String] {
         guard let uploads = model.uploads, model.connection?.id == target.connectionId, workspace.id == target.workspaceId else { return [] }
         return uploads.paste(providers, target: target, appNpub: workspace.appNpub, context: target.threadId == nil ? "message" : "thread")
+    }
+
+    /// A paste of text: over 2,500 characters, or enough to push the field past 10,000, becomes a `.txt` attachment with
+    /// the complete bytes. The field's text and selection stay as they were. Anything shorter is an ordinary paste.
+    private func pasteText(_ string: String, selection: NSRange) -> TextPasteResult? {
+        guard let composer, let staging = model.staging, model.connection?.id == target.connectionId, workspace.id == target.workspaceId else { return nil }
+        let current = composer.visibleText as NSString
+        let remaining = selection.location != NSNotFound && NSMaxRange(selection) <= current.length
+            ? current.replacingCharacters(in: selection, with: "") : current as String
+        guard TextAttachmentPolicy.decide(paste: string, existingCodePoints: TextAttachmentPolicy.codePoints(remaining),
+                                          existingUTF8Bytes: remaining.utf8.count) == .file else { return nil }
+        pasteNotice = nil
+        guard string.utf8.count <= ComposerUploads.maxBytes else {
+            pasteNotice = "That text is over 100 MB and cannot be attached."
+            return TextPasteResult(undo: {}, redo: {})
+        }
+        do {
+            let attachment = try TextAttachmentStaging.stage(text: string, name: TextAttachmentStaging.nextName(among: composer.attachments),
+                                                             source: .paste, in: staging)
+            composer.attachments.append(attachment)
+            composer.saveNow()
+            return TextPasteResult(
+                undo: { composer.attachments.removeAll { $0.id == attachment.id } },
+                redo: { if !composer.attachments.contains(where: { $0.id == attachment.id }) { composer.attachments.append(attachment) } })
+        } catch {
+            pasteNotice = (error as? LocalizedError)?.errorDescription ?? "The pasted text could not be saved on this device."
+            return TextPasteResult(undo: {}, redo: {})
+        }
     }
 
     private func send() {

@@ -68,6 +68,44 @@ final class PasteUploadUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "composer.uploaded").firstMatch
     }
 
+    func testAutomaticTextAttachmentPagesRenameAndSurviveOfflineRelaunch() {
+        let app = launch()
+        openChannel(app, "general")
+        let composer = field(app)
+        composer.tap(); composer.typeText("Keep this draft")
+        let large = "\u{FEFF}" + String(repeating: "report 😀 e\u{301}\r\n", count: 240_000)
+        UIPasteboard.general.string = large
+        paste(app, into: composer)
+        let card = app.buttons["composer.textcard.open"].firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 15))
+        XCTAssertEqual(value(composer), "Keep this draft")
+        app.buttons["composer.textcard.open"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "textfile.page").firstMatch.waitForExistence(timeout: 15))
+        let editor = app.textViews["textfile.content"].exists ? app.textViews["textfile.content"] : app.textViews["textfile.editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        XCTAssertLessThanOrEqual((editor.value as? String ?? "").unicodeScalars.count, 14_001)
+        let name = app.textFields["textfile.name"]
+        XCTAssertTrue(name.exists)
+        name.tap()
+        name.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (name.value as? String ?? "").count) + "Offline report.txt")
+        app.buttons["textfile.save"].tap()
+        XCTAssertTrue(app.staticTexts["Offline report.txt"].waitForExistence(timeout: 10))
+        XCTAssertEqual(value(composer), "Keep this draft")
+        // Reopen the same disposable test container, retaining draft and staged bytes.
+        app.terminate()
+        app.launchArguments.removeAll { $0 == "-AmbulandoFixtureReset" }
+        app.launchArguments.append("-AmbulandoFixtureOffline")
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Sample data on this iPhone. Not connected to a Tower."].waitForExistence(timeout: 15))
+        if app.buttons["channel.general"].exists { openChannel(app, "general") }
+        XCTAssertTrue(app.staticTexts["Offline report.txt"].waitForExistence(timeout: 15))
+        XCTAssertEqual(value(field(app)), "Keep this draft")
+        app.buttons["composer.textcard.open"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "textfile.page").firstMatch.waitForExistence(timeout: 15))
+        app.buttons["textfile.cancel"].tap()
+        XCTAssertTrue(app.staticTexts["Offline report.txt"].exists)
+    }
+
     func testPasteTextThenImageUploadsToStorageWithoutSending() {
         let app = launch()
         openChannel(app, "general")

@@ -19,7 +19,7 @@ struct BrowserView: View {
             ZStack {
                 if let tab = browser.selected {
                     WebViewHost(webView: tab.webView).id(tab.id)
-                    if tab.isBlank && !tab.loading { startPage }
+                    if tab.isBlank && !tab.loading { BrowserStartPage() }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -120,7 +120,7 @@ struct BrowserView: View {
     }
 
     /// Everything that is not used on every page, grouped: the current page, the tab, the site and browsing data.
-    /// Page-level actions (such as saving the page) belong in `pageActions`; the bar itself stays at six controls.
+    /// Page-level actions (such as saving the page as a favourite) are in `pageActions`; the bar itself stays at six controls.
     private var menu: some View {
         Menu {
             if let tab = browser.selected {
@@ -156,23 +156,14 @@ struct BrowserView: View {
             Button { browser.reload(url, in: tab) } label: { Label("Reload", systemImage: "arrow.clockwise") }
         }
         if let url = tab.url, url.scheme == "https" {
+            if browser.favourites.favourite(for: url) != nil {
+                Button { browser.toggleFavourite(tab) } label: { Label("Remove from Favourites", systemImage: "star.slash") }
+            } else {
+                Button { browser.toggleFavourite(tab) } label: { Label("Add to Favourites", systemImage: "star") }
+            }
             ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
             Button { openURL(url) } label: { Label("Open in Safari", systemImage: "safari") }
         }
-    }
-
-    private var startPage: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "globe").font(.amb(.largeTitle)).foregroundStyle(Amb.mutedForeground)
-            Text("Enter an address below").font(.amb(.headline)).foregroundStyle(Amb.foreground)
-            Text("Pages open here with your Nostr key available through window.nostr. Each site asks before it can see your key, and every signature asks you first.")
-                .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
-        }
-        .padding(32)
-        .tabletReadingWidth(620)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Amb.background)
-        .accessibilityIdentifier("browser.start")
     }
 
     private func notice(_ text: String, systemImage: String) -> some View {

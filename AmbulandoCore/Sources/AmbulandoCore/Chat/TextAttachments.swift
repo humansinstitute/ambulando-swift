@@ -32,32 +32,36 @@ public struct TextPages: Sendable, Equatable {
 
     public init(text: String) {
         var out: [String] = [], utf8: [Int] = [], count: [Int] = []
-        let all = Array(text.unicodeScalars)
-        var start = 0
-        while start < all.count {
-            var end = min(start + Self.pageScalars, all.count)
-            if end < all.count {
-                // Prefer ending just after a line break within the lookahead, and never split a CRLF.
-                var cut = end
-                let limit = min(all.count, end + Self.lookahead)
+        let all = text.unicodeScalars
+        var start = all.startIndex
+        while start < all.endIndex {
+            var end = all.index(start, offsetBy: Self.pageScalars, limitedBy: all.endIndex) ?? all.endIndex
+            if end < all.endIndex {
+                let limit = all.index(end, offsetBy: Self.lookahead, limitedBy: all.endIndex) ?? all.endIndex
                 var probe = end
-                while probe < limit { if all[probe - 1] == "\n" || all[probe - 1] == "\r" { cut = probe; break }; probe += 1 }
-                end = cut
-                if end < all.count, all[end - 1] == "\r", all[end] == "\n" { end += 1 }
+                while probe < limit {
+                    let previous = all[all.index(before: probe)]
+                    if previous == "\n" || previous == "\r" { end = probe; break }
+                    all.formIndex(after: &probe)
+                }
+                if all[all.index(before: end)] == "\r", all[end] == "\n" { all.formIndex(after: &end) }
             }
-            var view = String.UnicodeScalarView()
-            view.append(contentsOf: all[start..<end])
-            let page = String(view)
-            out.append(page); utf8.append(page.utf8.count); count.append(end - start)
+            let page = String(all[start..<end])
+            out.append(page); utf8.append(page.utf8.count); count.append(page.unicodeScalars.count)
             start = end
         }
         if out.isEmpty { out = [""]; utf8 = [0]; count = [0] }
         pages = out; bytes = utf8; scalars = count
     }
 
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        guard lhs.bytes == rhs.bytes, lhs.scalars == rhs.scalars, lhs.pages.count == rhs.pages.count else { return false }
+        return zip(lhs.pages, rhs.pages).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
+    }
+
     /// nil when the bytes are not valid UTF-8 (such a file can be downloaded and copied but not edited as text).
     public init?(data: Data) {
-        guard let text = String(data: data, encoding: .utf8), Data(text.utf8) == data else { return nil }
+        guard let text = TextAttachmentPolicy.exactUTF8(data) else { return nil }
         self.init(text: text)
     }
 
@@ -67,10 +71,15 @@ public struct TextPages: Sendable, Equatable {
     public func page(_ index: Int) -> String { pages[index] }
 
     public mutating func replace(page index: Int, with text: String) {
-        guard pages.indices.contains(index), pages[index] != text else { return }
-        pages[index] = text
-        bytes[index] = text.utf8.count
-        scalars[index] = text.unicodeScalars.count
+        guard pages.indices.contains(index), !pages[index].utf8.elementsEqual(text.utf8) else { return }
+        if text.unicodeScalars.count <= Self.pageScalars + Self.lookahead + 1 {
+            pages[index] = text; bytes[index] = text.utf8.count; scalars[index] = text.unicodeScalars.count
+            return
+        }
+        let replacement = TextPages(text: text)
+        pages.replaceSubrange(index...index, with: replacement.pages)
+        bytes.replaceSubrange(index...index, with: replacement.bytes)
+        scalars.replaceSubrange(index...index, with: replacement.scalars)
     }
 
     public var data: Data {
@@ -142,12 +151,11 @@ public enum TextAttachmentStaging {
         return nil
     }
 
-    /// Replaces an attachment's content and name with an edit: a new staged file, the old one removed. The id (and so
+    /// Replaces an attachment's content and name with an edit: a new staged file. The previous bytes remain until garbage collection after a durable metadata transition. The id (and so
     /// its place in the draft) is kept.
     public static func replacing(_ attachment: PendingAttachment, data: Data, name: String, in staging: URL) throws -> PendingAttachment {
         var next = try stage(data: data, name: name, source: attachment.text?.source ?? .paste, in: staging, id: attachment.id)
         next.objectId = nil; next.uploadURL = nil; next.complete = false
-        if attachment.staged != next.staged { try? FileManager.default.removeItem(at: staging.appendingPathComponent(attachment.staged)) }
         return next
     }
 

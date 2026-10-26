@@ -307,10 +307,13 @@ extension TowerAPI {
 
     /// Prepare → upload → complete, verifying Tower's recorded size and hash. `prepared` resumes an earlier attempt.
     public func store(workspaceId: String, appNpub: String, bytes: Data, contentType: String, fileName: String,
-                      prepared existing: PreparedObject?, onPrepared: @Sendable (PreparedObject) async throws -> Void) async throws -> String {
+                      prepared existing: PreparedObject?, allowReplacingMissingPrepared: Bool = true, onPrepared: @Sendable (PreparedObject) async throws -> Void) async throws -> String {
         let sha = SHA256Hex.of(bytes)
         var prepared = existing
-        if let current = prepared, try await storageObject(objectId: current.objectId) == nil { prepared = nil }   // gone: prepare a fresh one
+        if let current = prepared, try await storageObject(objectId: current.objectId) == nil {
+            guard allowReplacingMissingPrepared else { throw FileTransferError.notAttachable }
+            prepared = nil
+        }
         if prepared == nil {
             let fresh = try await prepareStorage(workspaceId: workspaceId, appNpub: appNpub, contentType: contentType, sizeBytes: bytes.count,
                                                  fileName: fileName, sha256: sha)
