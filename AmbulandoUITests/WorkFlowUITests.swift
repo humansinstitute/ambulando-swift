@@ -106,6 +106,9 @@ final class WorkFlowUITests: XCTestCase {
         app.buttons["task.state"].tap()
         app.buttons["In progress"].tap()
         XCTAssertTrue(app.buttons["task.state"].staticTexts["In progress"].waitForExistence(timeout: 10) || app.buttons["In progress"].waitForExistence(timeout: 5))
+        // Compact widths switch between Task and Comments; wide windows show both.
+        let tabs = app.segmentedControls["task.tabs"]
+        if tabs.exists { tabs.buttons["Comments"].tap() }
         let comment = input(app, "comment.field")
         comment.tap()
         comment.typeText("Started on device")
@@ -117,6 +120,7 @@ final class WorkFlowUITests: XCTestCase {
         title.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
         title.typeText(" today")
         app.buttons["edittask.save"].tap()
+        if tabs.exists { tabs.buttons["Task"].tap() }
         XCTAssertTrue(app.staticTexts["Test the phone build today"].waitForExistence(timeout: 10))
         capture(app, "wp4-task-detail")
         app.navigationBars.buttons.element(boundBy: 0).tap()

@@ -238,26 +238,22 @@ struct TaskDetailView: View {
     @State private var comment = ""
     @FocusState private var commentFocused: Bool
 
+    @State private var commentsExpanded = false
+    @State private var compactTab = TaskDetailTab.task
+
+    enum TaskDetailTab: String, CaseIterable { case task = "Task", comments = "Comments" }
+
+    /// Wide windows show details beside an independent comments panel; narrow ones switch between the two.
+    private static let splitWidth: CGFloat = 700
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if let row = snapshot.value.row {
-                    header(row)
-                    ForEach(row.pending) { WriteStatusLine(item: $0, label: label(for: $0)) }
-                    if let description = row.task.description, !description.isEmpty {
-                        MessageBody(text: description, workspace: workspace).ambCard()
-                    }
-                    comments
-                } else if snapshot.loaded {
-                    SyncNote(text: model.isUnlocked ? "Loading task…" : "This task is not saved on this \(Device.name) yet. Unlock to load it.")
-                }
-                if let error = model.syncError(forKey: WorkspaceSync.taskKey(workspace.id, taskId)) { SyncNote(text: error, tone: .warning) }
+        GeometryReader { proxy in
+            let wide = proxy.size.width >= Self.splitWidth
+            Group {
+                if wide { splitLayout(width: proxy.size.width) } else { tabbedLayout }
             }
-            .padding(16)
-            .tabletReadingWidth()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .scrollDismissesKeyboard(.interactively)
-        .safeAreaInset(edge: .bottom) { commentComposer.tabletReadingWidth() }
         .background(Amb.background)
         .fixtureLabel()
         .navigationTitle("Task")
@@ -270,9 +266,58 @@ struct TaskDetailView: View {
         .sheet(isPresented: $editing) {
             if let row = snapshot.value.row { TaskEditSheet(row: row, workspace: workspace) }
         }
-        .refreshable { model.openTask(taskId, in: workspace, force: true) }
         .task { start() }
         .onAppear { model.openTask(taskId, in: workspace); model.markViewed(.task, taskId, in: workspace) }
+    }
+
+    private func splitLayout(width: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            if !commentsExpanded {
+                detailScroll
+                Divider()
+            }
+            commentsPanel(expandable: true)
+                .frame(width: commentsExpanded ? nil : min(max(320, width * 0.4), 480))
+                .frame(maxWidth: commentsExpanded ? .infinity : nil)
+        }
+    }
+
+    private var tabbedLayout: some View {
+        VStack(spacing: 0) {
+            switch compactTab {
+            case .task: detailScroll
+            case .comments: commentsPanel(expandable: false).tabletReadingWidth()
+            }
+            Divider()
+            Picker("Section", selection: $compactTab) {
+                ForEach(TaskDetailTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 8)
+            .accessibilityIdentifier("task.tabs")
+            .background(Amb.card)
+        }
+    }
+
+    private var detailScroll: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let row = snapshot.value.row {
+                    header(row)
+                    ForEach(row.pending) { WriteStatusLine(item: $0, label: label(for: $0)) }
+                    if let description = row.task.description, !description.isEmpty {
+                        MessageBody(text: description, workspace: workspace).ambCard()
+                    }
+                } else if snapshot.loaded {
+                    SyncNote(text: model.isUnlocked ? "Loading task…" : "This task is not saved on this \(Device.name) yet. Unlock to load it.")
+                }
+                if let error = model.syncError(forKey: WorkspaceSync.taskKey(workspace.id, taskId)) { SyncNote(text: error, tone: .warning) }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .tabletReadingWidth()
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .refreshable { model.openTask(taskId, in: workspace, force: true) }
     }
 
     private func header(_ row: TaskRow) -> some View {
@@ -312,21 +357,49 @@ struct TaskDetailView: View {
             .background(Amb.accent, in: Capsule()).foregroundStyle(Amb.accentForeground)
     }
 
-    private var comments: some View {
+    private var commentCount: Int { snapshot.value.comments.count + snapshot.value.pendingComments.count }
+
+    /// Newest first: unsent comments are the newest, then saved ones by time.
+    private var newestFirst: [CommentRecord] { snapshot.value.comments.sorted { $0.createdAt > $1.createdAt } }
+
+    private func commentsPanel(expandable: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Comments").font(.amb(.headline)).foregroundStyle(Amb.itemHeading)
-            ForEach(snapshot.value.comments) { c in CommentRow(comment: c, names: snapshot.value.names, me: model.identity.npub, workspace: workspace) }
-            ForEach(snapshot.value.pendingComments) { item in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.string("body") ?? "").font(.amb(.body)).foregroundStyle(Amb.mutedForeground)
-                    WriteStatusLine(item: item, label: "Comment")
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Comments").font(.amb(.headline)).foregroundStyle(Amb.itemHeading)
+                    Text(commentCount == 1 ? "1 comment" : "\(commentCount) comments").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 }
-                .accessibilityIdentifier("comment.pending")
+                Spacer()
+                if expandable {
+                    Button { commentsExpanded.toggle() } label: {
+                        Image(systemName: commentsExpanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Amb.mutedForeground)
+                    .accessibilityLabel(commentsExpanded ? "Restore comments" : "Expand comments")
+                    .accessibilityIdentifier("task.comments.expand")
+                }
             }
-            if snapshot.value.comments.isEmpty && snapshot.value.pendingComments.isEmpty {
-                Text("No comments yet.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+            commentComposer
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(snapshot.value.pendingComments.reversed()) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.string("body") ?? "").font(.amb(.body)).foregroundStyle(Amb.mutedForeground)
+                            WriteStatusLine(item: item, label: "Comment")
+                        }
+                        .accessibilityIdentifier("comment.pending")
+                    }
+                    ForEach(newestFirst) { c in CommentRow(comment: c, names: snapshot.value.names, me: model.identity.npub, workspace: workspace) }
+                    if commentCount == 0 {
+                        Text("No comments yet.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .scrollDismissesKeyboard(.interactively)
         }
+        .padding(16)
+        .background(Amb.background)
     }
 
     private var commentComposer: some View {
@@ -344,8 +417,6 @@ struct TaskDetailView: View {
                 .disabled(comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send comment").accessibilityIdentifier("comment.send")
         }
-        .padding(.horizontal, 10).padding(.vertical, 8)
-        .background(Amb.card)
     }
 
     private func label(for item: WriteItem) -> String {

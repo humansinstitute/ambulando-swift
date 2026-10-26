@@ -18,6 +18,9 @@ struct MessageCell: View {
     var threadTitle: String? = nil
     @State private var editing = false
     @State private var confirmDelete = false
+    @State private var gettingItDone = false
+    @State private var autopilot: URL?
+    @Environment(\.openURL) private var openURL
 
     private var writes: [WriteItem] { extras.writes[message.id] ?? [] }
     private var distinctTitle: String? {
@@ -77,6 +80,7 @@ struct MessageCell: View {
             }
         }
         .contextMenu { actions }
+        .sheet(isPresented: $gettingItDone) { GetItDoneSheet(message: message, workspace: workspace) }
         .sheet(isPresented: $editing) { MessageEditSheet(message: message, workspace: workspace, currentBody: pendingEdit?.string("body") ?? message.body) }
         .confirmationDialog("Delete this message for everyone?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -94,14 +98,40 @@ struct MessageCell: View {
             }
         } label: { Label("React", systemImage: "face.smiling") }
             .accessibilityIdentifier("message.react")
+        if !message.deleted {
+            Button { gettingItDone = true } label: { Label("Get it done", systemImage: "checkmark.circle") }
+                .accessibilityIdentifier("message.getitdone")
+        }
+        if message.threadId != nil && !message.deleted {
+            Button { model.branch(from: message, in: workspace, recipient: agentSender) } label: { Label("Branch from here", systemImage: "arrow.triangle.branch") }
+                .accessibilityIdentifier("message.branch")
+        }
         Button { Pasteboard.copy(MentionCodec.plain(message.body)) } label: { Label("Copy message", systemImage: "doc.on.doc") }
             .accessibilityIdentifier("message.copy")
+        if AutopilotSessionLink.sessionId(in: message.raw) != nil {
+            Button { Task { await openAutopilot() } } label: { Label("Autopilot Link", systemImage: "arrow.up.forward.app") }
+                .accessibilityIdentifier("message.autopilot")
+        }
         Button { Pasteboard.copy(Self.reference(for: message)) } label: { Label("FD Ref", systemImage: "link") }
             .accessibilityIdentifier("message.ref")
         if mine && !message.deleted {
             Button { editing = true } label: { Label("Edit", systemImage: "pencil") }.accessibilityIdentifier("message.edit")
             Button(role: .destructive) { confirmDelete = true } label: { Label("Delete message", systemImage: "trash") }.accessibilityIdentifier("message.delete")
         }
+    }
+
+    /// The sender when it is a workspace agent: a branch keeps talking to it, as the web does.
+    private var agentSender: String? {
+        guard let npub = message.senderNpub, people.isAgent(npub) else { return nil }
+        return npub
+    }
+
+    private func openAutopilot() async {
+        guard let url = await model.autopilotURL(for: message, in: workspace) else {
+            model.notice = "This workspace has no Autopilot address to open this session."
+            return
+        }
+        openURL(url)
     }
 
     /// Flight Deck reference to this message, as the web's "FD Ref" copies it.

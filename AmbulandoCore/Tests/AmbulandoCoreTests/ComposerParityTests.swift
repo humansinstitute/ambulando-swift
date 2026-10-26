@@ -38,3 +38,25 @@ final class ComposerParityTests: XCTestCase {
         XCTAssertEqual(StorageMarkdown.strippingReferences(from: StorageMarkdown.composing(visible: "look\n", keeping: image)), "look\n")
     }
 }
+
+final class MessageFlowTests: XCTestCase {
+    func testAutopilotLinkNeedsASessionMessageAndAnAddress() {
+        let session = "0a1b2c3d-1111-4222-8333-444455556666"
+        let raw = Data(#"{"metadata":{"source":"autopilot_session","session_id":"\#(session)"}}"#.utf8)
+        XCTAssertEqual(AutopilotSessionLink.sessionId(in: raw), session)
+        XCTAssertNil(AutopilotSessionLink.sessionId(in: Data(#"{"metadata":{"source":"other","session_id":"\#(session)"}}"#.utf8)))
+        XCTAssertNil(AutopilotSessionLink.sessionId(in: Data(#"{"metadata":{"source":"autopilot_session","session_id":"nope"}}"#.utf8)))
+        XCTAssertEqual(AutopilotSessionLink.url(sessionId: session, autopilot: "https://autopilot.example/agents?x=1")?.absoluteString,
+                       "https://autopilot.example/live/\(session)")
+        XCTAssertNil(AutopilotSessionLink.url(sessionId: session, autopilot: "javascript:alert(1)"))
+        XCTAssertEqual(AutopilotSessionLink.address(inWorkspace: Data(#"{"metadata":{"autopilot_url":"https://a.example"}}"#.utf8)), "https://a.example")
+    }
+
+    func testGetItDoneDescriptionFollowsTheWebTemplate() {
+        let text = GetItDone.description(prompt: " Fix it ", output: .doc, extra: "", sourceReference: "@[Chat thread](mention:chat:c#m)",
+                                         messages: [(sender: "Ann", body: "first"), (sender: "Rick", body: "second")])
+        XCTAssertTrue(text.hasPrefix("## Request\nFix it\n\n## Source\n@[Chat thread](mention:chat:c#m)\n\n## Output\nCreate and attach the linked document deliverable."))
+        XCTAssertTrue(text.contains("## Extra Instructions\nNone."))
+        XCTAssertTrue(text.hasSuffix("## Latest Thread Excerpt\nRick: second\nAnn: first"))
+    }
+}

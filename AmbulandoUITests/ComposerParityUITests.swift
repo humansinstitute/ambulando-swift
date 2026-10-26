@@ -81,6 +81,14 @@ final class ComposerParityUITests: XCTestCase {
         actions.tap()
         XCTAssertTrue(app.buttons["message.copy"].waitForExistence(timeout: 5), "Copy message")
         XCTAssertTrue(app.buttons["message.ref"].exists, "FD Ref")
+        XCTAssertTrue(app.buttons["message.getitdone"].exists, "Get it done")
         capture(app, "message-menu-open")
+        app.buttons["message.getitdone"].tap()
+        let title = app.textFields["getitdone.title"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5), "Get it done opens its task form")
+        XCTAssertFalse(app.buttons["getitdone.create"].isEnabled, "a title is required")
+        title.tap(); title.typeText("Check the outbox")
+        XCTAssertTrue(app.buttons["getitdone.create"].isEnabled)
+        capture(app, "get-it-done")
     }
 }

@@ -154,6 +154,10 @@ public struct WriteSender: Sendable {
             var body: [String: Any] = ["client_request_id": item.id, "title": p["title"] ?? "", "state": p["state"] ?? "new", "priority": p["priority"] ?? "sand"]
             if let d = p["description"] as? String, !d.isEmpty { body["description"] = d }
             if let a = p["assigned_to_npub"] as? String, !a.isEmpty { body["assigned_to_npub"] = a }
+            // A task made from a conversation ("Get it done") keeps its thread and source link, as the web writes them.
+            if let t = p["thread_id"] as? String, !t.isEmpty { body["thread_id"] = t }
+            if let m = p["metadata"] as? [String: Any], !m.isEmpty { body["metadata"] = m }
+            if let m = p["mentions"] as? [[String: Any]], !m.isEmpty { body["mentions"] = m }
             let r = try await send("POST", base + "/channels/" + TowerAPI.uuid(channel) + "/tasks", body)
             if (200..<300).contains(r.status), let task = record(r.body, "task", TaskRecord.init(raw:)) { return .done(ack(tasks: [task])) }
             if r.status == 409 { return .permanent(status: 409, code: "idempotency_conflict", message: "Tower already has a different task with this request.") }
