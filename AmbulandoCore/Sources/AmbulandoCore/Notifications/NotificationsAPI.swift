@@ -104,6 +104,34 @@ extension TowerAPI {
                                       hasMore: (o["has_more"] as? Bool) ?? false, rulesRevision: flexibleInt(o["rules_revision"]), skipped: rows.count - changes.count)
     }
 
+    /// What Tower says about one inbox item right now.
+    public enum NotificationLookup: Sendable, Equatable {
+        /// Present, and this person may see it.
+        case item(NotificationItem)
+        /// Not found, not theirs, tombstoned, withdrawn, or access lost: nothing of it may be shown or opened.
+        case unavailable
+    }
+
+    /// `GET …/notifications/items/:id` — read fresh from Tower; the answer is the access check. 404/403/501, a tombstone and
+    /// `access:"unavailable"` all mean unavailable; any other failure throws (the caller must not fall back to a cached copy).
+    public func notificationLookup(workspaceId: String, appNpub: String, id: String) async throws -> NotificationLookup {
+        let path = try Self.notificationsPath(workspaceId) + "/items/" + Self.uuid(id)
+        // No query: Tower's single-item route takes none (the app view filters lists, counts, changes and bulk only; a direct
+        // id read is the actor's own ACL) and rejects unknown query keys.
+        let (status, body) = try await client.exchange(method: "GET", path: path, appNpub: appNpub, jsonBody: nil, query: [])
+        switch status {
+        case 200..<300:
+            let o = try object(body, "notification")
+            guard let raw = o["item"] as? [String: Any], let change = NotificationChange(json: raw, workspaceId: workspaceId) else { throw TowerError.malformed("notification") }
+            guard case .upsert(let item) = change, item.accessOK, item.id == id.lowercased() else { return .unavailable }
+            return .item(item)
+        case 403, 404, 501: return .unavailable
+        default:
+            let failure = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            throw TowerError.http(status: status, code: failure?["code"] as? String ?? failure?["error"] as? String, stage: "notifications")
+        }
+    }
+
     /// `GET …/notifications/counts`.
     public func notificationCounts(workspaceId: String, appNpub: String) async throws -> NotificationCounts {
         let o = try await notificationRead(try Self.notificationsPath(workspaceId) + "/counts",

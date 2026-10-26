@@ -29,6 +29,10 @@ extension AppModel {
         }
     }
 
+    /// "Check again": renews the registration now (unlocked only; signing is still refused while locked) so Tower's current
+    /// delivery readiness is read instead of waiting for the lease to reach half-life. One request per workspace per tap.
+    func recheckPush() { reconcilePush(force: true) }
+
     func refreshPushStatus() {
         guard let pushCoordinator else { return }
         Task { pushStatus = await pushCoordinator.status() }
@@ -121,24 +125,27 @@ extension AppModel {
         }
     }
 
-    /// Selects the workspace, fetches the inbox item again (Tower re-checks access on every read) and opens it through the
-    /// ordinary notification route. Without an item id, or if the item cannot be fetched in time, the destination named by
-    /// the payload opens the usual way, where the record's own load checks access and says so neutrally if it is refused.
+    /// Selects the workspace and, for an alert that names an inbox item, reads that item fresh from Tower first (one signed
+    /// request through the sync owner, never the local cache): only an item Tower still grants opens, through the ordinary
+    /// notification route. A 404/403/removed item says so neutrally; a failed check opens nothing and does not fall back to
+    /// the cached copy. An alert with only record ids opens that record the usual way, where its own load checks access.
     private func openPushPayload(_ payload: PushPayload) async {
-        guard let store, let connection else { return }
-        if selectedWorkspaceId != payload.workspaceId { selectWorkspace(payload.workspaceId) }
-        guard let notificationId = payload.notificationId else { openPushDestination(payload); return }
-        openNotifications(force: true)
-        let deadline = ContinuousClock.now + .seconds(6)
-        var item: NotificationItem?
-        while ContinuousClock.now < deadline {
-            item = try? await store.reader.notificationItem(connectionId: connection.id, workspaceId: payload.workspaceId, id: notificationId)
-            if let found = item, payload.changeSeq.map({ found.changeSeq >= $0 }) ?? true { break }
-            try? await Task.sleep(for: .milliseconds(300))
+        guard let sync, let connection, let workspace = workspaces.value.first(where: { $0.id.lowercased() == payload.workspaceId }) else {
+            notice = "That notification isn't for this Ambulando connection."
+            return
         }
-        guard let item else { openPushDestination(payload); return }
-        guard item.accessOK else { notice = "You no longer have access to that notification."; return }
-        if openNotification(item) == .detail { notice = "Open Notifications to see this one." }
+        if selectedWorkspaceId != workspace.id { selectWorkspace(workspace.id) }
+        guard let notificationId = payload.notificationId else { openPushDestination(payload); return }
+        do {
+            switch try await sync.notificationForTap(connection, workspace, id: notificationId) {
+            case .unavailable:
+                notice = "That notification is no longer available to you."
+            case .item(let item):
+                if openNotification(item) == .detail { tapDetail = item }
+            }
+        } catch {
+            notice = "Could not check that notification just now. Open Notifications to try again."
+        }
     }
 
     private func openPushDestination(_ payload: PushPayload) {
@@ -149,6 +156,7 @@ extension AppModel {
         case .thread(_, let channel, let thread): openInChat(channelId: channel, threadId: thread)
         case .threadById(_, let id): openRecord(kind: "thread", id: id)
         case .channel(_, let id): openRecord(kind: "channel", id: id)
+        case .notification: break   // handled by the fresh item read
         }
     }
 }

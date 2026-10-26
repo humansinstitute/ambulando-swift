@@ -484,7 +484,7 @@ extension PushCoordinatorTests {
         let pinned = try TowerOrigin("https://tower.pinned.invalid")
         XCTAssertEqual(alt.towerServiceNpub, known)
         XCTAssertEqual(PushRouter.decide(alt, connectedOrigin: pinned, connectedTowerNpub: known, workspaceIds: [w1], isLocked: false),
-                       .open(PushRouter.destination(for: alt)!))
+                       .open(PushRouter.tapDestination(for: alt)!))
         // Same origin text but another Tower's identity is refused, as is an alternate origin without a matching identity.
         XCTAssertEqual(PushRouter.decide(try payload(["tower_service_npub": "npub1other"]), connectedOrigin: try TowerOrigin("https://tower.sample.invalid"),
                                          connectedTowerNpub: known, workspaceIds: [w1], isLocked: false), .refuse(.foreignOrigin))
@@ -492,5 +492,43 @@ extension PushCoordinatorTests {
         XCTAssertEqual(PushRouter.decide(try payload(["origin": "https://tower.canonical.invalid"]), connectedOrigin: pinned, connectedTowerNpub: known,
                                          workspaceIds: [w1], isLocked: false), .refuse(.foreignOrigin))
         XCTAssertNil(try payload(["tower_service_npub": "not-an-npub"]).towerServiceNpub)
+    }
+
+    func testMissingDeliveryFlagIsNeutralNotOnAndRecheckBeforeHalfLifeFixesIt() async throws {
+        let h = harness()
+        let b = try binding()
+        await h.registrar.setDelivery(ready: nil, reason: nil)                      // an older Tower without `delivery`
+        await h.coordinator.enable(context: unlocked(b))
+        await h.coordinator.tokenReceived(tokenData, context: unlocked(b))
+        var status = await h.coordinator.status()
+        XCTAssertEqual(status.phase, .registeredNotDelivering(reason: "readiness_unknown"))
+        await h.registrar.setDelivery(ready: false, reason: "provider_not_configured")
+        await h.coordinator.reconcile(context: unlocked(b))                         // plain trigger: lease is fresh, nothing re-sent
+        var uploads = await h.registrar.registered.count
+        XCTAssertEqual(uploads, 1)
+        await h.registrar.setDelivery(ready: true, reason: nil)                     // key configured on Tower
+        await h.coordinator.reconcile(context: PushContext(binding: b, unlockedSigner: nil), force: true)   // locked: no signing, no change
+        uploads = await h.registrar.registered.count
+        XCTAssertEqual(uploads, 1)
+        await h.coordinator.reconcile(context: unlocked(b), force: true)            // explicit "Check again", unlocked, well before half-life
+        uploads = await h.registrar.registered.count
+        status = await h.coordinator.status()
+        XCTAssertEqual(uploads, 2)
+        if case .active = status.phase {} else { XCTFail("expected active only after Tower said ready, got \(status.phase)") }
+    }
+
+    func testIdOnlyAlertRoutesToTheInboxItemAndNoLongerRefusesAsNoTarget() throws {
+        let origin = try TowerOrigin("https://tower.sample.invalid")
+        let idOnly = try PushPayload.parse(userInfo: ["fd": ["v": 1, "origin": "https://tower.sample.invalid", "workspace_id": w1,
+                                                              "notification_id": "11111111-2222-4333-8444-555555555555", "change_seq": 7,
+                                                              "category": "app_object", "source_app_id": "blinkers"]])
+        XCTAssertNil(PushRouter.destination(for: idOnly))
+        XCTAssertEqual(PushRouter.decide(idOnly, connectedOrigin: origin, workspaceIds: [w1], isLocked: false),
+                       .open(.notification(workspaceId: w1, notificationId: "11111111-2222-4333-8444-555555555555")))
+        XCTAssertEqual(PushRouter.decide(idOnly, connectedOrigin: origin, workspaceIds: [w1], isLocked: true),
+                       .holdUntilUnlock(.notification(workspaceId: w1, notificationId: "11111111-2222-4333-8444-555555555555")))
+        // With neither an item nor a record id there is still nothing to open.
+        XCTAssertEqual(PushRouter.decide(try PushPayload.parse(userInfo: ["fd": ["v": 1, "origin": "https://tower.sample.invalid", "workspace_id": w1]]),
+                                         connectedOrigin: origin, workspaceIds: [w1], isLocked: false), .refuse(.noTarget))
     }
 }

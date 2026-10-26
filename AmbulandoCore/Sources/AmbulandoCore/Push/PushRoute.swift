@@ -8,6 +8,9 @@ public enum PushDestination: Sendable, Hashable {
     /// A thread whose channel the payload omitted; the app resolves it as it does for pins.
     case threadById(workspaceId: String, threadId: String)
     case channel(workspaceId: String, channelId: String)
+    /// An alert that names only its inbox item (an external app's object, or a kind this build has no record route for).
+    /// The item is read fresh from Tower and its own target, or a generic card, decides what opens.
+    case notification(workspaceId: String, notificationId: String)
 }
 
 public enum PushRefusal: Sendable, Equatable {
@@ -38,6 +41,13 @@ public enum PushRouter {
         return nil
     }
 
+    /// What a tap opens. The inbox item comes first when the alert names one: it is fetched with Tower's access check and
+    /// carries its own target. Without it the most specific record is used (its own load checks access).
+    public static func tapDestination(for payload: PushPayload) -> PushDestination? {
+        if let id = payload.notificationId { return .notification(workspaceId: payload.workspaceId, notificationId: id) }
+        return destination(for: payload)
+    }
+
     /// Refuses a payload from another Tower origin or for a workspace this connection does not hold. Access to the
     /// record itself is still checked by Tower when the app loads it; a refusal there is shown neutrally too.
     ///
@@ -53,7 +63,7 @@ public enum PushRouter {
             guard connectedOrigin == payload.origin else { return .refuse(.foreignOrigin) }
         }
         guard workspaceIds.contains(where: { $0.lowercased() == payload.workspaceId }) else { return .refuse(.unknownWorkspace) }
-        guard let destination = destination(for: payload) else { return .refuse(.noTarget) }
+        guard let destination = tapDestination(for: payload) else { return .refuse(.noTarget) }
         return isLocked ? .holdUntilUnlock(destination) : .open(destination)
     }
 }

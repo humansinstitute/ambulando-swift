@@ -466,7 +466,8 @@ struct PushAlertsRows: View {
             let why = switch reason {
             case "provider_not_configured": "Tower has no Apple push key set up yet, so it cannot send alerts."
             case "environment_not_enabled": "Tower is not set up to send alerts to this kind of build yet."
-            case "permission_denied": "Tower was told alerts are denied on this device."
+            case "permission_denied", "permission_not_granted": "Tower was not told that alerts are allowed on this device."
+            case "readiness_unknown": "This Tower did not say whether it can send alerts yet."
             default: "Tower says it cannot send alerts yet."
             }
             return "This device is registered, but alerts are not being delivered. " + why + " Notifications still appear in the bell."
@@ -486,6 +487,9 @@ struct PushAlertsRows: View {
                 case .denied, .off:
                     Button("Open Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } }
                         .accessibilityIdentifier("settings.notifications.openSettings")
+                case .registeredNotDelivering:
+                    Button("Check again") { model.recheckPush() }.disabled(!model.isUnlocked).accessibilityIdentifier("settings.notifications.recheck")
+                    Button("Turn off alerts", role: .destructive) { model.disablePush() }.accessibilityIdentifier("settings.notifications.disable")
                 default:
                     Button("Turn off alerts", role: .destructive) { model.disablePush() }.accessibilityIdentifier("settings.notifications.disable")
                 }

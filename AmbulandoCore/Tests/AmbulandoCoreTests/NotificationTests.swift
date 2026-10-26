@@ -11,6 +11,8 @@ final class FakeNotificationTower: @unchecked Sendable {
     private var log: [(seq: Int, change: [String: Any])] = []
     private var mutations: [String: (body: String, item: [String: Any])] = [:]
     var invalidCursorOnce = false
+    /// Ids answered as content-free tombstones by `GET items/{id}` (removed after the device cached them).
+    var tombstoned: Set<String> = []
     var invalidCursorAlways = false
     var churnRulesEveryItemsPage = false
     var rulesRevision = 1
@@ -139,6 +141,14 @@ final class FakeNotificationTower: @unchecked Sendable {
                     let page = Array(live.dropFirst(offset).prefix(limit))
                     let next: Any = offset + limit < live.count ? Data(String(offset + limit).utf8).base64EncodedString() : NSNull()
                     return (200, ["items": page, "next_cursor": next, "head_seq": seq, "rules_revision": rulesRevision, "inbox_started_at": "2026-10-26T12:00:00Z"])
+                }
+                if tail.hasPrefix("/items/"), request.httpMethod == "GET" {
+                    let id = String(tail.dropFirst(7))
+                    if tombstoned.contains(id) {
+                        return (200, ["item": ["schema": "org.wingman.notification.tombstone", "id": id, "change_seq": seq + 1, "removal_reason": "revoked"]])
+                    }
+                    guard let item = items[id] else { return (404, ["error": "not found", "code": "notification_not_found"]) }
+                    return (200, ["item": item])
                 }
                 if tail == "/changes" {
                     let after = Int(q("after_seq") ?? "0") ?? 0
@@ -1099,5 +1109,61 @@ final class NotificationAppViewTests: XCTestCase {
         prefs.rules = [NotificationRule(sourceAppId: "s", category: "c", clientAppId: "ambulando", channel: "inbox", mode: "default", rowVersion: 4)]
         XCTAssertTrue(prefs.inboxOn(category), "a reset keeps its row but is skipped")
         XCTAssertEqual(prefs.rowVersion(source: "s", category: "c", clientAppId: "ambulando", channel: "inbox"), 4)
+    }
+}
+
+final class NotificationTapTests: XCTestCase {
+    private func lookup(_ h: NotificationHarness, _ id: String) async throws -> TowerAPI.NotificationLookup {
+        try await h.sync.notificationForTap(h.connection, h.workspace, id: id)
+    }
+
+    func testColdGenericIdOnlyTapReadsTheItemFreshWithoutAnyLocalRow() async throws {
+        let h = try await NotificationHarness.make()
+        let id = h.tower.put(title: "Blinkers", target: ["kind": "app_object", "app_id": "blinkers", "object_type": "capture", "object_id": "x"])
+        // Nothing synced yet: the inbox is cold, as after a tap that launched the app.
+        let cached = try await h.items()
+        XCTAssertTrue(cached.isEmpty)
+        let found = try await lookup(h, id)
+        guard case .item(let item) = found else { return XCTFail("expected the item, got \(found)") }
+        XCTAssertEqual(item.id, id)
+        XCTAssertTrue(item.accessOK)
+        // Exactly the id route with an empty query: Tower rejects unknown query keys on this route.
+        XCTAssertTrue(h.tower.requests.contains("GET /items/\(id)?"), "requests: \(h.tower.requests)")
+        XCTAssertFalse(h.tower.requests.contains { $0.contains("/items/\(id)?") && $0.hasSuffix("?") == false })
+    }
+
+    func testRevokedAfterCachingIsRefusedAndNeverFallsBackToTheCachedTitle() async throws {
+        let h = try await NotificationHarness.make()
+        let id = h.tower.put(title: "Secret thread title")
+        try await h.run()
+        let cachedBefore = try await h.items()
+        XCTAssertEqual(cachedBefore.first?.title, "Secret thread title")
+        h.tower.lock.withLock { h.tower.tombstoned.insert(id) }
+        let result = try await lookup(h, id)
+        XCTAssertEqual(result, .unavailable)
+    }
+
+    func testAccessLostItemAndMissingItemAreUnavailable() async throws {
+        let h = try await NotificationHarness.make()
+        let lost = h.tower.put(title: "Hidden", access: "unavailable")
+        let lostResult = try await lookup(h, lost)
+        XCTAssertEqual(lostResult, .unavailable)
+        let missingResult = try await lookup(h, UUID().uuidString.lowercased())
+        XCTAssertEqual(missingResult, .unavailable)
+    }
+
+    func testNetworkFailureThrowsSoNothingStaleOpens() async throws {
+        let h = try await NotificationHarness.make()
+        let id = h.tower.put()
+        try await h.run()
+        h.tower.status = 503
+        do { _ = try await lookup(h, id); XCTFail("a failed check must not yield an item") } catch {}
+    }
+
+    func testLockedIdentityNeverChecksOrOpens() async throws {
+        let h = try await NotificationHarness.make(unlocked: false)
+        let id = h.tower.put()
+        do { _ = try await lookup(h, id); XCTFail("signed while locked") } catch {}
+        XCTAssertFalse(h.tower.requests.contains { $0.contains("/items/\(id)") })
     }
 }

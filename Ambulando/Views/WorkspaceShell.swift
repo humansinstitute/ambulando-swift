@@ -315,6 +315,7 @@ private struct ShellToolbar: ViewModifier {
                         .environment(\.focusThread, FocusThreadAction { searchedThread = $0; searching = false })
                 }
             }
+            .sheet(item: Binding(get: { model.tapDetail }, set: { model.tapDetail = $0 })) { item in NotificationDetailView(item: item) }
             .sheet(isPresented: $notifying) {
                 if let workspace = model.selectedWorkspace, let store = model.store {
                     NotificationsView(workspace: workspace, store: store)

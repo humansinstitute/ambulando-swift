@@ -74,8 +74,9 @@ A visible APNs alert reaches the device while Ambulando is closed. It is a *prom
   logged or shown). For each workspace the app `PUT`s `…/notifications/apns-devices/<installation>` with `client_app_id=ambulando`,
   `platform`, `permission_state=granted`, `environment`, `bundle_id`, a 7-day lease. Leases renew at half-life on launch, unlock,
   foreground and workspace-list changes (no timer). Uploads are signed by the unlocked identity only: while locked the token waits.
-- **Truthful status.** Tower's `delivery.ready=false` (`provider_not_configured`, `environment_not_enabled`, `permission_denied`)
-  shows "Waiting for Tower", never "On". `404/501` shows "Not available on this Tower" and is retried at most hourly.
+- **Truthful status.** Only an explicit `delivery.ready=true` reads "On". `ready=false` (`provider_not_configured`,
+  `environment_not_enabled`, `permission_not_granted`) and a Tower that sends no `delivery` field read "Waiting for Tower";
+  **Check again** renews the registration now (unlocked only) to read the current state instead of waiting for half-life. `404/501` shows "Not available on this Tower" and is retried at most hourly.
 - **Withdrawal.** Disconnect, Remove identity, Turn off alerts, a signer change, a removed workspace, or alerts denied in system
   Settings `DELETE` the registration. A revocation that cannot be signed (locked) or sent is kept and retried when its signer is
   unlocked, and dropped when the lease has ended (Tower stops delivering to an unrenewed lease by itself). The installation id is
@@ -84,9 +85,12 @@ A visible APNs alert reaches the device while Ambulando is closed. It is a *prom
 - **Tap.** `UNUserNotificationCenter` delegate is set before launch finishes, so a cold tap is delivered. The payload (`fd` v1) is
   parsed strictly and checked by `PushRouter` against the connected Tower and workspaces: the payload's `tower_service_npub` is matched to the
   connection's stored Tower identity (so a pinned or alternate address for the same Tower still matches; a different Tower is refused), otherwise the origin text must match. The payload's origin is never fetched. Locked: the tap is held in memory
-  (ids only) until unlock, then decided again. Open: the workspace is selected, the inbox item is fetched again (waiting up to six
-  seconds for the change sequence in the alert), and it opens through the ordinary notification route only if Tower still grants
-  access; otherwise a neutral notice appears. Opening marks the notification read at the fetched sequence, never earlier.
+  (ids only) until unlock, then decided again. Open: the workspace is selected and, if the alert names an
+  inbox item, that item is read fresh from Tower (`GET …/notifications/items/<id>` with no query, one signed request through the sync owner,
+  never the local cache). Only an item Tower still grants opens, through the ordinary notification route (an external app's
+  object shows a plain card). 404/403, a tombstone or `access:"unavailable"` shows a neutral notice; a failed check (network,
+  locked) opens nothing and does not fall back to a cached copy or title. An alert with only record ids opens that record, whose
+  own load checks access. Opening marks the notification read at the fetched sequence, never earlier.
 - **Foreground.** An alert for the thread, task or document already on screen is not shown as a second banner; others use the
   system alert channel.
 

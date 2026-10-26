@@ -103,7 +103,9 @@ public actor PushCoordinator {
         else if permission == .notDetermined { phase = .needsPermission }
         else if permission == .denied { phase = .denied }
         else if let until = state.enrolled.values.min(), state.binding != nil, !state.enrolled.isEmpty, until > now() {
-            phase = state.deliveryReady == false ? .registeredNotDelivering(reason: state.deliveryReason) : .active(until: until)
+            // Only an explicit `ready: true` from Tower may read "On"; a missing flag is "unknown", never assumed.
+            phase = state.deliveryReady == true ? .active(until: until)
+                : .registeredNotDelivering(reason: state.deliveryReady == nil ? "readiness_unknown" : state.deliveryReason)
         }
         else if let problem = state.lastProblem { phase = .failed(problem) }
         else if let at = state.providerUnavailableAt, now().timeIntervalSince(at) < Self.unavailableRetry { phase = .providerUnavailable }

@@ -33,6 +33,18 @@ extension WorkspaceSync {
         }
     }
 
+    /// A tap on a delivered alert: reads the item fresh from Tower with the unlocked identity (never a cached copy, never
+    /// the read-only background credential) and returns it only if Tower still grants access. Throws on any other failure,
+    /// including a locked identity: the caller shows "could not check" and opens nothing. The normal keyed job is scheduled
+    /// afterwards, so the local inbox catches up through its one sync owner.
+    public func notificationForTap(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, id: String) async throws -> TowerAPI.NotificationLookup {
+        try await identity.requireSigner(npub: connection.signerNpub)
+        let lookup = try await api(origin: try TowerOrigin(connection.origin))
+            .notificationLookup(workspaceId: workspace.id, appNpub: workspace.appNpub, id: id)
+        await refreshNotifications(connection, workspace, priority: .visible, force: true)
+        return lookup
+    }
+
     /// Outcome of one job, for tests and diagnostics.
     public struct NotificationRun: Sendable, Equatable {
         public var listed = 0

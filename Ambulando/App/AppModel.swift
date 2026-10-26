@@ -130,6 +130,8 @@ final class AppModel {
     var pushStatus: PushStatus?
     /// A notification tap waiting for unlock; ids only, in memory only.
     @ObservationIgnored var pendingPushTap: PendingPushTap?
+    /// A freshly fetched notification a tap could not open to a screen (another app's object): shown as a plain card.
+    var tapDetail: NotificationItem?
     /// Viewer-local board positions by canvas, so returning to a board keeps where it was (never written to Tower).
     @ObservationIgnored var canvasViewports: [String: CanvasViewport] = [:]
     /// Excalidraw board sessions (drafts, saves) shared by the inline and full-screen editors.
