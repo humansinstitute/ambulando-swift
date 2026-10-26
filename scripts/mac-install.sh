@@ -109,6 +109,8 @@ if (( editor_rc )); then
     if grep -q "bun is required" "$EDITOR_LOG"; then
         print -u2 "Install bun (https://bun.sh): curl -fsSL https://bun.sh/install | bash"
         print -u2 "then open a new Terminal window and run this again."
+    elif grep -q "cannot read BoardEditor/bun.lock" "$EDITOR_LOG"; then
+        print -u2 "Upgrade bun, then run this installer again: bun upgrade"
     fi
     fail "the board editor did not build (exit $editor_rc); the lines above say why."
 fi

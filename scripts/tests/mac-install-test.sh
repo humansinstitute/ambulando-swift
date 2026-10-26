@@ -51,6 +51,7 @@ case ${STUB_EDITOR:-ok} in
     ok) print "Using bun 1.4.4 (/stub/bun)"; print "Board editor up to date" ;;
     nobun) print -u2 "error: bun is required to build the board editor. Install it from https://bun.sh"; exit 1 ;;
     vite) print "vite v6.4.1 building for production..."; print -u2 "error during build:"; exit 1 ;;
+    oldbun) print "Using bun 1.2.22 (/stub/bun)"; print -u2 "error: bun 1.2.22 cannot read BoardEditor/bun.lock (lockfile version 2)."; exit 1 ;;
 esac
 EOF
     chmod +x "$ROOT/scripts/build-board-editor.sh"
@@ -154,6 +155,14 @@ check "exits non-zero" [ $RC -ne 0 ]
 check "explains bun is required" has "bun is required"
 check "gives the bun install command" has "curl -fsSL https://bun.sh/install | bash"
 check "names the stage" has "while preparing the board editor"
+check "does not start the app build" not called "xcodebuild -skipPackagePluginValidation"
+
+# 3b. An installed Bun that is too old gets a specific recovery command.
+start board-editor-old-bun STUB_EDITOR=oldbun
+run
+check "exits non-zero" [ $RC -ne 0 ]
+check "explains the incompatible lockfile" has "cannot read BoardEditor/bun.lock"
+check "gives the upgrade command" has "Upgrade bun, then run this installer again: bun upgrade"
 check "does not start the app build" not called "xcodebuild -skipPackagePluginValidation"
 
 # 4. A board editor failure without "error:" text is still reported.
@@ -315,6 +324,20 @@ check "prints the bun version" has "Using bun 1.0.0"
 check "shows bun's own message" has "lockfile could not be read"
 check "explains the failure" has "bun install --frozen-lockfile failed (exit 1)"
 check "suggests updating bun" has "bun upgrade"
+
+# 20. build-board-editor.sh rejects Bun 1.2 before running install.
+CASE=board-editor-old-bun-preflight; print -r -- "- $CASE"
+E=$WORK/$CASE; mkdir -p "$E/scripts" "$E/BoardEditor/web" "$E/home/.bun/bin"
+cp "$REPO/scripts/build-board-editor.sh" "$E/scripts/"
+print '{}' > "$E/BoardEditor/package.json"; print '{"lockfileVersion": 2}' > "$E/BoardEditor/bun.lock"; print '' > "$E/BoardEditor/vite.config.mjs"
+print 'x' > "$E/BoardEditor/web/main.js"
+print '#!/bin/zsh\n[[ $1 == --version ]] && { print 1.2.22; exit 0 }\nprint -u2 "unexpected bun command: $*"; exit 99' > "$E/home/.bun/bin/bun"
+chmod +x "$E/home/.bun/bin/bun"
+OUT=$(env -i PATH=/usr/bin:/bin HOME=$E/home zsh "$E/scripts/build-board-editor.sh" 2>&1); RC=$?
+check "exits non-zero" [ $RC -ne 0 ]
+check "explains the incompatible versions" has "bun 1.2.22 cannot read BoardEditor/bun.lock (lockfile version 2)"
+check "suggests Bun 1.3 or newer" has "Upgrade bun to 1.3 or newer with: bun upgrade"
+check "does not try to install" not has "unexpected bun command: install"
 
 print "\n$passed passed, $failed failed"
 (( failed == 0 ))
