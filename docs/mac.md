@@ -16,7 +16,7 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (10) |
+| Version | 0.1.0 (11) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
@@ -29,7 +29,7 @@ the screens is shared:
 
 `scripts/mac-install.sh --package` writes `dist/Ambulando-mac-<version>-<build>.zip` and a `.sha256` file next to it.
 
-1. Copy the ZIP to the Mac (AirDrop or Files). Check it: `shasum -a 256 Ambulando-mac-0.1.0-10.zip` must match the
+1. Copy the ZIP to the Mac (AirDrop or Files). Check it: `shasum -a 256 Ambulando-mac-0.1.0-11.zip` must match the
    `.sha256` file.
 2. Double-click the ZIP and drag **Ambulando** into **Applications**.
 3. The app is signed with a Developer ID certificate but **not notarized**. Gatekeeper assessment rejects this release
@@ -83,9 +83,9 @@ signing identity, the built version and build, the app it replaces, the installe
 Applications, and which copy is running after it opens. A successful run ends with:
 
 ```text
-==> Installed /Applications/Ambulando.app: Ambulando 0.1.0 (build 10)
-==> Running: /Applications/Ambulando.app, Ambulando 0.1.0 (build 10)
-    In Ambulando, Settings > About should show Version 0.1.0 and Build 10.
+==> Installed /Applications/Ambulando.app: Ambulando 0.1.0 (build 11)
+==> Running: /Applications/Ambulando.app, Ambulando 0.1.0 (build 11)
+    In Ambulando, Settings > About should show Version 0.1.0 and Build 11.
 ```
 
 If any step fails, it prints why (xcodebuild's errors and failed commands, the end of the build log, codesign's
@@ -163,8 +163,7 @@ each time, so after each rebuild macOS asks once for the login password to let A
   it is in the login keychain, which is open whenever you are logged in; other apps cannot read it without macOS asking
   you first. Use **Lock now** (⇧⌘L) when you step away if that matters to you; the PIN is then needed again.
 - **Not verified on the Mac:** an authenticated workspace session with a real member identity (live checks used the
-  public NIP-19 test key, which has no workspaces), Intel Macs, and automated UI tests (there is no Mac UI test target;
-  the Mac UI was checked with accessibility automation on sample data).
+  public NIP-19 test key, which has no workspaces), Intel Macs, and external pointer automation on the release app. The Debug new-thread harness below runs in-process AppKit interactions on sample data; there is no Mac XCTest UI target.
 - Push notifications and FIPS transport are not part of either app.
 
 ## Sample data
@@ -299,3 +298,32 @@ For further UI validation, use an isolated Debug sample-data app (never reset an
 The reported build 5 exception did not include its reason string. Sidebar hierarchy changes are a plausible trigger,
 not a proven explanation of that historical exception. The separate long-message hang report directly identified
 full-draft composer measurement on the main thread.
+
+
+## New-thread interaction regression
+
+Mac build 11 fixes a presentation input trap: the app disabled its background when either a thread or New thread
+was open, but chose the existing-thread overlay for both states. Since there was no existing thread, nothing appeared.
+The presenter now chooses the existing-thread panel when a thread exists, otherwise the New thread panel when composing.
+The background remains inactive only while a modal is shown.
+
+The reusable, **Debug-only** in-process AppKit harness runs against the actual Mac app window. It requires both launch
+flags below, uses a fresh fixture database and memory-only test credentials, and never connects to Tower or reads the
+normal account. It exits nonzero on an assertion failure or after a 90-second timeout. The same visible-composer
+assertion fails on the old presenter. Release builds contain no harness code.
+
+```sh
+xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme AmbulandoMac -configuration Debug \
+  -destination 'platform=macOS' -derivedDataPath build/mac-thread-regression build
+build/mac-thread-regression/Build/Products/Debug/Ambulando.app/Contents/MacOS/Ambulando \
+  -AmbulandoUITestFixture -AmbulandoMacThreadRegression > build/mac-thread-regression.log 2>&1
+```
+
+Checks cover Deck +, native text entry, mention selection, Cancel, draft-preserving reopen, local mouse clicks through
+the real window, narrow/wide resizing, modal expand/restore, macOS fullscreen when available, outside-click dismissal,
+fixture-backed submission, closing the accepted thread, and underlying section navigation after dismissal. Each capture
+is emitted as a `SNAPSHOT_BASE64 <name> <PNG base64>` line in the log; ordinary action and assertion lines remain readable.
+`OS_FULLSCREEN entered=false` explicitly records an unavailable fullscreen check rather than treating it as verified.
+
+These checks exercise AppKit hit testing and accessibility actions inside the process. They do not establish external
+hardware mouse/keyboard delivery, a real-account Tower round trip, Intel execution, or notarization.

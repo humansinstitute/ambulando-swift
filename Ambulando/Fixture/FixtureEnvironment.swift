@@ -69,9 +69,21 @@ final class FixtureEnvironment {
         tower = FixtureTower(file: directory.appendingPathComponent("fixture-tower.json"))
         tower.offline = offline
         tower.failScopes = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureScopesFail")
+        #if DEBUG && os(macOS)
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacThreadRegression") {
+            secrets = MacRegressionVaultStore()
+            backgroundCredentials = MacRegressionBackgroundStore()
+            sessionKeys = MacRegressionSessionStore()
+        } else {
+            secrets = KeychainVaultSecretStore(service: KeychainServices.named("studio.otherstuff.ambulando.native.fixture-vault.v1"))
+            backgroundCredentials = KeychainBackgroundCredentialStore(service: Self.backgroundService)
+            sessionKeys = KeychainSessionKeyStore(service: Self.sessionService)
+        }
+        #else
         secrets = KeychainVaultSecretStore(service: KeychainServices.named("studio.otherstuff.ambulando.native.fixture-vault.v1"))
         backgroundCredentials = KeychainBackgroundCredentialStore(service: Self.backgroundService)
         sessionKeys = KeychainSessionKeyStore(service: Self.sessionService)
+        #endif
         events = FixtureEventStream(tower: tower)
         profileSource = FixtureProfileSource(tower: tower)
         avatarTransport = FixtureAvatarTransport(tower: tower)
@@ -117,12 +129,20 @@ final class FixtureEnvironment {
         // needs a second, deliberate flag (a designated test device only, never someone's everyday phone).
         guard args.contains("-AmbulandoFixtureOnDevice") else { return nil }
         #endif
-        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        var directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("AmbulandoFixture", isDirectory: true)
+        #if os(macOS)
+        if args.contains("-AmbulandoMacThreadRegression") {
+            // Each in-process interaction run is disposable, including its credentials.
+            directory = directory.appendingPathComponent("thread-regression-" + UUID().uuidString, isDirectory: true)
+        }
+        #endif
         if args.contains("-AmbulandoFixtureReset") {
             try? FileManager.default.removeItem(at: directory)
-            try? KeychainBackgroundCredentialStore(service: backgroundService).delete()
-            try? KeychainSessionKeyStore(service: sessionService).delete()
+            if !args.contains("-AmbulandoMacThreadRegression") {
+                try? KeychainBackgroundCredentialStore(service: backgroundService).delete()
+                try? KeychainSessionKeyStore(service: sessionService).delete()
+            }
         }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return FixtureEnvironment(directory: directory, startLocked: args.contains("-AmbulandoFixtureLocked"),

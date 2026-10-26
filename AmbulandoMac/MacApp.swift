@@ -54,6 +54,18 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     @MainActor let model = AppModel()
     @MainActor let ui = MacUI()
 
+    #if DEBUG
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard ProcessInfo.processInfo.arguments.contains("-AmbulandoMacThreadRegression"),
+              ProcessInfo.processInfo.arguments.contains("-AmbulandoUITestFixture") else { return }
+        Task { @MainActor in
+            await model.start()
+            guard model.fixture != nil else { return }
+            await MacThreadRegression.run(model: model)
+        }
+    }
+    #endif
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 

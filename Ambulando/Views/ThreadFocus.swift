@@ -135,8 +135,12 @@ private struct ThreadFocusPresenter: ViewModifier {
             // The app behind stays exactly as it is, only out of reach: no clicks, keyboard or VoiceOver.
             .allowsHitTesting(!focused)
             .accessibilityHidden(focused)
-            .overlay { if focused { ThreadFocusContainer() } }
-            .overlay { if model.composingThread && !focused { NewThreadContainer() } }
+            .overlay {
+                // `focused` also includes composingThread: use the actual thread to choose the panel.
+                // Otherwise + disables the shell but renders an empty ThreadFocusContainer, trapping input.
+                if model.focusedThread != nil { ThreadFocusContainer() }
+                else if model.composingThread { NewThreadContainer() }
+            }
             .modifier(ThreadFocusLifecycle())
         #endif
     }
