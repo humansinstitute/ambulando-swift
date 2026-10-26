@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Visible (alert) notifications through APNs. "development" is what Xcode signs for device builds; distribution
+	     signing (TestFlight / App Store) rewrites it to "production". The app reads the effective value at runtime
+	     (PushEnvironment) so a token is always registered for the host that issued it. -->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>

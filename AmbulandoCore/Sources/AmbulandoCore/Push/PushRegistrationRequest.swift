@@ -56,9 +56,14 @@ public struct PushRegistration: Sendable, Equatable {
     public let bundleId: String
     public let preview: PushPreview
     public let leaseSeconds: Int
+    /// Presentation routing only (contract: not an attestation). Tower's audience rules use it to pick this app's alerts.
+    public let clientAppId: String
+    public let platform: String
+    public let appVersion: String?
 
     public init(workspaceId: String, appNpub: String, installationId: String, environment: PushEnvironment,
-                bundleId: String, preview: PushPreview = .generic, leaseSeconds: Int = defaultLeaseSeconds) throws {
+                bundleId: String, preview: PushPreview = .generic, leaseSeconds: Int = defaultLeaseSeconds,
+                clientAppId: String = "ambulando", platform: String = "ios", appVersion: String? = nil) throws {
         guard !bundleId.isEmpty, (1...Self.maximumLeaseSeconds).contains(leaseSeconds) else { throw TowerError.malformed("push registration") }
         self.workspaceId = try TowerAPI.uuid(workspaceId).lowercased()
         self.installationId = try TowerAPI.uuid(installationId).lowercased()
@@ -67,6 +72,9 @@ public struct PushRegistration: Sendable, Equatable {
         self.bundleId = bundleId
         self.preview = preview
         self.leaseSeconds = leaseSeconds
+        self.clientAppId = clientAppId
+        self.platform = platform
+        self.appVersion = appVersion
     }
 
     public var path: String {
@@ -75,10 +83,15 @@ public struct PushRegistration: Sendable, Equatable {
 
     /// Exact body bytes (sorted keys) so the NIP-98 payload hash covers what is sent.
     public func body(token: PushDeviceToken) throws -> Data {
-        try JSONSerialization.data(withJSONObject: [
+        // Registering is only ever done once the person has allowed alerts, so the permission is stated as granted;
+        // a later denial withdraws the registration instead of being reported here.
+        var object: [String: Any] = [
             "device_token": token.hex, "environment": environment.rawValue, "bundle_id": bundleId,
             "preview": preview.rawValue, "lease_seconds": leaseSeconds,
-        ], options: [.sortedKeys])
+            "client_app_id": clientAppId, "platform": platform, "permission_state": "granted",
+        ]
+        if let appVersion, !appVersion.isEmpty { object["app_version"] = String(appVersion.prefix(64)) }
+        return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 
     /// `PUT …/notifications/apns-devices/:installation_id`, signed. Throws `IdentityError.locked` while locked.
@@ -91,13 +104,33 @@ public struct PushRegistration: Sendable, Equatable {
         try await client.signed(method: "DELETE", path: try path, query: [], appNpub: appNpub, jsonBody: nil)
     }
 
-    /// Reads `lease_expires_at` from Tower's reply. A reply that echoes the full token is treated as malformed.
-    public static func leaseExpiry(fromResponse data: Data, token: PushDeviceToken) throws -> Date {
+    /// Reads Tower's acknowledgement. A reply that echoes the full token is treated as malformed. `delivery` is absent
+    /// from older Towers; then readiness is unknown rather than assumed.
+    public static func acknowledgement(fromResponse data: Data, token: PushDeviceToken) throws -> PushAcknowledgement {
         guard String(decoding: data, as: UTF8.self).lowercased().contains(token.hex) == false,
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let device = object["device"] as? [String: Any], let text = device["lease_expires_at"] as? String,
               let date = ISO8601DateFormatter.tower.date(from: text) else { throw TowerError.malformed("push registration") }
-        return date
+        let delivery = object["delivery"] as? [String: Any]
+        return PushAcknowledgement(leaseExpiresAt: date, deliveryReady: delivery?["ready"] as? Bool, deliveryReason: delivery?["reason"] as? String)
+    }
+
+    public static func leaseExpiry(fromResponse data: Data, token: PushDeviceToken) throws -> Date {
+        try acknowledgement(fromResponse: data, token: token).leaseExpiresAt
+    }
+}
+
+/// What Tower said about one registration. `deliveryReady == false` is the truthful "registered, but nothing will be
+/// sent yet" (no provider key, environment not enabled, alerts denied); it must never be shown as "on".
+public struct PushAcknowledgement: Sendable, Equatable, Codable {
+    public let leaseExpiresAt: Date
+    public let deliveryReady: Bool?
+    public let deliveryReason: String?
+
+    public init(leaseExpiresAt: Date, deliveryReady: Bool? = nil, deliveryReason: String? = nil) {
+        self.leaseExpiresAt = leaseExpiresAt
+        self.deliveryReady = deliveryReady
+        self.deliveryReason = deliveryReason
     }
 }
 

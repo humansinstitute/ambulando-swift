@@ -62,7 +62,7 @@ Status values (this file is updated only after validation evidence exists):
 | Workrooms, reports, jobs, opportunities | — | Later package | Proposed deferral | Awaiting Pete's prioritisation. Their events are counted and ignored by the event plan |
 | Daily scope, audio notes | — | Later package | Proposed deferral | Awaiting Pete's prioritisation |
 | Hosted workspace signup, billing, legal | — | Later package | Proposed deferral | Web onboarding stays authoritative until decided otherwise |
-| Push notifications | — | — | Unsupported | Tower has Web Push (VAPID) only; APNs needs separate server work |
+| Push notifications | iPhone/iPad: permission, APNs registration, tap routing | build 28 | Built and tested on fakes; not live until Tower has an APNs key | See docs/notifications.md. Mac: no push entitlement |
 | FIPS transport | — | — | Unsupported natively | WMapp-shell capability; native-ip is HTTPS-only and never silently falls back |
 
 

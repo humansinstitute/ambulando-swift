@@ -103,7 +103,7 @@ struct SettingsView: View {
                     AboutRow(label: "Version", value: bundleValue("CFBundleShortVersionString"), id: "settings.version")
                     AboutRow(label: "Build", value: bundleValue("CFBundleVersion"), id: "settings.build")
                     AboutRow(label: "Platform", value: Device.name, id: "settings.platform")
-                    Text("Alerts outside the app and FIPS transport are not part of this build. This app uses HTTPS only; notifications are read from Tower's inbox.")
+                    Text("FIPS transport is not part of this build. This app uses HTTPS only; notifications are read from Tower's inbox.")
                         .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 } header: { Text("About") }
                 }

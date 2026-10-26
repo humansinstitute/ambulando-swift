@@ -125,6 +125,11 @@ final class AppModel {
     let notificationBadge = LiveQuery<NotificationSnapshot>(initial: NotificationSnapshot())
     /// Read, dismiss and archive for notifications; goes through the durable write queue (see `NotificationActions`).
     @ObservationIgnored private(set) var notificationActions: NotificationActions?
+    /// Alert enrolment (permission, device token, per-workspace registrations); nil in sample-data mode. See `AppModel+Push`.
+    @ObservationIgnored private(set) var pushCoordinator: PushCoordinator?
+    var pushStatus: PushStatus?
+    /// A notification tap waiting for unlock; ids only, in memory only.
+    @ObservationIgnored var pendingPushTap: PendingPushTap?
     /// Viewer-local board positions by canvas, so returning to a board keeps where it was (never written to Tower).
     @ObservationIgnored var canvasViewports: [String: CanvasViewport] = [:]
     /// Excalidraw board sessions (drafts, saves) shared by the inline and full-screen editors.
@@ -220,6 +225,12 @@ final class AppModel {
     @ObservationIgnored private var restoringPath = false
 
     let workspaces = LiveQuery<[WorkspaceRecord]>(initial: [])
+
+    /// "0.1.0 (28)" as sent to Tower with an alert registration (diagnostic only).
+    static var versionLabel: String {
+        let info = Bundle.main.infoDictionary
+        return "\(info?["CFBundleShortVersionString"] as? String ?? "?") (\(info?["CFBundleVersion"] as? String ?? "?"))"
+    }
 
     static var dataDirectory: URL {
         ProductionStorage.dataDirectory(applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
@@ -334,6 +345,17 @@ final class AppModel {
                 await sync.refreshNotifications(connection, workspace, priority: .background)
             })
             self.notificationActions = self.writes.map { NotificationActions(store: store, writes: $0) }
+            #if os(iOS)
+            if fixture == nil {
+                // The environment is whatever this build was signed for; a token from one APNs host is refused by the other.
+                let profile = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision").flatMap { try? Data(contentsOf: $0) }
+                self.pushCoordinator = PushCoordinator(platform: SystemPushPlatform(), registrar: TowerPushRegistrar(transport: transport, signer: identity),
+                                                       persistence: PushStatePersistence(store: store), bundleId: Bundle.main.bundleIdentifier ?? "",
+                                                       environment: PushEnvironment.resolve(embeddedProfile: profile),
+                                                       platformName: UIDevice.current.userInterfaceIdiom == .pad ? "ipados" : "ios",
+                                                       appVersion: Self.versionLabel)
+            }
+            #endif
             self.saver = DocumentSaver(store: store, identity: identity, transport: transport)
             let pasted = ComposerUploadTransfer(engine: engine, identity: identity, transport: transport, transfers: transfers)
             self.uploads = ComposerUploads(store: store, staging: staging) { [weak self] job in
@@ -405,6 +427,7 @@ final class AppModel {
             watchNetwork()
             observeProtectedData()
             phase = .ready
+            reconcilePush()
             #if AMBULANDO_TEST
             if let fixture {
                 let readiness = "ready: sample transport; credential stores: \(type(of: fixture.secrets)), \(type(of: fixture.backgroundCredentials)), \(type(of: fixture.sessionKeys)); no Keychain"
@@ -447,6 +470,7 @@ final class AppModel {
     /// lost). Keeps a listed workspace shown and its sidebar reading; the same list stored again changes nothing.
     private func workspacesDidLoad(_ listed: [WorkspaceRecord], connectionId: String, generation: UInt64) {
         guard let store, connection?.id == connectionId, generation == workspaceListGeneration else { return }
+        reconcilePush(workspaces: listed)
         guard listed.isEmpty else {
             applyWorkspaceChange(listed: listed, listComplete: true)
             return
@@ -516,6 +540,8 @@ final class AppModel {
             refresh(force: false)
             kickOutbox(force: true)   // messages written while locked are signed only now
             startLive()
+            reconcilePush()
+            resumePendingPushTap()
         } catch { notice = error.localizedDescription }
     }
 
@@ -533,6 +559,7 @@ final class AppModel {
     /// Removes only this app's sealed identity and cancels sync. Cached workspace data stays until disconnect.
     func removeIdentity() async {
         guard let sync else { return }
+        await unbindPush()   // withdraw alerts while the signer still exists; a revocation that cannot be sent waits or expires with its lease
         await liveStream?.stop()
         await sync.engine.cancelAll()
         do { identity = try await sync.identity.remove() } catch { notice = error.localizedDescription }
@@ -568,6 +595,7 @@ final class AppModel {
     func disconnect() async {
         guard let sync, let store, let connection else { return }
         browser.reset()
+        await unbindPush()
         await liveStream?.stop()
         await sync.engine.cancelAll()
         // Disconnecting ends the trusted-device session; the next launch asks for the PIN.
@@ -661,6 +689,7 @@ final class AppModel {
             kickOutbox()
             startLive()
             recoverConnection(reason: "foreground")
+            reconcilePush()
         }
     }
 

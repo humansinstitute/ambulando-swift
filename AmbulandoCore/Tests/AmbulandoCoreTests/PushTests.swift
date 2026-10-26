@@ -84,7 +84,7 @@ final class PushTests: XCTestCase {
         XCTAssertEqual(put.value(forHTTPHeaderField: "x-flightdeck-pg-app-npub"), TestKeys.npub)
         let body = try XCTUnwrap(put.httpBody)
         XCTAssertEqual(String(decoding: body, as: UTF8.self),
-                       #"{"bundle_id":"studio.otherstuff.ambulando.native","device_token":"\#(token.hex)","environment":"sandbox","lease_seconds":604800,"preview":"generic"}"#)
+                       #"{"bundle_id":"studio.otherstuff.ambulando.native","client_app_id":"ambulando","device_token":"\#(token.hex)","environment":"sandbox","lease_seconds":604800,"permission_state":"granted","platform":"ios","preview":"generic"}"#)
         let putAuth = try decodeAuthorization(put)
         XCTAssertEqual(putAuth.kind, NIP98.kind)
         XCTAssertTrue(putAuth.tags.contains(["payload", SHA256Hex.of(body)]))

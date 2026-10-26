@@ -56,10 +56,44 @@ written all-or-nothing with each key's `expected_row_version` (0 only when absen
 and shown with a notice, and the person's next explicit choice is sent with a new `mutation_id` (never silently re-applied);
 `mutation_id_reused` is a rejection. Pages of one listing that disagree on `rules_revision` restart the listing. `default` keeps its row.
 
+## Alerts outside the app (iPhone and iPad)
+
+A visible APNs alert reaches the device while Ambulando is closed. It is a *prompt to sync*: the lock screen shows generic text
+("New activity") and a few ids; opening it fetches the inbox item again with the person's own credentials.
+
+- **Entitlement and signing.** `Config/Ambulando.entitlements` carries `aps-environment`. Automatic signing registers the explicit
+  App ID `studio.otherstuff.ambulando.native` with Push Notifications and an `aps-environment` profile (verify with
+  `codesign -d --entitlements :-` on the built app). Xcode device builds are `development` (APNs sandbox); distribution export
+  rewrites it to `production`. At run time the app reads the environment from the embedded profile (`PushEnvironment.resolve`), so
+  a token is registered for the host that issued it. The Mac app has no push entitlement (a Developer ID profile with push needs
+  portal work) and says alerts are unavailable there.
+- **Enabling.** Nothing is requested at launch. **Settings › Notifications › Enable Notifications** shows the system prompt (alert,
+  sound, badge); a refusal is shown as "Blocked in system Settings" with an Open Settings button. Turning alerts off in system
+  Settings later withdraws the registration on the next reconcile.
+- **Registration** (`Push/PushCoordinator.swift`). A stable installation id and the device token live in the app store (never
+  logged or shown). For each workspace the app `PUT`s `…/notifications/apns-devices/<installation>` with `client_app_id=ambulando`,
+  `platform`, `permission_state=granted`, `environment`, `bundle_id`, a 7-day lease. Leases renew at half-life on launch, unlock,
+  foreground and workspace-list changes (no timer). Uploads are signed by the unlocked identity only: while locked the token waits.
+- **Truthful status.** Tower's `delivery.ready=false` (`provider_not_configured`, `environment_not_enabled`, `permission_denied`)
+  shows "Waiting for Tower", never "On". `404/501` shows "Not available on this Tower" and is retried at most hourly.
+- **Withdrawal.** Disconnect, Remove identity, Turn off alerts, a signer change, a removed workspace, or alerts denied in system
+  Settings `DELETE` the registration. A revocation that cannot be signed (locked) or sent is kept and retried when its signer is
+  unlocked, and dropped when the lease has ended (Tower stops delivering to an unrenewed lease by itself). The installation id is
+  rotated on every withdrawal and signer change because Tower binds an id to its first actor (`409 installation_owned`); owed
+  revocations keep the id they were made under. A token held by another account is reported (`transport_owned`), never taken.
+- **Tap.** `UNUserNotificationCenter` delegate is set before launch finishes, so a cold tap is delivered. The payload (`fd` v1) is
+  parsed strictly and checked by `PushRouter` against the connected Tower and workspaces: the payload's `tower_service_npub` is matched to the
+  connection's stored Tower identity (so a pinned or alternate address for the same Tower still matches; a different Tower is refused), otherwise the origin text must match. The payload's origin is never fetched. Locked: the tap is held in memory
+  (ids only) until unlock, then decided again. Open: the workspace is selected, the inbox item is fetched again (waiting up to six
+  seconds for the change sequence in the alert), and it opens through the ordinary notification route only if Tower still grants
+  access; otherwise a neutral notice appears. Opening marks the notification read at the fetched sequence, never earlier.
+- **Foreground.** An alert for the thread, task or document already on screen is not shown as a second banner; others use the
+  system alert channel.
+
 ## Limits (this build)
 
-- No alerts outside the app: Tower has no alert sender, installation/transport registry, quiet hours or APNs route yet, and this app
-  has no push setup. Settings says so; nothing is claimed or sent. `Push/` keeps the UI-free APNs groundwork unconnected.
+- Alerts outside the app need a Tower that has an APNs provider key: until then the registration is accepted but Tower reports
+  `delivery.ready=false` and Settings says "Waiting for Tower". No quiet hours.
 - Mac: compiled and launched in sample-data mode; the shared views are exercised by the iPhone sample UI tests.
 
 ## Validation

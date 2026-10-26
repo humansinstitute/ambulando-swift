@@ -1,10 +1,11 @@
 import AmbulandoCore
 import BackgroundTasks
 import UIKit
+import UserNotifications
 
 /// Owns the one `AppModel` and the iOS entry points SwiftUI does not cover: BackgroundTasks registration (which must
 /// happen before launch finishes) and background `URLSession` event delivery.
-final class AppDelegate: NSObject, UIApplicationDelegate {
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     static let refreshTaskIdentifier = "studio.otherstuff.ambulando.native.refresh"
 
     @MainActor let model = AppModel()
@@ -15,7 +16,34 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             guard let refresh = task as? BGAppRefreshTask else { task.setTaskCompleted(success: false); return }
             Task { @MainActor in Self.run(refresh, model: model) }
         }
+        // The delegate must be set before launch finishes so a tap that cold-started the app is delivered to it.
+        UNUserNotificationCenter.current().delegate = self
         return true
+    }
+
+    // MARK: Alerts (APNs)
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Task { @MainActor in await model.pushTokenReceived(deviceToken) }
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        Task { @MainActor in await model.pushRegistrationFailed(error) }
+    }
+
+    /// An alert arriving while the app is open: no second banner for the resource already on screen; anything else is
+    /// shown by the OS alert channel exactly as it would be in the background.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        let payload = try? PushPayload.parse(userInfo: notification.request.content.userInfo)
+        let suppress = await MainActor.run { PushPresentation.foreground(payload, viewing: model.viewedPushDestination) == .suppress }
+        return suppress ? [] : [.banner, .list, .sound]
+    }
+
+    /// A tap, from a cold start or while running. Only the parsed ids are used; the item is fetched again after unlock.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
+        let payload = try? PushPayload.parse(userInfo: response.notification.request.content.userInfo)
+        await model.handlePushTap(payload)
     }
 
     /// One opportunistic refresh window: the next one is requested first, the work runs the normal sync pipeline, and

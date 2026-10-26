@@ -40,9 +40,18 @@ public enum PushRouter {
 
     /// Refuses a payload from another Tower origin or for a workspace this connection does not hold. Access to the
     /// record itself is still checked by Tower when the app loads it; a refusal there is shown neutrally too.
-    public static func decide(_ payload: PushPayload, connectedOrigin: TowerOrigin?, workspaceIds: Set<String>,
-                              isLocked: Bool) -> PushTapDecision {
-        guard let connectedOrigin, connectedOrigin == payload.origin else { return .refuse(.foreignOrigin) }
+    ///
+    /// The service identity settles origin spelling differences (a pinned or alternate address for the same Tower): when the
+    /// connection knows its Tower's npub and the payload names one, they must be equal and the origin text no longer decides.
+    /// The app still connects only to its stored origin; the payload's origin is never fetched.
+    public static func decide(_ payload: PushPayload, connectedOrigin: TowerOrigin?, connectedTowerNpub: String? = nil,
+                              workspaceIds: Set<String>, isLocked: Bool) -> PushTapDecision {
+        guard let connectedOrigin else { return .refuse(.foreignOrigin) }
+        if let known = connectedTowerNpub, let claimed = payload.towerServiceNpub {
+            guard known == claimed else { return .refuse(.foreignOrigin) }
+        } else {
+            guard connectedOrigin == payload.origin else { return .refuse(.foreignOrigin) }
+        }
         guard workspaceIds.contains(where: { $0.lowercased() == payload.workspaceId }) else { return .refuse(.unknownWorkspace) }
         guard let destination = destination(for: payload) else { return .refuse(.noTarget) }
         return isLocked ? .holdUntilUnlock(destination) : .open(destination)

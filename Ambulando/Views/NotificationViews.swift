@@ -381,9 +381,17 @@ struct NotificationSettingsSection: View {
                 Button("Load notification choices again") { Task { await load() } }
             }
             if let problem { Text(problem).font(.amb(.footnote)).foregroundStyle(Amb.destructive) }
+            #if os(iOS)
+            PushAlertsRows()
+            #else
             LabeledContent("Alerts on this \(Device.name)", value: "Not available").accessibilityIdentifier("settings.notifications.alerts")
+            #endif
         } header: { Text("Notifications") } footer: {
-            Text("New notifications appear in the bell while Ambulando is open and when it refreshes in the background. Your choice for each kind applies to what Ambulando shows; other apps keep their own. Reading a notification here is shared with them. Alerts on this \(Device.name) (banners, lock screen, badge) are unavailable in this version.")
+            #if os(iOS)
+            Text("New notifications appear in the bell while Ambulando is open and when it refreshes in the background. Your choice for each kind applies to what Ambulando shows; other apps keep their own. Reading a notification here is shared with them. Alerts use the system's notification settings; lock screen text is generic (\"New activity\") and opening one fetches it again and checks your access first.")
+            #else
+            Text("New notifications appear in the bell while Ambulando is open and when it refreshes in the background. Your choice for each kind applies to what Ambulando shows; other apps keep their own. Reading a notification here is shared with them. Alerts outside the app are not available on the Mac in this version.")
+            #endif
         }
         .task(id: model.selectedWorkspace?.id) { await load() }
     }
@@ -417,3 +425,73 @@ struct NotificationSettingsSection: View {
         }
     }
 }
+
+
+#if os(iOS)
+import UIKit
+
+/// Alerts outside the app. The system prompt appears only when the person presses Enable; every state below is what the
+/// coordinator actually knows (permission, token, Tower's acknowledgement), never an assumption.
+struct PushAlertsRows: View {
+    @Environment(AppModel.self) private var model
+
+    private var status: PushStatus? { model.pushStatus }
+
+    private var label: String {
+        guard model.pushAvailable else { return "Not available in sample data" }
+        guard let status else { return "Checking…" }
+        switch status.phase {
+        case .off: return status.permission == .denied ? "Blocked in system Settings" : "Off"
+        case .needsPermission: return "Waiting for your answer"
+        case .denied: return "Blocked in system Settings"
+        case .waitingForToken: return "Registering this \(Device.name) with Apple…"
+        case .waitingForUnlock: return "Waiting for unlock"
+        case .notRegistered: return "Not registered with Tower yet"
+        case .active: return "On"
+        case .registeredNotDelivering: return "Waiting for Tower"
+        case .providerUnavailable: return "Not available on this Tower"
+        case .failed: return "Needs attention"
+        }
+    }
+
+    private var detail: String? {
+        guard let status else { return nil }
+        switch status.phase {
+        case .denied: return "Notifications are turned off for Ambulando in system Settings. Open Settings to allow them."
+        case .off where status.permission == .denied: return "Notifications are turned off for Ambulando in system Settings. Open Settings to allow them, then come back and press Enable."
+        case .waitingForUnlock: return "Registering needs your identity unlocked. Alerts are not delivered until then."
+        case .providerUnavailable: return "This Tower is not set up to send alerts yet. Notifications still appear in the bell."
+        case .failed(let message): return message
+        case .registeredNotDelivering(let reason):
+            let why = switch reason {
+            case "provider_not_configured": "Tower has no Apple push key set up yet, so it cannot send alerts."
+            case "environment_not_enabled": "Tower is not set up to send alerts to this kind of build yet."
+            case "permission_denied": "Tower was told alerts are denied on this device."
+            default: "Tower says it cannot send alerts yet."
+            }
+            return "This device is registered, but alerts are not being delivered. " + why + " Notifications still appear in the bell."
+        case .active(let until): return "Registered until \(until.formatted(date: .abbreviated, time: .shortened)); it renews itself while Ambulando is unlocked."
+        default: return nil
+        }
+    }
+
+    var body: some View {
+        Group {
+            LabeledContent("Alerts on this \(Device.name)", value: label).accessibilityIdentifier("settings.notifications.alerts")
+            if let detail { Text(detail).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("settings.notifications.alerts.detail") }
+            if let status, model.pushAvailable {
+                switch status.phase {
+                case .off where status.permission != .denied:
+                    Button("Enable Notifications") { model.enablePush() }.disabled(!model.isUnlocked).accessibilityIdentifier("settings.notifications.enable")
+                case .denied, .off:
+                    Button("Open Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } }
+                        .accessibilityIdentifier("settings.notifications.openSettings")
+                default:
+                    Button("Turn off alerts", role: .destructive) { model.disablePush() }.accessibilityIdentifier("settings.notifications.disable")
+                }
+            }
+        }
+        .task { model.refreshPushStatus() }
+    }
+}
+#endif

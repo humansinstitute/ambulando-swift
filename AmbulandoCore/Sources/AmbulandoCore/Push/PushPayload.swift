@@ -6,9 +6,16 @@ public struct PushPayload: Sendable, Equatable {
     public static let version = 1
 
     public let origin: TowerOrigin
+    /// The workspace's Tower service identity: a matching hint for a stored connection when `origin` differs from the one
+    /// the connection is pinned to. Never an authority and never a place to connect to.
+    public let towerServiceNpub: String?
     public let workspaceId: String
     public let category: String?
     public let outboxEventId: String?
+    /// The inbox item this alert is for; the app refetches it (and Tower re-checks access) before opening anything.
+    public let notificationId: String?
+    /// Tower's change sequence at send time. A hint for ordering only, never authority.
+    public let changeSeq: Int?
     public let channelId: String?
     public let threadId: String?
     public let taskId: String?
@@ -33,8 +40,10 @@ public struct PushPayload: Sendable, Equatable {
             return text.lowercased()
         }
         guard let workspaceId = try id("workspace_id") else { throw ParseError.invalidId("workspace_id") }
-        return PushPayload(origin: origin, workspaceId: workspaceId, category: fd["category"] as? String,
-                           outboxEventId: try id("outbox_event_id"), channelId: try id("channel_id"),
+        let service = (fd["tower_service_npub"] as? String).flatMap { $0.hasPrefix("npub1") && $0.count <= 100 ? $0 : nil }
+        return PushPayload(origin: origin, towerServiceNpub: service, workspaceId: workspaceId, category: fd["category"] as? String,
+                           outboxEventId: try id("outbox_event_id"), notificationId: try id("notification_id"),
+                           changeSeq: (fd["change_seq"] as? Int).flatMap { $0 >= 0 ? $0 : nil }, channelId: try id("channel_id"),
                            threadId: try id("thread_id"), taskId: try id("task_id"), docId: try id("doc_id"))
     }
 }
