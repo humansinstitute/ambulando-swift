@@ -39,6 +39,24 @@ the screens is shared:
 4. Once launched, import your `nsec`, choose a PIN and connect to your Tower, as on the iPhone. Each device keeps its own encrypted
    copy; nothing is copied from the iPhone.
 
+For delivery systems with a small request limit, the same signed app may be supplied as
+`Ambulando-mac-0.1.0-11.tar.xz`. Extract it in Terminal from the download folder:
+
+```sh
+tar -xJf Ambulando-mac-0.1.0-11.tar.xz
+codesign --verify --strict --deep Ambulando.app
+```
+
+Then drag the extracted **Ambulando** into **Applications**, as above. The archive format does not change the app’s
+signature or notarization status. To create this smaller archive after the normal signed build:
+
+```sh
+zsh scripts/mac-install.sh --no-install --package
+tar -cf - -C build/mac-release/Build/Products/Release Ambulando.app | xz -9e > dist/Ambulando-mac-0.1.0-11.tar.xz
+```
+
+Creating the archive requires `xz`; extracting it uses the Mac’s built-in `tar`.
+
 To update, quit Ambulando first, then replace the app in Applications with the new one. Your identity, connection, saved data, drafts and
 unsent messages stay (they live in the app's container and Keychain, not in the app).
 
