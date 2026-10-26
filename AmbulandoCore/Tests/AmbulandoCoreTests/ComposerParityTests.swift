@@ -3,7 +3,7 @@ import XCTest
 
 final class ComposerParityTests: XCTestCase {
     let rick = Mention(type: .agent, npub: "npub1hd37reqgfcnz3pvzj4grknd2nkzc94p9ercmunrxx22razr2rfxsw6dns5", label: "Rick")
-    let id = "d2baabe4-4d38-4bd7-b64e-4beedd8e1a19"
+    let id = "00000000-0000-4000-8000-000000000001"
 
     func testBackspaceInsideAPickedNameRemovesTheWholeName() {
         let old = "Hi @Rick"

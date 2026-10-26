@@ -323,6 +323,10 @@ struct ThreadView: View {
                 ForEach(Array(snapshot.value.messages.enumerated()), id: \.element.id) { index, message in
                     VStack(spacing: 0) {
                         if let day = snapshot.value.dayStarts[message.id] { DaySeparator(day: day) }
+                        #if os(macOS)
+                        // A faint line shows where one message ends and the next begins (not under the replies rule).
+                        if index > 1 { Rectangle().fill(Amb.border.opacity(0.45)).frame(height: 1).padding(.horizontal, 24) }
+                        #endif
                         MessageCell(message: message, people: snapshot.value.people, workspace: workspace, extras: snapshot.value.extras)
                         if index == 0 && snapshot.value.messages.count > 1 { RepliesRule(count: snapshot.value.messages.count - 1) }
                     }
@@ -452,7 +456,12 @@ struct MessageRow: View {
             }
             Spacer(minLength: 0)
         }
+        #if os(macOS)
+        // Desktop messages get room to breathe; the iPhone keeps its compact rows.
+        .padding(.horizontal, 24).padding(.vertical, 14)
+        #else
         .padding(.horizontal, 16).padding(.vertical, 8)
+        #endif
         .accessibilityElement(children: interactive ? .contain : .combine)
         .accessibilityIdentifier("message")
     }
