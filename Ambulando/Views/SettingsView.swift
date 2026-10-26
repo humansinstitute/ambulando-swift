@@ -56,7 +56,9 @@ struct SettingsView: View {
                     }
                 }
                 Section {
-                    ShareLink(item: DiagnosticsExport(model: model), preview: SharePreview("Ambulando diagnostics"))
+                    ShareLink(item: DiagnosticsExport(model: model), preview: SharePreview("Ambulando diagnostics")) {
+                        Label("Export diagnostics", systemImage: "square.and.arrow.up")
+                    }
                         .accessibilityIdentifier("settings.diagnostics.export")
                 } header: { Text("Diagnostics") } footer: {
                     Text("Export diagnostics shares a short text log of recent connection attempts: times (UTC), the kind of request, how long it took and the error code. It contains your Tower's address but no keys, messages, names or record ids, and nothing is sent unless you share it.")

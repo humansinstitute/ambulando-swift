@@ -19,12 +19,20 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Connection recovery (iPhone/iPad build 22, Mac build 12; review builds)
+
+Settings shows connection status; transient read failures retry a bounded number of times with recovery triggers; and
+**Settings > Diagnostics > Export diagnostics** shares a redacted local text log of recent connection attempts (UTC time,
+request kind, duration, error code; no keys, messages, names or record ids; nothing is sent unless you share it). The
+original transport failure cause is unknown (backend contention is a hypothesis). These are review builds built locally
+and not installed or published; behaviour on a live Tower is not yet confirmed.
+
 ## Mac new-thread fix (Mac build 11)
 
 Deck’s **+** now displays the New thread composer instead of leaving the window with all content disabled and no
 visible modal. Cancel, outside click and closing a submitted thread restore the underlying app. The Mac regression
 harness exercises the real app window with isolated sample data; see [Mac validation](docs/mac.md#new-thread-interaction-regression).
-The iPhone remains on build 21.
+The iPhone was on build 21 at that point.
 
 ## Interface parity fixes (iPhone build 21, Mac build 10)
 
@@ -55,7 +63,7 @@ large pasted crash reports. The iPhone/iPad composer is unchanged. See [Mac vali
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (21); Mac version 0.1.0 (11). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (22); Mac version 0.1.0 (12). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 

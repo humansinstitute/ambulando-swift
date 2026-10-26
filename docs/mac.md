@@ -101,9 +101,9 @@ signing identity, the built version and build, the app it replaces, the installe
 Applications, and which copy is running after it opens. A successful run ends with:
 
 ```text
-==> Installed /Applications/Ambulando.app: Ambulando 0.1.0 (build 11)
-==> Running: /Applications/Ambulando.app, Ambulando 0.1.0 (build 11)
-    In Ambulando, Settings > About should show Version 0.1.0 and Build 11.
+==> Installed /Applications/Ambulando.app: Ambulando 0.1.0 (build 12)
+==> Running: /Applications/Ambulando.app, Ambulando 0.1.0 (build 12)
+    In Ambulando, Settings > About should show Version 0.1.0 and Build 12.
 ```
 
 If any step fails, it prints why (xcodebuild's errors and failed commands, the end of the build log, codesign's
