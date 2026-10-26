@@ -19,6 +19,22 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Text attachments, browser favourites and bounded Mac threads (iPhone/iPad build 24, Mac build 14)
+
+- **Long pastes become text attachments.** A paste over 2,500 Unicode code points, or one that would take the inline
+  text over 10,000, is staged as a complete UTF-8 `.txt` file; Undo removes it. Staged and sent text cards open in a
+  bounded editor (rename, edit, Save, Cancel); a sent edit saves a new Files version and keeps the signed message
+  unchanged. See [Automatic text attachments](docs/mac.md#automatic-text-attachments).
+- **Browser favourites.** The browser start page shows saved favourites over the start background. Add or remove the
+  current page from the page menu, edit name and icon, add by address (https only), arrange the order; favourites are
+  kept on this device.
+- **Composer:** Hide keyboard now sits beside Attach photos instead of replacing it, so photos can be attached mid-sentence.
+- **Mac threads** render a bounded 50-message page of the loaded 500, with Earlier/Newer replies, a remembered reading
+  position for the app session, and native message menus built when opened. This addresses the post-save freeze seen
+  on earlier Mac builds; it is validated with the sample-data regression harness, not yet on a live account.
+- Known limit: on Mac the text editor's disabled Save button draws as a blank white control (enabled Save and Cancel
+  are readable). These are locally built review builds; the Mac app is signed with Developer ID and not notarized.
+
 ## Connection recovery (iPhone/iPad build 22, Mac build 12; review builds)
 
 Settings shows connection status; transient read failures retry a bounded number of times with recovery triggers; and
@@ -63,7 +79,7 @@ large pasted crash reports. The iPhone/iPad composer is unchanged. See [Mac vali
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (22); Mac version 0.1.0 (12). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (24); Mac version 0.1.0 (14). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
