@@ -87,7 +87,7 @@ large pasted crash reports. The iPhone/iPad composer is unchanged. See [Mac vali
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (24); Mac version 0.1.0 (14). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (25); Mac version 0.1.0 (15). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 
