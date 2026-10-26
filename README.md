@@ -19,6 +19,13 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Composer draft ordering (iPhone/iPad build 29, Mac build 19)
+
+Clearing an unsent draft now takes precedence over delayed reads of its older saved text. Newer external Edit
+restores remain supported. The Mac channel Messages fixture covers repeated button/Return sends, incoming sync,
+resizing and post-send typing. The reported real-account channel beachball has not been reproduced; this draft
+ordering fix is not a confirmed remedy for that hang. These builds are for local review and are not activated.
+
 ## Notifications (iPhone/iPad build 28, Mac build 18)
 
 - A bell with the unread count opens Tower's durable notification inbox: Unread / All / Archived, category filter, read, unread,
@@ -91,7 +98,7 @@ large pasted crash reports. The iPhone/iPad composer is unchanged. See [Mac vali
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (28); Mac version 0.1.0 (18). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (29); Mac version 0.1.0 (19). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 

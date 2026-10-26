@@ -16,7 +16,7 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (18) |
+| Version | 0.1.0 (19) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
@@ -421,3 +421,24 @@ The separate Mac Test app has a real-window text attachment check (synthetic cli
 Add `-AmbulandoMacTextModalContrast` for a small modal-only visual check. Core text integrity and retry tests live in
 `TextAttachmentTests`; `PasteUploadUITests.testAutomaticTextAttachmentPagesRenameAndSurviveOfflineRelaunch` exercises
 the iPhone edit-menu paste, bounded reader, rename and offline relaunch against the isolated Test app.
+
+## Channel Messages regression (build 19)
+
+Build 19 prevents a delayed saved draft read from undoing intentional local clearing. A newer external draft can
+still restore the message selected with Edit. This is a confirmed composer ordering correction; the historical
+real-account channel beachball remains unreproduced and its cause unconfirmed.
+
+Run the isolated native check after building `AmbulandoMacTest`:
+
+```sh
+'build/test-mac/Build/Products/Test/Ambulando Test.app/Contents/MacOS/Ambulando Test' \
+  -AmbulandoFixtureReset -AmbulandoMacThreadRegression -AmbulandoMacChannelRegression
+```
+
+The check seeds variable-height plain and table history, then exercises five top-level sends through the button
+and Return key, acceptance exactly once, rendering, incoming sync, resizing and further
+typing/clearing. It explicitly scrolls to reveal an accepted row if a resize left it outside the lazy list's
+visible rows; automatic follow-latest after resizing is not established by this check. It also directly checks stale
+versus newer draft adoption for both text and attachment-only drafts. The shared heartbeat and watchdog apply.
+These fixture checks do not establish a real Tower round trip or resolve the historical freeze report. The installed
+normal app is never replaced or quit by this check.

@@ -703,12 +703,14 @@ enum ChatTime {
 @MainActor
 @Observable
 final class ComposerModel {
-    var text = "" { didSet { if text != oldValue { edited = true; scheduleSave() } } }
+    var text = "" { didSet { if text != oldValue { edited = true; changedAt = Date(); scheduleSave() } } }
     private(set) var mentions: [Mention] = []
     private(set) var persistenceFailure: String?
     @ObservationIgnored let target: ChatTarget
     @ObservationIgnored private let store: LocalStore
     @ObservationIgnored private var edited = false
+    /// Local edits, including clearing the field, take precedence over a draft read that started earlier.
+    @ObservationIgnored private var changedAt = Date.distantPast
     @ObservationIgnored private var debounce: Task<Void, Never>?
     @ObservationIgnored private var tail: Task<Void, Never>?
     /// Set by `send`: a draft read before the send cleared it can still arrive from the store and must not put the sent
@@ -729,6 +731,9 @@ final class ComposerModel {
     /// not sent) is adopted when the composer is empty, so the text appears where the user is looking.
     func adopt(_ draft: Draft?) {
         guard let draft, text.isEmpty, attachments.isEmpty, !draft.text.isEmpty || !draft.attachments.isEmpty else { return }
+        // An empty field can be an intentional local edit. A delayed read of its previous saved text must
+        // not resurrect that text. A genuinely newer external draft (Edit on a rejected send) still restores.
+        if edited, (draft.updatedAt ?? .distantPast) <= changedAt.addingTimeInterval(0.001) { return }
         // Stored times are rounded to milliseconds, so anything within 1 ms of the send counts as before it.
         if let sentAt, (draft.updatedAt ?? .distantPast) <= sentAt.addingTimeInterval(0.001) { return }
         mentions = draft.mentions
@@ -802,7 +807,7 @@ final class ComposerModel {
 
     /// Photos and pasted text files chosen for the next message, already staged on the device. They are part of the
     /// durable draft, so they survive relaunch and a change of conversation.
-    var attachments: [PendingAttachment] = [] { didSet { if attachments != oldValue { edited = true; scheduleSave() } } }
+    var attachments: [PendingAttachment] = [] { didSet { if attachments != oldValue { edited = true; changedAt = Date(); scheduleSave() } } }
 
     /// Hands the composed text to the outbox (which clears the stored draft in the same transaction).
     func send(with outbox: OutboxSender, connection: ConnectionRecord, workspace: WorkspaceRecord,

@@ -60,6 +60,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacChannelRegression") {
+                try await channelSends(window, model: model)
+                print("PASS: channel Messages repeated sends"); fflush(stdout); exit(0)
+            }
             try press(window, "section.deck")
             await settle()
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacTextAttachmentRegression") {
@@ -164,6 +168,86 @@ enum MacThreadRegression {
         }
         fflush(stdout)
         exit(0)
+    }
+
+    /// Covers top-level Messages rather than Deck's new-thread modal or a reply panel.
+    static func channelSends(_ window: NSWindow, model: AppModel) async throws {
+        model.selectWorkspace(FixtureTower.studio)
+        await settle()
+        guard let workspace = model.selectedWorkspace, let store = model.store,
+              let fixture = model.fixture else { throw Failure(description: "Missing fixture") }
+        guard let channel = model.navigation.value.channel(FixtureTower.generalChannel) else { throw Failure(description: "Missing fixture channel") }
+        guard let connection = model.connection else { throw Failure(description: "Missing fixture connection") }
+        let probe = ComposerModel(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id,
+                                                     channelId: channel.id, threadId: "draft-ordering-regression"), store: store)
+        probe.text = "Old unsent draft"
+        let stale = Draft(text: probe.text, mentions: [], updatedAt: Date().addingTimeInterval(-1))
+        probe.text = ""
+        probe.adopt(stale)
+        try require(probe.text.isEmpty, "delayed saved draft must not undo local clearing")
+        probe.adopt(Draft(text: "External Edit restore", mentions: [], updatedAt: Date().addingTimeInterval(1)))
+        try require(probe.text == "External Edit restore", "newer external draft must still restore")
+        probe.text = ""
+        let attachment = PendingAttachment(filename: "fixture.txt", mimeType: "text/plain", sizeBytes: 1,
+                                           sha256: String(repeating: "0", count: 64), staged: "fixture-only.txt")
+        probe.attachments = [attachment]
+        let staleAttachment = Draft(text: "", mentions: [], updatedAt: Date().addingTimeInterval(-1), attachments: [attachment])
+        probe.attachments = []
+        probe.adopt(staleAttachment)
+        try require(probe.attachments.isEmpty, "delayed attachment-only draft must not undo removal")
+        probe.adopt(Draft(text: "", mentions: [], updatedAt: Date().addingTimeInterval(1), attachments: [attachment]))
+        try require(probe.attachments == [attachment], "newer attachment-only Edit restore remains supported")
+        probe.attachments = []; probe.saveNow()
+        print("DRAFT_ORDERING_PASS"); fflush(stdout)
+        for index in 0..<160 {
+            let body = index % 3 == 0 ? "## History \(index)\n\n| Key | Value |\n| --- | --- |\n| Long | " + String(repeating: "variable wrapped table text ", count: 30) + " |"
+                : "Channel history \(index)\n\n" + String(repeating: "Variable wrapped history text. ", count: (index % 20) + 1)
+            fixture.tower.postAsMember(channel: channel.id, body: body)
+        }
+        model.selectContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id))
+        model.mode = .chat
+        await settle()
+        print("CHANNEL_OPEN"); fflush(stdout)
+        for cycle in 0..<5 {
+            try require(try textView(window).string.isEmpty, "next send starts with empty composer")
+            let body = "Channel compose regression \(cycle)\n\n| Key | Value |\n| --- | --- |\n| Send | accepted |"
+            try type(window, body)
+            await settle()
+            let expected = try textView(window).string
+            print("CHANNEL_SEND \(cycle) method=\(cycle % 2 == 0 ? "button" : "return")"); fflush(stdout)
+            if cycle % 2 == 0 { try press(window, "composer.send") }
+            else { try postKey(window, key: "\r", code: 36, modifiers: []) }
+            for _ in 0..<20 {
+                await settle()
+                let rows = try await store.reader.channelFeed(workspaceId: workspace.id, channelId: channel.id, limit: 150)
+                if rows.contains(where: { $0.message.body == expected }) {
+                    // A resize can leave the lazy list reading older rows. Reveal the accepted row explicitly;
+                    // this regression checks responsiveness/rendering, not automatic follow-latest behavior.
+                    if !containsText(window, "Channel compose regression \(cycle)"),
+                       let list = threadScrollView(window), let document = list.documentView {
+                        let end = document.isFlipped ? max(0, document.bounds.maxY - list.contentView.bounds.height) : document.bounds.minY
+                        list.contentView.scroll(to: NSPoint(x: 0, y: end)); list.reflectScrolledClipView(list.contentView)
+                        print("CHANNEL_REVEAL_ACCEPTED \(cycle)"); fflush(stdout)
+                    } else { break }
+                }
+            }
+            let rows = try await store.reader.channelFeed(workspaceId: workspace.id, channelId: channel.id, limit: 150)
+            try require(rows.filter { $0.message.body == expected }.count == 1, "top-level send accepted exactly once")
+            try require(try textView(window).string.isEmpty, "accepted channel send clears composer")
+            try require(containsText(window, "Channel compose regression \(cycle)"), "accepted channel send must render")
+            fixture.tower.postAsMember(channel: channel.id, body: "Background channel update \(cycle)")
+            model.openChannel(channel.id, in: workspace, force: true)
+            window.setContentSize(cycle % 2 == 0 ? NSSize(width: 900, height: 600) : NSSize(width: 1440, height: 900))
+            await settle()
+            try type(window, "Unsent channel draft")
+            await settle()
+            try require(try textView(window).string == "Unsent channel draft", "composer remains responsive after acceptance and sync")
+            let field = try textView(window)
+            field.setSelectedRange(NSRange(location: 0, length: (field.string as NSString).length))
+            field.insertText("", replacementRange: field.selectedRange())
+            await settle()
+            print("CHANNEL_PASS \(cycle)"); fflush(stdout)
+        }
     }
 
     /// Exercises the real composer, native paste interception, undo and page editor in a disposable fixture window.
