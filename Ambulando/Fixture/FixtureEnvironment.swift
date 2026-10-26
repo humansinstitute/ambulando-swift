@@ -7,23 +7,30 @@ import UIKit
 #endif
 import UniformTypeIdentifiers
 
-/// Deterministic local sample data for UI automation and demos, enabled only in Debug builds with the
-/// `-AmbulandoUITestFixture` launch argument. Every app code path (identity vault, signing, store, sync engine,
+/// Local sample data for UI automation and demos, mandatory in Test builds and opt-in in Debug
+/// with `-AmbulandoUITestFixture`. Every app code path (identity vault, signing, store, sync engine,
 /// outbox) runs for real; only the network transport is replaced by an in-process stand-in for Tower, so nothing
 /// leaves the device. The identity is a throwaway key generated on first fixture launch, never a user's key.
 /// The UI labels this mode on every screen; it is not evidence of live Tower behaviour.
 @MainActor
 @Observable
 final class FixtureEnvironment {
+    static var requested: Bool {
+        #if AMBULANDO_TEST
+        true
+        #else
+        (Bundle.main.bundleIdentifier?.hasSuffix(".test") == true) || ProcessInfo.processInfo.arguments.contains("-AmbulandoUITestFixture")
+        #endif
+    }
     nonisolated static let origin = "https://fixture.ambulando.invalid"
     nonisolated static let pin = "135790"
     let studioWorkspaceId = FixtureTower.studio
     let directory: URL
     let tower: FixtureTower
     let secrets: VaultSecretStore
-    /// Real Keychain item under a fixture-only service, so the opt-in background credential path runs as in production.
+    /// Test builds use fixture files; opt-in normal Debug fixtures retain their existing credential stores.
     let backgroundCredentials: BackgroundCredentialStore
-    /// Trusted-device session item under a fixture-only service.
+    /// Synthetic trusted-device session; Test builds never use Keychain.
     let sessionKeys: SessionKeyStore
     /// In-process stand-in for the SSE route, fed from the fixture's event log.
     let events: EventStreamTransport
@@ -69,7 +76,11 @@ final class FixtureEnvironment {
         tower = FixtureTower(file: directory.appendingPathComponent("fixture-tower.json"))
         tower.offline = offline
         tower.failScopes = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureScopesFail")
-        #if DEBUG && os(macOS)
+        #if AMBULANDO_TEST
+        secrets = FixtureVaultStore(file: directory.appendingPathComponent("test-vault.json"))
+        backgroundCredentials = FixtureBackgroundStore(file: directory.appendingPathComponent("test-background.json"))
+        sessionKeys = FixtureSessionStore(file: directory.appendingPathComponent("test-session.json"))
+        #elseif DEBUG && os(macOS)
         if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacThreadRegression") {
             secrets = MacRegressionVaultStore()
             backgroundCredentials = MacRegressionBackgroundStore()
@@ -123,14 +134,32 @@ final class FixtureEnvironment {
     static func fromLaunchArguments() -> FixtureEnvironment? {
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
-        guard args.contains("-AmbulandoUITestFixture") else { return nil }
+        #if AMBULANDO_TEST
+        // Fault injection verifies that mandatory fixture failure cannot fall back to production.
+        #if os(macOS)
+        let expectedBundle = "studio.otherstuff.ambulando.mac.test"
+        #else
+        let expectedBundle = "studio.otherstuff.ambulando.native.test"
+        #endif
+        guard Bundle.main.bundleIdentifier == expectedBundle,
+              !args.contains("-AmbulandoTestMissingFixture") else { return nil }
+        #else
+        // A misconfigured Test bundle must never initialize the legacy Keychain-backed fixture.
+        guard Bundle.main.bundleIdentifier?.hasSuffix(".test") != true,
+              args.contains("-AmbulandoUITestFixture") else { return nil }
+        #endif
         #if os(iOS) && !targetEnvironment(simulator)
         // On a physical iPhone a sample-data process looks like a different account to whoever opens the app next, so it
         // needs a second, deliberate flag (a designated test device only, never someone's everyday phone).
         guard args.contains("-AmbulandoFixtureOnDevice") else { return nil }
         #endif
-        var directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("AmbulandoFixture", isDirectory: true)
+        var cacheRoot = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        #if AMBULANDO_TEST
+        // Explicit namespace also isolates ad-hoc/unsandboxed launches from normal Debug fixtures.
+        cacheRoot = cacheRoot.appendingPathComponent("AmbulandoTest", isDirectory: true)
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "unconfigured-test", isDirectory: true)
+        #endif
+        var directory = cacheRoot.appendingPathComponent("AmbulandoFixture", isDirectory: true)
         #if os(macOS)
         if args.contains("-AmbulandoMacThreadRegression") {
             // Each in-process interaction run is disposable, including its credentials.
@@ -138,11 +167,16 @@ final class FixtureEnvironment {
         }
         #endif
         if args.contains("-AmbulandoFixtureReset") {
+            #if AMBULANDO_TEST
+            UserDefaults.standard.removePersistentDomain(forName: expectedBundle)
+            #endif
             try? FileManager.default.removeItem(at: directory)
+            #if !AMBULANDO_TEST
             if !args.contains("-AmbulandoMacThreadRegression") {
                 try? KeychainBackgroundCredentialStore(service: backgroundService).delete()
                 try? KeychainSessionKeyStore(service: sessionService).delete()
             }
+            #endif
         }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return FixtureEnvironment(directory: directory, startLocked: args.contains("-AmbulandoFixtureLocked"),

@@ -186,16 +186,16 @@ each time, so after each rebuild macOS asks once for the login password to let A
 
 ## Sample data
 
-Debug builds keep the iPhone's sample-data mode: launch with `-AmbulandoUITestFixture` (add `-AmbulandoFixtureReset`
-to start over). It uses a throwaway key, an in-process stand-in for Tower and its own storage, is labelled on every
-screen ("Sample data on this Mac"), and exists only in Debug builds, whose separate bundle identifier gives them their
-own container and Keychain items. Release builds ignore the flag.
+Use the dedicated **Ambulando Test** app for unattended automation. It starts in labelled sample mode without launch
+flags, uses fixture credential files instead of Keychain, and has a separate test bundle/container/settings domain.
+See [Test apps](test-apps.md) for both platforms, readiness timeouts, relaunch/reset and fail-closed checks.
 
 ```sh
-xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme AmbulandoMac -configuration Debug \
-  -destination 'platform=macOS' -derivedDataPath build/ddmac build
-open -n build/ddmac/Build/Products/Debug/Ambulando.app --args -AmbulandoUITestFixture
+./scripts/test-app.py mac --reset
 ```
+
+Normal Debug builds retain their explicit `-AmbulandoUITestFixture` demo hook and fixture-only Keychain services.
+Release builds refuse a requested fixture launch instead of silently starting a production session.
 
 ## Editing documents on the page
 
@@ -325,16 +325,14 @@ was open, but chose the existing-thread overlay for both states. Since there was
 The presenter now chooses the existing-thread panel when a thread exists, otherwise the New thread panel when composing.
 The background remains inactive only while a modal is shown.
 
-The reusable, **Debug-only** in-process AppKit harness runs against the actual Mac app window. It requires both launch
-flags below, uses a fresh fixture database and memory-only test credentials, and never connects to Tower or reads the
-normal account. It exits nonzero on an assertion failure or after a 180-second timeout. The same visible-composer
-assertion fails on the old presenter. Release builds contain no harness code.
+The reusable in-process AppKit harness runs against the actual Mac Test window. It uses a fresh fixture database
+and synthetic credential files, never normal account storage or Keychain. It exits nonzero on an assertion failure
+or after a 180-second timeout. Release builds contain no harness code.
 
 ```sh
-xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme AmbulandoMac -configuration Debug \
-  -destination 'platform=macOS' -derivedDataPath build/mac-thread-regression build
-build/mac-thread-regression/Build/Products/Debug/Ambulando.app/Contents/MacOS/Ambulando \
-  -AmbulandoUITestFixture -AmbulandoMacThreadRegression > build/mac-thread-regression.log 2>&1
+./scripts/test-app.py mac --reset
+'build/test-mac/Build/Products/Test/Ambulando Test.app/Contents/MacOS/Ambulando Test' \
+  -AmbulandoMacThreadRegression > tmp/docs/handoffs/mac-thread-regression.log 2>&1
 ```
 
 Checks cover Deck +, native text entry, mention selection, Cancel, draft-preserving reopen, local mouse clicks through

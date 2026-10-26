@@ -35,7 +35,7 @@ enum MacThreadRegression {
         }
         NSApp.accessibilitySetValue(true, forAttribute: .init(rawValue: "AXEnhancedUserInterface"))
         NSApp.accessibilitySetValue(true, forAttribute: .init(rawValue: "AXManualAccessibility"))
-        guard let window = NSApp.windows.first(where: { $0.title == "Ambulando" }) else {
+        guard let window = NSApp.windows.first(where: { $0.title == "Ambulando" || $0.title == "Ambulando Test" }) else {
             print("FAIL: no real app window"); fflush(stdout); exit(1)
         }
         window.makeKeyAndOrderFront(nil)

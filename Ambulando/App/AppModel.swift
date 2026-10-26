@@ -262,6 +262,11 @@ final class AppModel {
         guard phase == .starting else { return }
         do {
             let fixture = FixtureEnvironment.fromLaunchArguments()
+            guard !FixtureEnvironment.requested || fixture != nil else {
+                throw CocoaError(.fileReadNoSuchFile, userInfo: [
+                    NSLocalizedDescriptionKey: "Ambulando Test requires local fixtures; production access refused."
+                ])
+            }
             let directory = fixture?.directory ?? Self.dataDirectory
             let secrets = fixture?.secrets ?? KeychainVaultSecretStore(service: KeychainServices.named(ProductionStorage.vaultSecretService))
             let background = fixture?.backgroundCredentials
@@ -390,6 +395,12 @@ final class AppModel {
             watchNetwork()
             observeProtectedData()
             phase = .ready
+            #if AMBULANDO_TEST
+            if let fixture {
+                let readiness = "ready: sample transport; credential stores: \(type(of: fixture.secrets)), \(type(of: fixture.backgroundCredentials)), \(type(of: fixture.sessionKeys)); no Keychain"
+                try readiness.write(to: fixture.directory.appendingPathComponent("test-readiness.txt"), atomically: true, encoding: .utf8)
+            }
+            #endif
             if canRead { refresh(force: false); kickOutbox() }
             if isActive { startLive() }
             if let fixture { fixture.startLiveIfRequested(); await fixture.simulateBackgroundRefreshIfRequested(self) }

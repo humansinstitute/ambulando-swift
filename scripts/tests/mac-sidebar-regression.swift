@@ -1,5 +1,5 @@
-// Run against a separately launched Debug fixture, never an everyday app:
-// swift scripts/tests/mac-sidebar-regression.swift <fixture-pid>
+// First run scripts/test-app.py mac; this defaults to the dedicated Ambulando Test process.
+// swift scripts/tests/mac-sidebar-regression.swift [test-pid]
 import AppKit
 import ApplicationServices
 
@@ -19,8 +19,18 @@ func find(_ element: AXUIElement, _ identifier: String, depth: Int = 0) -> AXUIE
 func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     guard condition() else { fatalError(message) }
 }
-require(CommandLine.arguments.count == 2, "Supply an isolated Debug fixture pid")
-let app = AXUIElementCreateApplication(Int32(CommandLine.arguments[1])!)
+require(CommandLine.arguments.count <= 2, "Use [test-pid], or launch scripts/test-app.py mac first")
+let testBundle = "studio.otherstuff.ambulando.mac.test"
+let target: NSRunningApplication?
+if CommandLine.arguments.count == 2, let pid = Int32(CommandLine.arguments[1]) {
+    target = NSRunningApplication(processIdentifier: pid)
+} else {
+    target = NSRunningApplication.runningApplications(withBundleIdentifier: testBundle).first
+}
+guard let target, target.bundleIdentifier == testBundle else {
+    fatalError("Refusing non-Test app. Launch scripts/test-app.py mac first")
+}
+let app = AXUIElementCreateApplication(target.processIdentifier)
 func window() -> AXUIElement {
     guard let result = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first else { fatalError("App stopped responding or has no window") }
     return result

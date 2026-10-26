@@ -13,7 +13,7 @@ struct AmbulandoMacApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
-        Window("Ambulando", id: MacWindow.main) {
+        Window(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Ambulando", id: MacWindow.main) {
             RootView()
                 .appTextSize()
                 .environment(delegate.model)
@@ -57,7 +57,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     #if DEBUG
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard ProcessInfo.processInfo.arguments.contains("-AmbulandoMacThreadRegression"),
-              ProcessInfo.processInfo.arguments.contains("-AmbulandoUITestFixture") else { return }
+              FixtureEnvironment.requested else { return }
         Task { @MainActor in
             await model.start()
             guard model.fixture != nil else { return }

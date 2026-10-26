@@ -286,7 +286,11 @@ swift test --package-path AmbulandoCore --scratch-path build/core
 (cd AmbulandoCore && xcodebuild -skipPackagePluginValidation -scheme AmbulandoCore \
   -destination 'platform=iOS Simulator,name=<simulator>' -derivedDataPath ../build/DerivedDataCore test)
 
-# App for the simulator
+# Isolated unattended sample apps (see docs/test-apps.md)
+./scripts/test-app.py mac --reset
+./scripts/test-app.py iphone --reset
+
+# Normal app for the simulator (production authentication)
 xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Ambulando -configuration Debug \
   -destination 'platform=iOS Simulator,name=<simulator>' -derivedDataPath build/DerivedData build
 
