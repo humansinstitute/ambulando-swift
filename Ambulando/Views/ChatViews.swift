@@ -19,6 +19,11 @@ struct ChannelSnapshot: Sendable, Equatable {
 }
 
 struct ThreadSnapshot: Sendable, Equatable {
+    var order: [String] = []
+    var windowStart = 0
+    var hasEarlier = false
+    var hasNewer = false
+    var pageIdentity = 0
     var title = ""
     var messages: [MessageRecord] = []
     var pending: [OutboxItem] = []
@@ -33,6 +38,10 @@ struct ThreadSnapshot: Sendable, Equatable {
 struct MessageExtras: Sendable, Equatable {
     var reactions: [String: [ReactionRecord]] = [:]
     var writes: [String: [WriteItem]] = [:]
+
+    func forMessage(_ id: String) -> Self {
+        Self(reactions: reactions[id].map { [id: $0] } ?? [:], writes: writes[id].map { [id: $0] } ?? [:])
+    }
 }
 
 private func messageExtras(_ store: LocalStore, _ workspaceId: String, connectionId: String, ids: [String]) async throws -> MessageExtras {
@@ -50,7 +59,7 @@ private func people(_ store: LocalStore, _ target: ChatTarget) async throws -> P
 
 private func chatMatches(_ workspaceId: String) -> @Sendable (ChangeKey) -> Bool {
     { key in
-        key.workspaceId == workspaceId && [.messages, .outbox, .members, .agents, .threads, .channels, .reactions, .writes].contains(key.table)
+        (key.workspaceId == workspaceId || key.workspaceId == nil) && [.messages, .outbox, .members, .agents, .threads, .channels, .reactions, .writes].contains(key.table)
             || (key.table == .outbox && key.workspaceId == nil) || key.table == .profiles
     }
 }
@@ -303,6 +312,8 @@ struct ThreadView: View {
     @State private var snapshot = LiveQuery<ThreadSnapshot>(initial: ThreadSnapshot())
     @State private var atNewest = true
     @State private var visibleRows = VisibleRows()
+    @State private var windowAnchor: String?
+    @State private var pageIdentity = 0
     /// Where the reader left this thread last time it was open (nil: open at the newest message).
     @State private var resumeAt: String?
 
@@ -310,13 +321,21 @@ struct ThreadView: View {
         self.target = target
         self.workspace = workspace
         self.store = store
-        _resumeAt = State(initialValue: ReadingPositions.shared.anchor(for: target))
+        let saved = ReadingPositions.shared.anchor(for: target)
+        _resumeAt = State(initialValue: saved)
+        _atNewest = State(initialValue: saved == nil)
+        #if os(macOS)
+        _windowAnchor = State(initialValue: saved)
+        #endif
     }
 
     var body: some View {
         VStack(spacing: 0) {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            ThreadMessageStack {
+                #if os(macOS)
+                if snapshot.value.hasEarlier { pageButton(earlier: true) }
+                #endif
                 if let threadId = target.threadId { SyncErrorNote(key: WorkspaceSync.threadKey(workspace.id, threadId)) }
                 if snapshot.value.archived { SyncNote(text: "This thread is archived. Replying reopens it.") }
                 // The first message, a labelled rule, then the replies; a date label starts each day. No line between replies.
@@ -325,14 +344,18 @@ struct ThreadView: View {
                         if let day = snapshot.value.dayStarts[message.id] { DaySeparator(day: day) }
                         #if os(macOS)
                         // A faint line shows where one message ends and the next begins (not under the replies rule).
-                        if index > 1 { Rectangle().fill(Amb.border.opacity(0.45)).frame(height: 1).padding(.horizontal, 24) }
+                        if index > 0 && !(index == 1 && snapshot.value.messages[0].isThreadRoot) { Rectangle().fill(Amb.border.opacity(0.45)).frame(height: 1).padding(.horizontal, 24) }
                         #endif
-                        MessageCell(message: message, people: snapshot.value.people, workspace: workspace, extras: snapshot.value.extras)
+                        MessageCell(message: message, people: snapshot.value.people, workspace: workspace, extras: snapshot.value.extras.forMessage(message.id)).equatable()
+                        #if os(macOS)
+                        if message.isThreadRoot && snapshot.value.order.count > 1 { RepliesRule(count: snapshot.value.order.count - 1) }
+                        #else
                         if index == 0 && snapshot.value.messages.count > 1 { RepliesRule(count: snapshot.value.messages.count - 1) }
+                        #endif
                     }
                     .onScrollVisibilityChange(threshold: 0.3) { [visibleRows] in visibleRows.set(message.id, $0) }
                 }
-                ForEach(snapshot.value.pending) { item in
+                ForEach(snapshot.value.hasNewer ? [] : snapshot.value.pending) { item in
                     VStack(spacing: 0) {
                         if item.id == snapshot.value.pending.first?.id, !snapshot.value.messages.isEmpty, snapshot.value.lastDay != ChatDay.today {
                             DaySeparator(day: .today)
@@ -343,18 +366,43 @@ struct ThreadView: View {
                 if snapshot.loaded && snapshot.value.messages.isEmpty {
                     SyncNote(text: isUnlocked ? "Loading thread…" : "This thread is not saved on this \(Device.name) yet. Unlock to load it.")
                 }
+                #if os(macOS)
+                if snapshot.value.hasNewer { pageButton(earlier: false) }
+                #endif
             }
             .padding(.bottom, 8)
+            #if !os(macOS)
             NewestSentinel(visible: $atNewest)
+            #endif
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .modifier(FollowLatest(lastId: snapshot.value.pending.last?.id ?? snapshot.value.messages.last?.id,
-                               pendingCount: snapshot.value.pending.count, nearBottom: atNewest,
-                               resumeAt: resumeAt.flatMap { id in snapshot.value.messages.contains { $0.id == id } ? id : nil }))
+                               pendingCount: snapshot.value.pending.count, nearBottom: atNewest && !snapshot.value.hasNewer,
+                               resumeAt: (pageIdentity > 0 ? windowAnchor : resumeAt).flatMap { id in snapshot.value.messages.contains { $0.id == id } ? id : nil }))
+        #if os(macOS)
+        // Directly measured pages have accurate geometry; a newly inserted visibility sentinel can miss its
+        // first callback after page replacement, leaving a latest page incorrectly marked as older reading.
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height <= 80
+        } action: { _, newest in
+            atNewest = newest && !snapshot.value.hasNewer
+        }
+        .onScrollPhaseChange { _, phase in
+            if phase == .interacting, windowAnchor == nil, snapshot.loaded {
+                windowAnchor = snapshot.value.messages.first?.id
+            }
+            if phase == .idle, snapshot.loaded, atNewest, !snapshot.value.hasNewer { windowAnchor = nil }
+        }
+        .id(snapshot.value.pageIdentity)
+        #endif
         .scrollDismissesKeyboard(.interactively)
         .refreshable { if let thread = target.threadId { model.openThread(thread, channelId: target.channelId, in: workspace) } }
-            Composer(target: target, workspace: workspace, store: store, placeholder: "Reply")
+            Composer(target: target, workspace: workspace, store: store, placeholder: "Reply", onEnqueued: { _ in
+                #if os(macOS)
+                if windowAnchor != nil { windowAnchor = nil; pageIdentity += 1 }
+                #endif
+            })
         }
         .tabletReadingWidth()
         .background(Amb.background)
@@ -362,7 +410,7 @@ struct ThreadView: View {
         .navigationTitle(snapshot.value.title.isEmpty ? "Thread" : snapshot.value.title)
         .inlineTitle()
         .preference(key: ThreadTitleKey.self, value: snapshot.value.title)
-        .task { start() }
+        .task(id: windowAnchor) { start() }
         .onAppear {
             if let thread = target.threadId {
                 model.openThread(thread, channelId: target.channelId, in: workspace)
@@ -373,31 +421,73 @@ struct ThreadView: View {
             if let thread = target.threadId { model.refreshReactions(workspace, scope: thread, messageIds: ids) }
         }
         .onDisappear {
-            let first = atNewest ? nil : snapshot.value.messages.first { visibleRows.ids.contains($0.id) }?.id
+            let first = atNewest && !snapshot.value.hasNewer ? nil : snapshot.value.messages.first { visibleRows.ids.contains($0.id) }?.id
             ReadingPositions.shared.record(target, firstVisible: first)
         }
     }
+
+    #if os(macOS)
+    private func pageButton(earlier: Bool) -> some View {
+        Button(earlier ? "Earlier replies" : "Newer replies") {
+            let value = snapshot.value
+            let next = earlier ? max(0, value.windowStart - 50) : value.windowStart + 50
+            windowAnchor = !earlier && next >= max(0, value.order.count - 50) ? nil : value.order.indices.contains(next) ? value.order[next] : nil
+            atNewest = false
+            pageIdentity += 1
+        }
+        .accessibilityIdentifier(earlier ? "thread.earlier" : "thread.newer")
+        .font(.amb(.footnote).weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
+        .accessibilityHint("Messages \(snapshot.value.windowStart + 1) through \(snapshot.value.windowStart + snapshot.value.messages.count) of \(snapshot.value.order.count)")
+    }
+    #endif
 
     private var isUnlocked: Bool { if case .unlocked = model.identity { true } else { false } }
 
     private func start() {
         guard let threadId = target.threadId else { return }
-        let target = target, store = store
-        snapshot.start(store: store, matches: chatMatches(target.workspaceId)) {
+        let target = target, store = store, anchor = windowAnchor, page = pageIdentity
+        let selectedStart = anchor.flatMap { snapshot.value.order.firstIndex(of: $0) }
+        let fallbackStart = selectedStart ?? snapshot.value.windowStart
+        let fallback = selectedStart.map { Array(snapshot.value.order.dropFirst($0)) } ?? snapshot.value.messages.map(\.id)
+        snapshot.start(store: store, keepingValue: true, matches: { key in
+            chatMatches(target.workspaceId)(key) && key.affectsThread(workspaceId: target.workspaceId, channelId: target.channelId, threadId: threadId)
+                || (key.table == .access && (key.workspaceId == nil || key.workspaceId == target.workspaceId))
+        }) {
             async let thread = store.reader.thread(workspaceId: target.workspaceId, id: threadId)
             async let messages = store.reader.threadMessages(workspaceId: target.workspaceId, threadId: threadId, limit: 500)
             async let pending = store.reader.outbox(target: target)
             async let directory = people(store, target)
-            let rows = try await messages
+            let history = try await messages
+            #if os(macOS)
+            let window = ThreadMessageWindow(history, anchor: anchor, fallback: fallback, fallbackStart: fallbackStart)
+            #else
+            let window = ThreadMessageWindow(history, size: 500)
+            #endif
+            let rows = window.messages
             MessageDisplayCache.shared.prepare(rows)
             let record = try await thread
-            let title = record?.title.map(MentionCodec.plain) ?? rows.first.map { MentionCodec.plain($0.body) } ?? ""
+            let title = record?.title.map(MentionCodec.plain) ?? history.first.map { MentionCodec.plain($0.body) } ?? ""
             let extras = try await messageExtras(store, target.workspaceId, connectionId: target.connectionId, ids: rows.map(\.id))
             let days = ChatDay.breaks(rows, id: \.id, time: \.createdAt)
-            return ThreadSnapshot(title: String(title.prefix(60)), messages: rows, pending: try await pending,
+            return ThreadSnapshot(order: window.order, windowStart: window.start, hasEarlier: window.hasEarlier, hasNewer: window.hasNewer,
+                                  pageIdentity: page, title: String(title.prefix(60)), messages: rows, pending: try await pending,
                                   people: try await directory, archived: record?.archived ?? false, extras: extras,
                                   dayStarts: days.starts, lastDay: days.last)
         }
+    }
+}
+
+/// Mac lazy row estimates can keep invalidating native text/control layout while sync changes the content during
+/// resizing. The Mac renders a 50-message page over its 500-message history, with explicit older/newer navigation.
+/// Channel history remains lazy/paginated, and the iPhone keeps its existing lazy thread layout.
+private struct ThreadMessageStack<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        #if os(macOS)
+        VStack(alignment: .leading, spacing: 0, content: content)
+        #else
+        LazyVStack(alignment: .leading, spacing: 0, content: content)
+        #endif
     }
 }
 

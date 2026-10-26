@@ -35,7 +35,7 @@ enum MacThreadRegression {
         }
         NSApp.accessibilitySetValue(true, forAttribute: .init(rawValue: "AXEnhancedUserInterface"))
         NSApp.accessibilitySetValue(true, forAttribute: .init(rawValue: "AXManualAccessibility"))
-        guard let window = NSApp.windows.first(where: { $0.title == "Ambulando" }) else {
+        guard let window = NSApp.windows.first(where: { $0.title == "Ambulando" || $0.title == "Ambulando Test" }) else {
             print("FAIL: no real app window"); fflush(stdout); exit(1)
         }
         window.makeKeyAndOrderFront(nil)
@@ -61,7 +61,7 @@ enum MacThreadRegression {
             try press(window, "section.deck")
             await settle()
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacPostSaveOnly") {
-                try await repeatedSends(window, model: model, count: 5)
+                try await repeatedSends(window, model: model, count: ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMenuProbe") ? 1 : 5)
                 print("PASS: isolated repeated post-save interactions"); fflush(stdout); exit(0)
             }
             try press(window, "deck.inbox.new")
@@ -173,6 +173,21 @@ enum MacThreadRegression {
                 await settle()
             }
             try await postSave(window, model: model, expected: "Post-save regression \(cycle)")
+            let accepted = model.focusedThread!
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacThreadCapacity") {
+                try await readingPositionCheck(window, model: model, focus: accepted)
+            }
+            try press(window, "thread.focus.close")
+            await settle()
+            // Re-enter through the same route as a thread link, rendering the real panel and persisted draft.
+            model.focusThread(accepted)
+            for _ in 0..<20 {
+                if find(window, "message.actions") != nil { break }
+                await settle()
+            }
+            try require(try textView(window).string == "Unsent responsiveness probe", "thread draft must survive close/reopen")
+            try require(find(window, "message.actions") != nil, "reopened message controls must render")
+            print("REOPEN_PASS draft and native message controls")
             try press(window, "thread.focus.close")
             await settle()
             try click(window, "section.chat")
@@ -197,15 +212,27 @@ enum MacThreadRegression {
         }
         try require(containsText(window, expected) && find(window, "message") != nil, "saved message must actually render")
         try snapshot(window, model: model, name: "post-save-" + focus.threadId)
+        try await menuAction(window, title: "Copy message")
+        try require(NSPasteboard.general.string(forType: .string)?.contains(expected) == true, "native menu must copy the rendered message")
+        let initialMenu = nativeActionsButton(window.contentView!)
+        let initialComposer = try textView(window)
         let before = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: focus.threadId, limit: 500).count
         let marker = "Concurrent reply \(expected)"
-        let replyCount = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacPostSaveNoSync") ? 0 : 12
+        let options = ProcessInfo.processInfo.arguments
+        let capacity = options.contains("-AmbulandoMacThreadCapacity")
+        let replyCount = capacity ? 499 : (options.contains("-AmbulandoMacPostSaveNoSync") || options.contains("-AmbulandoMacPostSaveInboxOnly") ? 0 : 12)
+        let inboxCount = capacity || options.contains("-AmbulandoMacPostSaveNoSync") || options.contains("-AmbulandoMacPostSaveThreadOnly") ? 0 : 12
         let resizing = !ProcessInfo.processInfo.arguments.contains("-AmbulandoMacPostSaveStatic")
+        let capacityStart = ContinuousClock.now
         let updates = Task.detached {
-            for index in 0..<replyCount {
+            if capacity {
+                fixture.tower.postAsMember(channel: channel, body: marker, threadId: focus.threadId, count: replyCount)
+                return
+            }
+            for index in 0..<max(replyCount, inboxCount) {
                 let n = index + 1
-                fixture.tower.postAsMember(channel: channel, body: "\(marker) \(n)", threadId: focus.threadId)
-                fixture.tower.postAsMember(channel: channel, body: "Background inbox update \(n)")
+                if index < replyCount { fixture.tower.postAsMember(channel: channel, body: "\(marker) \(n)", threadId: focus.threadId) }
+                if index < inboxCount { fixture.tower.postAsMember(channel: channel, body: "Background inbox update \(n)") }
                 try? await Task.sleep(for: .milliseconds(180))
             }
         }
@@ -213,7 +240,7 @@ enum MacThreadRegression {
         var maxDelay = 0.0
         for step in 0..<12 {
             let start = ContinuousClock.now
-            print("POST_SAVE_STEP step=\(step) resizing=\(resizing) replies=\(replyCount)"); fflush(stdout)
+            print("POST_SAVE_STEP step=\(step) resizing=\(resizing) replies=\(replyCount) inbox=\(inboxCount)"); fflush(stdout)
             if resizing {
                 window.setContentSize(step.isMultiple(of: 2) ? NSSize(width: 900, height: 600) : NSSize(width: 1440, height: 900))
                 if step.isMultiple(of: 3) { try press(window, "thread.focus.expand") }
@@ -237,6 +264,15 @@ enum MacThreadRegression {
         let rows = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: focus.threadId, limit: 500)
         try require(rows.count == before + replyCount, "all concurrent replies must reach local store through sync")
         try require(replyCount == 0 || containsText(window, marker), "synced reply must render in actual thread")
+        if capacity { print("CAPACITY_INCREMENTAL rows=\(rows.count) wall=\(capacityStart.duration(to: .now))") }
+        if options.contains("-AmbulandoMacPostSaveInboxOnly") && !resizing {
+            try require(nativeActionsButton(window.contentView!) === initialMenu, "unrelated inbox traffic must preserve native menu button identity")
+            try require(try textView(window) === initialComposer, "unrelated inbox traffic must preserve composer identity")
+            print("IDENTITY_PASS unchanged native menu/composer after unrelated inbox traffic")
+        }
+        try await menuAction(window, title: "FD Ref")
+        try require(NSPasteboard.general.string(forType: .string)?.contains("mention:chat:") == true, "native menu FD reference must remain actionable")
+        try snapshot(window, model: model, name: "received-" + focus.threadId)
         try type(window, "Unsent responsiveness probe")
         await settle()
         try require(try textView(window).string == "Unsent responsiveness probe", "post-save reply composer must accept input")
@@ -249,6 +285,193 @@ enum MacThreadRegression {
             try require(seconds < 2, "sustained post-save response stalled")
         }
         print("POST_SAVE_PASS thread=\(focus.threadId) replies=\(replyCount) maxResponseSeconds=\(maxDelay)"); fflush(stdout)
+    }
+
+    /// Open the real native menu and select an actual item inside AppKit's tracking run loop.
+    static func menuAction(_ window: NSWindow, title: String) async throws {
+        let selected = MacRegressionMemory<Bool>()
+        let observer = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { notification in
+            let tracked = MacRegressionMemory<NSMenu>()
+            tracked.save(notification.object as? NSMenu)
+            MainActor.assumeIsolated {
+                let timer = Timer(timeInterval: 0.15, repeats: false) { _ in
+                    MainActor.assumeIsolated {
+                        guard let menu = tracked.load() else { return }
+                        if let index = menu.items.firstIndex(where: { $0.title == title }) {
+                            menu.performActionForItem(at: index)
+                            selected.save(true)
+                        }
+                        menu.cancelTracking()
+                    }
+                }
+                // AppKit tracks menus in this mode; a main-queue async block is not necessarily serviced there.
+                RunLoop.main.add(timer, forMode: .eventTracking)
+                RunLoop.main.add(timer, forMode: .common)
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        try require(find(window, "message.actions") != nil, "message menu must expose its accessibility label/identifier")
+        guard let button = nativeActionsButton(window.contentView!) else {
+            throw Failure(description: "Message actions must expose its native accessible NSButton")
+        }
+        // NSPushButton's AX press result can be false after a synchronous menu tracking action; use its actual
+        // AppKit click path and assert the menu item effect, rather than interpreting that return as menu failure.
+        button.performClick(nil)
+        await settle()
+        try require(selected.load() == true, "native menu must open and perform " + title)
+        print("MENU_PASS " + title)
+    }
+
+    /// At the full thread query bound, test actual native scrolling and the saved first-message anchor.
+    static func readingPositionCheck(_ window: NSWindow, model: AppModel, focus: ThreadFocus) async throws {
+        guard let store = model.store, let channel = focus.channelId, let connection = model.connection else {
+            throw Failure(description: "Missing capacity target")
+        }
+        let rows = try await store.reader.threadMessages(workspaceId: focus.workspaceId, threadId: focus.threadId, limit: 500)
+        try require(rows.count == 500, "capacity fixture must reach all 500 rows")
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacCapacityFollowOnly") {
+            try await capacityFollowCheck(window, model: model, focus: focus)
+            return
+        }
+        func scrollView() throws -> NSScrollView {
+            guard let view = threadScrollView(window), let document = view.documentView, document.bounds.height > view.contentView.bounds.height else {
+                throw Failure(description: "Missing scrollable native thread")
+            }
+            return view
+        }
+        func actionButtons(_ view: NSView) -> [NSButton] {
+            ((view as? NSButton).flatMap { $0.identifier?.rawValue == "message.actions" ? [$0] : nil } ?? [])
+                + view.subviews.flatMap(actionButtons)
+        }
+        func checkBound() throws {
+            let count = actionButtons(window.contentView!).count
+            try require(count > 0 && count <= 50, "native materialized message controls must stay bounded to 50, got \(count)")
+        }
+        try checkBound()
+        var seen = Set<String>()
+        // Native controls carry each message's Copy action. Inspect every actual page through the UI controls.
+        for page in 0..<10 {
+            try checkBound()
+            let end = 500 - page * 50
+            let renderedText = accessibilityText(window)
+            for row in rows[(end - 50)..<end] {
+                try require(renderedText.contains(MentionCodec.plain(row.body).components(separatedBy: "\n").first ?? row.body), "paged message must render")
+                seen.insert(row.id)
+            }
+            if page < 9 {
+                let started = ContinuousClock.now
+                try press(window, "thread.earlier")
+                await settle()
+                print("CAPACITY_PAGE older=\(page + 1) wall=\(started.duration(to: .now))")
+            }
+        }
+        try require(seen.count == 500, "all 500 loaded rows must be reachable")
+        let list = try scrollView(), document = list.documentView!
+        let top = document.isFlipped ? document.bounds.minY : document.bounds.maxY - list.contentView.bounds.height
+        list.contentView.scroll(to: NSPoint(x: 0, y: top)); list.reflectScrolledClipView(list.contentView)
+        await settle()
+        try snapshot(window, model: model, name: "capacity-oldest")
+        let target = ChatTarget(connectionId: connection.id, workspaceId: focus.workspaceId, channelId: channel, threadId: focus.threadId)
+        try press(window, "thread.focus.close")
+        await settle()
+        try require(ReadingPositions.shared.anchor(for: target) == rows.first?.id, "closing while reading older replies must retain the first visible message")
+        let coldOpen = ContinuousClock.now
+        model.focusThread(focus)
+        for _ in 0..<20 {
+            if find(window, "message.actions") != nil { break }
+            await settle()
+        }
+        await settle()
+        let renderedOpen = coldOpen.duration(to: .now)
+        let reopened = try scrollView(), reopenedDocument = reopened.documentView!
+        let reopenedTop = reopenedDocument.isFlipped ? reopenedDocument.bounds.minY : reopenedDocument.bounds.maxY - reopened.contentView.bounds.height
+        try require(abs(reopened.contentView.bounds.minY - reopenedTop) < 500, "reopen must restore older reading position instead of the newest reply")
+        try checkBound()
+        try require(containsText(window, MentionCodec.plain(rows[0].body).components(separatedBy: "\n").first!), "saved window must include root")
+        // A new reply while reading the oldest page must not replace that page or its scroll position.
+        guard let fixture = model.fixture, let workspace = model.selectedWorkspace else { throw Failure(description: "Missing fixture") }
+        fixture.tower.postAsMember(channel: channel, body: "Capacity incremental newest", threadId: focus.threadId)
+        for _ in 0..<5 { model.openThread(focus.threadId, channelId: channel, in: workspace); await settle() }
+        try checkBound()
+        try require(containsText(window, MentionCodec.plain(rows[1].body).components(separatedBy: "\n").first!), "live replies must preserve surviving older reading rows")
+        try require(!containsText(window, "Capacity incremental newest"), "new reply must not interrupt older reading")
+        try snapshot(window, model: model, name: "capacity-older-live")
+        var pages = 0
+        while find(window, "thread.newer") != nil && pages < 11 {
+            let started = ContinuousClock.now
+            try press(window, "thread.newer"); await settle(); try checkBound()
+            print("CAPACITY_PAGE newer=\(pages + 1) wall=\(started.duration(to: .now))")
+            pages += 1
+        }
+        try require(pages > 0 && pages <= 10, "newer navigation must reach latest")
+        try require(containsText(window, "Capacity incremental newest"), "new reply must be reachable on newest page")
+        try require(try textView(window).string == "Unsent responsiveness probe", "paging must retain draft")
+        try snapshot(window, model: model, name: "capacity-latest")
+        try await capacityFollowCheck(window, model: model, focus: focus)
+        try press(window, "thread.focus.close"); await settle()
+        try require(ReadingPositions.shared.anchor(for: target) == nil, "latest page bottom must reopen at newest")
+        let latestOpen = ContinuousClock.now
+        model.focusThread(focus)
+        for _ in 0..<20 {
+            if containsText(window, "Capacity follow latest") { break }
+            await settle()
+        }
+        try checkBound()
+        try require(containsText(window, "Capacity follow latest"), "cold latest open must render newest loaded page")
+        print("CAPACITY_COLD_LATEST wall=\(latestOpen.duration(to: .now))")
+        print("CAPACITY_PASS rows=500 bounded50 all pages, live older reading, draft and reopen coldOpenToRendered=\(renderedOpen)")
+
+    }
+
+    static func capacityFollowCheck(_ window: NSWindow, model: AppModel, focus: ThreadFocus) async throws {
+        guard let fixture = model.fixture, let workspace = model.selectedWorkspace, let channel = focus.channelId else { throw Failure(description: "Missing fixture") }
+        func geometry() throws -> (Double, Double) {
+            guard let list = threadScrollView(window), let doc = list.documentView else { throw Failure(description: "Missing thread scroll view") }
+            let bottom = doc.isFlipped ? doc.bounds.maxY - list.contentView.bounds.height : doc.bounds.minY
+            print("CAPACITY_GEOMETRY flipped=\(doc.isFlipped) document=\(doc.bounds) clip=\(list.contentView.bounds) bottom=\(bottom)")
+            return (list.contentView.bounds.minY, bottom)
+        }
+        let before = try geometry()
+        try require(abs(before.0 - before.1) < 100, "latest navigation must start at bottom before new reply")
+        fixture.tower.postAsMember(channel: channel, body: "Capacity follow latest", threadId: focus.threadId)
+        for _ in 0..<5 { model.openThread(focus.threadId, channelId: channel, in: workspace); await settle() }
+        try require(containsText(window, "Capacity follow latest"), "near-bottom reader must receive live newest row")
+        let after = try geometry()
+        try require(abs(after.0 - after.1) < 100, "near-bottom must follow live replies")
+        try snapshot(window, model: model, name: "capacity-follow")
+        guard let connection = model.connection else { throw Failure(description: "Missing connection") }
+        let target = ChatTarget(connectionId: connection.id, workspaceId: focus.workspaceId, channelId: channel, threadId: focus.threadId)
+        try press(window, "thread.focus.close"); await settle()
+        try require(ReadingPositions.shared.anchor(for: target) == nil, "latest page bottom must reopen at newest")
+        model.focusThread(focus)
+        for _ in 0..<20 {
+            if containsText(window, "Capacity follow latest") { break }
+            await settle()
+        }
+        try require(containsText(window, "Capacity follow latest"), "reopen at newest must retain latest page")
+    }
+
+    /// Deck's underlying inbox can be taller than the focused thread. Identify the actual message scroll document
+    /// by its native message controls, never by the height of unrelated background content.
+    static func threadScrollView(_ window: NSWindow) -> NSScrollView? {
+        nativeScrollViews(window.contentView!).filter { view in
+            view.documentView.map { nativeActionsButton($0) != nil } ?? false
+        }.max { ($0.documentView?.bounds.height ?? 0) < ($1.documentView?.bounds.height ?? 0) }
+    }
+
+    static func nativeScrollViews(_ view: NSView) -> [NSScrollView] {
+        ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap { nativeScrollViews($0) }
+    }
+
+    static func nativeActionsButton(_ view: NSView) -> NSButton? {
+        if let button = view as? NSButton, button.identifier?.rawValue == "message.actions" { return button }
+        return view.subviews.lazy.compactMap { nativeActionsButton($0) }.first
+    }
+
+    static func accessibilityText(_ object: Any, depth: Int = 0) -> String {
+        guard depth < 60 else { return "" }
+        let own = ["AXValue", "AXDescription"].compactMap { value(object, $0) as? String }
+        return (own + children(object).map { accessibilityText($0, depth: depth + 1) }).joined(separator: "\n")
     }
 
     static func containsText(_ object: Any, _ text: String, depth: Int = 0) -> Bool {

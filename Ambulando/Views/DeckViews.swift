@@ -1025,6 +1025,7 @@ struct DeckThreadComposer: View {
     let onCreated: (ThreadFocus) -> Void
     @State private var channelId: String?
     @State private var requestId: String?
+    @State private var openedRequestId: String?
     @State private var sent = LiveQuery<MessageRecord?>(initial: nil)
     @State private var pending = LiveQuery<OutboxItem?>(initial: nil)
 
@@ -1131,9 +1132,12 @@ struct DeckThreadComposer: View {
             }
         }
         .onChange(of: sent.value) { _, message in
-            guard let message, let threadId = message.threadId else { return }
+            guard let message, let threadId = message.threadId, openedRequestId != requestId else { return }
+            openedRequestId = requestId
             onCreated(ThreadFocus(workspaceId: workspace.id, channelId: message.channelId, threadId: threadId))
+            #if !os(macOS)
             close()
+            #endif
         }
     }
 }

@@ -361,6 +361,21 @@ expand/restore, and/or `-AmbulandoMacPostSaveNoSync` to omit the added member re
 thread/channel refresh and query paths still run in the latter control. `POST_SAVE_STEP` records the active options
 and the last attempted sizing/sync step. All modes still require both fixture and Mac regression launch flags above.
 
+Use `-AmbulandoMacPostSaveThreadOnly` to add only current-thread replies, or
+`-AmbulandoMacPostSaveInboxOnly` to add only other inbox conversations. Combine either with
+`-AmbulandoMacPostSaveOnly -AmbulandoMacPostSaveStatic` for a single-factor control. The inbox-only static control
+asserts that the native message action button and composer retain object identity. Menu checks open the real AppKit
+menu and select Copy message and FD Ref; repeated sends also close/reopen the rendered thread and check the saved
+draft. Run the original combined sequence repeatedly, because a single pass can miss failures around cycles three
+to five. Run responsiveness checks without first-boot simulator/setup workloads competing for the host.
+
+Thread queries use exact local conversation change scopes for message/thread/outbox updates; unknown scopes, global
+resets and access removals still reload safely. Message moves invalidate both old and new conversations. Public
+profiles, members, agents, pending edits/deletes and reactions remain query inputs. Unchanged message cells compare
+only their own reactions/writes, retaining their control state when another row changes. On Mac the visible message
+action control is a stable native button; its menu is built when opened, avoiding SwiftUI popup-adaptor updates during
+background layout. The iPhone keeps its existing menu. The contextual actions remain available on both platforms.
+
 Keep a post-save beachball separate from the build 11 presentation input trap. A short stackshot in AttributeGraph,
 RootGeometry or `sizeThatFits` identifies sampled layout work, but does not by itself establish a deadlock, a callback
 loop, or a specific expensive view. A passing fixture run cannot establish that a historical real-account hang is
@@ -368,3 +383,15 @@ fixed. Preserve failed-run logs as well as passes; report an earlier assertion f
 post-save checks from running. For a reproducible stall, retain the last action/heartbeat, capture a process sample
 while stalled, and reduce the fixture to the smallest triggering content/update sequence before changing production
 layout. Operational reports, logs and captures belong in ignored `tmp/docs/handoffs/`, not tracked product docs.
+
+
+Mac thread rendering uses direct measurement of a bounded 50-message page rather than lazy layout estimates.
+Earlier replies and Newer replies provide navigation across all 500 messages loaded by the thread query. The root
+keeps its replies rule only on the page containing the root; a reply is never relabelled as the root. Closing while
+reading retains the first visible message for this app session, scoped to the connection/workspace/thread. New
+replies preserve an older page; sending returns to the latest page. iPhone and channel history remain lazy.
+
+Add `-AmbulandoMacThreadCapacity -AmbulandoMacPostSaveOnly -AmbulandoMacMenuProbe -AmbulandoMacPostSaveStatic`
+to the Debug fixture harness to load 500 rows, assert at most 50 native message controls, navigate all pages in both
+directions, verify reading-position reopen and older reading during a new reply, and retain the unsent draft.
+The two-second heartbeat and independent watchdog remain active throughout loading and page changes.
