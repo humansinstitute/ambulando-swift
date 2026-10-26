@@ -195,7 +195,7 @@ final class DiagnosticsTests: XCTestCase {
     func testEndpointTemplatesDropIdentifiersAndQueryValues() {
         let url = URL(string: "https://tower.example/api/v4/flightdeck-pg/workspaces/2e5caefd-008d-4af2-b819-972ea88fc67c/resource-view-states?limit=200&cursor=eyJzZWNyZXQiOiJ4In0&since=2026-10-26T08:00:00Z")!
         let text = DiagnosticsRedactor.endpoint(method: "get", url: url)
-        XCTAssertEqual(text, "GET tower.example/api/v4/flightdeck-pg/workspaces/:id/resource-view-states?cursor,limit=200,since")
+        XCTAssertEqual(text, "GET tower.example/api/v4/flightdeck-pg/workspaces/:id/resource-view-states??,cursor,limit=200")
         let npubPath = URL(string: "https://tower.example/api/v4/people/\(TestKeys.npub)/files/Secret%20Plan.pdf")!
         let second = DiagnosticsRedactor.endpoint(method: "GET", url: npubPath)
         XCTAssertFalse(second.contains("npub1"))
@@ -209,10 +209,34 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertEqual(DiagnosticsRedactor.errorCode(leaky), "error")
     }
 
-    func testCorrelationAcceptsOnlyTokenCharacters() {
+    func testLowercaseSlugsEncodedSegmentsAndArbitraryQueryNamesAreNotKept() {
+        let slugs = ["https://tower.example/api/v4/flightdeck-pg/workspaces/acmecorp/scopes/alice/channels/secretproject/messages",
+                     "https://tower.example/api/v4/flightdeck-pg/workspaces/abcdefabcdef/files/quarterlyreport/content",
+                     "https://tower.example/api/v4/flightdeck-pg/workspaces/%61lice/docs/files%2Fsecret/comments",
+                     "https://tower.example/api/v4/flightdeck-pg/workspaces/ALICE/tasks/résumé/comments",
+                     "https://tower.example/api/v4/flightdeck-pg/workspaces/a.b/threads/x_y/messages?limit=200&password=hunter2&user_alice=1&cursor=zzz&limit2=5"]
+        let out = slugs.map { DiagnosticsRedactor.endpoint(method: "GET", url: URL(string: $0)) }
+        XCTAssertEqual(out[0], "GET tower.example/api/v4/flightdeck-pg/workspaces/:id/scopes/:id/channels/:id/messages")
+        XCTAssertEqual(out[1], "GET tower.example/api/v4/flightdeck-pg/workspaces/:id/files/:id/content")
+        XCTAssertEqual(out[2], "GET tower.example/api/v4/flightdeck-pg/workspaces/:id/docs/:id/comments")
+        XCTAssertEqual(out[3], "GET tower.example/api/v4/flightdeck-pg/workspaces/:id/tasks/:id/comments")
+        XCTAssertEqual(out[4], "GET tower.example/api/v4/flightdeck-pg/workspaces/:id/threads/:id/messages??,?,?,cursor,limit=200")
+        for line in out { for leak in ["alice", "acmecorp", "secretproject", "quarterlyreport", "hunter2", "password", "user_alice", "zzz", "secret", "ALICE"] { XCTAssertFalse(line.contains(leak), "\(line) leaked \(leak)") } }
+        XCTAssertEqual(DiagnosticsRedactor.endpoint(method: "get\r\nX: y", url: URL(string: "https://t.example/api/v4/me")), "OTHER t.example/api/v4/me")
+        XCTAssertEqual(DiagnosticsRedactor.endpoint(method: "GET", url: URL(string: "https://t.example/api/v4/x?limit=99999999999")), "GET t.example/api/v4/:id?limit")
+        XCTAssertEqual(DiagnosticsRedactor.family("inbox"), "inbox")
+        XCTAssertEqual(DiagnosticsRedactor.family("alice@example.com"), "job")
+    }
+
+    func testCorrelationOnlyInRecognisedFormats() {
         func response(_ headers: [String: String]) -> HTTPURLResponse { HTTPURLResponse(url: URL(string: "https://t.example")!, statusCode: 200, httpVersion: nil, headerFields: headers)! }
-        XCTAssertEqual(DiagnosticsRedactor.correlation(response(["cf-ray": "8a1b2c3d4e5f-AMS"])), "cf-ray=8a1b2c3d4e5f-AMS")
-        XCTAssertNil(DiagnosticsRedactor.correlation(response(["x-request-id": "hello world; secret=1"])))
+        XCTAssertEqual(DiagnosticsRedactor.correlation(response(["cf-ray": "8a1b2c3d4e5f6071-AMS"])), "cf-ray=8a1b2c3d4e5f6071-AMS")
+        XCTAssertEqual(DiagnosticsRedactor.correlation(response(["x-request-id": "2E5CAEFD-008D-4AF2-B819-972EA88FC67C"])), "x-request-id=2e5caefd-008d-4af2-b819-972ea88fc67c")
+        for bad in ["hello-world", "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg", "secret-token-123", "alice", "sk_live_abcdef", "8a1b2c3d4e5f-AMS", "8a1b2c3d4e5f6071-AMSX"] {
+            XCTAssertNil(DiagnosticsRedactor.correlation(response(["x-request-id": bad])), bad)
+            XCTAssertNil(DiagnosticsRedactor.correlation(response(["cf-ray": bad])), bad)
+            XCTAssertNil(DiagnosticsRedactor.correlation(response(["x-correlation-id": bad])), bad)
+        }
     }
 
     func testObservedTransportLogsRedactedEntriesAndExportHasNoSecrets() async throws {

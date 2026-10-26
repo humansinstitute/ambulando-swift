@@ -6,7 +6,7 @@ public struct DiagnosticEntry: Codable, Sendable, Equatable {
     public var at: Date
     /// "request", "retry", "recovered", "gave-up" or "trigger".
     public var kind: String
-    /// "GET host /path/with/:id?query,keys" (no identifiers, no query values except a numeric `limit`).
+    /// "GET host/path/with/:id?known,names": static route words only, no query values except a small numeric limit.
     public var endpoint: String
     public var durationMs: Int?
     /// "ok", "http", "failed", "cancelled" for requests; the retry outcome otherwise.
@@ -26,32 +26,51 @@ public struct DiagnosticEntry: Codable, Sendable, Equatable {
 }
 
 public enum DiagnosticsRedactor {
-    private static let idShapes = try! NSRegularExpression(pattern: "^v[0-9]+$")
-    private static let word = try! NSRegularExpression(pattern: "^[a-z][a-z-]{0,39}$")
-    private static let safeValue = try! NSRegularExpression(pattern: "^[A-Za-z0-9._-]{1,64}$")
+    /// Static route words of the Tower API this client calls. Any other path segment (ids, slugs, user names, file names,
+    /// tokens, encoded text) is replaced, so a lowercase word is never trusted just because it looks like one.
+    static let routeWords: Set<String> = [
+        "api", "v4", "flightdeck-pg", "workspaces", "scopes", "channels", "messages", "threads", "tasks", "docs", "files", "file-folders",
+        "members", "me", "scope-order", "resource-view-states", "reactions", "comments", "events", "event-stream", "stream", "edit-leases",
+        "acquire", "renew", "release", "complete", "content", "body", "object", "storage", "prepare", "sync", "record-sync", "snapshot",
+        "canvases", "components", "context", "references", "relationships", "naplets", "versions", "branches", "artifacts",
+        "agent-activities", "autopilot-agents", "workspace-agents", "personal-wapps", "live", "mark-viewed", "priority", "state",
+        "reorder", ".well-known", "nstack.json",
+    ]
+    /// Query parameter names this client sends. Values are never kept, except a small integer for the two limits.
+    static let queryNames: Set<String> = ["channel_id", "cursor", "family", "history_limit", "include_archived", "limit", "row_version", "target_id", "target_type", "thread_id"]
+    static let limitNames: Set<String> = ["limit", "history_limit"]
+
+    private static let hostShape = try! NSRegularExpression(pattern: "^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
+    private static let familyShape = try! NSRegularExpression(pattern: "^[a-z][a-z-]{0,23}$")
+    private static let uuidShape = try! NSRegularExpression(pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+    private static let cfRayShape = try! NSRegularExpression(pattern: "^[0-9a-f]{16}-[A-Z]{3}$")
 
     private static func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
         regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
     }
 
-    /// Method, host and a path template: lowercase route words and `v4` are kept, every other segment (UUIDs, npubs,
-    /// hex, file names, numbers) becomes `:id`. Query: parameter names only, plus a numeric `limit`.
+    /// Method, host and a path template: only the static route words above are kept, every other segment (and anything
+    /// percent-encoded) becomes `:id`. Query: known parameter names only (others become `?`), plus a small numeric limit.
+    /// The host is the Tower address the user configured; it is the one deployment detail the export includes.
     public static func endpoint(method: String, url: URL?) -> String {
         guard let url, let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return "\(method.uppercased()) unknown" }
-        let path = components.path.split(separator: "/").map { segment -> String in
-            let text = String(segment)
-            return matches(word, text) || matches(idShapes, text) ? text : (text == ".well-known" || text == "nstack.json" ? text : ":id")
+        let verb = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"].contains(method.uppercased()) ? method.uppercased() : "OTHER"
+        let path = components.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: true).map { segment -> String in
+            routeWords.contains(String(segment)) ? String(segment) : ":id"
         }.joined(separator: "/")
-        let names = (components.queryItems ?? []).map { item -> String in
-            guard matches(word, item.name.replacingOccurrences(of: "_", with: "-")) else { return "?" }
-            if item.name == "limit", let value = item.value, Int(value) != nil { return "limit=\(value)" }
+        let names = (components.percentEncodedQueryItems ?? []).map { item -> String in
+            guard queryNames.contains(item.name) else { return "?" }
+            if limitNames.contains(item.name), let value = item.value, let n = Int(value), (0...1000).contains(n) { return "\(item.name)=\(n)" }
             return item.name
         }.sorted()
-        let host = components.host.map { matches(safeValue, $0) ? $0 : "host" } ?? "host"
-        return "\(method.uppercased()) \(host)/\(path)" + (names.isEmpty ? "" : "?" + names.joined(separator: ","))
+        let host = components.host.map { matches(hostShape, $0.lowercased()) ? $0.lowercased() : "host" } ?? "host"
+        return "\(verb) \(host)/\(path)" + (names.isEmpty ? "" : "?" + names.joined(separator: ","))
     }
 
-    /// "NSURLErrorDomain -1001", an HTTP-derived "http 503", or the error's type name; never `localizedDescription`
+    /// A job family such as "inbox": accepted only in the plain lowercase shape the code's own job keys use.
+    public static func family(_ text: String) -> String { matches(familyShape, text) ? text : "job" }
+
+    /// "NSURLErrorDomain -1001", an HTTP-derived "http 503", or a fixed word; never `localizedDescription`
     /// (a Foundation description can embed the full URL, including query values).
     public static func errorCode(_ error: Error) -> String {
         if let url = error as? URLError { return "NSURLErrorDomain \(url.code.rawValue)" }
@@ -62,11 +81,13 @@ public enum DiagnosticsRedactor {
         return "error"
     }
 
-    /// First usable correlation header, restricted to a short token alphabet so a header cannot smuggle content.
+    /// A correlation value only in a recognised format: a UUID for `x-request-id` / `x-correlation-id`, or Cloudflare's
+    /// `cf-ray` (16 hex, dash, 3-letter datacentre). Anything else is omitted, never filtered into the log.
     public static func correlation(_ response: HTTPURLResponse) -> String? {
-        for name in ["x-request-id", "x-correlation-id", "cf-ray"] {
-            if let value = response.value(forHTTPHeaderField: name), matches(safeValue, value) { return "\(name)=\(value)" }
+        for name in ["x-request-id", "x-correlation-id"] {
+            if let value = response.value(forHTTPHeaderField: name), matches(uuidShape, value) { return "\(name)=\(value.lowercased())" }
         }
+        if let value = response.value(forHTTPHeaderField: "cf-ray"), matches(cfRayShape, value) { return "cf-ray=\(value)" }
         return nil
     }
 }
@@ -121,7 +142,7 @@ public actor DiagnosticsLog {
             "Ambulando diagnostics",
             "App: \(app) (\(build))   Platform: \(platform) \(system)",
             "Exported: \(Self.stamp(now)) UTC",
-            "Entries: \(items.count) (newest \(capacity) kept; no keys, tokens, message text or account identifiers are recorded)",
+            "Entries: \(items.count) (newest \(capacity) kept; no keys, tokens, message text, record ids or user names; the Tower host name is included)",
             "",
         ]
         for entry in items {

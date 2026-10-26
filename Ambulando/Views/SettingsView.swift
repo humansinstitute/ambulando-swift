@@ -59,7 +59,7 @@ struct SettingsView: View {
                     ShareLink(item: DiagnosticsExport(model: model), preview: SharePreview("Ambulando diagnostics"))
                         .accessibilityIdentifier("settings.diagnostics.export")
                 } header: { Text("Diagnostics") } footer: {
-                    Text("Export diagnostics shares a short text log of recent connection attempts: times (UTC), the kind of request, how long it took and the error code. It contains no keys, messages or names, and nothing is sent unless you share it.")
+                    Text("Export diagnostics shares a short text log of recent connection attempts: times (UTC), the kind of request, how long it took and the error code. It contains your Tower's address but no keys, messages, names or record ids, and nothing is sent unless you share it.")
                 }
                 Section {
                     Toggle("Public Nostr profiles", isOn: Binding(get: { model.publicProfilesEnabled },

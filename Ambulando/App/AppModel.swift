@@ -292,7 +292,7 @@ final class AppModel {
                 case .retriesExhausted: ("gave-up", "automatic retries used up; waiting for foreground, network return or Retry")
                 case .recovered(let failures): ("recovered", "after \(failures) failed \(failures == 1 ? "attempt" : "attempts")")
                 }
-                Task { await diagnostics.record(DiagnosticEntry(kind: "retry", endpoint: event.family, outcome: outcome, note: note)) }
+                Task { await diagnostics.record(DiagnosticEntry(kind: "retry", endpoint: DiagnosticsRedactor.family(event.family), outcome: outcome, note: note)) }
             }
             if fixture == nil {
                 // Recreated at every launch with the same identifier so iOS can deliver results of earlier transfers.
