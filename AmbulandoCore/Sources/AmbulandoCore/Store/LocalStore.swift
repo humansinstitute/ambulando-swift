@@ -11,11 +11,32 @@ public enum StoreTable: String, Sendable, Hashable, CaseIterable {
     case access
 }
 
-/// A change notification key. `workspaceId == nil` means "not workspace-scoped".
+/// Optional exact scope for local chat change notifications.
+public enum ChatChangeScope: Sendable, Hashable {
+    /// Exact conversation; nil thread means a channel message outside a thread.
+    case conversation(channelId: String, threadId: String?)
+    /// Channel history cursor/completeness; no thread data changed.
+    case channelHistory(String)
+}
+
+/// A change notification key. Nil scope means an unknown/broad change and must remain a safe fallback.
 public struct ChangeKey: Sendable, Hashable {
     public let table: StoreTable
     public let workspaceId: String?
-    public init(_ table: StoreTable, _ workspaceId: String? = nil) { self.table = table; self.workspaceId = workspaceId }
+    public let chatScope: ChatChangeScope?
+    public init(_ table: StoreTable, _ workspaceId: String? = nil, chatScope: ChatChangeScope? = nil) {
+        self.table = table; self.workspaceId = workspaceId; self.chatScope = chatScope
+    }
+
+    /// Broad/unknown events deliberately reload. Exact conversation events exclude unrelated inbox traffic.
+    public func affectsThread(workspaceId: String, channelId: String, threadId: String) -> Bool {
+        guard self.workspaceId == nil || self.workspaceId == workspaceId else { return false }
+        guard let chatScope else { return true }
+        switch chatScope {
+        case .conversation(let channel, let thread): return channel == channelId && thread == threadId
+        case .channelHistory: return false
+        }
+    }
 }
 
 public struct ConnectionRecord: Sendable, Equatable, Identifiable, Codable {
@@ -36,7 +57,7 @@ public struct ConnectionRecord: Sendable, Equatable, Identifiable, Codable {
 }
 
 enum Schema {
-    static let version = 5
+    static let version = 6
 
     static func migrate(_ db: SQLiteConnection) throws {
         let current = try db.userVersion
@@ -110,6 +131,7 @@ enum Schema {
             if current < 3 { try migrateV3(db) }
             if current < 4 { try migrateV4(db) }
             if current < 5 { try migrateV5(db) }
+            if current < 6 { try migrateV6(db) }
             try db.execute("PRAGMA user_version = \(version)")
         }
     }
@@ -345,14 +367,26 @@ public actor StoreWriter {
         \(newerGuard("messages"))
         """)
         let retire = try db.prepare("DELETE FROM outbox WHERE id = ? AND workspace_id = ? AND signer_npub = ?")
+        let previous = try db.prepare("SELECT channel_id, thread_id FROM messages WHERE workspace_id = ? AND id = ?")
         for r in records {
+            try previous.bind([.text(r.workspaceId), .text(r.id)])
+            var oldScope: ChatChangeScope?
+            if try previous.step(), let channel = previous.text(0) {
+                oldScope = .conversation(channelId: channel, threadId: previous.text(1))
+                _ = try previous.step()
+            }
             try s.run([.text(r.workspaceId), .text(r.id), .text(r.channelId), r.threadId.sql, r.threadSourceId.sql, .text(r.body), r.senderNpub.sql,
                        r.senderLabel.sql, r.clientRequestId.sql, .text(r.createdAt), .text(r.updatedAt), .int(Int64(r.rowVersion)),
                        .int(r.deleted ? 1 : 0), .blob(r.raw)])
-            if db.changes > 0 { changed += 1; keys.insert(ChangeKey(.messages, r.workspaceId)) }
+            if db.changes > 0 {
+                changed += 1
+                keys.insert(ChangeKey(.messages, r.workspaceId, chatScope: .conversation(channelId: r.channelId, threadId: r.threadId)))
+                if let oldScope { keys.insert(ChangeKey(.messages, r.workspaceId, chatScope: oldScope)) }
+            }
             if let request = r.clientRequestId, let sender = r.senderNpub {
+                let pendingKey = try outboxChange(request.lowercased())
                 try retire.run([.text(request.lowercased()), .text(r.workspaceId), .text(sender)])
-                if db.changes > 0 { keys.insert(ChangeKey(.outbox, r.workspaceId)) }
+                if db.changes > 0 { keys.insert(pendingKey ?? ChangeKey(.outbox, r.workspaceId)) }
             }
         }
         return changed

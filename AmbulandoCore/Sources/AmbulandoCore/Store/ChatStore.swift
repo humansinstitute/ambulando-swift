@@ -22,7 +22,11 @@ public struct Draft: Sendable, Equatable {
     /// When the stored draft was last written (millisecond precision), so a composer can tell a draft written after
     /// its own send (an Edit restore) from one read before it.
     public let updatedAt: Date?
-    public init(text: String, mentions: [Mention], updatedAt: Date? = nil) { self.text = text; self.mentions = mentions; self.updatedAt = updatedAt }
+    /// Staged attachments (pasted text files, photos) kept with the text until the message is sent.
+    public let attachments: [PendingAttachment]
+    public init(text: String, mentions: [Mention], updatedAt: Date? = nil, attachments: [PendingAttachment] = []) {
+        self.text = text; self.mentions = mentions; self.updatedAt = updatedAt; self.attachments = attachments
+    }
 }
 
 extension StoreWriter {
@@ -101,15 +105,17 @@ enum JSONText {
 /// An image staged on the device for a chat message. Its bytes are already privacy-stripped (see `ImagePrivacy`).
 public struct PendingAttachment: Sendable, Equatable, Codable, Hashable, Identifiable {
     public let id: String
-    public let filename: String
-    public let mimeType: String
-    public let sizeBytes: Int
-    public let sha256: String
+    public var filename: String
+    public var mimeType: String
+    public var sizeBytes: Int
+    public var sha256: String
     /// File name inside the staging directory.
-    public let staged: String
+    public var staged: String
     public var objectId: String?
     public var uploadURL: String?
     public var complete: Bool
+    /// Set for a pasted or edited text file (contract v1): it is sent as a `file` attachment with these counts.
+    public var text: TextAttachmentInfo?
 
     public init(id: String = UUID().uuidString.lowercased(), filename: String, mimeType: String, sizeBytes: Int, sha256: String, staged: String,
                 objectId: String? = nil, uploadURL: String? = nil, complete: Bool = false) {
@@ -118,7 +124,12 @@ public struct PendingAttachment: Sendable, Equatable, Codable, Hashable, Identif
     }
 
     public var wire: MessageAttachment? {
-        objectId.map { MessageAttachment(kind: "image", storageObjectId: $0, filename: filename, mimeType: mimeType, sizeBytes: sizeBytes) }
+        guard let objectId else { return nil }
+        if let text {
+            return MessageAttachment(kind: "file", storageObjectId: objectId, filename: filename, mimeType: mimeType, sizeBytes: sizeBytes,
+                                     sha256: sha256, textAttachment: text)
+        }
+        return MessageAttachment(kind: "image", storageObjectId: objectId, filename: filename, mimeType: mimeType, sizeBytes: sizeBytes)
     }
 }
 
@@ -127,14 +138,15 @@ extension StoreWriter {
 
     /// Saves (or clears, when empty) the composer state for one target.
     public func saveDraft(_ target: ChatTarget, _ draft: Draft) async throws {
-        if draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.mentions.isEmpty {
+        if draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.mentions.isEmpty && draft.attachments.isEmpty {
             try db.prepare("DELETE FROM drafts WHERE key = ?").run([.text(target.draftKey)])
         } else {
             try db.prepare("""
-            INSERT INTO drafts(key, connection_id, workspace_id, channel_id, thread_id, text, mentions, updated_at) VALUES(?,?,?,?,?,?,?,?)
-            ON CONFLICT(key) DO UPDATE SET text = excluded.text, mentions = excluded.mentions, updated_at = excluded.updated_at
+            INSERT INTO drafts(key, connection_id, workspace_id, channel_id, thread_id, text, mentions, updated_at, attachments) VALUES(?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(key) DO UPDATE SET text = excluded.text, mentions = excluded.mentions, updated_at = excluded.updated_at,
+                                           attachments = excluded.attachments
             """).run([.text(target.draftKey), .text(target.connectionId), .text(target.workspaceId), .text(target.channelId), target.threadId.sql,
-                      .text(draft.text), .text(JSONText.mentions(draft.mentions)), .text(draftStamp())])
+                      .text(draft.text), .text(JSONText.mentions(draft.mentions)), .text(draftStamp()), .text(JSONText.attachments(draft.attachments))])
         }
         await emit([ChangeKey(.drafts, target.workspaceId)])
     }
@@ -170,7 +182,7 @@ extension StoreWriter {
                       .text(JSONText.attachments(attachments))])
             try db.prepare("DELETE FROM drafts WHERE key = ?").run([.text(target.draftKey)])
         }
-        await emit([ChangeKey(.outbox, target.workspaceId), ChangeKey(.drafts, target.workspaceId)])
+        await emit([ChangeKey(.outbox, target.workspaceId, chatScope: .conversation(channelId: target.channelId, threadId: target.threadId)), ChangeKey(.drafts, target.workspaceId)])
         return OutboxItem(id: id, connectionId: target.connectionId, origin: origin, signerNpub: signerNpub, workspaceId: target.workspaceId,
                           appNpub: appNpub, channelId: target.channelId, threadId: target.threadId, createThread: target.threadId == nil,
                           body: body, mentions: mentions, request: nil, state: .awaitingSignature, attempts: 0, lastStatus: nil, lastCode: nil,
@@ -190,7 +202,7 @@ extension StoreWriter {
         try db.prepare("UPDATE outbox SET request = ?, state = ?, updated_at = ? WHERE id = ? AND request IS NULL")
             .run([.blob(request), .text(OutboxState.queued.rawValue), .text(now()), .text(id)])
         let frozen = db.changes > 0
-        if let workspace = try outboxWorkspace(id) { await emit([ChangeKey(.outbox, workspace)]) }
+        if let key = try outboxChange(id) { await emit([key]) }
         return frozen
     }
 
@@ -199,15 +211,16 @@ extension StoreWriter {
         try db.prepare("""
         UPDATE outbox SET state = ?, last_status = ?, last_code = ?, last_error = ?, attempts = attempts + ?, updated_at = ? WHERE id = ?
         """).run([.text(state.rawValue), status.map { .int(Int64($0)) } ?? .null, code.sql, error.sql, .int(countAttempt ? 1 : 0), .text(now()), .text(id)])
-        if let workspace = try outboxWorkspace(id) { await emit([ChangeKey(.outbox, workspace)]) }
+        if let key = try outboxChange(id) { await emit([key]) }
     }
 
     /// Tower accepted (or replayed) the send: store its message and thread and retire the outbox row together.
     public func acknowledgeSend(id: String, message: MessageRecord, thread: ThreadRecord?) async throws {
-        var keys: Set<ChangeKey> = [ChangeKey(.outbox, message.workspaceId)]
+        var keys: Set<ChangeKey> = [ChangeKey(.outbox, message.workspaceId, chatScope: .conversation(channelId: message.channelId, threadId: message.threadId))]
+        if let previous = try outboxChange(id) { keys.insert(previous) }
         try db.transaction {
             _ = try writeMessages([message], keys: &keys)
-            if let thread { _ = try writeThreads([thread]); keys.insert(ChangeKey(.threads, thread.workspaceId)) }
+            if let thread { _ = try writeThreads([thread], keys: &keys) }
             try db.prepare("DELETE FROM outbox WHERE id = ?").run([.text(id)])
         }
         await emit(keys)
@@ -218,26 +231,33 @@ extension StoreWriter {
         try db.prepare("UPDATE outbox SET state = CASE WHEN request IS NULL THEN ? ELSE ? END, updated_at = ? WHERE id = ? AND state IN (?, ?)")
             .run([.text(OutboxState.awaitingSignature.rawValue), .text(OutboxState.queued.rawValue), .text(now()), .text(id),
                   .text(OutboxState.failed.rawValue), .text(OutboxState.retrying.rawValue)])
-        if let workspace = try outboxWorkspace(id) { await emit([ChangeKey(.outbox, workspace)]) }
+        if let key = try outboxChange(id) { await emit([key]) }
     }
 
     /// Removes an unsent message. With `restoreDraft`, its text returns to the composer it came from
     /// (when that composer is empty), so the user can edit and resend it.
-    public func discardOutbox(id: String, restoreDraft: Bool) async throws {
-        guard let item = try outboxItem(id) else { return }
-        guard item.state != .sending else { return }
+    /// Returns true when the row's staged attachments went back to the draft (their files must then stay on the device).
+    @discardableResult
+    public func discardOutbox(id: String, restoreDraft: Bool) async throws -> Bool {
+        guard let item = try outboxItem(id) else { return false }
+        guard item.state != .sending else { return false }
+        var kept = false
         try db.transaction {
             if restoreDraft {
                 let (text, mentions) = MentionCodec.decode(body: item.body)
+                // Uploads are redone for the restored draft: the storage objects of an unsent message are not reused.
+                let restored = item.attachments.map { a -> PendingAttachment in var a = a; a.objectId = nil; a.uploadURL = nil; a.complete = false; return a }
                 try db.prepare("""
-                INSERT INTO drafts(key, connection_id, workspace_id, channel_id, thread_id, text, mentions, updated_at) VALUES(?,?,?,?,?,?,?,?)
+                INSERT INTO drafts(key, connection_id, workspace_id, channel_id, thread_id, text, mentions, updated_at, attachments) VALUES(?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(key) DO NOTHING
                 """).run([.text(item.target.draftKey), .text(item.connectionId), .text(item.workspaceId), .text(item.channelId), item.threadId.sql,
-                          .text(text), .text(JSONText.mentions(mentions)), .text(draftStamp())])
+                          .text(text), .text(JSONText.mentions(mentions)), .text(draftStamp()), .text(JSONText.attachments(restored))])
+                kept = db.changes > 0 && !item.attachments.isEmpty
             }
             try db.prepare("DELETE FROM outbox WHERE id = ?").run([.text(id)])
         }
-        await emit([ChangeKey(.outbox, item.workspaceId), ChangeKey(.drafts, item.workspaceId)])
+        await emit([ChangeKey(.outbox, item.workspaceId, chatScope: .conversation(channelId: item.channelId, threadId: item.threadId)), ChangeKey(.drafts, item.workspaceId)])
+        return kept
     }
 
     /// After relaunch nothing is in flight: a send interrupted mid-request is queued again (idempotent replay).
@@ -246,10 +266,11 @@ extension StoreWriter {
         if db.changes > 0 { await emit([ChangeKey(.outbox)]) }
     }
 
-    private func outboxWorkspace(_ id: String) throws -> String? {
-        let s = try db.prepare("SELECT workspace_id FROM outbox WHERE id = ?")
+    func outboxChange(_ id: String) throws -> ChangeKey? {
+        let s = try db.prepare("SELECT workspace_id, channel_id, thread_id FROM outbox WHERE id = ?")
         try s.bind([.text(id)])
-        return try s.step() ? s.text(0) : nil
+        guard try s.step(), let workspace = s.text(0), let channel = s.text(1) else { return nil }
+        return ChangeKey(.outbox, workspace, chatScope: .conversation(channelId: channel, threadId: s.text(2)))
     }
 
     func outboxItem(_ id: String) throws -> OutboxItem? {
@@ -260,7 +281,7 @@ extension StoreWriter {
 
     // MARK: Threads, members, catch-up
 
-    func writeThreads(_ records: [ThreadRecord]) throws -> Int {
+    func writeThreads(_ records: [ThreadRecord], keys: inout Set<ChangeKey>) throws -> Int {
         var changed = 0
         let s = try db.prepare("""
         INSERT INTO threads(workspace_id, id, channel_id, source_message_id, title, latest, archived, deleted, row_version, updated_at, raw)
@@ -273,15 +294,19 @@ extension StoreWriter {
         for r in records {
             try s.run([.text(r.workspaceId), .text(r.id), .text(r.channelId), r.sourceMessageId.sql, r.title.sql, r.latest.sql,
                        .int(r.archived ? 1 : 0), .int(r.deleted ? 1 : 0), .int(Int64(r.rowVersion)), .text(r.updatedAt), .blob(r.raw)])
-            changed += db.changes
+            if db.changes > 0 {
+                changed += 1
+                keys.insert(ChangeKey(.threads, r.workspaceId, chatScope: .conversation(channelId: r.channelId, threadId: r.id)))
+            }
         }
         return changed
     }
 
     @discardableResult
     public func upsertThreads(workspaceId: String, _ records: [ThreadRecord]) async throws -> Int {
-        let changed = try db.transaction { try writeThreads(records.filter { $0.workspaceId == workspaceId }) }
-        if changed > 0 { await emit([ChangeKey(.threads, workspaceId)]) }
+        var keys = Set<ChangeKey>()
+        let changed = try db.transaction { try writeThreads(records.filter { $0.workspaceId == workspaceId }, keys: &keys) }
+        await emit(keys)
         return changed
     }
 
@@ -330,7 +355,7 @@ extension StoreWriter {
           complete = MAX(channel_sync.complete, excluded.complete), synced_at = excluded.synced_at
         """).run([.text(workspaceId), .text(channelId), resumeCursor.sql, (resumeAfter?.createdAt).sql, (resumeAfter?.id).sql,
                   .int(complete ? 1 : 0), .text(now())])
-        await emit([ChangeKey(.messages, workspaceId)])
+        await emit([ChangeKey(.messages, workspaceId, chatScope: .channelHistory(channelId))])
     }
 }
 
@@ -457,12 +482,13 @@ extension StoreReader {
     }
 
     public func draft(_ target: ChatTarget) throws -> Draft? {
-        let s = try db.prepare("SELECT text, mentions, updated_at FROM drafts WHERE key = ?")
+        let s = try db.prepare("SELECT text, mentions, updated_at, attachments FROM drafts WHERE key = ?")
         try s.bind([.text(target.draftKey)])
         guard try s.step() else { return nil }
         let stamp = s.text(2)
         return Draft(text: s.text(0) ?? "", mentions: JSONText.mentions(s.text(1)),
-                     updatedAt: stamp.flatMap { ISO8601DateFormatter.tower.date(from: $0) ?? ISO8601DateFormatter().date(from: $0) })
+                     updatedAt: stamp.flatMap { ISO8601DateFormatter.tower.date(from: $0) ?? ISO8601DateFormatter().date(from: $0) },
+                     attachments: JSONText.attachments(s.text(3)))
     }
 
     public func members(workspaceId: String) throws -> [MemberRecord] {

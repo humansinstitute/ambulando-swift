@@ -365,7 +365,7 @@ final class ProfileStoreTests: XCTestCase {
         }
         let store = try LocalStore(directory: directory)
         let version = try await store.writer.schemaVersion()
-        XCTAssertEqual(version, 5)
+        XCTAssertEqual(version, Schema.version)
         let connections = try await store.reader.connections()
         XCTAssertEqual(connections.map(\.signerNpub), [TestKeys.npub])
         let members = try await store.reader.members(workspaceId: w).map(\.label)

@@ -364,15 +364,26 @@ public struct MessageAttachment: Sendable, Equatable, Codable, Hashable {
     public let filename: String
     public let mimeType: String?
     public let sizeBytes: Int?
+    public let sha256: String?
+    /// Counts of a pasted or edited text file (shared contract v1); nil for every other attachment.
+    public let textAttachment: TextAttachmentInfo?
 
-    public init(kind: String, storageObjectId: String, filename: String, mimeType: String?, sizeBytes: Int?) {
+    public init(kind: String, storageObjectId: String, filename: String, mimeType: String?, sizeBytes: Int?,
+                sha256: String? = nil, textAttachment: TextAttachmentInfo? = nil) {
         self.kind = kind; self.storageObjectId = storageObjectId; self.filename = filename; self.mimeType = mimeType; self.sizeBytes = sizeBytes
+        self.sha256 = sha256; self.textAttachment = textAttachment
     }
 
     public var requestObject: [String: Any] {
         var o: [String: Any] = ["kind": kind, "storage_object_id": storageObjectId, "filename": filename]
         if let mimeType { o["mime_type"] = mimeType }
         if let sizeBytes { o["size_bytes"] = sizeBytes }
+        if let sha256 { o["sha256_hex"] = sha256 }
+        if let textAttachment {
+            // Contract v1 names the type `content_type`; `mime_type` stays for clients that read the older field.
+            if let mimeType { o["content_type"] = mimeType }
+            o["text_attachment"] = textAttachment.requestObject
+        }
         return o
     }
 
@@ -383,7 +394,8 @@ public struct MessageAttachment: Sendable, Equatable, Codable, Hashable {
         return list.compactMap { a in
             guard let id = lowerUUID(a["storage_object_id"] as? String) else { return nil }
             return MessageAttachment(kind: (a["kind"] as? String) ?? "file", storageObjectId: id, filename: (a["filename"] as? String) ?? "Attachment",
-                                     mimeType: a["mime_type"] as? String, sizeBytes: flexibleInt(a["size_bytes"]))
+                                     mimeType: (a["mime_type"] as? String) ?? (a["content_type"] as? String), sizeBytes: flexibleInt(a["size_bytes"]),
+                                     sha256: (a["sha256_hex"] as? String)?.lowercased(), textAttachment: TextAttachmentInfo.from(a["text_attachment"]))
         }
     }
 }

@@ -111,8 +111,8 @@ public struct OutboxSender: Sendable {
     /// Removes an unsent message and its staged attachment bytes.
     public func discard(_ id: String, restoreDraft: Bool) async throws {
         let item = try await store.reader.outboxItem(id: id)
-        try await store.writer.discardOutbox(id: id, restoreDraft: restoreDraft)
-        if try await store.reader.outboxItem(id: id) == nil { removeStaged(item?.attachments ?? []) }
+        let kept = try await store.writer.discardOutbox(id: id, restoreDraft: restoreDraft)
+        if !kept, try await store.reader.outboxItem(id: id) == nil { removeStaged(item?.attachments ?? []) }
     }
 
     func removeStaged(_ attachments: [PendingAttachment]) {
@@ -182,7 +182,7 @@ public struct OutboxSender: Sendable {
                     if Task.isCancelled || error is CancellationError { throw CancellationError() }
                     let permanent = error is FileTransferError
                     try await store.writer.markOutbox(id: item.id, state: permanent ? .failed : .retrying,
-                                                      error: "Image upload: " + ((error as? LocalizedError)?.errorDescription ?? Self.networkMessage(error)),
+                                                      error: "Attachment upload: " + ((error as? LocalizedError)?.errorDescription ?? Self.networkMessage(error)),
                                                       countAttempt: true)
                     blocked.insert(conversation)
                     if !permanent { nextRetry = min(nextRetry ?? .max, item.attempts + 1) }
