@@ -98,8 +98,8 @@ extension AppModel {
         do { return .success(try await sync.loadNotificationPreferences(connection, workspace)) } catch { return .failure(error) }
     }
 
-    func setNotificationInbox(_ category: NotificationCategoryInfo, on: Bool) async -> Result<[NotificationRule], Error> {
+    func setNotificationInbox(_ category: NotificationCategoryInfo, on: Bool, known: NotificationPreferences) async -> Result<NotificationPreferences, Error> {
         guard let sync, let connection, let workspace = selectedWorkspace else { return .failure(TowerError.unsafePath) }
-        do { return .success(try await sync.setNotificationInboxRule(connection, workspace, category: category, on: on)) } catch { return .failure(error) }
+        do { return .success(try await sync.setNotificationInboxRule(connection, workspace, category: category, on: on, known: known)) } catch { return .failure(error) }
     }
 }

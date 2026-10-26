@@ -66,11 +66,17 @@ extension WorkspaceSync {
                     return run
                 }
             }
-            try await replayNotifications(connection, workspace, api: api, from: status.localSeq, run: &run)
+            try await replayNotifications(connection, workspace, api: api, from: status.localSeq, rulesRevision: status.rulesRevision, run: &run)
             let counts = try await api.notificationCounts(workspaceId: w, appNpub: workspace.appNpub)
             try Task.checkCancellation()
             try await store.writer.saveNotificationCounts(connectionId: c, workspaceId: w, counts)
-            try await repairDrift(connection, workspace, counts: counts)
+            // Rules changed (here or on another device) since this snapshot: the visible set differs, so list again.
+            if let current = counts.rulesRevision, let stored = status.rulesRevision, current != stored {
+                try await store.writer.resetNotificationCursor(connectionId: c, workspaceId: w)
+                run.reschedule = true
+            } else {
+                try await repairDrift(connection, workspace, counts: counts)
+            }
         } catch TowerAPI.NotificationReadFailure.unsupported {
             run.unsupported = true
             try await store.writer.markNotificationSync(connectionId: c, workspaceId: w, state: .unsupported)
@@ -113,6 +119,8 @@ extension WorkspaceSync {
         // resume only when a cursor exists; otherwise the first page is fetched again under a new snapshot.
         var resumed = status.hydrating && cursor != nil
         var startedAt: String?
+        // The rules revision this listing is computed under: pages that disagree are not one snapshot.
+        var snapshotRevision: Int? = resumed ? status.rulesRevision : nil
         var fetched = 0
         var seen = Set<String>()
         while true {
@@ -124,7 +132,16 @@ extension WorkspaceSync {
                 resumed = false; cursor = nil    // the saved cursor expired: start over from the first page
                 continue
             }
-            if !resumed { gen = try await store.writer.beginNotificationHydration(connectionId: c, workspaceId: w, snapshotSeq: page.headSeq); resumed = true }
+            if resumed, let first = snapshotRevision, let now = page.rulesRevision, now != first {
+                // The person's rules changed mid-listing: items of the earlier pages were filtered differently. Start over.
+                resumed = false; cursor = nil; snapshotRevision = nil
+                continue
+            }
+            if !resumed {
+                snapshotRevision = page.rulesRevision
+                gen = try await store.writer.beginNotificationHydration(connectionId: c, workspaceId: w, snapshotSeq: page.headSeq, rulesRevision: page.rulesRevision)
+                resumed = true
+            }
             startedAt = page.inboxStartedAt ?? startedAt
             guard try await store.writer.storeNotificationHydrationPage(connectionId: c, workspaceId: w, gen: gen, items: page.items, nextCursor: page.nextCursor) else {
                 run.reschedule = true; return     // superseded by a reset: the next job lists again
@@ -141,11 +158,11 @@ extension WorkspaceSync {
         }
     }
 
-    private func replayNotifications(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, api: TowerAPI, from start: Int, run: inout NotificationRun) async throws {
+    private func replayNotifications(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, api: TowerAPI, from start: Int, rulesRevision: Int?, run: inout NotificationRun) async throws {
         var after = start
         for _ in 0..<Self.notificationReplayPageBudget {
             try Task.checkCancellation()
-            let page = try await api.notificationChanges(workspaceId: workspace.id, appNpub: workspace.appNpub, afterSeq: after)
+            let page = try await api.notificationChanges(workspaceId: workspace.id, appNpub: workspace.appNpub, afterSeq: after, rulesRevision: rulesRevision)
             run.pages += 1
             // The cursor moves to what this page really delivered, never to the head. A page that delivered nothing but
             // claims more is a Tower fault: stop instead of looping.
@@ -218,17 +235,45 @@ extension WorkspaceSync {
         return try await api(origin: try TowerOrigin(connection.origin)).notificationPreferences(workspaceId: workspace.id, appNpub: workspace.appNpub)
     }
 
-    /// Turns one category's inbox rule on or off. A mandatory category is refused here as well as by Tower.
-    public func setNotificationInboxRule(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, category: NotificationCategoryInfo, on: Bool) async throws -> [NotificationRule] {
+    /// Turns one category's inbox on or off *for this app's view* (`client_app_id = ambulando`); the shared item and what other apps
+    /// show are untouched. One compare-and-set write on the exact key. If the key changed elsewhere (`rules_conflict`) nothing is
+    /// written and the current rules are returned inside `changedElsewhere`: the screen shows the actual choices and the person
+    /// chooses again (a new `mutation_id`); a simultaneous choice made on another device is never silently overwritten.
+    public func setNotificationInboxRule(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, category: NotificationCategoryInfo, on: Bool,
+                                         known: NotificationPreferences) async throws -> NotificationPreferences {
         guard !category.mandatory else { throw NotificationPreferenceError.mandatory }
         try await identity.requireSigner(npub: connection.signerNpub)
-        let rule = NotificationRule(sourceAppId: category.sourceAppId, category: category.category, channel: "inbox", mode: on ? "on" : "off")
-        return try await api(origin: try TowerOrigin(connection.origin)).putNotificationRules(
-            workspaceId: workspace.id, appNpub: workspace.appNpub, mutationId: UUID().uuidString.lowercased(), [rule])
+        let api = api(origin: try TowerOrigin(connection.origin))
+        let client = TowerAPI.notificationClientAppId
+        let rule = NotificationRule(sourceAppId: category.sourceAppId, category: category.category, clientAppId: client, channel: "inbox", mode: on ? "on" : "off")
+        let expected = known.rowVersion(source: rule.sourceAppId, category: rule.category, clientAppId: client, channel: "inbox")
+        switch try await api.putNotificationRules(workspaceId: workspace.id, appNpub: workspace.appNpub, mutationId: UUID().uuidString.lowercased(), [(rule, expected)]) {
+        case .applied(let rules, let revision):
+            var updated = known
+            updated.rules = rules; updated.rulesRevision = revision
+            // The visible set changed: the inbox lists again under the new revision (the one sync owner).
+            await refreshNotifications(connection, workspace, priority: .visible, force: true)
+            return updated
+        case .conflict(let rules, let revision):
+            var current = known
+            current.rules = rules; current.rulesRevision = revision
+            throw NotificationPreferenceError.changedElsewhere(current)
+        case .mutationReused:
+            throw NotificationPreferenceError.rejected
+        }
     }
 }
 
 public enum NotificationPreferenceError: LocalizedError, Sendable {
     case mandatory
-    public var errorDescription: String? { "This kind of notification can't be turned off." }
+    /// The rules changed elsewhere twice in a row; these are the current ones.
+    case changedElsewhere(NotificationPreferences)
+    case rejected
+    public var errorDescription: String? {
+        switch self {
+        case .mandatory: "This kind of notification can't be turned off."
+        case .changedElsewhere: "These choices were changed on another device. They are shown as they are now; choose again if you still want to change this."
+        case .rejected: "That change was rejected. Nothing was changed."
+        }
+    }
 }

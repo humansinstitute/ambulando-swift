@@ -46,11 +46,20 @@ state through it, and never invents notifications. Wire shapes live in one adapt
   through the write queue, which signs only while unlocked. Items cache only plain text (bidi/control characters removed); an item
   without access never keeps producer text. No notification is ever authority to act.
 
+## This app's view (contract v1.1)
+
+Every read (`items`, `changes`, `counts`) and `bulk` is asked for as `client_app_id=ambulando`, a presentation filter and never an
+access boundary. The per-category switch in Settings writes only Ambulando's own inbox rule: it hides items from this app's views
+and leaves the shared item and every other app unchanged; reading stays shared. The snapshot's `rules_revision` is stored and sent
+with `changes`; a `410 reset_required (rules_changed)`, or a different revision seen in `counts`, lists the inbox again. Rules are
+written all-or-nothing with each key's `expected_row_version` (0 only when absent); on `rules_conflict` nothing is written, the current rules are adopted
+and shown with a notice, and the person's next explicit choice is sent with a new `mutation_id` (never silently re-applied);
+`mutation_id_reused` is a rejection. Pages of one listing that disagree on `rules_revision` restart the listing. `default` keeps its row.
+
 ## Limits (this build)
 
 - No alerts outside the app: Tower has no alert sender, installation/transport registry, quiet hours or APNs route yet, and this app
   has no push setup. Settings says so; nothing is claimed or sent. `Push/` keeps the UI-free APNs groundwork unconnected.
-- Rules use Tower's current last-writer-wins write; they are reconciled when Tower adds revision checks.
 - Mac: compiled and launched in sample-data mode; the shared views are exercised by the iPhone sample UI tests.
 
 ## Validation

@@ -27,7 +27,7 @@ extension Schema {
           started_at TEXT, synced_at TEXT, counts BLOB, archived_hydrated INTEGER NOT NULL DEFAULT 0,
           last_error TEXT, checked_at TEXT, reset_at TEXT,
           hydrating INTEGER NOT NULL DEFAULT 0, hydrate_gen INTEGER NOT NULL DEFAULT 0, hydrate_seq INTEGER, hydrate_cursor TEXT,
-          archive_cursor TEXT, archive_complete INTEGER NOT NULL DEFAULT 1,
+          archive_cursor TEXT, archive_complete INTEGER NOT NULL DEFAULT 1, rules_revision INTEGER,
           PRIMARY KEY(connection_id, workspace_id));
         """)
     }
@@ -125,15 +125,15 @@ extension StoreWriter {
     /// records the generation, the sequence read with the first page and (later) the next page cursor, so a later job
     /// resumes exactly there. Nothing is removed and `local_seq` does not move until the listing reaches its end.
     @discardableResult
-    public func beginNotificationHydration(connectionId: String, workspaceId: String, snapshotSeq: Int) async throws -> Int {
+    public func beginNotificationHydration(connectionId: String, workspaceId: String, snapshotSeq: Int, rulesRevision: Int? = nil) async throws -> Int {
         let gen: Int = try db.transaction {
             try db.prepare("""
-            INSERT INTO notification_sync(connection_id, workspace_id, state, hydrating, hydrate_gen, hydrate_seq, hydrate_cursor)
-            VALUES(?,?,?,1,1,?,NULL)
+            INSERT INTO notification_sync(connection_id, workspace_id, state, hydrating, hydrate_gen, hydrate_seq, hydrate_cursor, rules_revision)
+            VALUES(?,?,?,1,1,?,NULL,?)
             ON CONFLICT(connection_id, workspace_id) DO UPDATE SET hydrating = 1, hydrate_gen = notification_sync.hydrate_gen + 1,
-              hydrate_seq = excluded.hydrate_seq, hydrate_cursor = NULL, state = ?
+              hydrate_seq = excluded.hydrate_seq, hydrate_cursor = NULL, state = ?, rules_revision = excluded.rules_revision
             """).run([.text(connectionId), .text(workspaceId), .text(NotificationSyncState.cold.rawValue), .int(Int64(snapshotSeq)),
-                      .text(NotificationSyncState.cold.rawValue)])
+                      rulesRevision.map { .int(Int64($0)) } ?? .null, .text(NotificationSyncState.cold.rawValue)])
             let s = try db.prepare("SELECT hydrate_gen FROM notification_sync WHERE connection_id = ? AND workspace_id = ?")
             try s.bind([.text(connectionId), .text(workspaceId)])
             return try s.step() ? Int(s.int(0)) : 1
@@ -371,7 +371,7 @@ extension StoreReader {
 
     public func notificationStatus(connectionId: String, workspaceId: String) throws -> NotificationSyncStatus {
         let s = try db.prepare("""
-        SELECT state, local_seq, head_seq, started_at, synced_at, counts, archived_hydrated, last_error, checked_at, reset_at, hydrating, hydrate_gen, hydrate_seq, hydrate_cursor, archive_cursor, archive_complete FROM notification_sync
+        SELECT state, local_seq, head_seq, started_at, synced_at, counts, archived_hydrated, last_error, checked_at, reset_at, hydrating, hydrate_gen, hydrate_seq, hydrate_cursor, archive_cursor, archive_complete, rules_revision FROM notification_sync
         WHERE connection_id = ? AND workspace_id = ?
         """)
         try s.bind([.text(connectionId), .text(workspaceId)])
@@ -385,6 +385,7 @@ extension StoreReader {
         status.lastError = s.text(7); status.checkedAt = s.text(8); status.resetAt = s.text(9)
         status.hydrating = s.int(10) != 0; status.hydrateGen = Int(s.int(11)); status.hydrateSeq = s.isNull(12) ? nil : Int(s.int(12))
         status.hydrateCursor = s.text(13); status.archiveCursor = s.text(14); status.archiveIncomplete = status.archivedHydrated && s.int(15) == 0
+        status.rulesRevision = s.isNull(16) ? nil : Int(s.int(16))
         return status
     }
 

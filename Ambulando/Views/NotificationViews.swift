@@ -383,7 +383,7 @@ struct NotificationSettingsSection: View {
             if let problem { Text(problem).font(.amb(.footnote)).foregroundStyle(Amb.destructive) }
             LabeledContent("Alerts on this \(Device.name)", value: "Not available").accessibilityIdentifier("settings.notifications.alerts")
         } header: { Text("Notifications") } footer: {
-            Text("New notifications appear in the bell while Ambulando is open and when it refreshes in the background. Alerts outside the app (banners, lock screen, badge) are not part of this build: Tower has no alert sender yet and this app has no push setup, so nothing is promised or sent. Turning a category off here stops new items of that kind reaching your inbox, on every app that shares it.")
+            Text("New notifications appear in the bell while Ambulando is open and when it refreshes in the background. Your choice for each kind applies to what Ambulando shows; other apps keep their own. Reading a notification here is shared with them. Alerts on this \(Device.name) (banners, lock screen, badge) are unavailable in this version.")
         }
         .task(id: model.selectedWorkspace?.id) { await load() }
     }
@@ -398,18 +398,20 @@ struct NotificationSettingsSection: View {
 
     private func set(_ category: NotificationCategoryInfo, on: Bool) {
         guard var current = preferences else { return }
+        let previous = current
         savingId = category.id; problem = nil
-        // Shown at once; put back if Tower refuses.
-        let previous = current.rules
-        current.rules.removeAll { $0.sourceAppId == category.sourceAppId && $0.category == category.category && $0.channel == "inbox" && $0.clientAppId == "*" }
-        current.rules.append(NotificationRule(sourceAppId: category.sourceAppId, category: category.category, channel: "inbox", mode: on ? "on" : "off"))
+        // Shown at once; put back if Tower refuses. The change is this app's view only.
+        let client = TowerAPI.notificationClientAppId
+        current.rules.removeAll { $0.sourceAppId == category.sourceAppId && $0.category == category.category && $0.channel == "inbox" && $0.clientAppId == client }
+        current.rules.append(NotificationRule(sourceAppId: category.sourceAppId, category: category.category, clientAppId: client, channel: "inbox", mode: on ? "on" : "off",
+                                              rowVersion: previous.rowVersion(source: category.sourceAppId, category: category.category, clientAppId: client, channel: "inbox")))
         preferences = current
         Task {
-            switch await model.setNotificationInbox(category, on: on) {
-            case .success(let rules): preferences?.rules = rules
+            switch await model.setNotificationInbox(category, on: on, known: previous) {
+            case .success(let updated): preferences = updated
             case .failure(let error):
-                preferences?.rules = previous
-                problem = "Could not change this: \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+                if case NotificationPreferenceError.changedElsewhere(let latest) = error { preferences = latest } else { preferences = previous }
+                problem = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
             savingId = nil
         }

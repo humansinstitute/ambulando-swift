@@ -11,6 +11,12 @@ final class FakeNotificationTower: @unchecked Sendable {
     private var log: [(seq: Int, change: [String: Any])] = []
     private var mutations: [String: (body: String, item: [String: Any])] = [:]
     var invalidCursorOnce = false
+    var rulesRevision = 1
+    /// Categories this app's view hides (an `off` rule): omitted from items, counts and changes.
+    var hiddenCategories: Set<String> = []
+    private var rules: [String: [String: Any]] = [:]      // exact key -> rule with row_version
+    private(set) var ruleBodies: [[String: Any]] = []
+    var conflictNextRulesPut = false
     fileprivate var reuseNext = false
     var status: Int?                       // forced status for every notification route
     var resetBelow = 0                     // `changes` older than this answers 410 reset_required
@@ -116,6 +122,7 @@ final class FakeNotificationTower: @unchecked Sendable {
                 let tail = String(url.path.dropFirst(base.count))
                 if tail == "/items", request.httpMethod == "GET" {
                     let live = items.values.filter { item in
+                        if hiddenCategories.contains((item["category"] as? String) ?? "") { return false }
                         let s = item["state"] as! [String: Any]
                         switch q("view") ?? "inbox" {
                         case "archived": return s["archived"] as? Bool == true && s["dismissed"] as? Bool != true
@@ -127,22 +134,54 @@ final class FakeNotificationTower: @unchecked Sendable {
                     let offset = q("cursor").flatMap { Data(base64Encoded: $0) }.flatMap { String(data: $0, encoding: .utf8) }.flatMap(Int.init) ?? 0
                     let page = Array(live.dropFirst(offset).prefix(limit))
                     let next: Any = offset + limit < live.count ? Data(String(offset + limit).utf8).base64EncodedString() : NSNull()
-                    return (200, ["items": page, "next_cursor": next, "head_seq": seq, "inbox_started_at": "2026-10-26T12:00:00Z"])
+                    return (200, ["items": page, "next_cursor": next, "head_seq": seq, "rules_revision": rulesRevision, "inbox_started_at": "2026-10-26T12:00:00Z"])
                 }
                 if tail == "/changes" {
                     let after = Int(q("after_seq") ?? "0") ?? 0
                     if after < resetBelow { return (410, ["error": "reset_required"]) }
+                    if let asked = q("rules_revision").flatMap(Int.init), asked != rulesRevision {
+                        return (410, ["code": "reset_required", "reason": "rules_changed", "rules_revision": rulesRevision])
+                    }
                     let limit = min(Int(q("limit") ?? "200") ?? 200, changeLimit)
-                    let pending = log.filter { $0.seq > after }
+                    let pending = log.filter { $0.seq > after && (hiddenCategories.isEmpty || !hiddenCategories.contains(($0.change["category"] as? String) ?? "")) }
                     let page = Array(pending.prefix(limit))
-                    return (200, ["changes": page.map(\.change), "through_seq": page.last?.seq ?? after, "head_seq": seq, "has_more": pending.count > page.count])
+                    return (200, ["changes": page.map(\.change), "through_seq": pending.count > page.count ? (page.last?.seq ?? after) : seq, "head_seq": seq, "has_more": pending.count > page.count, "rules_revision": rulesRevision])
                 }
                 if tail == "/counts" {
                     let unread = items.values.filter { item in
+                        if hiddenCategories.contains((item["category"] as? String) ?? "") { return false }
                         let s = item["state"] as! [String: Any]
                         return s["read"] as? Bool != true && s["dismissed"] as? Bool != true && s["archived"] as? Bool != true
                     }.count
-                    return (200, ["unread_total": unread, "by_category": ["mention": unread], "badge": unread, "capped_at": 999, "head_seq": seq, "inbox_started_at": "2026-10-26T12:00:00Z"])
+                    return (200, ["unread_total": unread, "by_category": ["mention": unread], "badge": unread, "capped_at": 999, "head_seq": seq, "rules_revision": rulesRevision, "inbox_started_at": "2026-10-26T12:00:00Z"])
+                }
+                if tail == "/categories" {
+                    return (200, ["sources": [["app_id": "flightdeck.core", "label": "Flight Deck", "kind": "tower_rule",
+                                               "categories": [["category": "mention", "label": "Mentions", "default_inbox": "on", "mandatory": false],
+                                                              ["category": "security", "label": "Security", "default_inbox": "on", "mandatory": true]]]]])
+                }
+                if tail == "/rules", request.httpMethod == "GET" { return (200, ["rules": Array(rules.values), "rules_revision": rulesRevision]) }
+                if tail == "/rules", request.httpMethod == "PUT" {
+                    let body = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:]
+                    ruleBodies.append(body)
+                    let entries = body["rules"] as? [[String: Any]] ?? []
+                    func key(_ r: [String: Any]) -> String { "\(r["source_app_id"] ?? "")|\(r["category"] ?? "")|\(r["client_app_id"] ?? "")|\(r["channel"] ?? "")" }
+                    if conflictNextRulesPut {
+                        conflictNextRulesPut = false
+                        // Another device wrote the key first.
+                        var other = entries[0]; other["mode"] = "off"; other["row_version"] = 5; other["preview"] = NSNull(); other.removeValue(forKey: "expected_row_version")
+                        rules[key(entries[0])] = other; rulesRevision += 1
+                    }
+                    for e in entries where (e["expected_row_version"] as? Int) != (rules[key(e)]?["row_version"] as? Int ?? 0) {
+                        return (409, ["code": "rules_conflict", "conflicts": [], "rules": Array(rules.values), "rules_revision": rulesRevision])
+                    }
+                    for e in entries {
+                        var stored = e; stored.removeValue(forKey: "expected_row_version")
+                        stored["row_version"] = (rules[key(e)]?["row_version"] as? Int ?? 0) + 1
+                        rules[key(e)] = stored
+                    }
+                    rulesRevision += 1
+                    return (200, ["rules": Array(rules.values), "rules_revision": rulesRevision])
                 }
                 if tail.hasPrefix("/items/"), request.httpMethod == "PATCH" {
                     let id = String(tail.dropFirst(7))
@@ -880,5 +919,163 @@ extension FakeNotificationTower {
         request.httpMethod = "PATCH"
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return try handler()(request).0
+    }
+}
+
+/// Contract v1.1: this app's presentation view (`client_app_id`), rules revision, and per-key compare-and-set rules.
+final class NotificationAppViewTests: XCTestCase {
+    func testEveryReadAndBulkIsAskedForAsAmbulando() async throws {
+        let h = try await NotificationHarness.make()
+        h.tower.put()
+        try await h.run()
+        let item = try await h.items().first!
+        _ = try await h.actions.markAllRead(connection: h.connection, workspace: h.workspace, upToSeq: item.changeSeq)
+        await h.drainWrites()
+        let reads = h.tower.recordedRequests.filter { $0.hasPrefix("GET") }
+        XCTAssertFalse(reads.isEmpty)
+        XCTAssertTrue(reads.allSatisfy { $0.contains("client_app_id=ambulando") }, "\(reads)")
+        let bulk = h.tower.recordedPatches.last
+        XCTAssertEqual((bulk?["selector"] as? [String: Any])?["client_app_id"] as? String, "ambulando")
+    }
+
+    func testRulesRevisionIsPersistedSentWithChangesAndAChangeRelists() async throws {
+        let h = try await NotificationHarness.make()
+        h.tower.put(title: "kept")
+        try await h.run()
+        var status = try await h.status()
+        XCTAssertEqual(status.rulesRevision, 1)
+        try await h.run()
+        XCTAssertTrue(h.tower.recordedRequests.contains { $0.contains("/changes") && $0.contains("rules_revision=1") })
+        // Another device changed the rules: changes answers 410 rules_changed, the next job lists again under revision 2.
+        h.tower.rulesRevision = 2
+        let first = try await h.run()
+        XCTAssertTrue(first.reschedule)
+        let second = try await h.run()
+        XCTAssertTrue(second.coldStart)
+        status = try await h.status()
+        XCTAssertEqual(status.rulesRevision, 2)
+        XCTAssertEqual(status.state, .ready)
+        let items = try await h.items()
+        XCTAssertEqual(items.map(\.title), ["kept"])
+    }
+
+    func testRulesRevisionSeenOnlyInCountsAlsoRelists() async throws {
+        let h = try await NotificationHarness.make()
+        h.tower.put()
+        try await h.run()
+        // A run whose changes carry no revision check (older stored value missing) must still notice via counts.
+        h.tower.rulesRevision = 3
+        try await h.store.writer.markNotificationSync(connectionId: h.connection.id, workspaceId: h.workspace.id, state: nil)
+        let run = try await h.run()
+        XCTAssertTrue(run.reschedule)
+    }
+
+    func testPreferenceChoiceIsAmbulandosViewAndUsesExactKeyRevision() async throws {
+        let h = try await NotificationHarness.make()
+        h.tower.put()
+        try await h.run()
+        let prefs = try await h.sync.loadNotificationPreferences(h.connection, h.workspace)
+        let mention = try XCTUnwrap(prefs.categories.first { $0.category == "mention" })
+        XCTAssertTrue(prefs.inboxOn(mention))
+        let updated = try await h.sync.setNotificationInboxRule(h.connection, h.workspace, category: mention, on: false, known: prefs)
+        XCTAssertFalse(updated.inboxOn(mention))
+        let sent = try XCTUnwrap(h.tower.ruleBodies.last?["rules"] as? [[String: Any]])
+        XCTAssertEqual(sent.first?["client_app_id"] as? String, "ambulando", "only this app's view")
+        XCTAssertEqual(sent.first?["channel"] as? String, "inbox")
+        XCTAssertEqual(sent.first?["mode"] as? String, "off")
+        XCTAssertEqual(sent.first?["expected_row_version"] as? Int, 0, "0 only because the key was absent")
+        // Turn it back on: the exact key's current revision is the base.
+        let again = try await h.sync.setNotificationInboxRule(h.connection, h.workspace, category: mention, on: true, known: updated)
+        XCTAssertTrue(again.inboxOn(mention))
+        XCTAssertEqual((h.tower.ruleBodies.last?["rules"] as? [[String: Any]])?.first?["expected_row_version"] as? Int, 1)
+        await h.chat.engine.waitUntilIdle()
+    }
+
+    func testRulesConflictAdoptsCurrentRulesWithoutSilentlyReapplying() async throws {
+        let h = try await NotificationHarness.make()
+        let prefs = try await h.sync.loadNotificationPreferences(h.connection, h.workspace)
+        let mention = try XCTUnwrap(prefs.categories.first { $0.category == "mention" })
+        h.tower.conflictNextRulesPut = true   // another device turned it off first
+        do {
+            _ = try await h.sync.setNotificationInboxRule(h.connection, h.workspace, category: mention, on: true, known: prefs)
+            XCTFail("a conflict is reported, not overwritten")
+        } catch NotificationPreferenceError.changedElsewhere(let current) {
+            XCTAssertFalse(current.inboxOn(mention), "the screen shows the actual (other device's) choice")
+            XCTAssertEqual(current.rowVersion(source: "flightdeck.core", category: "mention", clientAppId: "ambulando", channel: "inbox"), 5)
+        }
+        XCTAssertEqual(h.tower.ruleBodies.count, 1, "no second PUT")
+        // The next explicit choice rebases on the adopted row with a new mutation id.
+        let reloaded = try await h.sync.loadNotificationPreferences(h.connection, h.workspace)
+        let applied = try await h.sync.setNotificationInboxRule(h.connection, h.workspace, category: mention, on: true, known: reloaded)
+        XCTAssertTrue(applied.inboxOn(mention))
+        let bodies = h.tower.ruleBodies
+        XCTAssertNotEqual(bodies[0]["mutation_id"] as? String, bodies[1]["mutation_id"] as? String)
+        XCTAssertEqual((bodies[1]["rules"] as? [[String: Any]])?.first?["expected_row_version"] as? Int, 5)
+        await h.chat.engine.waitUntilIdle()
+    }
+
+    func testFilteredEmptyPageAdvancesToHeadOnceAndAPreferenceChangeRelists() async throws {
+        let h = try await NotificationHarness.make()
+        h.tower.put(title: "visible", category: "mention")
+        try await h.run()
+        // A hidden category keeps arriving: the filtered page is empty but the cursor must still advance, once.
+        h.tower.hiddenCategories = ["chat_thread"]
+        for _ in 0..<3 { h.tower.put(title: "hidden", category: "chat_thread") }
+        let before = h.tower.recordedRequests.filter { $0.contains("/changes") }.count
+        try await h.run()
+        let status = try await h.status()
+        XCTAssertEqual(status.localSeq, h.tower.seq, "advanced to the head though every row was filtered")
+        XCTAssertEqual(h.tower.recordedRequests.filter { $0.contains("/changes") }.count, before + 1, "no healing loop")
+        try await h.run()
+        XCTAssertEqual(h.tower.recordedRequests.filter { $0.contains("/changes") }.count, before + 2, "the next job asks once from the head")
+        let titles = try await h.items().map(\.title)
+        XCTAssertEqual(titles, ["visible"])
+        // The person's rules change (another app view): 410 rules_changed, then the listing is recomputed.
+        h.tower.hiddenCategories = []
+        h.tower.rulesRevision = 2
+        let first = try await h.run()
+        XCTAssertTrue(first.reschedule)
+        try await h.run()
+        let after = try await h.items().count
+        XCTAssertEqual(after, 4)
+    }
+
+    func testMixedRulesRevisionPagesRestartTheListing() async throws {
+        let h = try await NotificationHarness.make()
+        for i in 0..<120 { h.tower.put(title: "n\(i)") }
+        try await h.run(budget: 1)
+        var status = try await h.status()
+        XCTAssertEqual(status.rulesRevision, 1)
+        h.tower.rulesRevision = 2                     // changes while the listing is between jobs
+        let resumed = try await h.run(budget: 1)
+        XCTAssertEqual(resumed.listed, 50, "the listing restarted from the first page rather than mixing revisions")
+        status = try await h.status()
+        XCTAssertEqual(status.rulesRevision, 2)
+        try await h.run(budget: 5)
+        status = try await h.status()
+        XCTAssertEqual(status.state, .ready)
+        let count = try await h.items(.all).count
+        XCTAssertEqual(count, 120)
+    }
+
+    func testMandatoryCategoryIsRefusedBeforeAnyRequest() async throws {
+        let h = try await NotificationHarness.make()
+        let prefs = try await h.sync.loadNotificationPreferences(h.connection, h.workspace)
+        let security = try XCTUnwrap(prefs.categories.first { $0.category == "security" })
+        do { _ = try await h.sync.setNotificationInboxRule(h.connection, h.workspace, category: security, on: false, known: prefs); XCTFail("refused") }
+        catch NotificationPreferenceError.mandatory {}
+        XCTAssertTrue(h.tower.ruleBodies.isEmpty)
+    }
+
+    func testResolutionOwnBeatsSharedAndDefaultIsSkipped() {
+        let category = NotificationCategoryInfo(sourceAppId: "s", sourceLabel: "S", category: "c", label: "C", mandatory: false, defaultInbox: true)
+        var prefs = NotificationPreferences()
+        prefs.rules = [NotificationRule(sourceAppId: "s", category: "c", clientAppId: "*", channel: "inbox", mode: "off")]
+        XCTAssertFalse(prefs.inboxOn(category))
+        prefs.rules.append(NotificationRule(sourceAppId: "s", category: "c", clientAppId: "ambulando", channel: "inbox", mode: "on"))
+        XCTAssertTrue(prefs.inboxOn(category), "this app's own rule beats the shared one")
+        prefs.rules = [NotificationRule(sourceAppId: "s", category: "c", clientAppId: "ambulando", channel: "inbox", mode: "default", rowVersion: 4)]
+        XCTAssertTrue(prefs.inboxOn(category), "a reset keeps its row but is skipped")
+        XCTAssertEqual(prefs.rowVersion(source: "s", category: "c", clientAppId: "ambulando", channel: "inbox"), 4)
     }
 }

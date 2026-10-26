@@ -4,6 +4,9 @@ import Foundation
 /// ordinary NIP-98 call made with the user's own identity; the inbox is the caller's alone. This file is the only place
 /// that knows the wire shapes, so a contract change is a change here.
 extension TowerAPI {
+    /// This app's presentation view of the shared inbox (never an access boundary): items, counts, changes and bulk are asked for
+    /// "as Ambulando", so a per-app inbox choice hides items here without touching what other apps see.
+    public static let notificationClientAppId = "ambulando"
     public static let notificationPageLimit = 50
     public static let notificationChangeLimit = 200
 
@@ -24,6 +27,8 @@ extension TowerAPI {
         public let nextCursor: String?
         public let headSeq: Int
         public let counts: NotificationCounts?
+        /// The rules revision this snapshot was computed under; sent back with `changes`.
+        public let rulesRevision: Int?
         /// When Tower started this person's inbox (`inbox_started_at`); nothing older is ever imported.
         public let inboxStartedAt: String?
         /// Rows that were not valid items for this workspace and were skipped.
@@ -35,6 +40,7 @@ extension TowerAPI {
         public let throughSeq: Int
         public let headSeq: Int
         public let hasMore: Bool
+        public let rulesRevision: Int?
         public let skipped: Int
     }
 
@@ -44,7 +50,8 @@ extension TowerAPI {
         case unsupported
         /// 403: the workspace no longer lets this identity read.
         case forbidden
-        /// 410 `reset_required`: the saved sequence is older than Tower keeps; list the inbox again.
+        /// 410 `reset_required`: the saved sequence is older than Tower keeps, or the person's rules changed
+        /// (`reason: rules_changed`); list the inbox again under the current rules revision.
         case resetRequired
     }
 
@@ -70,32 +77,37 @@ extension TowerAPI {
     /// first page and is the sequence to replay from after listing.
     public func notificationItems(workspaceId: String, appNpub: String, view: String = "inbox", cursor: String? = nil,
                                   limit: Int = TowerAPI.notificationPageLimit) async throws -> NotificationPage {
-        var query = [URLQueryItem(name: "view", value: view), URLQueryItem(name: "limit", value: String(min(max(limit, 1), 200)))]
+        var query = [URLQueryItem(name: "view", value: view), URLQueryItem(name: "limit", value: String(min(max(limit, 1), 200))),
+                     URLQueryItem(name: "client_app_id", value: Self.notificationClientAppId)]
         if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
         let o = try await notificationRead(try Self.notificationsPath(workspaceId) + "/items", query: query, appNpub: appNpub)
         guard let rows = o["items"] as? [[String: Any]] else { throw TowerError.malformed("notifications") }
         let items = rows.compactMap { NotificationItem(json: $0, workspaceId: workspaceId) }
         let next = (o["next_cursor"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         return NotificationPage(items: items, nextCursor: next, headSeq: flexibleInt(o["head_seq"]) ?? 0,
-                                counts: (o["counts"] as? [String: Any]).flatMap(NotificationCounts.init(json:)),
+                                counts: (o["counts"] as? [String: Any]).flatMap(NotificationCounts.init(json:)), rulesRevision: flexibleInt(o["rules_revision"]),
                                 inboxStartedAt: o["inbox_started_at"] as? String, skipped: rows.count - items.count)
     }
 
     /// `GET …/notifications/changes?after_seq=&limit=` — ascending, including state transitions and tombstones.
     /// `through_seq` is the last sequence actually delivered in this page (never the head).
-    public func notificationChanges(workspaceId: String, appNpub: String, afterSeq: Int,
+    public func notificationChanges(workspaceId: String, appNpub: String, afterSeq: Int, rulesRevision: Int?,
                                     limit: Int = TowerAPI.notificationChangeLimit) async throws -> NotificationChangePage {
-        let query = [URLQueryItem(name: "after_seq", value: String(afterSeq)), URLQueryItem(name: "limit", value: String(min(max(limit, 1), 200)))]
+        var query = [URLQueryItem(name: "after_seq", value: String(afterSeq)), URLQueryItem(name: "limit", value: String(min(max(limit, 1), 200))),
+                     URLQueryItem(name: "client_app_id", value: Self.notificationClientAppId)]
+        // The revision the snapshot was computed under: if the rules changed since, Tower answers 410 (rules_changed).
+        if let rulesRevision { query.append(URLQueryItem(name: "rules_revision", value: String(rulesRevision))) }
         let o = try await notificationRead(try Self.notificationsPath(workspaceId) + "/changes", query: query, appNpub: appNpub)
         guard let rows = o["changes"] as? [[String: Any]], let through = flexibleInt(o["through_seq"]) else { throw TowerError.malformed("notification changes") }
         let changes = rows.compactMap { NotificationChange(json: $0, workspaceId: workspaceId) }
         return NotificationChangePage(changes: changes, throughSeq: through, headSeq: flexibleInt(o["head_seq"]) ?? through,
-                                      hasMore: (o["has_more"] as? Bool) ?? false, skipped: rows.count - changes.count)
+                                      hasMore: (o["has_more"] as? Bool) ?? false, rulesRevision: flexibleInt(o["rules_revision"]), skipped: rows.count - changes.count)
     }
 
     /// `GET …/notifications/counts`.
     public func notificationCounts(workspaceId: String, appNpub: String) async throws -> NotificationCounts {
-        let o = try await notificationRead(try Self.notificationsPath(workspaceId) + "/counts", query: [], appNpub: appNpub)
+        let o = try await notificationRead(try Self.notificationsPath(workspaceId) + "/counts",
+                                           query: [URLQueryItem(name: "client_app_id", value: Self.notificationClientAppId)], appNpub: appNpub)
         guard let counts = NotificationCounts(json: (o["counts"] as? [String: Any]) ?? o) else { throw TowerError.malformed("notification counts") }
         return counts
     }
@@ -127,7 +139,7 @@ extension TowerAPI {
     /// actually been shown is changed; items that arrived after that sequence stay unread.
     public func bulkNotifications(workspaceId: String, appNpub: String, mutationId: String, op: String, ids: [String]?, upToSeq: Int?,
                                   view: String? = nil, category: String? = nil) async throws -> NotificationBulkOutcome {
-        var selector: [String: Any] = [:]
+        var selector: [String: Any] = ["client_app_id": Self.notificationClientAppId]
         if let ids { selector["ids"] = ids }
         if let upToSeq { selector["up_to_seq"] = upToSeq }
         if let view { selector["view"] = view }

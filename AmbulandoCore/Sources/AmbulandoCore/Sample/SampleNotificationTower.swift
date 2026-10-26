@@ -141,10 +141,21 @@ public final class SampleNotificationTower: @unchecked Sendable {
         return lock.withLock {
             defer { persist() }
             func state(_ item: [String: Any]) -> [String: Any] { item["state"] as? [String: Any] ?? [:] }
+            // This app's view: an `off` inbox rule (its own, else the shared one) hides a category from list, count and changes alike.
+            let viewer = q("client_app_id") ?? "*"
+            func visible(_ item: [String: Any]) -> Bool {
+                let app = (item["source"] as? [String: Any])?["app_id"] as? String ?? "", category = item["category"] as? String ?? ""
+                let matching = rules.values.filter { $0["source_app_id"] as? String == app && $0["category"] as? String == category && $0["channel"] as? String == "inbox"
+                    && $0["mode"] as? String != "default" }
+                if let own = matching.first(where: { $0["client_app_id"] as? String == viewer }) { return own["mode"] as? String != "off" }
+                if let shared = matching.first(where: { $0["client_app_id"] as? String == "*" }) { return shared["mode"] as? String != "off" }
+                return true
+            }
             switch (method, tail) {
             case ("GET", "/items"):
                 let wanted = q("view") ?? "inbox"
                 let live = items.values.filter { item in
+                    guard visible(item) else { return false }
                     let s = state(item)
                     if wanted == "archived" { return s["archived"] as? Bool == true && s["dismissed"] as? Bool != true }
                     return s["dismissed"] as? Bool != true && s["archived"] as? Bool != true
@@ -153,18 +164,25 @@ public final class SampleNotificationTower: @unchecked Sendable {
                 let offset = q("cursor").flatMap { Data(base64Encoded: $0) }.flatMap { String(data: $0, encoding: .utf8) }.flatMap(Int.init) ?? 0
                 let page = Array(live.dropFirst(offset).prefix(limit))
                 let next: Any = offset + limit < live.count ? Data(String(offset + limit).utf8).base64EncodedString() : NSNull()
-                return (200, ["items": page, "next_cursor": next, "head_seq": seq, "inbox_started_at": "2026-10-26T11:00:00Z"])
+                return (200, ["items": page, "next_cursor": next, "head_seq": seq, "rules_revision": rulesRevision, "inbox_started_at": "2026-10-26T11:00:00Z"])
             case ("GET", "/changes"):
                 let after = Int(q("after_seq") ?? "0") ?? 0
+                if let asked = q("rules_revision").flatMap(Int.init), asked != rulesRevision {
+                    return (410, ["code": "reset_required", "reason": "rules_changed", "rules_revision": rulesRevision])
+                }
                 let limit = min(Int(q("limit") ?? "200") ?? 200, 200)
-                let pending = changes.filter { ($0["change_seq"] as? Int ?? 0) > after }
+                // Items this app's view hides are omitted; tombstones (content-free) always stay.
+                let pending = changes.filter { ($0["change_seq"] as? Int ?? 0) > after && ($0["change_type"] as? String == "remove" || visible($0)) }
                 let page = Array(pending.prefix(limit))
-                return (200, ["changes": page, "through_seq": (page.last?["change_seq"] as? Int) ?? after, "head_seq": seq, "has_more": pending.count > page.count])
+                let more = pending.count > page.count
+                // Last delivered row while more remain; the head (same snapshot) on the last page, so a page that filtered everything advances.
+                return (200, ["changes": page, "through_seq": more ? ((page.last?["change_seq"] as? Int) ?? after) : seq, "head_seq": seq, "has_more": more,
+                              "rules_revision": rulesRevision])
             case ("GET", "/counts"):
-                let unread = items.values.filter { s in let st = state(s); return st["read"] as? Bool != true && st["dismissed"] as? Bool != true && st["archived"] as? Bool != true }
+                let unread = items.values.filter { s in let st = state(s); return visible(s) && st["read"] as? Bool != true && st["dismissed"] as? Bool != true && st["archived"] as? Bool != true }
                 var byCategory: [String: Int] = [:]
                 for item in unread { byCategory[item["category"] as? String ?? "unknown", default: 0] += 1 }
-                return (200, ["unread_total": unread.count, "by_category": byCategory, "badge": unread.count, "capped_at": 999, "head_seq": seq,
+                return (200, ["unread_total": unread.count, "by_category": byCategory, "badge": unread.count, "capped_at": 999, "head_seq": seq, "rules_revision": rulesRevision,
                               "inbox_started_at": "2026-10-26T11:00:00Z"])
             case ("GET", "/categories"):
                 let core: [[String: Any]] = [("chat_thread", "Conversations", false), ("mention", "Mentions", false), ("dm", "Direct messages", false),
@@ -174,17 +192,21 @@ public final class SampleNotificationTower: @unchecked Sendable {
                 }
                 return (200, ["sources": [["app_id": "flightdeck.core", "label": "Flight Deck", "kind": "tower_rule", "categories": core]]])
             case ("GET", "/rules"):
-                return (200, ["rules": (state2["rules"] as? [[String: Any]]) ?? []])
+                return (200, ["rules": Array(rules.values), "rules_revision": rulesRevision])
             case ("PUT", "/rules"):
-                var rules = (state2["rules"] as? [[String: Any]]) ?? []
-                for rule in (body["rules"] as? [[String: Any]]) ?? [] {
-                    rules.removeAll { $0["source_app_id"] as? String == rule["source_app_id"] as? String && $0["category"] as? String == rule["category"] as? String
-                        && $0["channel"] as? String == rule["channel"] as? String }
-                    var stored = rule; stored["row_version"] = 1
-                    rules.append(stored)
+                func key(_ r: [String: Any]) -> String { "\(r["source_app_id"] ?? "")|\(r["category"] ?? "")|\(r["client_app_id"] ?? "")|\(r["channel"] ?? "")" }
+                let entries = body["rules"] as? [[String: Any]] ?? []
+                for e in entries where (e["expected_row_version"] as? Int) != (rules[key(e)]?["row_version"] as? Int ?? 0) {
+                    return (409, ["code": "rules_conflict", "conflicts": [], "rules": Array(rules.values), "rules_revision": rulesRevision])
                 }
-                state2["rules"] = rules
-                return (200, ["rules": rules])
+                for e in entries {
+                    var stored = e
+                    stored.removeValue(forKey: "expected_row_version")
+                    stored["row_version"] = (rules[key(e)]?["row_version"] as? Int ?? 0) + 1
+                    rules[key(e)] = stored
+                }
+                rulesRevision += 1
+                return (200, ["rules": Array(rules.values), "rules_revision": rulesRevision])
             case ("PATCH", _) where tail.hasPrefix("/items/"):
                 let id = String(tail.dropFirst(7))
                 guard var item = items[id] else { return (404, ["error": "notification_not_found", "code": "notification_not_found"]) }
@@ -216,7 +238,8 @@ public final class SampleNotificationTower: @unchecked Sendable {
         }
     }
 
-    private var state2: [String: Any] = [:]
+    private var rules: [String: [String: Any]] = [:]
+    private var rulesRevision = 1
 
     private func apply(_ patch: [String: Any], to source: [String: Any]) -> [String: Any] {
         var item = source

@@ -112,4 +112,29 @@ final class NotificationsUITests: XCTestCase {
         bell.tap()
         XCTAssertTrue(app.staticTexts["Rick mentioned you"].waitForExistence(timeout: 15))
     }
+
+    func testCategoryChoiceHidesItInThisAppsViewAndCountsAgree() {
+        let app = launch()
+        let bell = app.buttons["notifications.open"].firstMatch
+        let five = NSPredicate(format: "label CONTAINS '5 unread'")
+        expectation(for: five, evaluatedWith: bell)
+        waitForExpectations(timeout: 20)
+        app.buttons["settings"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10))
+        let toggle = app.switches["settings.notifications.category.mention"]
+        for _ in 0..<10 where !toggle.exists { app.swipeUp() }
+        XCTAssertTrue(toggle.exists)
+        capture(app, "notifications-settings-categories")
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        sleep(2)
+        capture(app, "notifications-settings-after-toggle")
+        app.buttons["Done"].firstMatch.tap()
+        // The two-update mention is hidden from Ambulando's view: list and count agree (4).
+        let four = NSPredicate(format: "label CONTAINS '4 unread'")
+        expectation(for: four, evaluatedWith: bell)
+        waitForExpectations(timeout: 30)
+        bell.tap()
+        XCTAssertTrue(app.staticTexts["Ana assigned you a task"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Ana mentioned you"].exists)
+    }
 }

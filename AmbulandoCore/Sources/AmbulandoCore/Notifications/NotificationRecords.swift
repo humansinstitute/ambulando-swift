@@ -209,6 +209,7 @@ public struct NotificationCounts: Sendable, Equatable, Codable {
     public var cappedAt = 999
     public var headSeq = 0
     public var inboxStartedAt: String?
+    public var rulesRevision: Int?
     public init() {}
 
     init?(json o: [String: Any]) {
@@ -219,6 +220,7 @@ public struct NotificationCounts: Sendable, Equatable, Codable {
         cappedAt = flexibleInt(o["capped_at"]) ?? 999
         headSeq = flexibleInt(o["head_seq"]) ?? 0
         inboxStartedAt = o["inbox_started_at"] as? String
+        rulesRevision = flexibleInt(o["rules_revision"])
     }
 }
 
@@ -238,6 +240,8 @@ public struct NotificationSyncStatus: Sendable, Equatable {
     /// The inbox is being listed across jobs (a long inbox): not ready until the listing reaches its end.
     public var hydrating = false
     public var hydrateGen = 0
+    /// The rules revision the stored snapshot was computed under (sent with `changes`).
+    public var rulesRevision: Int?
     public var hydrateSeq: Int?
     public var hydrateCursor: String?
     public var archiveCursor: String?
