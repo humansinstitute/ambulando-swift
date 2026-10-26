@@ -11,6 +11,8 @@ final class FakeNotificationTower: @unchecked Sendable {
     private var log: [(seq: Int, change: [String: Any])] = []
     private var mutations: [String: (body: String, item: [String: Any])] = [:]
     var invalidCursorOnce = false
+    var invalidCursorAlways = false
+    var churnRulesEveryItemsPage = false
     var rulesRevision = 1
     /// Categories this app's view hides (an `off` rule): omitted from items, counts and changes.
     var hiddenCategories: Set<String> = []
@@ -130,6 +132,8 @@ final class FakeNotificationTower: @unchecked Sendable {
                         }
                     }.sorted { ($0["occurred_at"] as! String, $0["id"] as! String) > ($1["occurred_at"] as! String, $1["id"] as! String) }
                     let limit = Int(q("limit") ?? "50") ?? 50
+                    if churnRulesEveryItemsPage { rulesRevision += 1 }
+                    if q("cursor") != nil, invalidCursorAlways { return (410, ["error": "reset_required"]) }
                     if q("cursor") != nil, invalidCursorOnce { invalidCursorOnce = false; return (400, ["error": "invalid cursor", "code": "invalid_cursor"]) }
                     let offset = q("cursor").flatMap { Data(base64Encoded: $0) }.flatMap { String(data: $0, encoding: .utf8) }.flatMap(Int.init) ?? 0
                     let page = Array(live.dropFirst(offset).prefix(limit))
@@ -741,6 +745,24 @@ final class NotificationHydrationTests: XCTestCase {
         XCTAssertEqual(ready.state, .ready)
         let count = try await h.items(.all).count
         XCTAssertEqual(count, 121)
+    }
+
+    func testRulesChurnAndRepeatedCursorRejectionAreBoundedPerJobAndNeverReady() async throws {
+        for churn in [true, false] {
+            let h = try await NotificationHarness.make()
+            for i in 0..<120 { h.tower.put(title: "n\(i)") }
+            try await h.run(budget: 1)            // a listing in progress with a stored cursor
+            let before = h.tower.recordedRequests.count
+            if churn { h.tower.churnRulesEveryItemsPage = true } else { h.tower.invalidCursorAlways = true }
+            let run = try await h.run(budget: 1)
+            let used = h.tower.recordedRequests.count - before
+            XCTAssertTrue(run.reschedule, "the job reschedules instead of looping")
+            XCTAssertLessThanOrEqual(used, 2 * (WorkspaceSync.notificationListRestartBudget + 1), "bounded requests (churn: \(churn))")
+            let status = try await h.status()
+            XCTAssertNotEqual(status.state, .ready, "never ready from a mixed or partial snapshot")
+            XCTAssertEqual(status.localSeq, 0)
+            XCTAssertTrue(run.coldStart)
+        }
     }
 
     func testRestartedListingRemovesWhatTowerNoLongerHolds() async throws {

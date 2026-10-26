@@ -16,6 +16,8 @@ extension WorkspaceSync {
     /// Pages of the inbox listing one job fetches (50 items each). A longer inbox continues in the next job from the stored
     /// cursor and snapshot sequence; the inbox is never declared ready, and `local_seq` never moves, before the listing ends.
     public static let notificationListPageBudget = 20
+    /// Times one job restarts a listing (expired cursor, rules changed mid-listing) before it stops and reschedules.
+    public static let notificationListRestartBudget = 2
     /// Pages of changes applied in one job before it schedules itself again.
     public static let notificationReplayPageBudget = 25
     /// An unsupported backend is asked again no sooner than this (a Tower upgrade makes the inbox appear).
@@ -122,6 +124,7 @@ extension WorkspaceSync {
         // The rules revision this listing is computed under: pages that disagree are not one snapshot.
         var snapshotRevision: Int? = resumed ? status.rulesRevision : nil
         var fetched = 0
+        var restarts = 0
         var seen = Set<String>()
         while true {
             try Task.checkCancellation()
@@ -129,11 +132,17 @@ extension WorkspaceSync {
             do {
                 page = try await api.notificationItems(workspaceId: w, appNpub: workspace.appNpub, view: "inbox", cursor: resumed ? cursor : nil)
             } catch TowerAPI.NotificationReadFailure.resetRequired where resumed {
-                resumed = false; cursor = nil    // the saved cursor expired: start over from the first page
+                // The saved cursor expired: start over from the first page, a bounded number of times per job.
+                restarts += 1
+                if restarts > Self.notificationListRestartBudget { run.reschedule = true; return }
+                resumed = false; cursor = nil
                 continue
             }
             if resumed, let first = snapshotRevision, let now = page.rulesRevision, now != first {
-                // The person's rules changed mid-listing: items of the earlier pages were filtered differently. Start over.
+                // The person's rules changed mid-listing: items of the earlier pages were filtered differently. Start over,
+                // but churn never spins a job: past the restart budget the listing stays unfinished (not ready) for the next job.
+                restarts += 1
+                if restarts > Self.notificationListRestartBudget { run.reschedule = true; return }
                 resumed = false; cursor = nil; snapshotRevision = nil
                 continue
             }
