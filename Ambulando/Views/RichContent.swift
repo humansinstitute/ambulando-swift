@@ -32,11 +32,47 @@ enum RichPalette {
 /// How blocks are sized: chat posts and comments (`.chat-post-markdown`) or the document reader (`.doc-block-rendered`).
 enum RichStyle: Sendable { case chat, document }
 
+/// Desktop chat rhythm is separate from document layout and the compact iOS renderer.
+/// Spacing follows the app's text size; a readable measure leaves room for long replies in expanded threads.
+@MainActor
+struct ChatTypography {
+    static var scale: CGFloat {
+        #if os(macOS)
+        TextScale.shared.factor
+        #else
+        1
+        #endif
+    }
+    static var lineSpacing: CGFloat {
+        #if os(macOS)
+        3 * scale
+        #else
+        0
+        #endif
+    }
+    static var readableWidth: CGFloat {
+        #if os(macOS)
+        800 * scale
+        #else
+        .infinity
+        #endif
+    }
+}
+
 private struct RichContext {
     var style: RichStyle
     var muted: Bool
     var workspace: WorkspaceRecord?
     var path: [Int] = []
+    var desktopChat: Bool {
+        #if os(macOS)
+        style == .chat
+        #else
+        false
+        #endif
+    }
+    @MainActor var blockSpacing: CGFloat { desktopChat ? 14 * ChatTypography.scale : (style == .chat ? 8 : 12) }
+    @MainActor var innerSpacing: CGFloat { desktopChat ? 8 * ChatTypography.scale : 4 }
     func child(_ indices: Int...) -> RichContext { var next = self; next.path += indices; return next }
 }
 
@@ -53,11 +89,12 @@ struct RichBlocksView: View {
     @Environment(\.openURL) private var parentOpenURL
 
     var body: some View {
-        VStack(alignment: .leading, spacing: style == .chat ? 8 : 12) {
+        VStack(alignment: .leading, spacing: RichContext(style: style, muted: muted, workspace: workspace).blockSpacing) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 RichBlockView(block: block, context: RichContext(style: style, muted: muted, workspace: workspace, path: [index])).id(index)
             }
         }
+        .frame(maxWidth: style == .chat ? ChatTypography.readableWidth : .infinity, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .environment(\.openURL, OpenURLAction { url in
             if let target = RichLinks.mentionTarget(url) { openMention(kind: target.kind, id: target.id); return .handled }
@@ -81,6 +118,7 @@ private struct RichBlockView: View {
     var body: some View {
         switch block {
         case .heading(let level, let runs):
+            Group {
             #if os(macOS)
             if let selection, let span = selection.spans.first(where: { $0.path == context.path }), span.text == runs.map(\.text).joined() {
                 DocumentSelectableText(runs: runs, span: span, selection: selection, heading: level)
@@ -90,6 +128,9 @@ private struct RichBlockView: View {
             #else
             Text(InlineText.attributed(runs)).font(headingFont(level)).foregroundStyle(ink).textSelection(.enabled)
             #endif
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, context.desktopChat && context.path.last != 0 ? 4 * ChatTypography.scale : 0)
         case .paragraph(let runs):
             #if os(macOS)
             if let selection, let span = selection.spans.first(where: { $0.path == context.path }), span.text == runs.map(\.text).joined() {
@@ -101,19 +142,29 @@ private struct RichBlockView: View {
         case .code(let language, let text):
             CodeBlockView(language: language, text: text, path: context.path)
         case .quote(let blocks):
-            HStack(alignment: .top, spacing: 10) {
-                RoundedRectangle(cornerRadius: 1.5).fill(Amb.border).frame(width: 3)
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(blocks.enumerated()), id: \.offset) {
-                        RichBlockView(block: $0.element, context: context.child($0.offset))
-                    }
+            // An overlay rail takes the measured content height without proposing infinite height to a stack.
+            VStack(alignment: .leading, spacing: context.desktopChat ? context.innerSpacing : 6) {
+                ForEach(Array(blocks.enumerated()), id: \.offset) {
+                    RichBlockView(block: $0.element, context: context.child($0.offset))
                 }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, context.desktopChat ? 14 * ChatTypography.scale : 13)
+            .padding(.trailing, context.desktopChat ? 10 * ChatTypography.scale : 0)
+            .padding(.vertical, context.desktopChat ? 8 * ChatTypography.scale : 0)
+            .background(context.desktopChat ? Amb.muted.opacity(0.35) : Color.clear)
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 1.5).fill(Amb.border).frame(width: 3)
             }
             .fixedSize(horizontal: false, vertical: true)
         case .list(let ordered, let start, let items):
-            VStack(alignment: .leading, spacing: 4) {
+            // Keep a common marker gutter, including lists starting at double/triple-digit numbers.
+            let digits = String(max(abs(start), abs(start + max(0, items.count - 1)))).count
+            let markerWidth: CGFloat = ordered ? max(22, CGFloat(digits) * 9 + 7) : 14
+            let loose = items.contains { $0.blocks.count > 1 }
+            VStack(alignment: .leading, spacing: context.desktopChat ? (loose ? 14 : 8) * ChatTypography.scale : 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: context.desktopChat ? 9 * ChatTypography.scale : 6) {
                         Group {
                             if let checked = item.checked {
                                 Image(systemName: checked ? "checkmark.square.fill" : "square")
@@ -123,14 +174,16 @@ private struct RichBlockView: View {
                                 Text(ordered ? "\(start + index)." : "•").foregroundStyle(Amb.mutedForeground).monospacedDigit()
                             }
                         }
-                        .frame(minWidth: ordered ? 22 : 14, alignment: .trailing)
-                        VStack(alignment: .leading, spacing: 4) {
+                        .font(.amb(.body))
+                        .frame(minWidth: context.desktopChat ? markerWidth * ChatTypography.scale : (ordered ? 22 : 14), alignment: .trailing)
+                        VStack(alignment: .leading, spacing: context.innerSpacing) {
                             ForEach(Array(item.blocks.enumerated()), id: \.offset) { RichBlockView(block: $0.element, context: context.child(index, $0.offset)) }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
-            .padding(.leading, 4)
+            .padding(.leading, context.desktopChat ? 2 * ChatTypography.scale : 4)
         case .table(let rows):
             TableBlockView(rows: rows, path: context.path)
         case .image(let alt, let source):
@@ -151,7 +204,16 @@ private struct RichBlockView: View {
 
     /// Chat: h1 1.3rem, h2 1.12rem, h3+ 0.98rem (styles.css `.chat-post-markdown`); documents use larger headings.
     private func headingFont(_ level: Int) -> Font {
-        switch (context.style, level) {
+        #if os(macOS)
+        if context.style == .chat {
+            return switch level {
+            case ...1: .amb(.title2).weight(.bold)
+            case 2: .amb(.title3).weight(.semibold)
+            default: .amb(.headline).weight(.semibold)
+            }
+        }
+        #endif
+        return switch (context.style, level) {
         case (.chat, ...1): .amb(.title3).weight(.bold)
         case (.chat, 2): .amb(.headline)
         case (.chat, _): .amb(.subheadline).weight(.semibold)
@@ -184,7 +246,8 @@ private struct ParagraphView: View {
     }
 
     private func line(_ runs: [InlineRun]) -> some View {
-        Text(InlineText.attributed(runs)).font(.amb(.body)).foregroundStyle(context.muted ? Amb.mutedForeground : Amb.foreground)
+        Text(InlineText.attributed(runs)).font(.amb(.body).weight(.regular)).foregroundStyle(context.muted ? Amb.mutedForeground : Amb.foreground)
+            .lineSpacing(context.style == .chat ? ChatTypography.lineSpacing : 0)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
     }

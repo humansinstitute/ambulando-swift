@@ -66,6 +66,10 @@ enum MacThreadRegression {
             }
             try press(window, "section.deck")
             await settle()
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacRichFormattingCheck") {
+                try await richFormattingCheck(window, model: model)
+                print("PASS: rich thread formatting, widths, menus and draft retention"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacTextAttachmentRegression") {
                 try await textAttachments(window, model: model)
                 print("PASS: automatic text attachment real-window interactions"); fflush(stdout); exit(0)

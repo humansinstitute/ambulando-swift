@@ -521,6 +521,14 @@ struct MessageRow: View {
     /// Resolved from the store with the snapshot: workspace name, Tower's label, public profile, else the short npub.
     private var sender: PersonDisplay { people.person(message.senderNpub, senderLabel: message.senderLabel) }
 
+    private var messageHeaderSpacing: CGFloat {
+        #if os(macOS)
+        6 * ChatTypography.scale
+        #else
+        3
+        #endif
+    }
+
     var body: some View {
         let display = MessageDisplayCache.shared.display(message)
         // Code, tables and images keep their own controls (copy, scroll, open), so such rows contain elements instead
@@ -529,7 +537,7 @@ struct MessageRow: View {
         let sender = sender
         HStack(alignment: .top, spacing: 10) {
             PersonAvatar(person: sender)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: messageHeaderSpacing) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(sender.name).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
                         .accessibilityIdentifier("message.author")
@@ -582,9 +590,12 @@ struct MessageBody: View {
         if let blocks {
             RichBlocksView(blocks: blocks, muted: muted, workspace: workspace)
         } else {
-            Text(verbatim: plain).font(.amb(.body)).foregroundStyle(muted ? Amb.mutedForeground : Amb.foreground)
+            Text(verbatim: plain).font(.amb(.body).weight(.regular)).foregroundStyle(muted ? Amb.mutedForeground : Amb.foreground)
                 .textSelection(.enabled)
+                .lineSpacing(ChatTypography.lineSpacing)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: ChatTypography.readableWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

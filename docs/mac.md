@@ -16,7 +16,7 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (19) |
+| Version | 0.1.0 (21) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
@@ -442,3 +442,24 @@ visible rows; automatic follow-latest after resizing is not established by this 
 versus newer draft adoption for both text and attachment-only drafts. The shared heartbeat and watchdog apply.
 These fixture checks do not establish a real Tower round trip or resolve the historical freeze report. The installed
 normal app is never replaced or quit by this check.
+
+## Rich thread reading (build 21)
+
+Mac messages use a readable text measure (up to 800 points at Actual Text Size), extra leading between wrapped lines,
+and consistent paragraph gaps. Numbered and bulleted lists keep a shared marker gutter, with more space between
+multi-block items than between the paragraphs inside an item. Quotes have a quiet inset surface and a left rule;
+nested quotes and lists remain inside their parent. Headings keep their native weight and size. The measure and
+spacing follow View › Text Size and shrink to fit narrow threads. iPhone and iPad retain compact text spacing.
+
+Run the isolated real-window presentation check after building `AmbulandoMacTest`:
+
+```sh
+'build/test-mac/Build/Products/Test/Ambulando Test.app/Contents/MacOS/Ambulando Test' \
+  -AmbulandoFixtureReset -AmbulandoMacThreadRegression -AmbulandoMacRichFormattingCheck
+```
+
+It syncs a synthetic long reply with paragraphs, multi-paragraph ordered items, nested lists/quotes, emphasis,
+mentions, links, large list numbers, task items, code and a table. It captures the top/middle/bottom at normal,
+narrow and expanded window sizes, plus larger text, and checks horizontal bounds, unchanged stored content,
+message menu actions and unsent draft retention. It uses the existing harness heartbeat and watchdog. Captures
+and logs belong in ignored `tmp/docs/handoffs/`; these sample checks do not validate a real Tower session.
