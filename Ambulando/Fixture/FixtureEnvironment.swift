@@ -369,6 +369,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         surfaces.recordLookup = { id in
             if let t = work.task(id) { return ["title": t["title"] ?? "", "channel_id": t["channel_id"] ?? NSNull(), "scope_id": t["scope_id"] ?? NSNull()] }
             if let d = work.doc(id) { return ["title": d["title"] ?? "", "channel_id": d["channel_id"] ?? NSNull(), "scope_id": d["scope_id"] ?? NSNull()] }
+            if let f = work.file(id) { return ["title": f["display_name"] ?? "", "channel_id": f["channel_id"] ?? NSNull(), "scope_id": f["scope_id"] ?? NSNull()] }
             let channels = [Self.generalChannel: Self.scopeAmbulando, Self.designChannel: Self.scopeAmbulando, Self.deploysChannel: Self.scopeOps]
             if let scope = channels[id] { return ["title": "channel", "channel_id": id, "scope_id": scope] }
             if id.hasPrefix("f1c7bbbb") { return ["title": "Conversation", "channel_id": Self.generalChannel, "scope_id": Self.scopeAmbulando] }
@@ -423,6 +424,16 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         add(202, Self.studio, Self.designChannel, Self.richMessage, sender: Self.rick, label: "Rick")
         add(201, Self.studio, Self.deploysChannel, "Staging is green", sender: Self.rick, label: "Rick")
         add(205, Self.studio, Self.deploysChannel, "Handing the deploy rota over", sender: Self.former, label: nil)
+        // A long conversation (60 replies of mixed length, some rich) for opening, reading back and reopening a thread.
+        add(210, Self.studio, Self.deploysChannel, "Deploy rota handover, the long version", sender: Self.rick, label: "Rick")
+        for n in 211...270 {
+            let i = n - 210
+            let body = i % 9 == 0 ? Self.richMessage
+                : i % 4 == 0 ? "Rota note \(i): " + String(repeating: "the checklist moves with the rota and the pager. ", count: 2 + i % 5)
+                : "Rota reply \(i)"
+            add(n, Self.studio, Self.deploysChannel, body, sender: i % 2 == 0 ? Self.rick : Self.ana, label: i % 2 == 0 ? "Rick" : "Ana",
+                thread: Self.uuid(210, "f1c7bbbb"))
+        }
         add(300, Self.lab, Self.notesChannel, "Lab workspace notes live here", sender: Self.ana, label: "Ana")
         return rows
     }

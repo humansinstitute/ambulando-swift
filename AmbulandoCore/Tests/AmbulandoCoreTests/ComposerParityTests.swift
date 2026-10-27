@@ -23,19 +23,19 @@ final class ComposerParityTests: XCTestCase {
         XCTAssertEqual(mentions, [rick])
     }
 
-    func testUploadedReferencesLeaveTheFieldButStayInTheMessage() {
+    func testUploadedReferencesStayWhereTheyWerePlacedAndRemoveInPlace() {
         let image = StorageMarkdown.image(objectId: id, alt: "shot.png")
-        let text = "look\n\(image)"
-        XCTAssertEqual(StorageMarkdown.strippingReferences(from: text), "look")
+        let text = "look\n\(image)\nbelow"
         XCTAssertEqual(StorageMarkdown.rawReferences(in: text).map(\.attachment.storageObjectId), [id])
-        // Typing more keeps the upload (after the typed text).
-        XCTAssertEqual(StorageMarkdown.composing(visible: "look here", keeping: text), "look here\n\(image)")
-        XCTAssertEqual(StorageMarkdown.composing(visible: "", keeping: image), image)
-        XCTAssertEqual(StorageMarkdown.removing(objectId: id, from: text), "look")
-        XCTAssertEqual(StorageMarkdown.removing(objectId: id, from: image), "")
-        // A space or line break typed at the end of the field is kept (it is not swallowed by the reference after it).
-        XCTAssertEqual(StorageMarkdown.strippingReferences(from: StorageMarkdown.composing(visible: "look ", keeping: image)), "look ")
-        XCTAssertEqual(StorageMarkdown.strippingReferences(from: StorageMarkdown.composing(visible: "look\n", keeping: image)), "look\n")
+        // Removing the thumbnail takes out only that reference (and the line it was alone on).
+        XCTAssertEqual(StorageMarkdown.removingInline(objectId: id, from: text), "look\nbelow")
+        XCTAssertEqual(StorageMarkdown.removingInline(objectId: id, from: "a \(image) b"), "a b")
+        XCTAssertEqual(StorageMarkdown.removingInline(objectId: id.uppercased(), from: image), "")
+        XCTAssertEqual(StorageMarkdown.removingInline(objectId: id, from: "end\n\(image)"), "end")
+        XCTAssertEqual(StorageMarkdown.removingInline(objectId: "00000000-0000-4000-8000-000000000002", from: text), text)
+        // The message shows an inline image once: a metadata attachment for the same object is not repeated below.
+        let attachment = MessageAttachment(kind: "image", storageObjectId: id, filename: "shot.png", mimeType: "image/png", sizeBytes: 1)
+        XCTAssertEqual(StorageMarkdown.standalone([attachment], body: text), [])
     }
 }
 

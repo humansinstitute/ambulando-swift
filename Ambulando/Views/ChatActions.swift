@@ -474,6 +474,22 @@ struct ComposerPastedUploads: View {
 
 extension PendingAttachment {
     /// Strips and stages one picked photo (off the main actor).
+    /// A picked photo as a pasteboard-style item for the upload pipeline. Its bytes load only when the upload reads them.
+    static func provider(_ item: PhotosPickerItem) -> NSItemProvider {
+        let provider = NSItemProvider()
+        let type = item.supportedContentTypes.first(where: { $0.conforms(to: .image) }) ?? .image
+        provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { completion in
+            Task { @MainActor in
+                do {
+                    let data = try await item.loadTransferable(type: Data.self)
+                    completion(data, nil)
+                } catch { completion(nil, error) }
+            }
+            return nil
+        }
+        return provider
+    }
+
     static func fromPicker(_ item: PhotosPickerItem, staging: URL) async -> PendingAttachment? {
         guard let data = try? await item.loadTransferable(type: Data.self) else { return nil }
         return await Task.detached {

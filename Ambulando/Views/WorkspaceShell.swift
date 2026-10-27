@@ -41,7 +41,8 @@ struct WorkspaceShell: View {
             // A row of its own (not an inset), so no section's content can sit under it. The keyboard simply covers it
             // (the shell ignores the keyboard; each section's host moves its own content, such as the composer, above
             // it), so typing never re-lays-out the shell or the other sections.
-            if !tablet.visible {
+            // A canvas (or its full-screen board) takes the whole screen; its own controls sit at the bottom instead.
+            if !tablet.visible && !canvasOnTop {
                 SectionBar(sections: AppMode.visible(agents: showAgents, context: showContext))
             }
             }
@@ -96,6 +97,15 @@ struct WorkspaceShell: View {
         }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { showUnlock = false } }
         .modifier(TabletFixtureWindow())
+    }
+
+    /// The open section shows a canvas or a canvas board on top.
+    private var canvasOnTop: Bool {
+        guard let key = AppModel.pathKey(model.mode) else { return false }
+        switch model[keyPath: key].last {
+        case .canvas?, .board?: return true
+        default: return false
+        }
     }
 
     @ViewBuilder private func sectionView(_ section: AppMode) -> some View {
@@ -243,7 +253,7 @@ private struct LocalMentions: ViewModifier {
                 case "file": path.append(.file(workspaceId: workspace, fileId: record))
                 case "thread": path.append(.threadById(workspaceId: workspace, threadId: record))
                 case "channel": path.append(.channel(workspaceId: workspace, channelId: record))
-                default: return
+                default: model.openRecord(kind: kind, id: id)
                 }
             })
         } else {

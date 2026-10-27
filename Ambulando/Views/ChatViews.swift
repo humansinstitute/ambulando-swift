@@ -194,24 +194,11 @@ struct ChannelView: View {
     @State private var snapshot = LiveQuery<ChannelSnapshot>(initial: ChannelSnapshot())
     @State private var limit = 150
     @State private var atNewest = true
-    /// Messages (the channel's conversation) or Threads (its conversations with replies, by latest activity).
-    @SceneStorage("channel.pane") private var pane = ChannelPane.messages
 
+    // One Messages view: every conversation is a card here, and one with replies opens its real thread (the web's
+    // separate Threads list showed the same conversations again).
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("Show", selection: $pane) {
-                Text("Messages").tag(ChannelPane.messages)
-                Text("Threads").tag(ChannelPane.threads)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16).padding(.vertical, 6)
-            .accessibilityIdentifier("channel.pane")
-            if pane == .threads {
-                ChannelThreadsView(target: target, workspace: workspace, store: store)
-            } else {
-                messages
-            }
-        }
+        messages
         .tabletReadingWidth()
         .background(Amb.background)
         .modifier(PushedFixtureLabel(enabled: pushed))
@@ -324,18 +311,14 @@ struct ThreadView: View {
         let saved = ReadingPositions.shared.anchor(for: target)
         _resumeAt = State(initialValue: saved)
         _atNewest = State(initialValue: saved == nil)
-        #if os(macOS)
         _windowAnchor = State(initialValue: saved)
-        #endif
     }
 
     var body: some View {
         VStack(spacing: 0) {
         ScrollView {
             ThreadMessageStack {
-                #if os(macOS)
                 if snapshot.value.hasEarlier { pageButton(earlier: true) }
-                #endif
                 if let threadId = target.threadId { SyncErrorNote(key: WorkspaceSync.threadKey(workspace.id, threadId)) }
                 if snapshot.value.archived { SyncNote(text: "This thread is archived. Replying reopens it.") }
                 // The first message, a labelled rule, then the replies; a date label starts each day. No line between replies.
@@ -347,11 +330,10 @@ struct ThreadView: View {
                         if index > 0 && !(index == 1 && snapshot.value.messages[0].isThreadRoot) { Rectangle().fill(Amb.border.opacity(0.45)).frame(height: 1).padding(.horizontal, 24) }
                         #endif
                         MessageCell(message: message, people: snapshot.value.people, workspace: workspace, extras: snapshot.value.extras.forMessage(message.id)).equatable()
-                        #if os(macOS)
-                        if message.isThreadRoot && snapshot.value.order.count > 1 { RepliesRule(count: snapshot.value.order.count - 1) }
-                        #else
-                        if index == 0 && snapshot.value.messages.count > 1 { RepliesRule(count: snapshot.value.messages.count - 1) }
-                        #endif
+                        // The root, or the first message of a thread stored without its source id.
+                        if (message.isThreadRoot || (index == 0 && snapshot.value.windowStart == 0)) && snapshot.value.order.count > 1 {
+                            RepliesRule(count: snapshot.value.order.count - 1)
+                        }
                     }
                     .onScrollVisibilityChange(threshold: 0.3) { [visibleRows] in visibleRows.set(message.id, $0) }
                 }
@@ -366,21 +348,15 @@ struct ThreadView: View {
                 if snapshot.loaded && snapshot.value.messages.isEmpty {
                     SyncNote(text: isUnlocked ? "Loading thread…" : "This thread is not saved on this \(Device.name) yet. Unlock to load it.")
                 }
-                #if os(macOS)
                 if snapshot.value.hasNewer { pageButton(earlier: false) }
-                #endif
             }
             .padding(.bottom, 8)
-            #if !os(macOS)
-            NewestSentinel(visible: $atNewest)
-            #endif
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .modifier(FollowLatest(lastId: snapshot.value.pending.last?.id ?? snapshot.value.messages.last?.id,
                                pendingCount: snapshot.value.pending.count, nearBottom: atNewest && !snapshot.value.hasNewer,
                                resumeAt: (pageIdentity > 0 ? windowAnchor : resumeAt).flatMap { id in snapshot.value.messages.contains { $0.id == id } ? id : nil }))
-        #if os(macOS)
         // Directly measured pages have accurate geometry; a newly inserted visibility sentinel can miss its
         // first callback after page replacement, leaving a latest page incorrectly marked as older reading.
         .onScrollGeometryChange(for: Bool.self) { geometry in
@@ -395,13 +371,10 @@ struct ThreadView: View {
             if phase == .idle, snapshot.loaded, atNewest, !snapshot.value.hasNewer { windowAnchor = nil }
         }
         .id(snapshot.value.pageIdentity)
-        #endif
         .scrollDismissesKeyboard(.interactively)
         .refreshable { if let thread = target.threadId { model.openThread(thread, channelId: target.channelId, in: workspace) } }
             Composer(target: target, workspace: workspace, store: store, placeholder: "Reply", onEnqueued: { _ in
-                #if os(macOS)
                 if windowAnchor != nil { windowAnchor = nil; pageIdentity += 1 }
-                #endif
             })
         }
         .tabletReadingWidth()
@@ -426,7 +399,6 @@ struct ThreadView: View {
         }
     }
 
-    #if os(macOS)
     private func pageButton(earlier: Bool) -> some View {
         Button(earlier ? "Earlier replies" : "Newer replies") {
             let value = snapshot.value
@@ -439,7 +411,6 @@ struct ThreadView: View {
         .font(.amb(.footnote).weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
         .accessibilityHint("Messages \(snapshot.value.windowStart + 1) through \(snapshot.value.windowStart + snapshot.value.messages.count) of \(snapshot.value.order.count)")
     }
-    #endif
 
     private var isUnlocked: Bool { if case .unlocked = model.identity { true } else { false } }
 
@@ -458,11 +429,7 @@ struct ThreadView: View {
             async let pending = store.reader.outbox(target: target)
             async let directory = people(store, target)
             let history = try await messages
-            #if os(macOS)
             let window = ThreadMessageWindow(history, anchor: anchor, fallback: fallback, fallbackStart: fallbackStart)
-            #else
-            let window = ThreadMessageWindow(history, size: 500)
-            #endif
             let rows = window.messages
             MessageDisplayCache.shared.prepare(rows)
             let record = try await thread
@@ -477,18 +444,14 @@ struct ThreadView: View {
     }
 }
 
-/// Mac lazy row estimates can keep invalidating native text/control layout while sync changes the content during
-/// resizing. The Mac renders a 50-message page over its 500-message history, with explicit older/newer navigation.
-/// Channel history remains lazy/paginated, and the iPhone keeps its existing lazy thread layout.
+/// A thread renders a 50-message page of its 500-message history, with explicit older/newer navigation, as a plain
+/// (measured) stack. Lazy row estimates kept invalidating native text layout on the Mac while sync changed the content,
+/// and on the iPhone and iPad they placed a reopened thread at estimated offsets: rows came back a few messages away
+/// from where the reader left, or not at all until a scroll (an empty screen). Measured rows put the reader exactly
+/// where they were. Channel history remains lazy and paginated.
 private struct ThreadMessageStack<Content: View>: View {
     @ViewBuilder let content: () -> Content
-    var body: some View {
-        #if os(macOS)
-        VStack(alignment: .leading, spacing: 0, content: content)
-        #else
-        LazyVStack(alignment: .leading, spacing: 0, content: content)
-        #endif
-    }
+    var body: some View { VStack(alignment: .leading, spacing: 0, content: content) }
 }
 
 // MARK: Rows
@@ -753,15 +716,14 @@ final class ComposerModel {
         edited = false
     }
 
-    /// What the field shows: the typed text without uploaded images and files, which appear as thumbnails above it.
-    /// Editing keeps them (after the typed text) until a thumbnail is removed.
+    /// What the field shows: the whole draft, including the Markdown of uploaded images and files where they were
+    /// inserted, so it can be moved or edited like the web's composer (the thumbnails above are only a preview).
     var visibleText: String {
-        get { StorageMarkdown.strippingReferences(from: text) }
+        get { text }
         set {
             // Backspace inside a picked name removes the whole name, as a pill is removed.
-            let typed = MentionCodec.wholeMentionDeletion(old: visibleText, new: newValue, mentions: mentions) ?? newValue
-            let next = StorageMarkdown.composing(visible: typed, keeping: text)
-            if next != text { text = next }
+            let typed = MentionCodec.wholeMentionDeletion(old: text, new: newValue, mentions: mentions) ?? newValue
+            if typed != text { text = typed }
         }
     }
 
@@ -773,11 +735,10 @@ final class ComposerModel {
         mentions.removeAll { $0 == mention }
     }
 
-    func removeUploaded(_ objectId: String) { text = StorageMarkdown.removing(objectId: objectId, from: text) }
+    func removeUploaded(_ objectId: String) { text = StorageMarkdown.removingInline(objectId: objectId, from: text) }
 
     func pick(_ mention: Mention) {
         if !mentions.contains(mention) { mentions.append(mention) }
-        // The typed text only: uploads kept after it must not hide the `@query` being completed.
         visibleText = MentionCodec.complete(visibleText, with: mention)
     }
 
@@ -877,9 +838,12 @@ struct Composer: View {
     @State private var members = LiveQuery<[MentionCandidate]>(initial: [])
     @State private var storedDraft = LiveQuery<Draft?>(initial: nil)
     @State private var photos: [PhotosPickerItem] = []
+    /// Upload placeholders of picked photos, put in at the caret like a paste (then replaced by their Markdown).
+    @State private var insertion: String?
     @State private var openAttachment: TextAttachmentSubject?
     @State private var pasteNotice: String?
     @State private var focused = false
+    @State private var recordSuggestions: (query: MentionQuery, rows: [MentionSuggestion]) = (MentionQuery(""), [])
     /// The row of the mention list that Return or Tab picks (Up and Down move it).
     @State private var highlighted = 0
     /// Escape closes the list for the text as it stands; typing more opens it again.
@@ -888,13 +852,30 @@ struct Composer: View {
     @State private var attachingFiles = false
     #endif
 
-    private var suggestions: [MentionCandidate] {
-        guard let composer, composer.visibleText != dismissedAt, let query = MentionCodec.activeQuery(in: composer.visibleText) else { return [] }
-        let q = query.lowercased()
-        let matches = members.value.filter { q.isEmpty || $0.member.label.lowercased().contains(q) }
-        // Names starting with what was typed come first.
-        let ranked = matches.filter { $0.member.label.lowercased().hasPrefix(q) } + matches.filter { !$0.member.label.lowercased().hasPrefix(q) }
-        return Array(ranked.prefix(6))
+    /// The `@` lookahead as on the web: people and agents from the directory, and documents, tasks, conversations,
+    /// channels and scopes from the local store, filtered by the name typed so far (a `doc:` style prefix narrows it).
+    private var suggestions: [MentionSuggestion] {
+        guard let composer, composer.visibleText != dismissedAt, let typed = MentionCodec.activeQuery(in: composer.visibleText) else { return [] }
+        let query = MentionQuery(typed)
+        let records = recordSuggestions.query == query ? recordSuggestions.rows : []
+        return MentionRanking.merge(actors: members.value.map { (Mention(member: $0.member), $0.member.npub) }, records: records, query: query)
+    }
+
+    /// Records matching the active `@` query, read off the main actor as it changes.
+    private func lookUpRecords(_ typed: String?) async {
+        guard let typed, let store = model.store else { return }
+        let query = MentionQuery(typed), workspaceId = target.workspaceId
+        // A short pause lets fast typing settle before the store is read; a newer keystroke cancels this one.
+        try? await Task.sleep(for: .milliseconds(60))
+        guard !Task.isCancelled, let rows = try? await store.reader.mentionSuggestions(workspaceId: workspaceId, query: query, limit: query.limit) else { return }
+        let navigation = model.navigation.value
+        // Channels carry the sidebar's name (direct messages are named after their participants), as the web labels them.
+        let labelled = rows.map { row -> MentionSuggestion in
+            guard row.mention.type == .channel, let channel = navigation.channel(row.mention.id) else { return row }
+            return MentionSuggestion(mention: Mention(type: .channel, npub: row.mention.id, label: navigation.label(channel)),
+                                     detail: row.detail, updatedAt: row.updatedAt)
+        }
+        recordSuggestions = (query, labelled)
     }
 
     /// Keys from the text field while the mention list is open. Returns whether the key was used.
@@ -905,7 +886,7 @@ struct Composer: View {
         switch key {
         case .up: highlighted = (index - 1 + list.count) % list.count
         case .down: highlighted = (index + 1) % list.count
-        case .enter, .tab: composer.pick(Mention(member: list[index].member)); highlighted = 0
+        case .enter, .tab: composer.pick(list[index].mention); highlighted = 0
         case .escape: dismissedAt = composer.visibleText
         }
         return true
@@ -914,7 +895,7 @@ struct Composer: View {
     var body: some View {
         VStack(spacing: 0) {
             if !suggestions.isEmpty, let composer {
-                MentionPicker(members: suggestions, highlighted: min(highlighted, suggestions.count - 1)) { composer.pick(Mention(member: $0.member)) }
+                MentionPicker(suggestions: suggestions, people: members.value, highlighted: min(highlighted, suggestions.count - 1)) { composer.pick($0.mention) }
             }
             Divider().overlay(Amb.border)
             if let composer {
@@ -942,62 +923,41 @@ struct Composer: View {
                     ComposerPastedUploads(uploads: uploads, target: target, text: composer.text)
                 }
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                // While typing the on-screen keyboard covers the section bar: this button puts it away. It sits beside the
-                // photo button rather than replacing it, so photos can be attached mid-sentence.
-                if focused {
+            HStack(alignment: .bottom, spacing: 6) {
+                // The tools stack in a column on the left so the text box gets the row's width; the box is at least as
+                // tall as the column, so a long draft shows more lines rather than the column wasting the height.
+                VStack(spacing: 0) { composerTools }
+                ComposerTextView(text: Binding(get: { composer?.visibleText ?? "" }, set: { composer?.visibleText = $0; fixtureTyping() }),
+                                 focused: $focused, placeholder: placeholder, plainKeyboard: model.fixture?.plainKeyboard == true,
+                                 onPasteItems: pasteItems, onSubmit: send, onPickerKey: mentionKey, pickerOpen: !suggestions.isEmpty,
+                                 mentionTokens: composer?.presentMentions.map(\.visible) ?? [], onPasteText: pasteText, limitsInline: true,
+                                 insertion: $insertion)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                VStack(spacing: 0) {
+                    // While typing the on-screen keyboard covers the section bar: this button puts it away. Its place above
+                    // Send is kept when it is hidden: a composer that changed height as the keyboard appeared stopped the
+                    // list following its newest message (measured: the newest row left the screen on focus and after Send).
                     Button { focused = false } label: {
-                        Image(systemName: "keyboard.chevron.compact.down").font(.body.weight(.semibold)).frame(width: 36, height: 36)
+                        Image(systemName: "keyboard.chevron.compact.down").font(.body.weight(.semibold)).frame(width: 34, height: 32)
                     }
                     .accessibilityLabel("Hide keyboard")
                     .accessibilityIdentifier("composer.hideKeyboard")
                     .iconButton()
+                    .opacity(focused ? 1 : 0)
+                    .disabled(!focused)
+                    .accessibilityHidden(!focused)
+                    Button { send() } label: {
+                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).foregroundStyle(canSend ? Amb.primary : Amb.border)
+                    }
+                    .disabled(!canSend)
+                    .accessibilityLabel("Send")
+                    .accessibilityIdentifier("composer.send")
+                        .iconButton()
                 }
-                PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
-                    Image(systemName: "photo").font(.body.weight(.semibold)).frame(width: 36, height: 36)
-                }
-                .accessibilityLabel("Attach photos")
-                .accessibilityIdentifier("composer.photo")
-                .iconButton()
-                #if os(macOS)
-                Button { attachingFiles = true } label: {
-                    Image(systemName: "paperclip").font(.amb(.body).weight(.semibold)).frame(width: 36, height: 36)
-                }
-                .accessibilityLabel("Attach files")
-                .accessibilityIdentifier("composer.files")
-                .iconButton()
-                .fileImporter(isPresented: $attachingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-                    guard case .success(let urls) = result, let composer else { return }
-                    let tokens = pasteItems(MacFiles.providers(copying: urls))
-                    guard !tokens.isEmpty else { return }
-                    if !(composer.text.last.map { $0.isWhitespace } ?? true), !composer.text.isEmpty { composer.text += " " }
-                    composer.text += tokens.joined()
-                }
-                #endif
-                Button {
-                    guard let composer else { return }
-                    if !(composer.visibleText.last.map { $0.isWhitespace } ?? true) { composer.visibleText += " " }
-                    composer.visibleText += "@"
-                    focused = true
-                    model.refreshDirectory(workspace)
-                } label: { Image(systemName: "at").font(.amb(.body).weight(.semibold)).frame(width: 36, height: 36) }
-                    .accessibilityLabel("Mention someone")
-                    .accessibilityIdentifier("composer.mention")
-                    .iconButton()
-                ComposerTextView(text: Binding(get: { composer?.visibleText ?? "" }, set: { composer?.visibleText = $0; fixtureTyping() }),
-                                 focused: $focused, placeholder: placeholder, plainKeyboard: model.fixture?.plainKeyboard == true,
-                                 onPasteItems: pasteItems, onSubmit: send, onPickerKey: mentionKey, pickerOpen: !suggestions.isEmpty,
-                                 mentionTokens: composer?.presentMentions.map(\.visible) ?? [], onPasteText: pasteText, limitsInline: true)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                Button { send() } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).foregroundStyle(canSend ? Amb.primary : Amb.border)
-                }
-                .disabled(!canSend)
-                .accessibilityLabel("Send")
-                .accessibilityIdentifier("composer.send")
-                    .iconButton()
             }
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 10).padding(.vertical, 8)
         }
         .background(Amb.card)
@@ -1027,9 +987,22 @@ struct Composer: View {
             }
         }
         .onChange(of: MentionCodec.activeQuery(in: composer?.visibleText ?? "")) { _, _ in highlighted = 0 }
+        .task(id: MentionCodec.activeQuery(in: composer?.visibleText ?? "")) { await lookUpRecords(MentionCodec.activeQuery(in: composer?.visibleText ?? "")) }
         .onChange(of: photos) { _, items in
-            guard !items.isEmpty, let staging = model.staging else { return }
+            guard !items.isEmpty else { return }
             photos = []
+            // Picked photos go in at the caret as their Markdown (as the web inserts them), so they can be moved
+            // in the text; the upload strips location and camera metadata as for a paste.
+            let tokens = pasteItems(items.map(PendingAttachment.provider))
+            if !tokens.isEmpty {
+                let text = composer?.text ?? ""
+                let lead = text.isEmpty || text.last?.isNewline == true ? "" : "\n"
+                insertion = lead + tokens.joined(separator: "\n") + "\n"
+                focused = true
+                return
+            }
+            // No upload service for this composer (not connected here): stage them for the message as before.
+            guard let staging = model.staging else { return }
             Task {
                 for item in items { if let staged = await PendingAttachment.fromPicker(item, staging: staging) { composer?.attachments.append(staged) } }
             }
@@ -1046,6 +1019,41 @@ struct Composer: View {
     private func fixtureTyping() {
         guard let fixture = model.fixture, let store = model.store else { return }
         fixture.startStormIfRequested(store: store, workspaceId: target.workspaceId)
+    }
+
+    /// Photos, files (Mac) and mention, one above the other.
+    @ViewBuilder private var composerTools: some View {
+        PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
+            Image(systemName: "photo").font(.body.weight(.semibold)).frame(width: 34, height: 32)
+        }
+        .accessibilityLabel("Attach photos")
+        .accessibilityIdentifier("composer.photo")
+        .iconButton()
+        #if os(macOS)
+        Button { attachingFiles = true } label: {
+            Image(systemName: "paperclip").font(.amb(.body).weight(.semibold)).frame(width: 34, height: 32)
+        }
+        .accessibilityLabel("Attach files")
+        .accessibilityIdentifier("composer.files")
+        .iconButton()
+        .fileImporter(isPresented: $attachingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result, let composer else { return }
+            let tokens = pasteItems(MacFiles.providers(copying: urls))
+            guard !tokens.isEmpty else { return }
+            if !(composer.text.last.map { $0.isWhitespace } ?? true), !composer.text.isEmpty { composer.text += " " }
+            composer.text += tokens.joined()
+        }
+        #endif
+        Button {
+            guard let composer else { return }
+            if !(composer.visibleText.last.map { $0.isWhitespace } ?? true) { composer.visibleText += " " }
+            composer.visibleText += "@"
+            focused = true
+            model.refreshDirectory(workspace)
+        } label: { Image(systemName: "at").font(.amb(.body).weight(.semibold)).frame(width: 34, height: 32) }
+            .accessibilityLabel("Mention someone")
+            .accessibilityIdentifier("composer.mention")
+            .iconButton()
     }
 
     private var canSend: Bool {
@@ -1105,30 +1113,33 @@ struct MentionCandidate: Identifiable, Equatable, Sendable {
 }
 
 struct MentionPicker: View {
-    let members: [MentionCandidate]
+    let suggestions: [MentionSuggestion]
+    /// Directory entries, for the avatars of people and agents.
+    let people: [MentionCandidate]
     var highlighted = 0
-    let pick: (MentionCandidate) -> Void
+    let pick: (MentionSuggestion) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(members) { candidate in
-                let member = candidate.member
-                Button { pick(candidate) } label: {
+            ForEach(suggestions) { suggestion in
+                let selected = suggestion.id == suggestions[min(highlighted, suggestions.count - 1)].id
+                Button { pick(suggestion) } label: {
                     HStack(spacing: 10) {
-                        PersonAvatar(person: candidate.person)
+                        MentionIcon(mention: suggestion.mention, people: people)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(member.label).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground)
-                            Text(member.mentionType == .agent ? "Agent" : "Person").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                            Text(suggestion.mention.label).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+                            Text(suggestion.detail).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                         }
                         Spacer()
                     }
                     .padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(candidate.id == members[min(highlighted, members.count - 1)].id ? Amb.selectedFill : Color.clear)
+                    .background(selected ? Amb.selectedFill : Color.clear)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityAddTraits(candidate.id == members[min(highlighted, members.count - 1)].id ? .isSelected : [])
-                .accessibilityIdentifier("mention.\(member.label)")
+                .accessibilityLabel("\(suggestion.mention.label), \(suggestion.detail)")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityIdentifier("mention.\(suggestion.mention.label)")
             }
         }
         .padding(.vertical, 4)
@@ -1136,90 +1147,34 @@ struct MentionPicker: View {
     }
 }
 
-// MARK: Threads of a channel
+/// A person's or agent's avatar, or the record kind's symbol (document, task, conversation, channel, scope).
+struct MentionIcon: View {
+    let mention: Mention
+    let people: [MentionCandidate]
+    var size: CGFloat = 32
 
-enum ChannelPane: String { case messages, threads }
-
-/// A channel's conversations with replies, newest activity first: title (or the root's text), who started it, the
-/// latest reply and how many replies. Opening one shows the thread focused over the channel (see `ThreadFocus`).
-struct ChannelThreadsView: View {
-    @Environment(AppModel.self) private var model
-    let target: ChatTarget
-    let workspace: WorkspaceRecord
-    let store: LocalStore
-    @State private var snapshot = LiveQuery<ChannelThreadsSnapshot>(initial: ChannelThreadsSnapshot())
-
-    var body: some View {
-        List {
-            ForEach(snapshot.value.threads) { thread in
-                ThreadRouteLink(route: ChatRoute.thread(workspaceId: workspace.id, channelId: target.channelId, threadId: thread.id)) {
-                    ThreadSummaryRow(thread: thread, people: snapshot.value.people, unread: snapshot.value.unread.contains(thread.id))
-                }
-                .accessibilityIdentifier("threadlist.item")
-            }
-        }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
-        .overlay {
-            if snapshot.loaded && snapshot.value.threads.isEmpty {
-                EmptyNote(title: "No threads yet", systemImage: "bubble.left.and.text.bubble.right",
-                          detail: "Replies to a message in this channel start a thread. Threads appear here by latest activity.")
-                    .accessibilityIdentifier("threadlist.empty")
-            }
-        }
-        .refreshable { model.openChannel(target.channelId, in: workspace, force: true) }
-        .task {
-            let w = workspace.id, c = target.channelId, store = store
-            let target = target
-            snapshot.start(store: store, matches: { ($0.workspaceId == w && [.messages, .threads, .members, .agents, .viewStates].contains($0.table)) || $0.table == .profiles }) {
-                async let threads = store.reader.channelThreads(workspaceId: w, channelId: c)
-                async let directory = people(store, target)
-                async let states = store.reader.viewStates(workspaceId: w)
-                let unread = Set(try await states.filter { $0.resourceType == .thread && ($0.unread || $0.needsAttention) }.map(\.resourceId))
-                return ChannelThreadsSnapshot(threads: try await threads, people: try await directory, unread: unread)
-            }
+    static func symbol(_ type: MentionType) -> String {
+        switch type {
+        case .agent, .person: "person.crop.circle"
+        case .doc: "doc.text"
+        case .task: "checkmark.circle"
+        case .chat: "bubble.left.and.text.bubble.right"
+        case .channel: "number"
+        case .scope: "square.stack.3d.up"
         }
     }
-}
-
-struct ChannelThreadsSnapshot: Sendable, Equatable {
-    var threads: [ThreadSummary] = []
-    var people = PeopleDirectory()
-    var unread: Set<String> = []
-}
-
-struct ThreadSummaryRow: View {
-    let thread: ThreadSummary
-    let people: PeopleDirectory
-    let unread: Bool
-
-    private func person(_ npub: String?) -> String { npub == nil ? "Someone" : people.name(npub) }
 
     var body: some View {
-        let root = MentionCodec.plain(thread.rootBody).trimmingCharacters(in: .whitespacesAndNewlines)
-        let title = thread.title.map(MentionCodec.plain)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if unread { Circle().fill(Amb.brandOrange).frame(width: 7, height: 7).accessibilityLabel("Unread") }
-                Text(title?.isEmpty == false ? title! : String(root.prefix(120)))
-                    .font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(2)
-                Spacer(minLength: 4)
-                Text(ChatTime.label(thread.lastActivityAt)).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
-            }
-            if let title, !title.isEmpty, !root.hasPrefix(title) {
-                Text(root).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).lineLimit(2)
-            }
-            HStack(spacing: 6) {
-                Label("\(thread.replyCount) \(thread.replyCount == 1 ? "reply" : "replies")", systemImage: "bubble.left.and.text.bubble.right")
-                    .font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.primary)
-                Text("·").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
-                Text("\(person(thread.latestSender)): \(MentionCodec.plain(thread.latestBody))")
-                    .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
-            }
-            if thread.archived { Text("Archived").font(.amb(.caption2).weight(.semibold)).foregroundStyle(Amb.mutedForeground) }
+        if mention.type.isActor, let person = people.first(where: { $0.member.npub == mention.npub })?.person {
+            PersonAvatar(person: person).scaleEffect(size / 32).frame(width: size, height: size)
+        } else {
+            Image(systemName: Self.symbol(mention.type))
+                .font(.system(size: size * 0.45, weight: .semibold))
+                .foregroundStyle(Amb.primary)
+                .frame(width: size, height: size)
+                .background(Amb.muted, in: RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
+                .accessibilityHidden(true)
         }
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
     }
 }
 
@@ -1231,8 +1186,8 @@ struct PushedFixtureLabel: ViewModifier {
     }
 }
 
-/// People and agents picked for this message, as pills above the field (as on the web). Each is removable here, or with
-/// Backspace in the field. The visible `@Name` and the structured mention are kept together by the composer.
+/// People, agents and records picked for this message, as pills above the field (as on the web). Each is removable here,
+/// or with Backspace in the field. The visible `@Name` and the structured mention are kept together by the composer.
 struct ComposerMentionPills: View {
     let mentions: [Mention]
     let people: [MentionCandidate]
@@ -1242,9 +1197,9 @@ struct ComposerMentionPills: View {
         if !mentions.isEmpty {
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
-                    ForEach(mentions, id: \.npub) { mention in
+                    ForEach(mentions, id: \.self) { mention in
                         HStack(spacing: 6) {
-                            if let person = people.first(where: { $0.member.npub == mention.npub })?.person { PersonAvatar(person: person).scaleEffect(0.6).frame(width: 20, height: 20) }
+                            MentionIcon(mention: mention, people: people, size: 20)
                             Text(mention.label).font(.amb(.footnote).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
                             Button { remove(mention) } label: { Image(systemName: "xmark").font(.amb(.caption2).weight(.bold)).foregroundStyle(Amb.mutedForeground) }
                                 .buttonStyle(.plain)

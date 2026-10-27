@@ -19,7 +19,7 @@ struct CanvasListView: View {
         let key = WorkspaceSync.canvasesKey(workspace.id)
         List {
             ForEach(canvases.value) { canvas in
-                NavigationLink(value: WorkRoute.canvas(workspaceId: workspace.id, canvasId: canvas.id)) {
+                CanvasRouteLink(workspaceId: workspace.id, canvasId: canvas.id) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(canvas.title).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground)
                         HStack(spacing: 6) {
@@ -126,18 +126,55 @@ struct CanvasBoardView: View {
     /// A naplet opened at full size over the board (a task tree's Expand); a route chosen inside opens after it closes.
     @State private var focused: CanvasNaplet?
     @State private var focusRoute: WorkRoute?
+    // Drawing elements (sol's text, shapes and arrows): selected and dragged like items, edited from the selection bar.
+    @State private var selectedElement: String?
+    @State private var elementOverrides: [String: LayoutOverride] = [:]
+    @State private var elementOrigin: CanvasLayout?
+    /// The text sheet: a new text element (nil element) or the text of an existing one.
+    @State private var textSheet: TextSheet?
+    @State private var creatingBoard = false
+    /// Choosing items to group (sol `createGroup`): their `naplet:<id>` / `element:<id>` keys.
+    @State private var grouping = false
+    @State private var groupKeys: Set<String> = []
+    /// An arrow or line end being dragged, in canvas points.
+    @State private var endDrag: (id: String, start: Bool, point: [Double])?
+
+    struct TextSheet: Identifiable { var element: CanvasElement?; var id: String { element?.id ?? "new" } }
 
     struct LayoutOverride: Equatable { var layout: CanvasLayout; var version: Int }
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dismiss) private var dismiss
+    /// The on-screen keyboard is up (typing in a conversation or task naplet): the bottom controls step aside for it.
+    @State private var keyboardShown = false
+    #endif
+
+    /// On the iPhone the canvas uses the whole screen: the section bar is hidden (see `WorkspaceShell`) and Back, the title
+    /// and the canvas controls sit at the bottom, within reach of a thumb, as in the in-app browser.
+    private var bottomControls: Bool {
+        #if os(iOS)
+        sizeClass == .compact
+        #else
+        false
+        #endif
+    }
 
     var body: some View {
         let value = snapshot.value
+        chrome(tracking(board(value), value), value)
+    }
+
+    private func board(_ value: CanvasBoardSnapshot) -> some View {
         GeometryReader { proxy in
             let vp = viewport ?? fitted(value, proxy.size)
             ZStack(alignment: .topLeading) {
                 Amb.muted.opacity(0.5)
                     .contentShape(Rectangle())
                     .onTapGesture { selected = nil }
-                CanvasElementsLayer(elements: value.scene.elements, transform: transform(vp))
+                CanvasElementsLayer(elements: shownElements(value.scene.elements), transform: transform(vp))
+                if editing {
+                    ForEach(value.scene.elements) { element in elementHitArea(element, vp) }
+                }
                 let shownNaplets = visible(value.scene.naplets, vp, proxy.size)
                 let live = liveBoards(shownNaplets, vp)
                 ForEach(shownNaplets) { naplet in
@@ -146,6 +183,10 @@ struct CanvasBoardView: View {
                 if let id = selected, let naplet = value.scene.naplets.first(where: { $0.id == id }), movable(naplet) {
                     resizeHandle(naplet, vp)
                 }
+                if editing, let id = selectedElement, let element = value.scene.elements.first(where: { $0.id == id }) {
+                    elementSelection(element, vp)
+                }
+                if grouping { groupPicker(value, vp) }
             }
             .clipped()
             // A selected live board takes its own touches (drawing, Excalidraw's pan and zoom); the canvas pans again
@@ -155,45 +196,62 @@ struct CanvasBoardView: View {
             .onAppear { boardSize = proxy.size }
             .onChange(of: proxy.size) { _, size in boardSize = size }
         }
+    }
+
+    private func tracking(_ content: some View, _ value: CanvasBoardSnapshot) -> some View {
+        content
         .onChange(of: value.scene.naplets) { _, naplets in
             // A newer stored version (this edit or someone else's) replaces the dragged position.
             let versions = Dictionary(naplets.map { ($0.id, $0.rowVersion) }, uniquingKeysWith: { a, _ in a })
             overrides = overrides.filter { versions[$0.key] == $0.value.version }
             if let id = selected, versions[id] == nil { selected = nil }
         }
+        .onChange(of: value.scene.elements) { _, elements in
+            let versions = Dictionary(elements.map { ($0.id, $0.rowVersion) }, uniquingKeysWith: { a, _ in a })
+            elementOverrides = elementOverrides.filter { versions[$0.key] == $0.value.version }
+            if let id = selectedElement, versions[id] == nil { selectedElement = nil }
+        }
+        .onChange(of: editing) { _, on in if !on { selectedElement = nil; grouping = false; groupKeys = [] } }
+        .onChange(of: selected) { _, id in if id != nil { selectedElement = nil } }
+    }
+
+    private func chrome(_ content: some View, _ value: CanvasBoardSnapshot) -> some View {
+        content
         .onChange(of: canEdit(value)) { _, allowed in if !allowed { editing = false } }
-        .safeAreaInset(edge: .bottom, spacing: 0) { selectionBar(value) }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                selectionBar(value)
+                if bottomControls && !keyboardVisible { bottomBar(value) }
+            }
+        }
         .safeAreaInset(edge: .top, spacing: 0) { notices(value) }
         .navigationTitle(value.canvas?.title ?? "Canvas")
         .inlineTitle()
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                if editing {
-                    Button { showAdd = true } label: { Image(systemName: "plus") }
-                        .disabled(busy)
-                        .accessibilityLabel("Add item").accessibilityIdentifier("canvas.add")
-                    Button("Done") { editing = false }.accessibilityIdentifier("canvas.done")
-                } else {
-                    Button { withAnimation(.snappy) { viewport = nil; model.canvasViewports[canvasId] = nil } } label: { Image(systemName: "arrow.up.left.and.down.right.magnifyingglass") }
-                        .accessibilityLabel("Fit board").accessibilityIdentifier("canvas.fit")
-                    Button { showItems = true } label: { Image(systemName: "list.bullet") }
-                        .accessibilityLabel("Board items").accessibilityIdentifier("canvas.items")
-                    if canEdit(value) {
-                        Menu {
-                            Button { editing = true } label: { Label("Edit items", systemImage: "arrow.up.and.down.and.arrow.left.and.right") }
-                                .accessibilityIdentifier("canvas.edit")
-                            Button { editing = true; showAdd = true } label: { Label("Add item…", systemImage: "plus") }
-                            Button { renameTitle = value.canvas?.title ?? ""; renaming = true } label: { Label("Rename canvas…", systemImage: "pencil") }
-                                .accessibilityIdentifier("canvas.rename")
-                        } label: { Image(systemName: "pencil.circle") }
-                            .accessibilityLabel("Edit canvas").accessibilityIdentifier("canvas.editMenu")
-                    }
-                }
+            if !bottomControls {
+                ToolbarItemGroup(placement: .primaryAction) { controls(value) }
             }
         }
-        .sheet(isPresented: $showItems, onDismiss: { if let next = pendingOpen { pendingOpen = nil; open(next) } }) { itemsSheet(value) }
+        #if os(iOS)
+        .toolbar(bottomControls ? .hidden : .automatic, for: .navigationBar)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardShown = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardShown = false }
+        #endif
+        .sheet(isPresented: $showItems, onDismiss: { if let next = pendingOpen { pendingOpen = nil; open(next) } }) {
+            itemsSheet(value).macSheetSize(minWidth: 420, idealWidth: 480, minHeight: 360, idealHeight: 520)
+        }
         .sheet(isPresented: $showAdd) {
             CanvasAddItemSheet(workspace: workspace, canvasId: canvasId, store: store) { choice in add(choice, value) }
+                .macSheetSize(minWidth: 480, idealWidth: 560, minHeight: 420, idealHeight: 600)
+        }
+        .sheet(item: $textSheet) { sheet in
+            CanvasTextSheet(initial: sheet.element?.text ?? "") { text in saveText(text, sheet.element, value) }
+                .macSheetSize(minWidth: 420, idealWidth: 480, minHeight: 260, idealHeight: 320)
+        }
+        .sheet(isPresented: $creatingBoard) {
+            NewBoardSheet(channels: model.navigation.value.groups.flatMap(\.channels), labels: model.navigation.value.labels,
+                          preferred: model.context.channelId) { title, channel in createBoard(title: title, channelId: channel, value) }
+                .macSheetSize(minWidth: 420, idealWidth: 480, minHeight: 300, idealHeight: 360)
         }
         .alert("Rename canvas", isPresented: $renaming) {
             TextField("Title", text: $renameTitle).accessibilityIdentifier("canvas.rename.title")
@@ -413,8 +471,83 @@ struct CanvasBoardView: View {
         }
     }
 
+    private var keyboardVisible: Bool {
+        #if os(iOS)
+        keyboardShown
+        #else
+        false
+        #endif
+    }
+
+    /// Fit, board items and the edit menu (or, while editing, Add and Done): in the toolbar, or the iPhone's bottom bar.
+    @ViewBuilder private func controls(_ value: CanvasBoardSnapshot) -> some View {
+        if editing {
+            Menu {
+                Button { showAdd = true } label: { Label("Item from this \(Device.name)…", systemImage: "square.on.square") }
+                    .accessibilityIdentifier("canvas.add.item")
+                Button { creatingBoard = true } label: { Label("New whiteboard…", systemImage: "scribble.variable") }
+                    .accessibilityIdentifier("canvas.add.board")
+                Divider()
+                Button { textSheet = TextSheet(element: nil) } label: { Label("Text…", systemImage: "textformat") }
+                    .accessibilityIdentifier("canvas.add.text")
+                Button { addShape(.rectangle, value) } label: { Label("Rectangle", systemImage: "rectangle") }
+                Button { addShape(.ellipse, value) } label: { Label("Ellipse", systemImage: "circle") }
+                Button { addShape(.diamond, value) } label: { Label("Diamond", systemImage: "diamond") }
+                Button { addArrow(value) } label: { Label("Arrow", systemImage: "arrow.right") }
+                    .accessibilityIdentifier("canvas.add.arrow")
+                Button { addArrow(value, line: true) } label: { Label("Line", systemImage: "line.diagonal") }
+                    .accessibilityIdentifier("canvas.add.line")
+                Button { addFrame(value) } label: { Label("Frame", systemImage: "rectangle.dashed") }
+                    .accessibilityIdentifier("canvas.add.frame")
+                Divider()
+                Button { selected = nil; selectedElement = nil; groupKeys = []; grouping = true } label: { Label("Group…", systemImage: "square.on.square.dashed") }
+                    .accessibilityIdentifier("canvas.add.group")
+            } label: { Image(systemName: "plus") }
+                .disabled(busy)
+                .accessibilityLabel("Add to canvas").accessibilityIdentifier("canvas.add")
+            Button("Done") { editing = false }.accessibilityIdentifier("canvas.done")
+        } else {
+            Button { withAnimation(.snappy) { viewport = nil; model.canvasViewports[canvasId] = nil } } label: { Image(systemName: "arrow.up.left.and.down.right.magnifyingglass") }
+                .accessibilityLabel("Fit board").accessibilityIdentifier("canvas.fit")
+            Button { showItems = true } label: { Image(systemName: "list.bullet") }
+                .accessibilityLabel("Board items").accessibilityIdentifier("canvas.items")
+            if canEdit(value) {
+                Menu {
+                    Button { editing = true } label: { Label("Edit items", systemImage: "arrow.up.and.down.and.arrow.left.and.right") }
+                        .accessibilityIdentifier("canvas.edit")
+                    Button { editing = true; showAdd = true } label: { Label("Add item…", systemImage: "plus") }
+                    Button { renameTitle = value.canvas?.title ?? ""; renaming = true } label: { Label("Rename canvas…", systemImage: "pencil") }
+                        .accessibilityIdentifier("canvas.rename")
+                } label: { Image(systemName: "pencil.circle") }
+                    .accessibilityLabel("Edit canvas").accessibilityIdentifier("canvas.editMenu")
+            }
+        }
+    }
+
+    /// The iPhone's canvas navigation at the bottom: Back, the canvas name and its controls, above the home indicator.
+    @ViewBuilder private func bottomBar(_ value: CanvasBoardSnapshot) -> some View {
+        #if os(iOS)
+        HStack(spacing: 18) {
+            Button { dismiss() } label: { Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).frame(width: 36, height: 36) }
+                .accessibilityLabel("Back").accessibilityIdentifier("canvas.back")
+            Text(value.canvas?.title ?? "Canvas").font(.amb(.headline)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
+            Group { controls(value) }.font(.system(size: 18, weight: .medium)).frame(minWidth: 36, minHeight: 36)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(.bar)
+        .overlay(alignment: .top) { Rectangle().fill(Amb.border).frame(height: 0.5) }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("canvas.bottomBar")
+        #endif
+    }
+
     @ViewBuilder private func selectionBar(_ value: CanvasBoardSnapshot) -> some View {
-        if let id = selected, let naplet = value.scene.naplets.first(where: { $0.id == id }) {
+        if editing && grouping {
+            groupBar(value)
+        } else if editing, let id = selectedElement, let element = value.scene.elements.first(where: { $0.id == id }) {
+            elementBar(element, value)
+        } else if let id = selected, let naplet = value.scene.naplets.first(where: { $0.id == id }) {
             HStack(spacing: 10) {
                 Image(systemName: NapletCard.icon(naplet.content)).foregroundStyle(Amb.primary)
                 VStack(alignment: .leading, spacing: 1) {
@@ -424,6 +557,13 @@ struct CanvasBoardView: View {
                 Spacer()
                 if editing {
                     if busy { ProgressView() }
+                    orderButtons(value) { delta in reorder(naplet, by: delta, value) }
+                    if naplet.isReady {
+                        Button { run { e, c, w in try await e.duplicate(c, w, canvasId: canvasId, naplet: naplet, topZ: topZ(value)) } } label: {
+                            Image(systemName: "plus.square.on.square")
+                        }
+                        .buttonStyle(.bordered).disabled(busy).accessibilityLabel("Duplicate").accessibilityIdentifier("naplet.duplicate")
+                    }
                     Button("Remove", role: .destructive) { removing = naplet }
                         .buttonStyle(.bordered).disabled(busy).accessibilityIdentifier("naplet.remove")
                 } else if openable(naplet) {
@@ -446,7 +586,7 @@ struct CanvasBoardView: View {
                 .accessibilityIdentifier("canvas.item.\(naplet.title)")
             }
             .navigationTitle("Board items")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { showItems = false } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { showItems = false }.accessibilityIdentifier("canvas.items.close") } }
         }
         .presentationDetents([.medium, .large])
     }
@@ -497,6 +637,302 @@ struct CanvasBoardView: View {
             .gesture(editGesture(naplet, vp, resize: true))
             .accessibilityLabel("Resize \(naplet.title)")
             .accessibilityIdentifier("naplet.resize")
+    }
+
+    // MARK: Drawing elements
+
+    /// Elements where they were just dragged until Tower has the move.
+    private func shownElements(_ elements: [CanvasElement]) -> [CanvasElement] {
+        guard !elementOverrides.isEmpty else { return elements }
+        return elements.map { e in
+            guard let o = elementOverrides[e.id], o.version == e.rowVersion else { return e }
+            var moved = e
+            moved.layout = o.layout
+            return moved
+        }
+    }
+
+    private func shownLayout(_ e: CanvasElement) -> CanvasLayout {
+        if let o = elementOverrides[e.id], o.version == e.rowVersion { return o.layout }
+        return e.layout
+    }
+
+    private func screenRect(_ layout: CanvasLayout, _ vp: CanvasViewport) -> CGRect {
+        CGRect(x: vp.x + layout.x * vp.scale, y: vp.y + layout.y * vp.scale, width: layout.width * vp.scale, height: layout.height * vp.scale)
+    }
+
+    /// While editing, each element can be tapped to select it and dragged to move it (one write when the finger lifts).
+    private func elementHitArea(_ element: CanvasElement, _ vp: CanvasViewport) -> some View {
+        let rect = screenRect(shownLayout(element), vp)
+        return Rectangle().fill(Color.white.opacity(0.001))
+            .frame(width: max(rect.width, 24), height: max(rect.height, 24))
+            .position(x: rect.midX, y: rect.midY)
+            .onTapGesture { selected = nil; selectedElement = element.id }
+            .gesture(elementGesture(element, vp, resize: false), including: selectedElement == element.id && !busy ? .all : .subviews)
+            .accessibilityElement()
+            .accessibilityLabel(element.kind == .text ? "Text: \(element.text ?? "")" : "\(element.kindName.capitalized) shape")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier("element.\(element.kindName)")
+    }
+
+    @ViewBuilder private func elementSelection(_ element: CanvasElement, _ vp: CanvasViewport) -> some View {
+        if element.kind == .arrow || element.kind == .line {
+            endHandles(element, vp)
+        } else {
+            boxSelection(element, vp)
+        }
+    }
+
+    /// An arrow's or line's two ends, each dragged to a new point (sol `moveArrowEndpoint`; any bend stays).
+    private func endHandles(_ element: CanvasElement, _ vp: CanvasViewport) -> some View {
+        let ends = CanvasEditor.endPoints(element)
+        return ZStack(alignment: .topLeading) {
+            ForEach([true, false], id: \.self) { isStart in
+                let point = endDrag.flatMap { $0.id == element.id && $0.start == isStart ? $0.point : nil } ?? (isStart ? ends.start : ends.end)
+                Circle().fill(Amb.primary).overlay(Circle().stroke(.white, lineWidth: 2))
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle().inset(by: -12))
+                    .offset(x: vp.x + point[0] * vp.scale - 11, y: vp.y + point[1] * vp.scale - 11)
+                    .gesture(DragGesture(minimumDistance: 2).onChanged { drag in
+                        if viewport == nil { viewport = vp }
+                        let origin = isStart ? ends.start : ends.end
+                        endDrag = (element.id, isStart, [origin[0] + drag.translation.width / vp.scale, origin[1] + drag.translation.height / vp.scale])
+                    }.onEnded { _ in
+                        guard let drag = endDrag, drag.id == element.id else { return }
+                        endDrag = nil
+                        let moved = CanvasEditor.movingEnd(element, start: isStart, to: drag.point.map { $0.rounded() })
+                        run { e, c, w in try await e.updateElement(c, w, canvasId: canvasId, element: element, layout: moved.layout, data: moved.data) }
+                    })
+                    .accessibilityLabel(isStart ? "Start of the arrow" : "End of the arrow")
+                    .accessibilityIdentifier(isStart ? "element.start" : "element.end")
+            }
+        }
+    }
+
+    /// Line style, arrowheads and straightening for an arrow or line (sol `setElementOption`, `straightenArrow`).
+    private func arrowControls(_ element: CanvasElement) -> some View {
+        Menu {
+            Picker("Line", selection: Binding(get: { element.lineStyle }, set: { style in
+                run { e, c, w in try await e.updateElement(c, w, canvasId: canvasId, element: element, data: ["lineStyle": style]) }
+            })) {
+                Text("Solid").tag("solid"); Text("Dotted").tag("dotted"); Text("Dashed").tag("dashed")
+            }
+            ForEach(["startArrowhead", "endArrowhead"], id: \.self) { field in
+                Picker(field == "startArrowhead" ? "Start" : "End", selection: Binding(
+                    get: { field == "startArrowhead" ? element.startArrowhead : element.endArrowhead },
+                    set: { head in run { e, c, w in try await e.updateElement(c, w, canvasId: canvasId, element: element, data: [field: head]) } })) {
+                    ForEach(["none", "arrow", "triangle", "diamond", "circle"], id: \.self) { Text($0.capitalized).tag($0) }
+                }
+            }
+            if element.curve != nil {
+                Button("Straighten") { run { e, c, w in try await e.updateElement(c, w, canvasId: canvasId, element: element, data: ["curve": NSNull()]) } }
+            }
+        } label: { Image(systemName: "line.3.horizontal.decrease") }
+            .disabled(busy).accessibilityLabel("Line style").accessibilityIdentifier("element.lineStyle")
+    }
+
+    private func boxSelection(_ element: CanvasElement, _ vp: CanvasViewport) -> some View {
+        let rect = screenRect(shownLayout(element), vp)
+        return ZStack(alignment: .topLeading) {
+            Rectangle().stroke(Amb.primary, style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+                .frame(width: rect.width, height: rect.height)
+                .offset(x: rect.minX, y: rect.minY)
+                .allowsHitTesting(false)
+            Circle().fill(Amb.primary).overlay(Circle().stroke(.white, lineWidth: 2))
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle().inset(by: -12))
+                .offset(x: rect.maxX - 11, y: rect.maxY - 11)
+                .gesture(elementGesture(element, vp, resize: true))
+                .accessibilityLabel("Resize")
+                .accessibilityIdentifier("element.resize")
+        }
+    }
+
+    private func elementGesture(_ element: CanvasElement, _ vp: CanvasViewport, resize: Bool) -> some Gesture {
+        DragGesture(minimumDistance: 2).onChanged { drag in
+            let origin = elementOrigin ?? shownLayout(element)
+            if elementOrigin == nil { elementOrigin = origin }
+            if viewport == nil { viewport = vp }
+            let dx = drag.translation.width / vp.scale, dy = drag.translation.height / vp.scale
+            var next = origin
+            if resize { next.width = origin.width + dx; next.height = origin.height + dy } else { next.x = origin.x + dx; next.y = origin.y + dy }
+            elementOverrides[element.id] = LayoutOverride(layout: CanvasEditor.elementLayout(next), version: element.rowVersion)
+        }.onEnded { _ in
+            let origin = elementOrigin
+            elementOrigin = nil
+            guard let target = elementOverrides[element.id]?.layout, target != origin else { return }
+            run(failed: { elementOverrides[element.id] = nil }) { e, c, w in
+                try await e.updateElement(c, w, canvasId: canvasId, element: element, layout: target)
+            }
+        }
+    }
+
+    /// The selected element's controls: edit text and its size, bring forward or send back, duplicate, delete.
+    private func elementBar(_ element: CanvasElement, _ value: CanvasBoardSnapshot) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: element.kind == .text ? "textformat" : element.kind == .arrow || element.kind == .line ? "arrow.right" : "square.on.circle")
+                .foregroundStyle(Amb.primary)
+            Text(element.kind == .text ? (element.text ?? "Text") : element.isGroup ? "Group" : element.kindName.capitalized)
+                .font(.amb(.subheadline).weight(.semibold)).lineLimit(1)
+            Spacer()
+            if busy { ProgressView() }
+            if element.kind == .text {
+                Button { textSheet = TextSheet(element: element) } label: { Image(systemName: "pencil") }
+                    .buttonStyle(.bordered).disabled(busy).accessibilityLabel("Edit text").accessibilityIdentifier("element.editText")
+                Menu {
+                    ForEach([12, 16, 20, 24, 32, 48, 72], id: \.self) { size in
+                        Button("\(size) pt") { run { e, c, w in try await e.updateElement(c, w, canvasId: canvasId, element: element, data: ["fontSize": size]) } }
+                    }
+                } label: { Image(systemName: "textformat.size") }
+                    .disabled(busy).accessibilityLabel("Text size").accessibilityIdentifier("element.fontSize")
+            }
+            if element.kind == .arrow || element.kind == .line {
+                arrowControls(element)
+            }
+            orderButtons(value) { delta in
+                var layout = element.layout
+                layout.z = min(100_000, max(1, layout.z + delta))
+                run { e, c, w in try await e.updateElement(c, w, canvasId: canvasId, element: element, layout: layout) }
+            }
+            Button { run { e, c, w in try await e.duplicate(c, w, canvasId: canvasId, element: element, topZ: topZ(value)) } } label: {
+                Image(systemName: "plus.square.on.square")
+            }
+            .buttonStyle(.bordered).disabled(busy).accessibilityLabel("Duplicate").accessibilityIdentifier("element.duplicate")
+            Button(role: .destructive) {
+                selectedElement = nil
+                run { e, c, w in try await e.deleteElement(c, w, canvasId: canvasId, element: element) }
+            } label: { Image(systemName: element.isGroup ? "square.on.square.dashed" : "trash") }
+                .buttonStyle(.bordered).disabled(busy).accessibilityLabel(element.isGroup ? "Ungroup" : "Delete").accessibilityIdentifier("element.delete")
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.bar)
+        // A container identifier would otherwise replace the buttons' own identifiers.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("canvas.elementBar")
+    }
+
+    /// Bring forward / send back by one layer (sol `orderSelected`).
+    private func orderButtons(_ value: CanvasBoardSnapshot, _ move: @escaping (Int) -> Void) -> some View {
+        Menu {
+            Button { move(1) } label: { Label("Bring forward", systemImage: "square.2.layers.3d.top.filled") }
+            Button { move(-1) } label: { Label("Send backward", systemImage: "square.2.layers.3d.bottom.filled") }
+        } label: { Image(systemName: "square.3.layers.3d") }
+            .disabled(busy).accessibilityLabel("Arrange").accessibilityIdentifier("canvas.arrange")
+    }
+
+    private func reorder(_ naplet: CanvasNaplet, by delta: Int, _ value: CanvasBoardSnapshot) {
+        var layout = shown(naplet)
+        layout.z = min(100_000, max(1, layout.z + delta))
+        run { e, c, w in try await e.updateLayout(c, w, canvasId: canvasId, naplet: naplet, to: layout) }
+    }
+
+    private func topZ(_ value: CanvasBoardSnapshot) -> Int {
+        max(value.scene.naplets.map(\.layout.z).max() ?? 0, value.scene.elements.map(\.layout.z).max() ?? 0)
+    }
+
+    /// The middle of what is on screen, in board coordinates (new items go there).
+    private func screenCentre(_ value: CanvasBoardSnapshot) -> (x: Double, y: Double) {
+        let vp = viewport ?? fitted(value, boardSize)
+        viewport = vp
+        return ((Double(boardSize.width) / 2 - vp.x) / vp.scale, (Double(boardSize.height) / 2 - vp.y) / vp.scale)
+    }
+
+    private func addShape(_ kind: CanvasElement.Kind, _ value: CanvasBoardSnapshot) {
+        let centre = screenCentre(value), z = topZ(value) + 1
+        let layout = CanvasLayout(x: centre.x - 100, y: centre.y - 60, width: 200, height: 120, z: z)
+        run { e, c, w in
+            let id = try await e.createElement(c, w, canvasId: canvasId, .shape(kind), layout: layout)
+            await MainActor.run { selectedElement = id }
+        }
+    }
+
+    private func addArrow(_ value: CanvasBoardSnapshot, line: Bool = false) {
+        let centre = screenCentre(value), z = topZ(value) + 1
+        run { e, c, w in
+            let id = try await e.createElement(c, w, canvasId: canvasId, .arrow(from: [centre.x - 120, centre.y], to: [centre.x + 120, centre.y], line: line),
+                                               layout: CanvasLayout(x: 0, y: 0, width: 8, height: 8, z: z))
+            await MainActor.run { selectedElement = id }
+        }
+    }
+
+    private func addFrame(_ value: CanvasBoardSnapshot) {
+        let centre = screenCentre(value), z = topZ(value) + 1
+        let layout = CanvasLayout(x: centre.x - 200, y: centre.y - 140, width: 400, height: 280, z: z)
+        run { e, c, w in
+            let id = try await e.createElement(c, w, canvasId: canvasId, .frame, layout: layout)
+            await MainActor.run { selectedElement = id }
+        }
+    }
+
+    /// Every item (and element) can be tapped to add it to the group or take it out again.
+    private func groupPicker(_ value: CanvasBoardSnapshot, _ vp: CanvasViewport) -> some View {
+        let items = value.scene.naplets.map { (CanvasEditor.itemKey("naplet", $0.id), $0.layout, $0.isReady ? $0.title : "Locked item") }
+            + value.scene.elements.filter { !$0.isGroup }.map { (CanvasEditor.itemKey("element", $0.id), $0.layout, $0.kind == .text ? ($0.text ?? "Text") : $0.kindName) }
+        // Largest first, so a smaller item inside a frame or behind a large item stays on top and can be picked.
+        let ordered = items.sorted { $0.1.width * $0.1.height > $1.1.width * $1.1.height }
+        return ForEach(ordered, id: \.0) { key, layout, title in
+            let rect = screenRect(layout, vp), chosen = groupKeys.contains(key)
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Amb.primary.opacity(chosen ? 0.18 : 0.04))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Amb.primary, style: StrokeStyle(lineWidth: chosen ? 2.5 : 1, dash: chosen ? [] : [4, 3])))
+                .overlay(alignment: .topTrailing) {
+                    if chosen { Image(systemName: "checkmark.circle.fill").foregroundStyle(Amb.primary).padding(4) }
+                }
+                .frame(width: max(rect.width, 24), height: max(rect.height, 24))
+                .position(x: rect.midX, y: rect.midY)
+                .onTapGesture { if chosen { groupKeys.remove(key) } else { groupKeys.insert(key) } }
+                .accessibilityElement()
+                .accessibilityLabel(title)
+                .accessibilityAddTraits(chosen ? [.isButton, .isSelected] : .isButton)
+                .accessibilityIdentifier("canvas.pick.\(title)")
+        }
+    }
+
+    private func groupBar(_ value: CanvasBoardSnapshot) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "square.on.square.dashed").foregroundStyle(Amb.primary)
+            Text(groupKeys.count < 2 ? "Tap two or more items to group them." : "\(groupKeys.count) items")
+                .font(.amb(.subheadline)).lineLimit(2)
+            Spacer()
+            Button("Cancel") { grouping = false; groupKeys = [] }.buttonStyle(.bordered).accessibilityIdentifier("canvas.group.cancel")
+            Button("Group") {
+                let keys = Array(groupKeys).sorted()
+                let layouts = value.scene.naplets.filter { keys.contains(CanvasEditor.itemKey("naplet", $0.id)) }.map(\.layout)
+                    + value.scene.elements.filter { keys.contains(CanvasEditor.itemKey("element", $0.id)) }.map(\.layout)
+                grouping = false; groupKeys = []
+                run { e, c, w in
+                    let id = try await e.createElement(c, w, canvasId: canvasId, .group(members: keys), layout: CanvasEditor.groupBounds(layouts))
+                    await MainActor.run { selectedElement = id }
+                }
+            }
+            .buttonStyle(.borderedProminent).disabled(groupKeys.count < 2 || busy).accessibilityIdentifier("canvas.group.confirm")
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(.bar)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("canvas.groupBar")
+    }
+
+    private func saveText(_ text: String, _ element: CanvasElement?, _ value: CanvasBoardSnapshot) {
+        textSheet = nil
+        if let element {
+            guard text != element.text else { return }
+            run { e, c, w in try await e.updateElement(c, w, canvasId: canvasId, element: element, data: ["text": text]) }
+            return
+        }
+        let centre = screenCentre(value), z = topZ(value) + 1
+        let layout = CanvasLayout(x: centre.x - 120, y: centre.y - 60, width: 240, height: 120, z: z)
+        run { e, c, w in
+            let id = try await e.createElement(c, w, canvasId: canvasId, .text(text), layout: layout)
+            await MainActor.run { selectedElement = id }
+        }
+    }
+
+    private func createBoard(title: String, channelId: String, _ value: CanvasBoardSnapshot) {
+        creatingBoard = false
+        let centre = screenCentre(value), z = topZ(value) + 1
+        let layout = CanvasLayout(x: centre.x - 320, y: centre.y - 230, width: 640, height: 460, z: z)
+        run { e, c, w in try await e.createBoard(c, w, canvasId: canvasId, channelId: channelId, title: title, layout: layout) }
     }
 
     private func remove(_ naplet: CanvasNaplet) {
@@ -829,5 +1265,72 @@ struct BoardSceneView: View {
     private func attach(_ reference: BoardReference?, _ title: String) {
         guard let reference else { return }
         session = model.boardSession(reference, title: title, in: workspace, canvasId: canvasId)
+    }
+}
+
+/// Text for a new text element, or the text of one being edited (sol's inline text editor).
+struct CanvasTextSheet: View {
+    let initial: String
+    let save: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        NavigationStack {
+            TextEditor(text: $text)
+                .focused($focused)
+                .font(.amb(.body))
+                .padding(12)
+                .accessibilityIdentifier("canvas.text.field")
+                .navigationTitle(initial.isEmpty ? "New text" : "Edit text")
+                .inlineTitle()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(initial.isEmpty ? "Add" : "Save") { save(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                            .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .accessibilityIdentifier("canvas.text.save")
+                    }
+                }
+        }
+        .presentationDetents([.medium])
+        .onAppear { text = initial; focused = true }
+    }
+}
+
+/// A new Excalidraw board (sol's "Create board"): a name and the channel its File is kept in.
+struct NewBoardSheet: View {
+    let channels: [ChannelRecord]
+    let labels: [String: String]
+    let preferred: String?
+    let create: (String, String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var channel = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Board name", text: $title).accessibilityIdentifier("canvas.board.title")
+                Picker("Channel", selection: $channel) {
+                    ForEach(channels) { c in Text("#" + (labels[c.id] ?? c.name)).tag(c.id) }
+                }
+                .accessibilityIdentifier("canvas.board.channel")
+                Text("The board is saved as a file in this channel and placed on the canvas. People who can read the channel can open it.")
+                    .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+            }
+            .macGroupedForm()
+            .navigationTitle("New whiteboard")
+            .inlineTitle()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") { create(title, channel) }.disabled(channel.isEmpty).accessibilityIdentifier("canvas.board.create")
+                }
+            }
+        }
+        .presentationDetents([.medium])
+        .onAppear { channel = preferred.flatMap { id in channels.contains { $0.id == id } ? id : nil } ?? channels.first?.id ?? "" }
     }
 }

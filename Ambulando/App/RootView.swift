@@ -32,6 +32,8 @@ struct RootView: View {
                 }
             }
         }
+        // Images open large over the window (the web's image modal) on the Mac.
+        .imageLightboxHost()
         .pushTapOutcomeAlert()
     }
 }

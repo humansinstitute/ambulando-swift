@@ -122,12 +122,13 @@ final class PasteUploadUITests: XCTestCase {
         // An image: placeholder at the caret, then the storage Markdown the web inserts.
         UIPasteboard.general.image = samplePNG()
         paste(app, into: composer)
-        // The upload shows as a thumbnail above the field (removable), not as Markdown in the text.
-        XCTAssertTrue(uploadedStrip(app).waitForExistence(timeout: 20), "uploaded image shown above the field: \(value(composer))")
+        // The image's Markdown stays in the text where it was pasted (it can be moved or edited, as on the web); the
+        // thumbnail above the field previews it and can remove it.
+        XCTAssertTrue(uploadedStrip(app).waitForExistence(timeout: 20), "uploaded image previewed above the field: \(value(composer))")
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Remove message-image-'")).firstMatch.exists, "thumbnail can be removed")
         let text = value(composer)
-        XCTAssertFalse(text.contains("storage://"), "no raw Markdown in the field: \(text)")
-        XCTAssertTrue(text.hasPrefix("Hi plain words"), "earlier text kept: \(text)")
+        XCTAssertTrue(text.hasPrefix("Hi plain words![message-image-"), "the image Markdown is where it was pasted: \(text)")
+        XCTAssertTrue(text.contains("](storage://"), text)
         XCTAssertFalse(text.contains("[ Uploading"), text)
 
         // Typing goes on in the same field, and nothing was sent on its own.
@@ -139,6 +140,22 @@ final class PasteUploadUITests: XCTestCase {
         app.buttons["composer.send"].tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Hi plain words")).firstMatch.waitForExistence(timeout: 10),
                       "sent on Send")
+
+        // The sent image opens large in the lightbox (Quick Look showed cached images as an empty page), and closes again.
+        let image = app.descendants(matching: .any).matching(identifier: "image.loaded").firstMatch
+        XCTAssertTrue(image.waitForExistence(timeout: 20), "the sent image is shown inline")
+        image.tap()
+        let large = app.descendants(matching: .any)["lightbox.image"].firstMatch
+        XCTAssertTrue(large.waitForExistence(timeout: 10), "the image opens in the lightbox")
+        // The 24 × 16 sample is enlarged to its 4× limit (a larger image is fitted to the screen).
+        XCTAssertEqual(large.frame.width, 96, accuracy: 1, "enlarged: \(large.frame)")
+        XCTAssertTrue(app.buttons["lightbox.share"].exists, "it can be shared")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "chat-image-lightbox"
+        shot.lifetime = .keepAlways
+        add(shot)
+        app.buttons["lightbox.close"].firstMatch.tap()
+        XCTAssertTrue(large.waitForNonExistence(timeout: 5), "closed")
     }
 
     func testOfflinePasteFailsWithRetryAndStaysWithItsChannel() {
@@ -182,6 +199,7 @@ final class PasteUploadUITests: XCTestCase {
         XCTAssertTrue(retry.waitForExistence(timeout: 10))
         retry.tap()
         XCTAssertTrue(uploadedStrip(app).waitForExistence(timeout: 20), "retried upload shown as a thumbnail: \(value(back))")
+        XCTAssertTrue(value(back).hasPrefix("Later ![message-image-"), "the image Markdown replaced its placeholder in place: \(value(back))")
         XCTAssertTrue(value(back).hasSuffix("still typing"), value(back))
         XCTAssertTrue(app.buttons["composer.send"].isEnabled)
 

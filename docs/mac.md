@@ -16,7 +16,7 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (21) |
+| Version | 0.1.0 (22) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
@@ -148,6 +148,13 @@ each time, so after each rebuild macOS asks once for the login password to let A
   content and remain visible on record screens. The window toolbar has sync status, Search, Browser and Settings.
 - The in-app browser (with `window.nostr`) is its own window; **Back to Ambulando** or closing it ends the browsing
   presentation, and websites can then no longer ask for signatures.
+- Each canvas opens in a window of its own (build 22), so it can sit beside the main window or go full screen. The
+  window keeps its own navigation (documents, tasks and boards opened from the board, with Back); a conversation opens
+  in the main window's thread view, which comes forward, and a linked canvas opens another window. Edit from the
+  pencil menu: **+** adds an item from this Mac, a new whiteboard, text, shapes or an arrow; a selected element has its
+  own bar (edit text and size, arrange, duplicate, delete).
+- Images open in a lightbox over the window (build 22): pinch, the zoom buttons or a double-click enlarge them; Esc, a
+  click outside or ✕ closes it; **Open in Preview** hands a copy named with the image's type to Preview.
 - Chat composer: Return sends, Shift-Return or Option-Return starts a new line. Paste or drop images and files into it,
   or use the paperclip (**Attach files**) or Photos button.
 - Files: Download (checksum verified), Preview (Quick Look), Share, **Save As…** and **Open in Default App**.

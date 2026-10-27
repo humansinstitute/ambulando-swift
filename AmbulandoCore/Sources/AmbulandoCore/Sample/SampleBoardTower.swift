@@ -136,6 +136,17 @@ public final class SampleBoardTower: @unchecked Sendable {
 
     /// Re-projects the boards this stand-in owns inside a Canvas snapshot response.
     public func project(_ result: (Int, Any), for request: URLRequest) -> (Int, Any) {
+        // A new board File (sol `createBoard`: `POST /channels/:c/files` with `metadata.kind = excalidraw_board`) starts
+        // its version history from the uploaded scene, as Tower's File version 1.
+        if result.0 == 201, request.httpMethod == "POST", request.url?.path.hasSuffix("/files") == true,
+           let body = request.httpBody.flatMap({ (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }),
+           (body["metadata"] as? [String: Any])?["kind"] as? String == "excalidraw_board",
+           let file = (result.1 as? [String: Any])?["file"] as? [String: Any], let id = (file["id"] as? String)?.lowercased(),
+           let objectId = body["storage_object_id"] as? String, let bytes = objectBytes?(objectId) {
+            seed(fileId: id, bytes: bytes, canWrite: true, author: "")
+            lock.withLock { boards[id]?["title"] = (body["metadata"] as? [String: Any])?["title"] as? String; persist() }
+            return result
+        }
         guard result.0 == 200, request.url?.path.hasSuffix("/snapshot") == true, var o = result.1 as? [String: Any],
               let naplets = o["naplets"] as? [[String: Any]] else { return result }
         o["naplets"] = lock.withLock {

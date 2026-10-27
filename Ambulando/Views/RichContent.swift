@@ -523,6 +523,7 @@ final class StorageImageCache: @unchecked Sendable {
 struct StorageImageView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.imageLightbox) private var lightbox
     let objectId: String
     let alt: String
     let workspace: WorkspaceRecord?
@@ -531,7 +532,7 @@ struct StorageImageView: View {
 
     @State private var image: PlatformImage?
     @State private var file: URL?
-    @State private var preview: URL?
+    @State private var lightboxImage: LightboxImage?
     @State private var attempt = 0
     @State private var requested = false
 
@@ -548,7 +549,7 @@ struct StorageImageView: View {
     var body: some View {
         Group {
             if let image {
-                Button { preview = file } label: {
+                Button { open() } label: {
                     Image(platformImage: image).resizable().aspectRatio(contentMode: .fit)
                         .frame(maxWidth: min(maxWidth, image.size.width), maxHeight: maxHeight, alignment: .leading)
                         .clipShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
@@ -562,10 +563,17 @@ struct StorageImageView: View {
                 placeholder
             }
         }
-        .quickLookPreview($preview)
+        .imageLightboxCover($lightboxImage)
         .task(id: "\(cacheKey)#\(attempt)") { await load() }
         .onChange(of: model.syncStatus) { _, _ in if image == nil && file == nil { attempt += 1 } }
         .onChange(of: model.isUnlocked) { _, unlocked in if unlocked && image == nil { requested = false; attempt += 1 } }
+    }
+
+    /// The image large: in the window's lightbox on the Mac, full screen from here on the iPhone and iPad.
+    private func open() {
+        guard let file else { return }
+        let shown = LightboxImage(objectId: objectId, file: file, alt: alt)
+        if let lightbox { lightbox.show(shown) } else { lightboxImage = shown }
     }
 
     @ViewBuilder private var placeholder: some View {

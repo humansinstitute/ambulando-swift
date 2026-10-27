@@ -45,6 +45,11 @@ struct MacWorkspaceShell: View {
         .environment(\.openURL, OpenURLAction { model.browser.handleLink($0) })
         .environment(\.openMention, OpenMentionAction { kind, id in model.openRecord(kind: kind, id: id) })
         .onChange(of: model.browser.presented) { _, shown in if shown { openWindow(id: MacWindow.browser) } }
+        .onChange(of: model.canvasWindowRequest) { _, request in
+            guard let request else { return }
+            model.canvasWindowRequest = nil
+            openWindow(id: MacWindow.canvas, value: request)
+        }
         // The context bar's "open navigation" on the Mac reveals the sidebar column.
         .onChange(of: model.sidebarOpen) { _, open in
             guard open else { return }

@@ -36,6 +36,25 @@ public final class SQLiteConnection {
             try execute("PRAGMA foreign_keys=ON")
         }
         try execute("PRAGMA temp_store=MEMORY")
+        registerFunctions()
+    }
+
+    /// `amb_ifind(text, needle)`: the 1-based character position of `needle` in `text` ignoring case in any script, or 0
+    /// (SQLite's own `LIKE` and `lower()` fold ASCII letters only).
+    private func registerFunctions() {
+        sqlite3_create_function_v2(handle, "amb_ifind", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nil, { context, _, argv in
+            guard let argv, let a = argv[0], let b = argv[1], let text = sqlite3_value_text(a), let find = sqlite3_value_text(b) else {
+                sqlite3_result_int(context, 0); return
+            }
+            // Only called for text with letters beyond ASCII, which an all-ASCII name cannot contain (most names are):
+            // decline those from the bytes, without building strings.
+            let length = Int(sqlite3_value_bytes(a))
+            if (0..<length).allSatisfy({ text[$0] < 0x80 }) { sqlite3_result_int(context, 0); return }
+            let haystack = String(cString: text), needle = String(cString: find)
+            guard !needle.isEmpty else { sqlite3_result_int(context, 1); return }
+            guard let found = haystack.range(of: needle, options: .caseInsensitive) else { sqlite3_result_int(context, 0); return }
+            sqlite3_result_int(context, Int32(haystack.distance(from: haystack.startIndex, to: found.lowerBound) + 1))
+        }, nil, nil, nil)
     }
 
     deinit { sqlite3_close_v2(handle) }

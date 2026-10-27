@@ -83,26 +83,22 @@ final class NavigationUITests: XCTestCase {
         XCTAssertTrue(relaunched.navigationBars["#deploys"].waitForExistence(timeout: 15), "context restored after relaunch")
     }
 
-    func testChannelThreadsListAndThreadNavigation() {
+    /// One Messages view (no separate Threads pane): a conversation with replies opens its real thread from the list.
+    func testChannelMessagesOpenThreadsWithoutAThreadsPane() {
         let app = launch(reset: true)
         let general = app.buttons["channel.general"]
         XCTAssertTrue(general.waitForExistence(timeout: 15))
         general.tap()
         XCTAssertTrue(app.navigationBars["#general"].waitForExistence(timeout: 10))
-        let pane = app.segmentedControls["channel.pane"]
-        XCTAssertTrue(pane.waitForExistence(timeout: 5))
-        pane.buttons["Threads"].tap()
-        let item = app.buttons["threadlist.item"].firstMatch
-        XCTAssertTrue(item.waitForExistence(timeout: 10), "threads with replies are listed")
-        XCTAssertTrue(item.label.contains("3 replies"), item.label)
-        capture(app, "nav-thread-list")
-        item.tap()
+        XCTAssertFalse(app.segmentedControls["channel.pane"].exists, "the duplicate Threads pane is gone")
+        let root = app.buttons["thread.3"].firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 10), "thread roots show their replies in the message list")
+        capture(app, "nav-messages-only")
+        root.tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Ship it")).firstMatch.waitForExistence(timeout: 10))
         capture(app, "nav-thread-open")
         app.buttons["thread.focus.close"].firstMatch.tap()
-        XCTAssertTrue(item.waitForExistence(timeout: 10), "closing returns to the channel's thread list")
-        pane.buttons["Messages"].tap()
-        XCTAssertTrue(app.buttons["thread.3"].firstMatch.waitForExistence(timeout: 10), "thread roots show their replies in the message list")
+        XCTAssertTrue(root.waitForExistence(timeout: 10), "closing returns to the channel's messages")
     }
 
     /// Deck reads the sidebar context like the web's Deck; opening a record from it returns to the same card.

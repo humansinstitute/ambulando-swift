@@ -141,6 +141,9 @@ extension AppModel {
             adoptContext(for: .file(workspaceId: workspace, fileId: record))
         case "channel":
             adoptContext(for: .channel(workspaceId: workspace, channelId: record)); mode = .chat
+        case "scope":
+            // A scope mention makes that scope the context (as choosing it in the sidebar does).
+            if navigation.value.scope(record) != nil { selectContext(WorkContext(scopeId: record, channelId: nil)) }
         case "thread":
             // Focused over the current screen; the view fetches the conversation when it is not stored yet.
             focusThread(ThreadFocus(workspaceId: workspace, channelId: nil, threadId: record))

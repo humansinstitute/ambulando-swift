@@ -86,6 +86,9 @@ final class AppModel {
     }
     /// Mac: the New thread composer is open over the current section (a window-filling modal, like the focused thread).
     var composingThread = false
+    /// Mac: a canvas to open in a window of its own (beside the main window, as the browser is). The main window opens
+    /// it and clears this.
+    var canvasWindowRequest: CanvasWindowRoute?
     /// The conversation shown in the focused thread view over the current section (see `ThreadFocus`); persisted per
     /// connection and workspace so relaunch reopens it. Sync never sets it.
     var focusedThread: ThreadFocus? {

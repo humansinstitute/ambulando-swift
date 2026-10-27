@@ -15,7 +15,8 @@ import Foundation
 /// is queued behind any read already in flight so an older answer cannot stay on screen. A stale version is never
 /// retried with a newer one: the board is re-read and the user decides again.
 ///
-/// Drawing elements (`/elements`) and Excalidraw board contents are not edited here.
+/// Drawing elements, new boards and duplicates are in `CanvasElementEditing.swift`; Excalidraw board contents are edited
+/// through `BoardController`.
 public struct CanvasEditor: Sendable {
     let sync: WorkspaceSync
 
@@ -122,7 +123,7 @@ public struct CanvasEditor: Sendable {
         return out
     }
 
-    private static func canvasPath(_ workspace: WorkspaceRecord, _ canvasId: String) throws -> String {
+    static func canvasPath(_ workspace: WorkspaceRecord, _ canvasId: String) throws -> String {
         try TowerAPI.base(workspace.id) + "/canvases/" + TowerAPI.uuid(canvasId)
     }
 
@@ -132,7 +133,7 @@ public struct CanvasEditor: Sendable {
 
     /// One signed write. A refusal is classified for the screen; a stale version or lost access also brings the stored
     /// board up to date so the user sees what changed.
-    private func send(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, method: String, path: String,
+    func send(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, method: String, path: String,
                       body: [String: Any], canvasId: String?) async throws -> [String: Any] {
         do { try await sync.identity.requireSigner(npub: connection.signerNpub) } catch { throw CanvasEditError.locked }
         let json = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
@@ -172,7 +173,7 @@ public struct CanvasEditor: Sendable {
         await sync.refreshCanvases(connection, workspace, priority: .user, force: true)
     }
 
-    private func reloadSnapshot(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, canvasId: String) async throws {
+    func reloadSnapshot(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, canvasId: String) async throws {
         do {
             let fetched = try await sync.api(origin: try TowerOrigin(connection.origin)).canvasSnapshot(workspaceId: workspace.id, appNpub: workspace.appNpub, canvasId: canvasId)
             try await sync.store.writer.saveCanvasSnapshot(fetched.snapshot, canvas: fetched.canvas)

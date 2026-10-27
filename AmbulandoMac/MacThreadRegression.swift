@@ -36,8 +36,16 @@ enum MacThreadRegression {
         }
         NSApp.accessibilitySetValue(true, forAttribute: .init(rawValue: "AXEnhancedUserInterface"))
         NSApp.accessibilitySetValue(true, forAttribute: .init(rawValue: "AXManualAccessibility"))
-        guard let window = NSApp.windows.first(where: { $0.title == "Ambulando" || $0.title == "Ambulando Test" }) else {
-            print("FAIL: no real app window"); fflush(stdout); exit(1)
+        // Navigation can restore a section title before this task runs. Wait for the fixture window's actual
+        // content instead of depending on its transient launch title or racing SwiftUI window creation.
+        var fixtureWindow: NSWindow?
+        for _ in 0..<50 {
+            fixtureWindow = NSApp.windows.first(where: { find($0, "fixture.banner") != nil })
+            if fixtureWindow != nil { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard let window = fixtureWindow else {
+            print("FAIL: no ready fixture app window"); fflush(stdout); exit(1)
         }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -60,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacOvernightCheck") {
+                try await overnightCheck(window, model: model)
+                print("PASS: lightbox, canvas window and Board items"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacChannelRegression") {
                 try await channelSends(window, model: model)
                 print("PASS: channel Messages repeated sends"); fflush(stdout); exit(0)

@@ -567,7 +567,7 @@ struct DeckCanvasCard: View {
                 else { DeckNote(text: model.canRead ? "No canvases yet." : "Unlock to load canvases.") }
             }
             ForEach(canvases.value) { canvas in
-                NavigationLink(value: WorkRoute.canvas(workspaceId: workspace.id, canvasId: canvas.id)) {
+                CanvasRouteLink(workspaceId: workspace.id, canvasId: canvas.id) {
                     HStack(spacing: 10) {
                         Image(systemName: "rectangle.3.group").foregroundStyle(Amb.primary).frame(width: 20)
                         VStack(alignment: .leading, spacing: 2) {

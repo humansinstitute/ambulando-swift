@@ -167,6 +167,7 @@ public final class SampleWorkTower: @unchecked Sendable {
     }
 
     public func doc(_ id: String) -> [String: Any]? { lock.withLock { table("docs")[id] } }
+    public func file(_ id: String) -> [String: Any]? { lock.withLock { table("files")[id] } }
 
     public func docBody(_ id: String) -> Data? {
         lock.withLock {

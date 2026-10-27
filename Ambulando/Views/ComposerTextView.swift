@@ -79,6 +79,8 @@ struct ComposerTextView: UIViewRepresentable {
     var onPasteText: TextPasteHandler? = nil
     /// Direct typing may not grow the text past the inline limit (10,000 characters).
     var limitsInline = false
+    /// Text to put in at the caret once (for example a picked photo's upload placeholder), then cleared.
+    var insertion: Binding<String?>? = nil
 
     static let maxLines: CGFloat = 6
 
@@ -121,6 +123,14 @@ struct ComposerTextView: UIViewRepresentable {
                 view.invalidateIntrinsicContentSize()
             }
             context.coordinator.reported = text
+        }
+        if let pending = insertion?.wrappedValue, !pending.isEmpty {
+            // Inserted as typing is, so the composer hears it through the delegate and the caret ends after it.
+            let binding = insertion
+            DispatchQueue.main.async {
+                binding?.wrappedValue = nil
+                view.insertText(pending)
+            }
         }
         styleMentions(view)
         let correction: UITextAutocorrectionType = plainKeyboard ? .no : .default
@@ -326,6 +336,8 @@ struct ComposerTextView: NSViewRepresentable {
     var onPasteText: TextPasteHandler? = nil
     var limitsInline = false
     var fixedHeight: CGFloat? = nil
+    /// Text to put in at the caret once (for example a picked photo's upload placeholder), then cleared.
+    var insertion: Binding<String?>? = nil
     /// Read while the parent draws, so a text size change (`TextScale`) reaches `updateNSView`.
     private let textScale = TextScale.shared.factor
 
@@ -387,6 +399,13 @@ struct ComposerTextView: NSViewRepresentable {
                 view.needsDisplay = true
             }
             context.coordinator.reported = text
+        }
+        if let pending = insertion?.wrappedValue, !pending.isEmpty {
+            let binding = insertion
+            DispatchQueue.main.async {
+                binding?.wrappedValue = nil
+                view.insertText(pending, replacementRange: view.selectedRange())
+            }
         }
         styleMentions(view)
         view.isAutomaticSpellingCorrectionEnabled = !plainKeyboard

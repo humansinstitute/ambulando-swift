@@ -70,9 +70,10 @@ final class SurfacesUITests: XCTestCase {
         let canvas = app.buttons["canvas.Launch board"].firstMatch
         XCTAssertTrue(canvas.waitForExistence(timeout: 15))
         canvas.tap()
-        let doc = app.buttons["naplet.Build 7 launch notes"].firstMatch
+        // Documents and boards are live naplet windows (elements, not buttons) since the canvas parity build.
+        let doc = app.descendants(matching: .any)["naplet.Build 7 launch notes"].firstMatch
         XCTAssertTrue(doc.waitForExistence(timeout: 15))
-        XCTAssertTrue(app.buttons["naplet.Architecture sketch"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["naplet.Architecture sketch"].exists)
         XCTAssertTrue(app.buttons["naplet.Not available to you"].exists, "the locked naplet keeps its frame")
         XCTAssertFalse(app.staticTexts["Budget"].exists, "and discloses no title")
         XCTAssertTrue(app.descendants(matching: .any)["naplet.Architecture sketch"].exists)

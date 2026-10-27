@@ -342,7 +342,7 @@ public final class SampleSurfaceTower: @unchecked Sendable {
             return (200, ["workspace_id": workspaceId, "naplet_id": p[3], "title": n["title"] ?? "HTML", "source": n["source"] ?? [:],
                           "content": ["html": html], "versions": []])
         case (_, _, "canvases"):
-            // Canvas and naplet writes (recorded above); drawing-element writes are refused as the native client sends none.
+            // Canvas, naplet and drawing-element writes.
             return canvasWrite(p, method: method, object: object)
         case ("GET", 5, "files"):
             guard !list("denied_records").contains(p[1]), let v = table("board_versions")["\(p[1])/\(p[3])"],
@@ -377,7 +377,8 @@ public final class SampleSurfaceTower: @unchecked Sendable {
 
     // MARK: Canvas writes (lock held)
 
-    /// `POST /canvases`, `PATCH /canvases/:c`, `POST /canvases/:c/naplets`, `PATCH|DELETE /canvases/:c/naplets/:n`, with
+    /// `POST /canvases`, `PATCH /canvases/:c`, `POST /canvases/:c/naplets`, `PATCH|DELETE /canvases/:c/naplets/:n`,
+    /// `POST /canvases/:c/elements`, `PATCH|DELETE /canvases/:c/elements/:e`, with
     /// Tower's checks in its order: visible canvas (404 `canvas_unavailable`), `can_manage` (403), body validation (400),
     /// source authorization (400 `canvas_source_unavailable`), then `expected_row_version` (409 `stale_row_version`).
     private func canvasWrite(_ p: [String], method: String, object: [String: Any]) -> (Int, Any) {
@@ -427,6 +428,31 @@ public final class SampleSurfaceTower: @unchecked Sendable {
                                       "layout": Self.napletLayout(object["layout"]), "content": content, "source": ["type": type, "id": sourceId], "row_version": 1]
             put("naplets", id, row)
             return (201, ["workspace_id": workspaceId, "naplet": row])
+        case ("POST", 3) where p[2] == "elements":
+            let kind = object["kind"] as? String ?? "", data = object["data"] as? [String: Any]
+            guard ["text", "rectangle", "diamond", "ellipse", "arrow", "line", "draw", "frame"].contains(kind), let data,
+                  object["layout"] is [String: Any], kind != "text" || !((data["text"] as? String) ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+            else { return error(400, "validation_error") }
+            let id = UUID().uuidString.lowercased(), stamp = now()
+            let row: [String: Any] = ["id": id, "canvas_id": p[1], "kind": kind, "layout": Self.elementLayout(object["layout"]), "data": data,
+                                      "row_version": 1, "created_at": stamp, "updated_at": stamp]
+            put("elements", id, row)
+            return (201, ["workspace_id": workspaceId, "element": row])
+        case ("PATCH", 4) where p[2] == "elements", ("DELETE", 4) where p[2] == "elements":
+            guard let version = expected() else { return error(400, "validation_error") }
+            if method == "PATCH", object["layout"] == nil, object["data"] == nil { return error(400, "validation_error") }
+            guard var element = table("elements")[p[3]], element["canvas_id"] as? String == p[1], version == element["row_version"] as? Int else {
+                return error(409, "stale_row_version")
+            }
+            if method == "DELETE" {
+                put("elements", p[3], nil)
+                return (200, ["workspace_id": workspaceId, "deleted": true, "id": p[3]])
+            }
+            if let layout = object["layout"] { element["layout"] = Self.elementLayout(layout) }
+            if let data = object["data"] as? [String: Any] { element["data"] = data }
+            element["row_version"] = version + 1; element["updated_at"] = now()
+            put("elements", p[3], element)
+            return (200, ["workspace_id": workspaceId, "element": element])
         case ("PATCH", 4) where p[2] == "naplets", ("DELETE", 4) where p[2] == "naplets":
             guard let version = expected() else { return error(400, "validation_error") }
             if method == "PATCH", object["layout"] == nil, object["title"] == nil { return error(400, "validation_error") }
@@ -448,6 +474,15 @@ public final class SampleSurfaceTower: @unchecked Sendable {
     }
 
     /// `normalizeFlightDeckPgCanvasLayout`: rounded, size clamped to 220…1200 × 160…1000, z to 1…100000; `task_tree` kept.
+    /// Tower's element layout normalisation (sizes 8–4000, z 1–100000).
+    static func elementLayout(_ value: Any?) -> [String: Any] {
+        let o = value as? [String: Any] ?? [:]
+        func number(_ key: String, _ fallback: Double) -> Double { (o[key] as? NSNumber)?.doubleValue ?? fallback }
+        return ["x": Int(number("x", 0).rounded()), "y": Int(number("y", 0).rounded()),
+                "width": Int(min(4000, max(8, number("width", 180).rounded()))), "height": Int(min(4000, max(8, number("height", 100).rounded()))),
+                "z": Int(min(100_000, max(1, number("z", 1).rounded())))]
+    }
+
     static func napletLayout(_ value: Any?) -> [String: Any] {
         let o = value as? [String: Any] ?? [:]
         func n(_ key: String, _ fallback: Double) -> Int { Int(((o[key] as? NSNumber)?.doubleValue ?? fallback).rounded()) }

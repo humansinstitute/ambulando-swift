@@ -3,9 +3,9 @@ import AppKit
 import SwiftUI
 
 /// The Mac app: one main window over the same `AppModel` as the iPhone app (identity vault, Tower transport, SQLite store,
-/// sync engine and outboxes from AmbulandoCore), plus the in-app browser in a window of its own. There is one main window
-/// on purpose: the model holds one navigation (section, context and paths), so a second main window would mirror the
-/// first rather than be independent.
+/// sync engine and outboxes from AmbulandoCore), plus the in-app browser and each open canvas in windows of their own.
+/// There is one main window on purpose: the model holds one navigation (section, context and paths), so a second main
+/// window would mirror the first rather than be independent. A canvas window keeps its own navigation instead.
 @main
 struct AmbulandoMacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var delegate
@@ -32,6 +32,18 @@ struct AmbulandoMacApp: App {
         .onChange(of: scenePhase) { _, phase in if phase == .active { delegate.model.sceneDidBecomeActive() } }
         .commands { AmbulandoCommands(model: delegate.model, ui: delegate.ui) }
 
+        // Each canvas in a window of its own, beside the main window or full screen (as the web's canvas page).
+        WindowGroup("Canvas", id: MacWindow.canvas, for: CanvasWindowRoute.self) { $route in
+            MacCanvasWindow(route: route)
+                .appTextSize()
+                .environment(delegate.model)
+                .environment(delegate.ui)
+                .tint(Amb.primary)
+                .preferredColorScheme(AppearancePreference(rawValue: appearance)?.colorScheme)
+                .frame(minWidth: 640, minHeight: 480)
+        }
+        .defaultSize(width: 1200, height: 820)
+
         Window("Browser", id: MacWindow.browser) {
             MacBrowserWindow()
                 .appTextSize()
@@ -47,6 +59,7 @@ struct AmbulandoMacApp: App {
 enum MacWindow {
     static let main = "main"
     static let browser = "browser"
+    static let canvas = "canvas"
 }
 
 /// Owns the one `AppModel` (and the Mac's window-level UI state) for the life of the process.

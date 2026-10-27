@@ -69,6 +69,8 @@ public struct CanvasNaplet: Sendable, Equatable, Identifiable {
     /// The saved layout object as Tower sent it (JSON), including keys this build does not draw (such as `task_tree`). A
     /// move or resize patches it, so those keys are kept, as sol merges `{ ...naplet.layout, ...change }`.
     public let savedLayout: Data
+    /// The source record id (`source.id`), for duplicating the item; nil for a locked one.
+    public var sourceId: String? = nil
 
     public var isReady: Bool { if case .denied = content { false } else { true } }
 }
@@ -79,7 +81,8 @@ public struct CanvasElement: Sendable, Equatable, Identifiable {
     public let id: String
     public let kind: Kind?
     public let kindName: String
-    public let layout: CanvasLayout
+    /// Mutable so the board can show an element where it is being dragged before Tower has the move.
+    public var layout: CanvasLayout
     public let text: String?
     public let fontSize: Double
     /// Arrow/line endpoints and optional quadratic control point, relative to the layout origin (sol `arrowPoints`).
@@ -93,6 +96,12 @@ public struct CanvasElement: Sendable, Equatable, Identifiable {
     public let points: [[Double]]
     /// A frame used only to group items (`data.role == "group"`) has no visible outline.
     public let isGroup: Bool
+    /// Tower's version of the element (edits send it as `expected_row_version`).
+    public var rowVersion: Int = 0
+    /// The saved layout and data objects as Tower sent them (JSON); an edit patches them, keeping keys this build does not
+    /// draw, as sol merges `{ ...element.layout, ...change }`.
+    public var savedLayout = Data("{}".utf8)
+    public var savedData = Data("{}".utf8)
 }
 
 public struct CanvasScene: Sendable, Equatable {
@@ -197,7 +206,8 @@ public struct CanvasScene: Sendable, Equatable {
         case "excalidraw":
             guard let file = lowerUUID(content["file_id"] as? String) ?? sourceId, let versionId = lowerUUID(content["current_version_id"] as? String),
                   let sha = (content["sha256"] as? String)?.lowercased(), sha.count == 64 else {
-                return CanvasNaplet(id: id, layout: layout, title: title, sourceType: type, content: .unknown(type: "excalidraw (incomplete metadata)"), rowVersion: version, savedLayout: saved)
+                return CanvasNaplet(id: id, layout: layout, title: title, sourceType: type, content: .unknown(type: "excalidraw (incomplete metadata)"), rowVersion: version, savedLayout: saved,
+                                    sourceId: sourceId)
             }
             parsed = .excalidraw(BoardReference(fileId: file, versionId: versionId, versionNumber: flexibleInt(content["current_version_number"]) ?? 0,
                                                 sha256: sha, sizeBytes: flexibleInt(content["size_bytes"]) ?? 0, updatedAt: content["updated_at"] as? String,
@@ -208,7 +218,8 @@ public struct CanvasScene: Sendable, Equatable {
         default:
             parsed = .unknown(type: type)
         }
-        return CanvasNaplet(id: id, layout: layout, title: title, sourceType: type, content: parsed, rowVersion: version, savedLayout: saved)
+        return CanvasNaplet(id: id, layout: layout, title: title, sourceType: type, content: parsed, rowVersion: version, savedLayout: saved,
+                            sourceId: sourceId)
     }
 
     static func element(_ row: [String: Any]) -> CanvasElement? {
@@ -230,7 +241,10 @@ public struct CanvasScene: Sendable, Equatable {
                              lineStyle: (d["lineStyle"] as? String) ?? "solid",
                              startArrowhead: (d["startArrowhead"] as? String) ?? "none",
                              endArrowhead: (d["endArrowhead"] as? String) ?? (kind == .arrow ? "triangle" : "none"),
-                             points: points, isGroup: kind == .frame && d["role"] as? String == "group")
+                             points: points, isGroup: kind == .frame && d["role"] as? String == "group",
+                             rowVersion: flexibleInt(row["row_version"]) ?? 0,
+                             savedLayout: (row["layout"] as? [String: Any]).flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) } ?? Data("{}".utf8),
+                             savedData: (try? JSONSerialization.data(withJSONObject: d, options: [.sortedKeys])) ?? Data("{}".utf8))
     }
 
     /// Short plain text from a body that may be Markdown or a stored document envelope.

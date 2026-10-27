@@ -19,6 +19,26 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Overnight feedback (iPhone/iPad build 31, Mac build 22)
+
+- **One Messages view per channel.** The separate Threads pane is gone; a conversation with replies opens its thread.
+- **Images open large** in a lightbox, from messages, documents and composer thumbnails: over the window on the Mac
+  (zoom, Esc to close, Open in Preview), full screen on the iPhone and iPad (pinch or double tap to zoom, Share, tap
+  beside the image to close). Quick Look had shown cached images as a blank document.
+- **Wider composer.** Photo, files and mention are stacked on the left; Hide keyboard sits above Send.
+- **Images stay where you put them.** Pasted and picked images keep their `![name](storage://…)` Markdown in the text at
+  the caret, so they can be moved; the thumbnail above previews and removes them.
+- **Threads never open blank.** iPhone/iPad threads use the Mac's measured 50-message pages (Earlier/Newer replies), so
+  a reopened thread shows exactly where it was left.
+- **Canvas.** Mac: each canvas in its own window. iPhone: the canvas fills the screen with Back and its controls at the
+  bottom. Editing adds text, shapes, arrows, lines, frames, groups and new whiteboards; elements can be moved, resized,
+  restyled, edited, arranged, duplicated and deleted. The Mac's Add to canvas and Board items lists show their rows again.
+- **`@` finds more than people:** documents, tasks, conversations, channels and scopes, looked up in the local database as
+  you type (web prefixes such as `doc:` work), inserted as the web's reference tokens with pills.
+
+Details and the remaining gaps: [parity matrix, Overnight feedback](docs/parity-matrix.md#overnight-feedback-iphoneipad-build-31-mac-build-22).
+These are review builds on sample-data tests; they have not been checked against a live Tower.
+
 ## Composer draft ordering (iPhone/iPad build 29, Mac build 19)
 
 Clearing an unsent draft now takes precedence over delayed reads of its older saved text. Newer external Edit
@@ -98,7 +118,7 @@ large pasted crash reports. The iPhone/iPad composer is unchanged. See [Mac vali
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (29); Mac version 0.1.0 (19). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (31); Mac version 0.1.0 (22). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 

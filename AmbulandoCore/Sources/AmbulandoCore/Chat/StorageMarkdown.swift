@@ -50,35 +50,24 @@ public enum StorageMarkdown {
         return found
     }
 
-    /// `text` without its storage references (and the line break that led into each), so the field shows what was typed
-    /// while uploads show as thumbnails.
-    public static func strippingReferences(from text: String) -> String {
-        guard text.contains("storage://") else { return text }
+    /// `text` with every reference to one object removed where it stands (the composer keeps references inline, where
+    /// the user placed them). A line left empty by the removal goes too; other text is untouched.
+    public static func removingInline(objectId: String, from text: String) -> String {
         let ns = text as NSString
-        var out = ns as String
+        var out = text
         for match in reference.matches(in: text, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let id = ns.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespaces)
+            guard id.lowercased() == objectId.lowercased() else { continue }
             var range = match.range
-            // Only the one line break `composing` puts before a reference: spaces the user typed stay.
-            if range.location > 0, (out as NSString).character(at: range.location - 1) == 10 {
-                range = NSRange(location: range.location - 1, length: range.length + 1)
-            }
-            out = (out as NSString).replacingCharacters(in: range, with: "")
+            let current = out as NSString
+            let before = range.location > 0 ? current.character(at: range.location - 1) : 10
+            let after = NSMaxRange(range) < current.length ? current.character(at: NSMaxRange(range)) : 10
+            if before == 10 && after == 10 && NSMaxRange(range) < current.length { range.length += 1 }
+            else if before == 10 && after == 10 && range.location > 0 { range.location -= 1; range.length += 1 }
+            else if after == 32 { range.length += 1 }
+            out = current.replacingCharacters(in: range, with: "")
         }
         return out
-    }
-
-    /// The field text the user edited, with the earlier references of `original` kept after it (one per line).
-    public static func composing(visible: String, keeping original: String) -> String {
-        let refs = rawReferences(in: original).map(\.raw)
-        guard !refs.isEmpty else { return visible }
-        return (visible.isEmpty ? "" : visible + "\n") + refs.joined(separator: "\n")
-    }
-
-    /// `text` without the reference to one object.
-    public static func removing(objectId: String, from text: String) -> String {
-        let keep = rawReferences(in: text).filter { $0.attachment.storageObjectId.lowercased() != objectId.lowercased() }.map(\.raw)
-        let visible = strippingReferences(from: text)
-        return (visible.isEmpty || keep.isEmpty ? visible : visible + "\n") + keep.joined(separator: "\n")
     }
 
     /// Attachments plus the body's storage references not already among them (sol `mergeChatStorageAttachments`).

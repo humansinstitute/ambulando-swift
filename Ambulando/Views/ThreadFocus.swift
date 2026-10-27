@@ -51,10 +51,23 @@ extension AppModel {
     /// A section's navigation path with any conversation taken out and opened in the focused thread view instead: every
     /// push (a link, a Deck row, a mention, a canvas naplet) shows threads the same way.
     func absorbingThreads(_ path: [WorkRoute]) -> [WorkRoute] {
+        #if os(macOS)
+        // On the Mac a canvas just pushed opens in its own window instead, so it can sit beside the app (or full screen).
+        if case .canvas(let workspace, let canvas)? = path.last {
+            canvasWindowRequest = CanvasWindowRoute(workspaceId: workspace, canvasId: canvas)
+            return absorbingThreads(Array(path.dropLast()))
+        }
+        #endif
         guard let focus = path.lazy.compactMap(ThreadFocus.init).last else { return path }
         focusThread(focus)
         return path.filter { ThreadFocus($0) == nil }
     }
+}
+
+/// A canvas shown in a Mac window of its own (the window's value, restored with the window).
+struct CanvasWindowRoute: Hashable, Codable {
+    let workspaceId: String
+    let canvasId: String
 }
 
 /// A link to a navigation route that opens conversations in the focused thread view and pushes anything else. A plain
@@ -72,6 +85,23 @@ struct ThreadRouteLink<Route: Hashable, Label: View>: View {
         } else {
             NavigationLink(value: route) { label }
         }
+    }
+}
+
+/// A link to a canvas: pushed on the iPhone and iPad; on the Mac it opens the canvas in its own window (a pushed
+/// `NavigationLink` would show it in the section even though the model takes it out of the path).
+struct CanvasRouteLink<Label: View>: View {
+    @Environment(AppModel.self) private var model
+    let workspaceId: String
+    let canvasId: String
+    @ViewBuilder let label: () -> Label
+
+    var body: some View {
+        #if os(macOS)
+        Button { model.canvasWindowRequest = CanvasWindowRoute(workspaceId: workspaceId, canvasId: canvasId) } label: { label() }
+        #else
+        NavigationLink(value: WorkRoute.canvas(workspaceId: workspaceId, canvasId: canvasId)) { label() }
+        #endif
     }
 }
 

@@ -1,11 +1,33 @@
 import Foundation
 
-public enum MentionType: String, Sendable, Codable, Hashable { case agent, person }
+/// What an `@` mention names. People and agents are routed (Tower gets a structured `mentions` entry); the others are
+/// record references carried by their body token only, as the web's `@` picker writes them (sol `searchMentions`):
+/// `doc`, `task`, `channel`, `scope`, and `chat` for a conversation (`<channel id>#<root message id>`, the web's FD Ref).
+public enum MentionType: String, Sendable, Codable, Hashable, CaseIterable {
+    case agent, person, doc, task, chat, channel, scope
+
+    /// A person or agent: routed to, and sent in the structured `mentions` list.
+    public var isActor: Bool { self == .agent || self == .person }
+
+    /// The word shown under a suggestion.
+    public var label: String {
+        switch self {
+        case .agent: "Agent"
+        case .person: "Person"
+        case .doc: "Doc"
+        case .task: "Task"
+        case .chat: "Thread"
+        case .channel: "Channel"
+        case .scope: "Scope"
+        }
+    }
+}
 
 /// One mention identity. The visible body token and the structured `mentions` entry are both derived
 /// from this value, so they can never disagree (sol agent-direct-chat.js / mention-composer.js).
 public struct Mention: Sendable, Codable, Hashable {
     public let type: MentionType
+    /// The person's or agent's npub, or the record id of a reference (the stored key keeps its original name).
     public let npub: String
     public let label: String
 
@@ -28,8 +50,10 @@ public struct Mention: Sendable, Codable, Hashable {
     public var token: String { "@[\(label)](mention:\(type.rawValue):\(npub))" }
     /// What the user sees and edits in the composer.
     public var visible: String { "@\(label)" }
-    /// Request entry for `POST …/messages` `mentions`.
+    /// Request entry for `POST …/messages` `mentions` (people and agents only; see `MentionCodec.encode`).
     public var requestObject: [String: String] { ["type": type.rawValue, "npub": npub, "label": label] }
+    /// The record id of a reference (the npub of a person or agent).
+    public var id: String { npub }
 }
 
 /// A rendered piece of a message body.
@@ -51,7 +75,7 @@ public enum MentionCodec {
         for match in pattern.matches(in: body, range: NSRange(location: 0, length: ns.length)) {
             if match.range.location > cursor { out.append(.text(ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))) }
             let label = ns.substring(with: match.range(at: 1)), kind = ns.substring(with: match.range(at: 2)), id = ns.substring(with: match.range(at: 3))
-            if let type = MentionType(rawValue: kind) { out.append(.mention(Mention(type: type, npub: id, label: label))) }
+            if let type = MentionType(rawValue: kind), type.isActor { out.append(.mention(Mention(type: type, npub: id, label: label))) }
             else { out.append(.reference(label: label, kind: kind, id: id)) }
             cursor = match.range.location + match.range.length
         }
@@ -71,7 +95,8 @@ public enum MentionCodec {
     }
 
     /// Converts composer text (visible `@Label` tokens) plus the mentions the user picked into the wire body and the
-    /// structured list. A picked mention whose visible text was edited away is dropped, never sent invisibly.
+    /// structured list. A picked mention whose visible text was edited away is dropped, never sent invisibly. Record
+    /// references become their canonical token in the body; only people and agents are in the structured list.
     public static func encode(text: String, selected: [Mention]) -> (body: String, mentions: [Mention]) {
         var body = text
         var used: [Mention] = []
@@ -85,7 +110,7 @@ public enum MentionCodec {
         }
         let order = selected.map(\.npub)
         used.sort { (order.firstIndex(of: $0.npub) ?? 0) < (order.firstIndex(of: $1.npub) ?? 0) }
-        return (body, used)
+        return (body, used.filter(\.type.isActor))
     }
 
     /// Finds `@Label` not already inside a canonical token and not followed by more name characters.
@@ -107,7 +132,16 @@ public enum MentionCodec {
             switch segment {
             case .text(let t): return t
             case .mention(let m): if !mentions.contains(m) { mentions.append(m) }; return m.visible
-            case .reference(let label, let kind, let id): return "@[\(label)](mention:\(kind):\(id))"
+            case .reference(let label, let kind, let id):
+                // A reference the picker can make is edited as its `@Label` (shown as a pill) like a person.
+                if let type = MentionType(rawValue: kind) {
+                    let m = Mention(type: type, npub: id, label: label)
+                    if m.label == label {
+                        if !mentions.contains(m) { mentions.append(m) }
+                        return m.visible
+                    }
+                }
+                return "@[\(label)](mention:\(kind):\(id))"
             }
         }.joined()
         return (text, mentions)

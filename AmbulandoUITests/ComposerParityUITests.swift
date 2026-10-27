@@ -58,6 +58,33 @@ final class ComposerParityUITests: XCTestCase {
         XCTAssertTrue(element(app, "composer.mention.pill").waitForNonExistence(timeout: 5), "the pill goes with the name")
     }
 
+    /// The `@` list offers documents, tasks, conversations, channels and scopes as well as people (as on the web), filtered by
+    /// the name typed; a picked record becomes a pill and is sent as its canonical reference.
+    func testRecordMentionsLookAheadAndSendTheirReference() {
+        let app = launch()
+        let composer = field(app)
+        composer.tap()
+        composer.typeText("Read @native app")
+        let doc = app.buttons["mention.Native app plan"]
+        XCTAssertTrue(doc.waitForExistence(timeout: 5), "documents are offered by name")
+        capture(app, "mention-records")
+        doc.tap()
+        XCTAssertEqual(value(composer), "Read @Native app plan ")
+        XCTAssertTrue(element(app, "composer.mention.pill").waitForExistence(timeout: 5), "the picked document shows as a pill")
+
+        composer.typeText("then @task:inbox")
+        let task = app.buttons["mention.Review the native inbox"]
+        XCTAssertTrue(task.waitForExistence(timeout: 5), "a kind prefix narrows the list to tasks")
+        XCTAssertFalse(app.buttons["mention.rick"].exists, "people are left out for task:")
+        task.tap()
+        XCTAssertEqual(value(composer), "Read @Native app plan then @Review the native inbox ")
+
+        app.buttons["composer.send"].tap()
+        // Records render as their names (no @), as on the web.
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Read Native app plan then Review the native inbox")).firstMatch
+            .waitForExistence(timeout: 10), "sent with both references")
+    }
+
     func testPillCanBeRemovedWithItsButton() {
         let app = launch()
         let composer = field(app)
