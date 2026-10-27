@@ -906,8 +906,9 @@ struct Composer: View {
             Divider().overlay(Amb.border)
             if let composer {
                 @Bindable var composer = composer
-                ComposerMentionPills(mentions: composer.presentMentions, people: members.value) { composer.removeMention($0) }
-                ComposerAttachments(attachments: $composer.attachments, staging: model.staging)
+                ComposerAttachmentStrip(mentions: composer.presentMentions, people: members.value, removeMention: { composer.removeMention($0) },
+                                        attachments: $composer.attachments, staging: model.staging, text: composer.text,
+                                        workspace: workspace, removeUploaded: { composer.removeUploaded($0) })
                 ComposerTextCards(attachments: $composer.attachments, staging: model.staging) { openAttachment = .draft($0) }
                 if let left = TextAttachmentPolicy.remaining(codePoints: TextAttachmentPolicy.codePoints(composer.visibleText)) {
                     Text(left >= 0 ? "\(left) characters left" : "\(-left) characters over")
@@ -924,7 +925,6 @@ struct Composer: View {
                     Text(pasteNotice).font(.amb(.caption)).foregroundStyle(Amb.destructive).padding(.horizontal, 14).padding(.top, 4)
                         .accessibilityIdentifier("composer.paste.notice")
                 }
-                ComposerUploadedThumbnails(text: composer.text, workspace: workspace) { composer.removeUploaded($0) }
                 if let uploads = model.uploads {
                     ComposerPastedUploads(uploads: uploads, target: target, text: composer.text)
                 }
@@ -1192,7 +1192,7 @@ struct PushedFixtureLabel: ViewModifier {
     }
 }
 
-/// People, agents and records picked for this message, as pills above the field (as on the web). Each is removable here,
+/// People, agents and records picked for this message, as pills in the composer's strip (as on the web). Each is removable here,
 /// or with Backspace in the field. The visible `@Name` and the structured mention are kept together by the composer.
 struct ComposerMentionPills: View {
     let mentions: [Mention]
@@ -1200,29 +1200,25 @@ struct ComposerMentionPills: View {
     let remove: (Mention) -> Void
 
     var body: some View {
-        if !mentions.isEmpty {
-            ScrollView(.horizontal) {
-                HStack(spacing: 6) {
-                    ForEach(mentions, id: \.self) { mention in
-                        HStack(spacing: 6) {
-                            MentionIcon(mention: mention, people: people, size: 20)
-                            Text(mention.label).font(.amb(.footnote).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
-                            Button { remove(mention) } label: { Image(systemName: "xmark").font(.amb(.caption2).weight(.bold)).foregroundStyle(Amb.mutedForeground) }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Remove \(mention.label)")
-                                .accessibilityIdentifier("composer.mention.remove")
-                        }
-                        .padding(.leading, 6).padding(.trailing, 8).padding(.vertical, 3)
-                        .background(Amb.card, in: Capsule())
-                        .overlay(Capsule().stroke(Amb.border, lineWidth: 1))
-                        .accessibilityElement(children: .contain)
-                        .accessibilityLabel("Mentioning \(mention.label)")
-                        .accessibilityIdentifier("composer.mention.pill")
-                    }
+        ForEach(mentions, id: \.self) { mention in
+            HStack(spacing: 2) {
+                MentionIcon(mention: mention, people: people, size: 20)
+                Text(mention.label).font(.amb(.footnote).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+                    .padding(.leading, 4)
+                Button { remove(mention) } label: {
+                    Image(systemName: "xmark").font(.amb(.caption2).weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                        .frame(width: 32, height: 32).contentShape(Rectangle())
                 }
-                .padding(.horizontal, 12).padding(.top, 8)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove \(mention.label)")
+                .accessibilityIdentifier("composer.mention.remove")
             }
-            .accessibilityIdentifier("composer.mentions")
+            .padding(.leading, 6)
+            .background(Amb.card, in: Capsule())
+            .overlay(Capsule().stroke(Amb.border, lineWidth: 1))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Mentioning \(mention.label)")
+            .accessibilityIdentifier("composer.mention.pill")
         }
     }
 }

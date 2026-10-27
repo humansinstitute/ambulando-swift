@@ -12,6 +12,12 @@ struct DeckView: View {
     let store: LocalStore
     @SceneStorage("deck.card") private var storedCard = DeckCard.inbox.rawValue
     @State private var card: DeckCard?
+    #if os(iOS)
+    /// New thread from the floating button or the Inbox heading's +: one composer for the context Deck shows.
+    @State private var composingThread = false
+    @State private var createdThread: ThreadFocus?
+    @State private var keyboardShown = false
+    #endif
 
     private var cards: [DeckCard] {
         let hasPins = model.pins.value.items.contains { model.pins.value.isPinned($0.pin.resourceType, $0.pin.resourceId) }
@@ -39,9 +45,17 @@ struct DeckView: View {
             .scrollPosition(id: $card)
             .scrollIndicators(.hidden)
             .accessibilityIdentifier("deck.track")
+            // Above the dots, so it never covers them or the section bar; hidden while the keyboard is up.
+            .overlay(alignment: .bottomTrailing) {
+                if !keyboardShown { DeckNewThreadButton { composingThread = true }.padding(.trailing, 16).padding(.bottom, 12) }
+            }
             DeckPagination(cards: cards, selection: $card)
         }
         .navigationTitle("Deck")
+        .onKeyboard(willHide: { keyboardShown = false }, didShow: { keyboardShown = true })
+        .fullScreenCover(isPresented: $composingThread, onDismiss: openCreatedThread) {
+            DeckThreadComposer(workspace: workspace, store: store, onCreated: { createdThread = $0 })
+        }
         .onAppear {
             // Also called when a pushed record pops back to Deck: the card shown then is kept.
             guard card == nil else { return }
@@ -59,13 +73,57 @@ struct DeckView: View {
     @ViewBuilder private func page(_ card: DeckCard) -> some View {
         switch card {
         case .hello: DeckHelloCard(workspace: workspace, store: store)
-        case .inbox: DeckInboxCard(workspace: workspace, store: store, active: model.mode == .deck && self.card == .inbox)
+        case .inbox:
+            #if os(iOS)
+            DeckInboxCard(workspace: workspace, store: store, active: model.mode == .deck && self.card == .inbox, onNewThread: { composingThread = true })
+            #else
+            DeckInboxCard(workspace: workspace, store: store, active: model.mode == .deck && self.card == .inbox)
+            #endif
         case .pinned: DeckPinnedCard(workspace: workspace)
         case .canvas: DeckCanvasCard(workspace: workspace, store: store)
         case .feed: DeckFeedCard()
         case .recent: DeckRecentCard(workspace: workspace, store: store, active: model.mode == .deck && self.card == .recent)
         }
     }
+
+    #if os(iOS)
+    private func openCreatedThread() {
+        if let createdThread { model.focusThread(createdThread); self.createdThread = nil }
+    }
+    #endif
+}
+
+#if os(iOS)
+/// Deck's floating New thread button (lower right, above the page dots): starts a thread in the context Deck shows.
+private struct DeckNewThreadButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "plus").font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(Amb.primaryForeground)
+                .frame(width: DeckLayout.newThreadButton, height: DeckLayout.newThreadButton)
+                .background(Amb.primary, in: Circle())
+                .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("New thread")
+        .accessibilityHint("Starts a thread in the scope Deck is showing")
+        .accessibilityIdentifier("deck.fab.new")
+    }
+}
+#endif
+
+enum DeckLayout {
+    /// The floating New thread button's side.
+    static let newThreadButton: CGFloat = 56
+    /// Room left under each card's last row so the floating button never sits on it for good.
+    #if os(iOS)
+    static let cardBottomInset: CGFloat = newThreadButton + 24
+    #else
+    static let cardBottomInset: CGFloat = 16
+    #endif
 }
 
 /// The dots under Deck (sol `.deck-mobile-pagination`). Each is a button labelled with its card.
@@ -112,7 +170,7 @@ private struct DeckCardFrame<Actions: View, Content: View>: View {
             .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 6)
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 8) { content() }
-                    .padding(.horizontal, 12).padding(.bottom, 16)
+                    .padding(.horizontal, 12).padding(.bottom, DeckLayout.cardBottomInset)
             }
             .scrollDismissesKeyboard(.interactively)
         }
@@ -155,11 +213,14 @@ struct DeckInboxSnapshot: Sendable, Equatable {
 /// Mark done (review tasks) and the read menu.
 struct DeckInboxCard: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let workspace: WorkspaceRecord
     let store: LocalStore
     /// Deck is the current section and this card is shown. Out of sight the query pauses (keeping its rows), so a sync
     /// burst does not re-read the whole feed for a card nobody is looking at.
     let active: Bool
+    /// The phone Deck's shared New thread composer; without it the card presents its own.
+    var onNewThread: (() -> Void)? = nil
     @State private var snapshot = LiveQuery<DeckInboxSnapshot>(initial: DeckInboxSnapshot())
     @State private var kinds = Set(DeckActivity.Kind.allCases)
     @State private var searchDraft = ""
@@ -205,40 +266,54 @@ struct DeckInboxCard: View {
         return model.canRead ? "No activity here yet." : "No saved activity here. Unlock to load it."
     }
 
-    private var controls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                ForEach(DeckActivity.Kind.allCases, id: \.self) { kind in
-                    let on = kinds.contains(kind)
-                    Button { if on { kinds.remove(kind) } else { kinds.insert(kind) }; visible = DeckInbox.pageSize } label: {
-                        Image(systemName: DeckInbox.icon(kind)).font(.amb(.subheadline))
-                            .foregroundStyle(on ? Amb.selectedForeground : Amb.mutedForeground)
-                            .frame(width: 36, height: 30)
-                            .background(on ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-                            .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl).stroke(Amb.border, lineWidth: 0.8))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(DeckInbox.toggleLabel(kind))
-                    .accessibilityValue(on ? "Shown" : "Hidden")
-                    .accessibilityAddTraits(on ? .isSelected : [])
-                    .accessibilityIdentifier("deck.inbox.type.\(kind.rawValue)")
-                }
-                Spacer(minLength: 0)
-            }
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(Amb.mutedForeground)
-                TextField("Search", text: $searchDraft)
-                    .submitLabel(.search)
-                    .onSubmit { query = searchDraft.trimmingCharacters(in: .whitespacesAndNewlines); visible = DeckInbox.pageSize }
-                    .onChange(of: searchDraft) { _, text in if text.isEmpty { query = ""; visible = DeckInbox.pageSize } }
-                    .accessibilityLabel("Search Inbox")
-                    .accessibilityIdentifier("deck.inbox.search")
-            }
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-            .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl).stroke(Amb.border, lineWidth: 0.8))
+    /// The four type toggles and Search on one row (search flexes). At accessibility text sizes Search moves under them,
+    /// so no toggle is dropped. Chosen by text size, not by measuring, so typing never moves the field.
+    @ViewBuilder private var controls: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 8) { typeToggles; searchField }.padding(.bottom, 2)
+        } else {
+            HStack(spacing: 6) { typeToggles; searchField }.padding(.bottom, 2)
         }
-        .padding(.bottom, 2)
+    }
+
+    private var typeToggles: some View {
+        HStack(spacing: 6) {
+            ForEach(DeckActivity.Kind.allCases, id: \.self) { kind in
+                let on = kinds.contains(kind)
+                Button { if on { kinds.remove(kind) } else { kinds.insert(kind) }; visible = DeckInbox.pageSize } label: {
+                    Image(systemName: DeckInbox.icon(kind)).font(.amb(.subheadline))
+                        .foregroundStyle(on ? Amb.selectedForeground : Amb.mutedForeground)
+                        .frame(width: 38, height: 36)
+                        .background(on ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+                        .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl).stroke(Amb.border, lineWidth: 0.8))
+                        .frame(minWidth: Amb.touchTarget, minHeight: Amb.touchTarget)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(DeckInbox.toggleLabel(kind))
+                .accessibilityValue(on ? "Shown" : "Hidden")
+                .accessibilityAddTraits(on ? .isSelected : [])
+                .accessibilityIdentifier("deck.inbox.type.\(kind.rawValue)")
+            }
+        }
+        .fixedSize()
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(Amb.mutedForeground).accessibilityHidden(true)
+            TextField("Search", text: $searchDraft)
+                .submitLabel(.search)
+                .onSubmit { query = searchDraft.trimmingCharacters(in: .whitespacesAndNewlines); visible = DeckInbox.pageSize }
+                .onChange(of: searchDraft) { _, text in if text.isEmpty { query = ""; visible = DeckInbox.pageSize } }
+                .accessibilityLabel("Search Inbox")
+                .accessibilityIdentifier("deck.inbox.search")
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, minHeight: 36)
+        .background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+        .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl).stroke(Amb.border, lineWidth: 0.8))
+        .frame(minHeight: Amb.touchTarget)
     }
 
     private func openCreatedThread() {
@@ -247,6 +322,7 @@ struct DeckInboxCard: View {
 
     private var newThreadButton: some View {
         Button {
+            if let onNewThread { onNewThread(); return }
             #if os(macOS)
             model.composingThread = true
             #else
@@ -1024,8 +1100,11 @@ struct DeckThreadComposer: View {
     var expanded: Binding<Bool>? = nil
     let onCreated: (ThreadFocus) -> Void
     @State private var channelId: String?
+    @State private var choosingChannel = false
     @State private var requestId: String?
     @State private var openedRequestId: String?
+    /// The Deck context the channel choice was made in (a scope change while open asks again).
+    @State private var openedContext: WorkContext?
     @State private var sent = LiveQuery<MessageRecord?>(initial: nil)
     @State private var pending = LiveQuery<OutboxItem?>(initial: nil)
 
@@ -1087,17 +1166,22 @@ struct DeckThreadComposer: View {
         #endif
     }
 
+    private var eligibleChannelIds: [String] { model.navigation.value.channels(in: model.context).map(\.id) }
+
     private var form: some View {
         VStack(alignment: .leading, spacing: 16) {
             let nav = model.navigation.value
             let channels = nav.channels(in: model.context)
-            Picker("Channel", selection: $channelId) {
-                Text("Choose channel").tag(Optional<String>.none)
-                ForEach(channels) { Text("#\(nav.label($0))").tag(Optional($0.id)) }
+            Button { choosingChannel = true } label: {
+                let selected = channels.first { $0.id == channelId }
+                Label(selected.map { "#\(nav.label($0))" } ?? "Choose channel", systemImage: "chevron.up.chevron.down")
+                    .frame(minHeight: Amb.touchTarget)
+                    .contentShape(Rectangle())
             }
             .disabled(requestId != nil)
+            .accessibilityLabel("Channel")
             .accessibilityIdentifier("deck.compose.channel")
-            if let channelId, let connection = model.connection {
+            if let channelId, !choosingChannel, let connection = model.connection {
                 Text("New conversation").font(.amb(.headline))
                 Text("Write the first message to start a thread.").foregroundStyle(Amb.mutedForeground)
                 Spacer(minLength: 0)
@@ -1111,15 +1195,33 @@ struct DeckThreadComposer: View {
                 }
             } else {
                 Text(channels.isEmpty ? "No channels in this context." : "Choose a channel here to start your thread.")
-                Spacer()
+                List(channels) { channel in
+                    Button("#\(nav.label(channel))") {
+                        channelId = channel.id
+                        choosingChannel = false
+                    }
+                    .accessibilityIdentifier("deck.compose.option.\(channel.id)")
+                }
+                .listStyle(.plain)
             }
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Amb.background)
+        // Resolved from the Deck context shown when the composer opens: its channel, or the only eligible one; otherwise
+        // the member chooses (the message field and Send appear once a channel is chosen).
         .onAppear {
-            let channels = model.navigation.value.channels(in: model.context)
-            channelId = model.context.channelId.flatMap { id in channels.contains(where: { $0.id == id }) ? id : nil } ?? channels.first?.id
+            openedContext = model.context
+            channelId = DeckCompose.initialChannel(context: model.context, eligible: eligibleChannelIds)
+        }
+        .onChange(of: model.context) { previous, context in
+            guard requestId == nil else { return }
+            channelId = DeckCompose.reconcile(chosen: channelId, from: openedContext ?? previous, to: context, eligible: eligibleChannelIds)
+            openedContext = context
+        }
+        .onChange(of: eligibleChannelIds) { _, eligible in
+            guard requestId == nil, let context = openedContext else { return }
+            channelId = DeckCompose.reconcile(chosen: channelId, from: context, to: context, eligible: eligible)
         }
         .task(id: requestId) {
             guard let requestId else { return }

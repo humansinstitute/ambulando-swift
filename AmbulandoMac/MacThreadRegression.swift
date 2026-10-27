@@ -82,6 +82,13 @@ enum MacThreadRegression {
                 try await richFormattingCheck(window, model: model)
                 print("PASS: rich thread formatting, widths, menus and draft retention"); fflush(stdout); exit(0)
             }
+            // Deck's New thread preselects only an unambiguous channel; these runs start in one so + opens the field.
+            model.selectContext(WorkContext(scopeId: FixtureTower.scopeAmbulando, channelId: FixtureTower.generalChannel))
+            await settle()
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDeckComposerCheck") {
+                try await deckComposerCheck(window, model: model)
+                print("PASS: Deck composer tiles, lightbox, removal, draft and resize"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacTextAttachmentRegression") {
                 try await textAttachments(window, model: model)
                 print("PASS: automatic text attachment real-window interactions"); fflush(stdout); exit(0)

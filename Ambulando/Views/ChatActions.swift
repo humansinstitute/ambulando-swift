@@ -335,38 +335,48 @@ struct AttachmentView: View {
     }
 }
 
-/// Selected photos for the composer, privacy-stripped and staged before they join the outbox.
+/// Selected photos for the composer, privacy-stripped and staged before they join the outbox: one 72pt tile each in
+/// the composer's strip (tap opens the photo, the corner control removes it).
 struct ComposerAttachments: View {
+    @Environment(\.imageLightbox) private var lightbox
+    @Environment(\.displayScale) private var displayScale
+    @State private var lightboxImage: LightboxImage?
     @Binding var attachments: [PendingAttachment]
     let staging: URL?
     @State private var thumbnails: [String: PlatformImage] = [:]
 
     var body: some View {
-        if attachments.contains(where: { $0.text == nil }) {
-            ScrollView(.horizontal) {
-                HStack(spacing: 8) {
-                    ForEach(attachments.filter { $0.text == nil }) { a in
-                        ZStack(alignment: .topTrailing) {
-                            Group {
-                                if let image = thumbnails[a.id] { Image(platformImage: image).resizable().scaledToFill() } else { Color(Amb.muted) }
-                            }
-                            .frame(width: 64, height: 64).clipShape(RoundedRectangle(cornerRadius: 8))
-                            Button { remove(a) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.white, .black.opacity(0.6)) }
-                                .accessibilityLabel("Remove photo")
-                        }
-                        .task(id: a.id) { await thumbnail(a) }
-                    }
-                }
-                .padding(.horizontal, 12).padding(.top, 8)
+        ForEach(attachments.filter { $0.text == nil }) { a in
+            Group {
+                if let image = thumbnails[a.id] { Image(platformImage: image).resizable().scaledToFill() } else { Color(Amb.muted) }
             }
+            .frame(width: ComposerTile.side, height: ComposerTile.side).clipShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
+            .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border.opacity(0.3), lineWidth: 1))
+            .contentShape(Rectangle())
+            .onTapGesture { open(a) }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("Photo")
+            .accessibilityHint("Opens the image")
+            .accessibilityIdentifier("composer.attachment.image")
+            .composerTile(remove: ComposerTileRemove(label: "Remove photo", identifier: "composer.attachment.remove") { remove(a) })
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("composer.attachments")
+            .imageLightboxCover(Binding(get: { lightboxImage?.objectId == a.id ? lightboxImage : nil }, set: { lightboxImage = $0 }))
+            .task(id: a.id) { await thumbnail(a) }
         }
     }
 
     private func thumbnail(_ a: PendingAttachment) async {
         guard let staging else { return }
         let url = staging.appendingPathComponent(a.staged)
-        thumbnails[a.id] = await Task.detached { StorageImageCache.downsample(url, maxPixels: 256, scale: 2) }.value
+        let tile = ComposerTile.side * displayScale, scale = displayScale
+        thumbnails[a.id] = await Task.detached { StorageImageCache.downsampleFilling(url, tile: tile, scale: scale) }.value
+    }
+
+    private func open(_ attachment: PendingAttachment) {
+        guard let staging else { return }
+        let shown = LightboxImage(objectId: attachment.id, file: staging.appendingPathComponent(attachment.staged), alt: attachment.filename)
+        if let lightbox { lightbox.show(shown) } else { lightboxImage = shown }
     }
 
     private func remove(_ a: PendingAttachment) {
@@ -375,38 +385,31 @@ struct ComposerAttachments: View {
     }
 }
 
-/// Images and files already uploaded for this draft (their storage Markdown sits after the typed text): a thumbnail
-/// for each image that opens full size, a named chip for each file, and a button to remove either.
+/// Images and files already uploaded for this draft (their storage Markdown sits after the typed text), in the
+/// composer's strip: a 72pt tile for each image that opens full size, a named chip for each file, each removable.
 struct ComposerUploadedThumbnails: View {
     let text: String
     let workspace: WorkspaceRecord
     let remove: (String) -> Void
 
     var body: some View {
-        let items = StorageMarkdown.rawReferences(in: text).map(\.attachment)
-        if !items.isEmpty {
-            ScrollView(.horizontal) {
-                HStack(spacing: 8) {
-                    ForEach(items, id: \.storageObjectId) { item in
-                        ZStack(alignment: .topTrailing) {
-                            Group {
-                                if item.kind == "image" {
-                                    StorageImageView(objectId: item.storageObjectId, alt: item.filename, workspace: workspace, maxHeight: 64, maxWidth: 96)
-                                } else {
-                                    Label(item.filename, systemImage: "paperclip").font(.amb(.footnote)).lineLimit(1)
-                                        .padding(8).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-                                }
-                            }
-                            .padding(.top, 6).padding(.trailing, 6)
-                            Button { remove(item.storageObjectId) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.white, .black.opacity(0.6)) }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Remove \(item.filename)")
-                                .accessibilityIdentifier("composer.uploaded.remove")
-                        }
+        ForEach(StorageMarkdown.rawReferences(in: text).map(\.attachment), id: \.storageObjectId) { item in
+            let removal = ComposerTileRemove(label: "Remove \(item.filename)", identifier: "composer.uploaded.remove") { remove(item.storageObjectId) }
+            Group {
+                if item.kind == "image" {
+                    StorageImageView(objectId: item.storageObjectId, alt: item.filename, workspace: workspace, fill: ComposerTile.side)
+                        .composerTile(remove: removal)
+                } else {
+                    HStack(spacing: 0) {
+                        Label(item.filename, systemImage: "paperclip").font(.amb(.footnote)).lineLimit(1).truncationMode(.middle)
+                            .padding(.leading, 10)
+                        removal
                     }
+                    .frame(maxWidth: 240, alignment: .leading)
+                    .background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                 }
-                .padding(.horizontal, 12).padding(.top, 4)
             }
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("composer.uploaded")
         }
     }

@@ -516,10 +516,23 @@ final class StorageImageCache: @unchecked Sendable {
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnail) else { return nil }
         return PlatformImage.bitmap(image, scale: scale)
     }
+
+    /// Decodes for a square tile of `tile` pixels that the image fills and is cropped to: the long edge comes from the
+    /// image's own size (`ImageTileBudget`, metadata only), bounded at 4096 and never above the image.
+    static func downsampleFilling(_ url: URL, tile: CGFloat, scale: CGFloat) -> PlatformImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let longEdge = ImageTileBudget.longEdge(tile: tile, width: properties?[kCGImagePropertyPixelWidth] as? CGFloat,
+                                                height: properties?[kCGImagePropertyPixelHeight] as? CGFloat)
+        return downsample(url, maxPixels: longEdge, scale: scale)
+    }
 }
 
 /// A stored image: loads the cached bytes, asks the sync engine to download them when missing (signed, typed object
-/// route), decodes off the main actor and shows loading, locked and error states. Tap opens Quick Look.
+/// route), decodes off the main actor and shows loading, locked and error states. Tap opens the in-app image viewer
+/// (`ImageLightbox`), as the web opens its image modal; this one view serves sent chat images and attachments,
+/// document images and the composer's uploaded thumbnails. `fill` makes it a square, cropped tile of that side (composer
+/// tiles); without it the image is fitted whole (chat and documents).
 struct StorageImageView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.displayScale) private var displayScale
@@ -529,6 +542,8 @@ struct StorageImageView: View {
     let workspace: WorkspaceRecord?
     var maxHeight: CGFloat = 384
     var maxWidth: CGFloat = 448
+    /// Side of a square tile the image fills and is cropped to; nil fits the whole image.
+    var fill: CGFloat? = nil
 
     @State private var image: PlatformImage?
     @State private var file: URL?
@@ -543,17 +558,30 @@ struct StorageImageView: View {
         return UUID(uuidString: id) != nil ? id.lowercased() : nil
     }
 
-    private var cacheKey: String { "\(workspace?.id ?? "-"):\(objectId):\(Int(maxWidth * displayScale))" }
+    /// Fitted images are keyed by their width in pixels, tiles by their side (a different decode of the same object).
+    private var cacheKey: String {
+        if let fill { return "\(workspace?.id ?? "-"):\(objectId):\(Int(fill * displayScale)):fill" }
+        return "\(workspace?.id ?? "-"):\(objectId):\(Int(maxWidth * displayScale))"
+    }
     private var errorKey: String? { workspace.map { "attachment:\($0.id):\(objectId)" } }
 
     var body: some View {
         Group {
             if let image {
                 Button { open() } label: {
-                    Image(platformImage: image).resizable().aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: min(maxWidth, image.size.width), maxHeight: maxHeight, alignment: .leading)
-                        .clipShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
-                        .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border.opacity(0.3), lineWidth: 1))
+                    if let fill {
+                        Image(platformImage: image).resizable().scaledToFill()
+                            .frame(width: fill, height: fill)
+                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
+                            .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border.opacity(0.3), lineWidth: 1))
+                            .contentShape(Rectangle())
+                    } else {
+                        Image(platformImage: image).resizable().aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: min(maxWidth, image.size.width), maxHeight: maxHeight, alignment: .leading)
+                            .clipShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
+                            .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border.opacity(0.3), lineWidth: 1))
+                    }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(alt.isEmpty ? "Image" : "Image: \(alt)")
@@ -564,7 +592,21 @@ struct StorageImageView: View {
             }
         }
         .imageLightboxCover($lightboxImage)
-        .task(id: "\(cacheKey)#\(attempt)") { await load() }
+        .task(id: "\(cacheKey)#\(attempt)") {
+            guard let store = model.store, let workspace else { await load(); return }
+            // Attachment completion touches messages in this workspace. Subscribe before probing the cache so even
+            // a fast download whose start/finish is hidden by throttled sync-status updates wakes this image.
+            let changes = await store.changes.stream()
+            await load()
+            if image != nil { return }
+            for await batch in changes {
+                guard !Task.isCancelled else { return }
+                if batch.contains(where: { $0.table == .messages && $0.workspaceId == workspace.id }) {
+                    await load()
+                    if image != nil { return }
+                }
+            }
+        }
         .onChange(of: model.syncStatus) { _, _ in if image == nil && file == nil { attempt += 1 } }
         .onChange(of: model.isUnlocked) { _, unlocked in if unlocked && image == nil { requested = false; attempt += 1 } }
     }
@@ -583,22 +625,46 @@ struct StorageImageView: View {
             else if let failure { ("exclamationmark.triangle", "Image could not be loaded: \(failure)", "image.error") }
             else if !model.isUnlocked && file == nil { ("lock", "Unlock to load this image", "image.locked") }
             else { ("photo", "Loading image…", "image.loading") }
-        HStack(spacing: 8) {
-            if id == "image.loading" { ProgressView().controlSize(.small) } else { Image(systemName: icon) }
-            Text(alt.isEmpty ? text : "\(alt) — \(text)").font(.amb(.footnote)).lineLimit(3)
+        let label = alt.isEmpty ? text : "\(alt) — \(text)"
+        Group {
+            if let fill, failure != nil {
+                // A failed tile is its own Retry button (the whole tile, at least 44pt): a corner control the tile's owner
+                // places over it (Remove) keeps its own corner.
+                Button(action: retry) {
+                    Image(systemName: "arrow.clockwise").font(.amb(.body).weight(.semibold))
+                        .frame(width: max(44, fill), height: max(44, fill))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .frame(width: fill, height: fill)
+                .accessibilityLabel("Retry: \(label)")
+            } else if let fill {
+                // A tile has room for the state's icon only; the full text is its accessibility label.
+                Group { if id == "image.loading" { ProgressView().controlSize(.small) } else { Image(systemName: icon) } }
+                    .frame(width: fill, height: fill)
+                    .accessibilityElement()
+                    .accessibilityLabel(label)
+            } else {
+                HStack(spacing: 8) {
+                    if id == "image.loading" { ProgressView().controlSize(.small) } else { Image(systemName: icon) }
+                    Text(label).font(.amb(.footnote)).lineLimit(3)
+                }
+                .padding(12)
+                .frame(maxWidth: maxWidth, minHeight: 72, alignment: .leading)
+                .accessibilityElement(children: .combine)
+            }
         }
         .foregroundStyle(Amb.mutedForeground)
-        .padding(12)
-        .frame(maxWidth: maxWidth, minHeight: 72, alignment: .leading)
         .background(Amb.muted.opacity(0.6), in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
-        .accessibilityElement(children: .combine)
         .accessibilityIdentifier(id)
         .overlay(alignment: .topTrailing) {
-            if failure != nil {
-                Button("Retry") { requested = false; attempt += 1 }.font(.amb(.caption).weight(.semibold)).padding(8)
+            if failure != nil && fill == nil {
+                Button("Retry", action: retry).font(.amb(.caption).weight(.semibold)).padding(8)
             }
         }
     }
+
+    private func retry() { requested = false; attempt += 1 }
 
     private func load() async {
         guard let workspace else { return }
@@ -616,9 +682,19 @@ struct StorageImageView: View {
             return
         }
         file = found
-        let pixels = maxWidth * displayScale, scale = displayScale
-        let decoded = await Task.detached(priority: .userInitiated) { StorageImageCache.downsample(found, maxPixels: pixels, scale: scale) }.value
-        guard !Task.isCancelled else { return }
+        let scale = displayScale
+        let decoded: PlatformImage?
+        if let fill {
+            let tile = fill * scale
+            decoded = await Task.detached(priority: .userInitiated) { StorageImageCache.downsampleFilling(found, tile: tile, scale: scale) }.value
+        } else {
+            let pixels = maxWidth * scale
+            decoded = await Task.detached(priority: .userInitiated) { StorageImageCache.downsample(found, maxPixels: pixels, scale: scale) }.value
+        }
+        // A sync-status change can replace this task after file was set. Dropping the completed decode then leaves
+        // a cached file with no image, which the download-only sync observer will never retry. The bounded decode
+        // may finish for the same current object/scale; reject it only when the view now represents a different key.
+        guard key == cacheKey else { return }
         if let decoded {
             StorageImageCache.shared.store(decoded, key: key)
             image = decoded

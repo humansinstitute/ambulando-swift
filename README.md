@@ -19,6 +19,22 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Deck and composer recovery (iPhone/iPad build 32, Mac build 23)
+
+- **Floating New thread:** a 56pt + on every iPhone/iPad Deck card, above the page dots and section bar. The Inbox +
+  remains. Both open the existing composer for the current channel; Home or a scope with several channels asks you
+  to choose one first. Nothing posts until Send. Mac keeps its Inbox-header create action.
+- **Compact Inbox:** Search and all four type filters share one row, with 44pt filter targets. Accessibility text
+  sizes keep Search on a separate row.
+- **Composer strip:** mentions, photos and uploaded files wrap together above the field. Images are 72pt cropped
+  tiles, with separate 44pt Remove controls; tapping previews in the existing lightbox. More than two lines scroll.
+  Editable inline image Markdown and record mentions are preserved.
+
+These changes were approved earlier but left in isolated source and omitted from build 31. The bounded
+[recent-release audit](docs/recent-release-audit.md) separates recovered omissions, delivered features and remaining
+work, including the still-pending safe-start/Clear drafts feature. Exact installation availability belongs to the
+release handoff; a source build number does not establish installation or TestFlight publication.
+
 ## Overnight feedback (iPhone/iPad build 31, Mac build 22)
 
 - **One Messages view per channel.** The separate Threads pane is gone; a conversation with replies opens its thread.
