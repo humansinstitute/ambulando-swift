@@ -526,7 +526,7 @@ struct SyncDot: View {
 /// An ordinary stable AppKit button. SwiftUI's popup adaptor eagerly updates menu/accessibility content during
 /// layout transactions; incoming replies must not rebuild that native menu graph on every unchanged message.
 /// Keep the button identity and current actions, and construct the menu only on explicit user interaction.
-private struct NativeMessageAction {
+struct NativeMessageAction {
     let title: String
     let symbol: String
     var children: [Self] = []
@@ -537,8 +537,12 @@ private struct NativeMessageAction {
     }
 }
 
-private struct NativeMessageActions: NSViewRepresentable {
+struct NativeMessageActions: NSViewRepresentable {
     let items: [NativeMessageAction]
+    /// The message menu by default; the focused thread header reuses this button for the thread menu.
+    var identifier = "message.actions"
+    var label = "Message actions"
+    var help = "Opens the message action menu"
 
     func makeCoordinator() -> Coordinator { Coordinator(items: items) }
     func makeNSView(context: Context) -> NSButton {
@@ -549,13 +553,16 @@ private struct NativeMessageActions: NSViewRepresentable {
         button.isBordered = false
         button.contentTintColor = .secondaryLabelColor
         button.image?.isTemplate = true
-        button.setAccessibilityLabel("Message actions")
-        button.setAccessibilityHelp("Opens the message action menu")
-        button.setAccessibilityIdentifier("message.actions")
-        button.identifier = NSUserInterfaceItemIdentifier("message.actions")
+        button.setAccessibilityLabel(label)
+        button.setAccessibilityHelp(help)
+        button.setAccessibilityIdentifier(identifier)
+        button.identifier = NSUserInterfaceItemIdentifier(identifier)
         return button
     }
-    func updateNSView(_ button: NSButton, context: Context) { context.coordinator.items = items }
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.items = items
+        button.isEnabled = !items.isEmpty
+    }
 
     final class Coordinator: NSObject {
         var items: [NativeMessageAction]

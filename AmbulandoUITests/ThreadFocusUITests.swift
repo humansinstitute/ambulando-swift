@@ -198,6 +198,48 @@ final class ThreadFocusUITests: XCTestCase {
         XCTAssertTrue(newest.isHittable, "a thread left at its newest message reopens at the newest")
     }
 
+    /// The thread menu sits in the header between pin and close (web `.thread-title-menu`), offers the actions for the
+    /// thread's first message with the message menu's rules, copies a reference without leaving the thread, and pin and
+    /// close keep working. The exact FD Ref text is checked by `ThreadMenuContextTests` and the Mac check: reading another
+    /// app's pasteboard here would raise the system paste prompt.
+    func testHeaderThreadMenuBesidePinAndClose() {
+        let app = launch(reset: true)
+        openGeneralThread(app, replies: 3)
+        let menu = app.buttons["thread.focus.actions"].firstMatch
+        let pin = app.buttons["pin.toggle"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "the header has a thread menu")
+        XCTAssertTrue(pin.exists && app.buttons["thread.focus.close"].firstMatch.exists, "pin and close stay in the header")
+        XCTAssertLessThan(pin.frame.midX, menu.frame.midX, "the menu follows pin")
+        XCTAssertLessThan(menu.frame.midX, app.buttons["thread.focus.close"].firstMatch.frame.midX, "and precedes close")
+        XCTAssertEqual(menu.frame.midY, pin.frame.midY, accuracy: 8, "on the header row")
+
+        menu.tap()
+        XCTAssertTrue(app.buttons["thread.menu.ref"].waitForExistence(timeout: 5), "FD Ref")
+        XCTAssertTrue(app.buttons["thread.menu.copy"].exists, "Copy message")
+        XCTAssertTrue(app.buttons["thread.menu.getitdone"].exists, "Get it done")
+        XCTAssertFalse(app.buttons["thread.menu.delete"].exists, "only its author can delete the first message")
+        XCTAssertFalse(app.buttons["thread.menu.autopilot"].exists, "no message here came from an Autopilot session")
+        capture(app, "thread-menu-open")
+        UIPasteboard.general.items = []
+        app.buttons["thread.menu.ref"].tap()
+        XCTAssertTrue(app.buttons["thread.menu.ref"].waitForNonExistence(timeout: 5), "choosing closes the menu")
+        XCTAssertTrue(UIPasteboard.general.hasStrings, "FD Ref copies a reference")
+        XCTAssertTrue(focus(app).exists, "and leaves the thread open")
+
+        menu.tap()
+        XCTAssertTrue(app.buttons["thread.menu.getitdone"].waitForExistence(timeout: 5))
+        app.buttons["thread.menu.getitdone"].tap()
+        XCTAssertTrue(app.textFields["getitdone.title"].firstMatch.waitForExistence(timeout: 5), "Get it done opens its task form")
+        app.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(focus(app).exists, "cancelling returns to the thread")
+
+        let toggled = expectation(for: NSPredicate(format: "label != %@", pin.label), evaluatedWith: pin)
+        pin.tap()
+        wait(for: [toggled], timeout: 5)
+        pin.tap()
+        close(app)
+    }
+
     /// A thread left open in one workspace never shows in another.
     func testWorkspaceSwitchShowsNoForeignThread() {
         let app = launch(reset: true)

@@ -140,6 +140,14 @@ struct ThreadTitleKey: PreferenceKey {
     }
 }
 
+/// The open `ThreadView`'s root, reference and Autopilot source, for the focused view's header menu.
+struct ThreadMenuKey: PreferenceKey {
+    static let defaultValue: ThreadMenuContext? = nil
+    static func reduce(value: inout ThreadMenuContext?, nextValue: () -> ThreadMenuContext?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
 // MARK: Presentation
 
 extension View {
@@ -323,13 +331,14 @@ private struct ThreadFocusBackdrop: View {
     }
 }
 
-/// Header (title, pin, close) above the shared `ThreadView`, whose composer keeps mentions, paste, uploads, the outbox
-/// and the stored draft exactly as in a pushed thread.
+/// Header (title, pin, thread menu, full screen, close) above the shared `ThreadView`, whose composer keeps mentions,
+/// paste, uploads, the outbox and the stored draft exactly as in a pushed thread.
 private struct ThreadFocusPanel: View {
     @Environment(AppModel.self) private var model
     let focus: ThreadFocus
     @Binding var expanded: Bool
     @State private var title = ""
+    @State private var menu: ThreadMenuContext?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -339,6 +348,7 @@ private struct ThreadFocusPanel: View {
         }
         .background(Amb.background)
         .onPreferenceChange(ThreadTitleKey.self) { title = $0 }
+        .onPreferenceChange(ThreadMenuKey.self) { menu = $0 }
         // A mentioned conversation replaces this one; any other record closes the thread and opens in its section.
         .environment(\.openMention, OpenMentionAction { [model] kind, id in
             if kind.lowercased() == "thread" {
@@ -370,6 +380,8 @@ private struct ThreadFocusPanel: View {
             Spacer(minLength: 8)
             if let workspace = model.selectedWorkspace, workspace.id == focus.workspaceId {
                 PinToggleButton(type: .thread, id: focus.threadId, workspace: workspace)
+                // Only this thread's own targets: a context left by another thread is never acted on.
+                ThreadHeaderMenu(context: menu?.threadId == focus.threadId ? menu : nil, workspace: workspace)
             }
             #if os(macOS)
             Button { expanded.toggle() } label: {
@@ -414,4 +426,92 @@ private struct ThreadFocusPanel: View {
     }
 
     private func close() { model.focusedThread = nil }
+}
+
+/// The web's thread menu (sol `.thread-title-menu`) beside pin, full screen and close: Get it done and Copy message for
+/// the first message, the thread's Autopilot Link and FD Ref, and Delete message for its author, with the same rules as
+/// the message menu. Renaming and archiving a thread stay on the web (the app has no write for them).
+private struct ThreadHeaderMenu: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openURL) private var openURL
+    let context: ThreadMenuContext?
+    let workspace: WorkspaceRecord
+    @State private var gettingItDone: MessageRecord?
+    @State private var deleting: MessageRecord?
+
+    private var root: MessageRecord? { context?.root }
+    private var liveRoot: MessageRecord? { root.flatMap { $0.deleted ? nil : $0 } }
+    private var mine: Bool { liveRoot?.senderNpub != nil && liveRoot?.senderNpub == model.identity.npub }
+
+    private struct Item: Identifiable {
+        let id: String
+        let title: String
+        let symbol: String
+        var destructive = false
+        let perform: () -> Void
+    }
+
+    private var items: [Item] {
+        var items: [Item] = []
+        if let liveRoot { items.append(Item(id: "getitdone", title: "Get it done", symbol: "checkmark.circle") { gettingItDone = liveRoot }) }
+        if let root { items.append(Item(id: "copy", title: "Copy message", symbol: "doc.on.doc") { Pasteboard.copy(MentionCodec.plain(root.body)) }) }
+        if let source = context?.autopilotSource {
+            items.append(Item(id: "autopilot", title: "Autopilot Link", symbol: "arrow.up.forward.app") { Task { await openAutopilot(source) } })
+        }
+        if let reference = context?.flightDeckReference {
+            items.append(Item(id: "ref", title: "FD Ref", symbol: "link") { Pasteboard.copy(reference) })
+        }
+        if mine, let liveRoot {
+            items.append(Item(id: "delete", title: "Delete message", symbol: "trash", destructive: true) { deleting = liveRoot })
+        }
+        return items
+    }
+
+    var body: some View {
+        let items = items
+        menuButton(items)
+            .disabled(items.isEmpty)
+            .help("Thread menu")
+            .sheet(item: $gettingItDone) { GetItDoneSheet(message: $0, workspace: workspace) }
+            .confirmationDialog("Delete this message for everyone?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                                titleVisibility: .visible, presenting: deleting) { message in
+                Button("Delete", role: .destructive) {
+                    model.submit(WriteIntent(kind: .messageDelete, targetId: message.id, payload: ["row_version": message.rowVersion]), in: workspace)
+                }
+            }
+    }
+
+    @ViewBuilder private func menuButton(_ items: [Item]) -> some View {
+        #if os(macOS)
+        // The message menu's stable AppKit button: the menu is built only when opened, never on every sync.
+        NativeMessageActions(items: items.map { item in NativeMessageAction(item.title, item.symbol, perform: item.perform) },
+                             identifier: "thread.focus.actions", label: "Thread menu", help: "Opens the thread menu")
+            .frame(width: Amb.touchTarget, height: Amb.touchTarget)
+        #else
+        Menu {
+            ForEach(items) { item in
+                Button(role: item.destructive ? .destructive : nil, action: item.perform) { Label(item.title, systemImage: item.symbol) }
+                    .accessibilityIdentifier("thread.menu.\(item.id)")
+            }
+        } label: {
+            Image(systemName: "ellipsis").font(.amb(.body).weight(.semibold))
+                .frame(width: Amb.touchTarget, height: Amb.touchTarget)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .foregroundStyle(Amb.mutedForeground)
+        .accessibilityLabel("Thread menu")
+        .accessibilityIdentifier("thread.focus.actions")
+        #endif
+    }
+
+    private func openAutopilot(_ message: MessageRecord) async {
+        guard let url = await model.autopilotURL(for: message, in: workspace) else {
+            model.notice = "This workspace has no Autopilot address to open this session."
+            return
+        }
+        openURL(url)
+    }
 }

@@ -525,7 +525,7 @@ enum MacThreadRegression {
     }
 
     /// Open the real native menu and select an actual item inside AppKit's tracking run loop.
-    static func menuAction(_ window: NSWindow, title: String) async throws {
+    static func menuAction(_ window: NSWindow, title: String, button id: String = "message.actions") async throws {
         let selected = MacRegressionMemory<Bool>()
         let observer = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { notification in
             let tracked = MacRegressionMemory<NSMenu>()
@@ -547,9 +547,9 @@ enum MacThreadRegression {
             }
         }
         defer { NotificationCenter.default.removeObserver(observer) }
-        try require(find(window, "message.actions") != nil, "message menu must expose its accessibility label/identifier")
-        guard let button = nativeActionsButton(window.contentView!) else {
-            throw Failure(description: "Message actions must expose its native accessible NSButton")
+        try require(find(window, id) != nil, id + " menu must expose its accessibility label/identifier")
+        guard let button = nativeActionsButton(window.contentView!, id: id) else {
+            throw Failure(description: id + " must expose its native accessible NSButton")
         }
         // NSPushButton's AX press result can be false after a synchronous menu tracking action; use its actual
         // AppKit click path and assert the menu item effect, rather than interpreting that return as menu failure.
@@ -700,9 +700,9 @@ enum MacThreadRegression {
         ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap { nativeScrollViews($0) }
     }
 
-    static func nativeActionsButton(_ view: NSView) -> NSButton? {
-        if let button = view as? NSButton, button.identifier?.rawValue == "message.actions" { return button }
-        return view.subviews.lazy.compactMap { nativeActionsButton($0) }.first
+    static func nativeActionsButton(_ view: NSView, id: String = "message.actions") -> NSButton? {
+        if let button = view as? NSButton, button.identifier?.rawValue == id { return button }
+        return view.subviews.lazy.compactMap { nativeActionsButton($0, id: id) }.first
     }
 
     static func accessibilityText(_ object: Any, depth: Int = 0) -> String {

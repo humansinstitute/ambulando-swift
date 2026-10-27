@@ -33,6 +33,9 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Canvas.** Mac: each canvas in its own window. iPhone: the canvas fills the screen with Back and its controls at the
   bottom. Editing adds text, shapes, arrows, lines, frames, groups and new whiteboards; elements can be moved, resized,
   restyled, edited, arranged, duplicated and deleted. The Mac's Add to canvas and Board items lists show their rows again.
+- **Thread menu in the header** (as on the web), beside pin, full screen and close: Get it done and Copy message for the
+  first message, Autopilot Link, FD Ref (`@[Chat thread](mention:chat:<channel>#<root message>)`), and Delete message
+  for its author.
 - **`@` finds more than people:** documents, tasks, conversations, channels and scopes, looked up in the local database as
   you type (web prefixes such as `doc:` work), inserted as the web's reference tokens with pills.
 

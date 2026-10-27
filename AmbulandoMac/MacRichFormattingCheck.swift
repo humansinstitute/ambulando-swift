@@ -106,7 +106,8 @@ extension MacThreadRegression {
         try require(try textView(window).string == "Unsent rich reading review", "close and reopen keep the draft")
         try await menuAction(window, title: "FD Ref")
         try require(NSPasteboard.general.string(forType: .string)?.contains("mention:chat:") == true, "message menu remains actionable")
-        print("RICH_FORMATTING_PASS exactBody=true normal=1100 narrow=900 expanded=1440 scale=1.3 menus=pass draft=pass")
+        try await threadMenuCheck(window, model: model)
+        print("RICH_FORMATTING_PASS exactBody=true normal=1100 narrow=900 expanded=1440 scale=1.3 menus=pass threadMenu=pass draft=pass")
     }
 
     private static func captureRichPages(_ window: NSWindow, model: AppModel, name: String) async throws {

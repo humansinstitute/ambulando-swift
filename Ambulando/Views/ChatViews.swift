@@ -32,6 +32,8 @@ struct ThreadSnapshot: Sendable, Equatable {
     var extras = MessageExtras()
     var dayStarts: [String: ChatDay] = [:]
     var lastDay: ChatDay?
+    /// What the focused view's header menu acts on (the whole stored history, not just this page).
+    var menu: ThreadMenuContext?
 }
 
 /// Reactions and unsent edits/deletes for the messages on screen.
@@ -383,6 +385,7 @@ struct ThreadView: View {
         .navigationTitle(snapshot.value.title.isEmpty ? "Thread" : snapshot.value.title)
         .inlineTitle()
         .preference(key: ThreadTitleKey.self, value: snapshot.value.title)
+        .preference(key: ThreadMenuKey.self, value: snapshot.value.menu)
         .task(id: windowAnchor) { start() }
         .onAppear {
             if let thread = target.threadId {
@@ -424,8 +427,9 @@ struct ThreadView: View {
             chatMatches(target.workspaceId)(key) && key.affectsThread(workspaceId: target.workspaceId, channelId: target.channelId, threadId: threadId)
                 || (key.table == .access && (key.workspaceId == nil || key.workspaceId == target.workspaceId))
         }) {
+            let historyLimit = 500
             async let thread = store.reader.thread(workspaceId: target.workspaceId, id: threadId)
-            async let messages = store.reader.threadMessages(workspaceId: target.workspaceId, threadId: threadId, limit: 500)
+            async let messages = store.reader.threadMessages(workspaceId: target.workspaceId, threadId: threadId, limit: historyLimit)
             async let pending = store.reader.outbox(target: target)
             async let directory = people(store, target)
             let history = try await messages
@@ -439,7 +443,9 @@ struct ThreadView: View {
             return ThreadSnapshot(order: window.order, windowStart: window.start, hasEarlier: window.hasEarlier, hasNewer: window.hasNewer,
                                   pageIdentity: page, title: String(title.prefix(60)), messages: rows, pending: try await pending,
                                   people: try await directory, archived: record?.archived ?? false, extras: extras,
-                                  dayStarts: days.starts, lastDay: days.last)
+                                  dayStarts: days.starts, lastDay: days.last,
+                                  menu: ThreadMenuContext(threadId: threadId, channelId: target.channelId, record: record, history: history,
+                                                          historyComplete: history.count < historyLimit))
         }
     }
 }
