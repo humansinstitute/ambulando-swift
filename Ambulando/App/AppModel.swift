@@ -132,6 +132,8 @@ final class AppModel {
     @ObservationIgnored var pendingPushTap: PendingPushTap?
     /// A freshly fetched notification a tap could not open to a screen (another app's object): shown as a plain card.
     var tapDetail: NotificationItem?
+    /// Why a tapped alert opened nothing (unavailable, could not be checked, not this connection); shown over any screen.
+    var pushTapOutcome: PushTapOutcome?
     /// Viewer-local board positions by canvas, so returning to a board keeps where it was (never written to Tower).
     @ObservationIgnored var canvasViewports: [String: CanvasViewport] = [:]
     /// Excalidraw board sessions (drafts, saves) shared by the inline and full-screen editors.
@@ -272,6 +274,7 @@ final class AppModel {
             refresh(force: false)
             kickOutbox(force: true)
             startLive()
+            resumePendingPushTap()   // an alert tapped while the phone was still locked
         }
     }
 

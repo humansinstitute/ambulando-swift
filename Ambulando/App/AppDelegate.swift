@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         let model = model
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshTaskIdentifier, using: nil) { task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.refreshTaskIdentifier, using: .main) { task in
             guard let refresh = task as? BGAppRefreshTask else { task.setTaskCompleted(success: false); return }
             Task { @MainActor in Self.run(refresh, model: model) }
         }
@@ -33,17 +33,31 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     /// An alert arriving while the app is open: no second banner for the resource already on screen; anything else is
     /// shown by the OS alert channel exactly as it would be in the background.
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+    ///
+    /// Both callbacks use the completion-handler form and call it on the main actor. The `async` form completes UIKit's
+    /// callback (a state-restoration snapshot) from wherever the method returns, and off the main thread that aborts the
+    /// app: build 29 crashed on every notification tap that way. Only Sendable values (the parsed ids) leave this method.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let payload = try? PushPayload.parse(userInfo: notification.request.content.userInfo)
-        let suppress = await MainActor.run { PushPresentation.foreground(payload, viewing: model.viewedPushDestination) == .suppress }
-        return suppress ? [] : [.banner, .list, .sound]
+        nonisolated(unsafe) let complete = completionHandler
+        Task { @MainActor in
+            let suppress = PushPresentation.foreground(payload, viewing: model.viewedPushDestination) == .suppress
+            complete(suppress ? [] : [.banner, .list, .sound])
+        }
     }
 
     /// A tap, from a cold start or while running. Only the parsed ids are used; the item is fetched again after unlock.
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier else { return }
+    /// The system's completion is called at once (on the main actor); the tap is resolved afterwards.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        let isDefaultTap = response.actionIdentifier == UNNotificationDefaultActionIdentifier
         let payload = try? PushPayload.parse(userInfo: response.notification.request.content.userInfo)
-        await model.handlePushTap(payload)
+        nonisolated(unsafe) let complete = completionHandler
+        Task { @MainActor in
+            complete()
+            if isDefaultTap { await model.handlePushTap(payload) }
+        }
     }
 
     /// One opportunistic refresh window: the next one is requested first, the work runs the normal sync pipeline, and

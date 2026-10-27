@@ -98,17 +98,7 @@ extension AppModel {
     /// trusted beyond naming a destination, which is fetched and access-checked again before anything opens.
     func handlePushTap(_ parsed: PushPayload?) async {
         await start()
-        guard let payload = parsed else {
-            notice = "That notification could not be opened."
-            return
-        }
-        let origin = connection.flatMap { try? TowerOrigin($0.origin) }
-        let ids = Set(workspaces.value.map { $0.id.lowercased() })
-        switch PushRouter.decide(payload, connectedOrigin: origin, connectedTowerNpub: connection?.towerNpub, workspaceIds: ids, isLocked: !isUnlocked) {
-        case .open: await openPushPayload(payload)
-        case .holdUntilUnlock: pendingPushTap = PendingPushTap(payload: payload, receivedAt: Date())
-        case .refuse: notice = "That notification isn't for this Ambulando connection."
-        }
+        await resolvePushTap(parsed)
     }
 
     /// After unlock: decide again with the connection as it is now.
@@ -116,36 +106,47 @@ extension AppModel {
         guard let held = pendingPushTap else { return }
         pendingPushTap = nil
         guard held.isFresh(now: Date()) else { return }
-        Task {
-            let origin = connection.flatMap { try? TowerOrigin($0.origin) }
-            let ids = Set(workspaces.value.map { $0.id.lowercased() })
-            if case .open = PushRouter.decide(held.payload, connectedOrigin: origin, connectedTowerNpub: connection?.towerNpub, workspaceIds: ids, isLocked: !isUnlocked) {
-                await openPushPayload(held.payload)
-            } else { notice = "That notification isn't for this Ambulando connection." }
-        }
+        Task { await resolvePushTap(held.payload) }
+    }
+
+    /// The saved connection as the tap needs it. Workspaces come from the store: on a cold start the observed list may not
+    /// have delivered its first value when the OS hands over the tap.
+    private func pushTapSnapshot() async -> (PushTapSnapshot, [WorkspaceRecord]) {
+        var listed = workspaces.value
+        if listed.isEmpty, let store, let connection { listed = (try? await store.reader.workspaces(connectionId: connection.id)) ?? [] }
+        let origin = connection.flatMap { try? TowerOrigin($0.origin) }
+        return (PushTapSnapshot(connectedOrigin: origin, connectedTowerNpub: connection?.towerNpub,
+                                workspaceIds: Set(listed.map(\.id)), isLocked: !isUnlocked), listed)
     }
 
     /// Selects the workspace and, for an alert that names an inbox item, reads that item fresh from Tower first (one signed
     /// request through the sync owner, never the local cache): only an item Tower still grants opens, through the ordinary
-    /// notification route. A 404/403/removed item says so neutrally; a failed check opens nothing and does not fall back to
-    /// the cached copy. An alert with only record ids opens that record the usual way, where its own load checks access.
-    private func openPushPayload(_ payload: PushPayload) async {
-        guard let sync, let connection, let workspace = workspaces.value.first(where: { $0.id.lowercased() == payload.workspaceId }) else {
-            notice = "That notification isn't for this Ambulando connection."
-            return
+    /// notification route. An unavailable or failed check opens nothing and says so (see `PushTapOutcome`). An alert with only
+    /// record ids opens that record the usual way, where its own load checks access.
+    private func resolvePushTap(_ payload: PushPayload?) async {
+        let (snapshot, listed) = await pushTapSnapshot()
+        let sync = sync, connection = connection
+        let resolution = await PushTapResolver.resolve(payload, snapshot: snapshot) { workspaceId, notificationId in
+            guard let sync, let connection, let workspace = listed.first(where: { $0.id.lowercased() == workspaceId }) else { throw TowerError.unsafePath }
+            return try await sync.notificationForTap(connection, workspace, id: notificationId)
         }
-        if selectedWorkspaceId != workspace.id { selectWorkspace(workspace.id) }
-        guard let notificationId = payload.notificationId else { openPushDestination(payload); return }
-        do {
-            switch try await sync.notificationForTap(connection, workspace, id: notificationId) {
-            case .unavailable:
-                notice = "That notification is no longer available to you."
-            case .item(let item):
-                if openNotification(item) == .detail { tapDetail = item }
-            }
-        } catch {
-            notice = "Could not check that notification just now. Open Notifications to try again."
+        switch resolution {
+        case .hold(let held):
+            pendingPushTap = PendingPushTap(payload: held, receivedAt: Date())
+        case .show(let outcome):
+            pushTapOutcome = outcome
+        case .openItem(let item):
+            selectPushWorkspace(item.workspaceId, in: listed)
+            if openNotification(item) == .detail { tapDetail = item }
+        case .openRecord(let held):
+            selectPushWorkspace(held.workspaceId, in: listed)
+            openPushDestination(held)
         }
+    }
+
+    private func selectPushWorkspace(_ id: String, in listed: [WorkspaceRecord]) {
+        guard let workspace = listed.first(where: { $0.id.lowercased() == id.lowercased() }), selectedWorkspaceId != workspace.id else { return }
+        selectWorkspace(workspace.id)
     }
 
     private func openPushDestination(_ payload: PushPayload) {

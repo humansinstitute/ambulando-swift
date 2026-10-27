@@ -32,6 +32,7 @@ struct RootView: View {
                 }
             }
         }
+        .pushTapOutcomeAlert()
     }
 }
 
@@ -51,3 +52,22 @@ private typealias Shell = WorkspaceShell
 #else
 private typealias Shell = MacWorkspaceShell
 #endif
+
+private extension View {
+    /// Why a tapped alert opened nothing, shown over whichever screen is up (workspace, lock or connect).
+    func pushTapOutcomeAlert() -> some View { modifier(PushTapOutcomeAlert()) }
+}
+
+private struct PushTapOutcomeAlert: ViewModifier {
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        @Bindable var model = model
+        content.alert("Notification", isPresented: Binding(get: { model.pushTapOutcome != nil }, set: { if !$0 { model.pushTapOutcome = nil } }),
+                      presenting: model.pushTapOutcome) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { outcome in
+            Text(outcome.message)
+        }
+    }
+}
