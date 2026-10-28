@@ -133,16 +133,26 @@ final class PushRefreshWindowTests: XCTestCase {
     func testDuplicateAndDistinctEventsCoalesceWithExactlyOneCompletionEach() async throws {
         let window = PushRefreshWindow(budget: .seconds(2))
         var runs = 0, completions = 0
+        var results: [PushRefreshWindow.Result] = []
+        let completed = expectation(description: "All push callbacks complete successfully within the window")
+        completed.expectedFulfillmentCount = 3
+        let completion: @MainActor (PushRefreshWindow.Result) -> Void = {
+            results.append($0)
+            completions += 1
+            completed.fulfill()
+        }
         let work: PushRefreshWindow.Work = { runs += 1; try? await Task.sleep(for: .milliseconds(40)); return .newData }
-        window.submit(key: "workspace", event: "a", work: work) { _ in completions += 1 }
+        window.submit(key: "workspace", event: "a", work: work, completion: completion)
         try await Task.sleep(for: .milliseconds(10))
-        window.submit(key: "workspace", event: "a", work: work) { _ in completions += 1 }
-        window.submit(key: "workspace", event: "b", work: work) { _ in completions += 1 }
-        try await Task.sleep(for: .milliseconds(150))
+        window.submit(key: "workspace", event: "a", work: work, completion: completion)
+        window.submit(key: "workspace", event: "b", work: work, completion: completion)
+        await fulfillment(of: [completed], timeout: 1)
         XCTAssertEqual(runs, 2)
         XCTAssertEqual(completions, 3)
+        XCTAssertEqual(results, [.newData, .newData, .newData])
         window.cancel()
         XCTAssertEqual(completions, 3)
+        XCTAssertEqual(results, [.newData, .newData, .newData])
     }
 
     func testDeadlineIncludesStartupDoesNotExtendAndLateResultCannotCompleteTwice() async throws {
