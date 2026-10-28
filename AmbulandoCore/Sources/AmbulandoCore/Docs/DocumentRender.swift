@@ -11,8 +11,11 @@ public struct InlineRun: Sendable, Equatable {
     public var mentionId: String?
     /// Inline image source (`storage://<object id>` or a web address, which is never fetched).
     public var image: String?
-    /// An inline object shown as a label (wiki link, image, file).
+    /// An inline object shown as a label (image, file).
     public var object = false
+    /// A wiki reference: bound to a document id, or title-only until a page is chosen or created. Kept apart from `link`
+    /// so it is routed inside the app and never treated as a web address.
+    public var wiki: WikiTarget?
 
     public init(text: String) { self.text = text }
 }
@@ -39,8 +42,30 @@ public indirect enum RenderBlock: Sendable, Equatable {
 public enum DocumentRender {
     /// Blocks for any decoded body.
     public static func blocks(_ body: DocumentBody) -> [RenderBlock] {
-        if let state = body.editorState { return (state["content"]?.arrayValue ?? []).map(block) }
-        return markdownBlocks(body.markdown)
+        if let state = body.editorState { return wikified((state["content"]?.arrayValue ?? []).map(block)) }
+        return wikified(markdownBlocks(body.markdown))
+    }
+
+    /// Document text only: canonical `[Title](wiki:<id>)` links and literal `[[Title]]` become wiki references. Code stays
+    /// literal. Chat renders through `markdownBlocks` directly and is not affected.
+    static func wikified(_ blocks: [RenderBlock]) -> [RenderBlock] {
+        func runs(_ list: [InlineRun]) -> [InlineRun] {
+            WikiLinks.expandLiterals(list.map { run in
+                guard run.wiki == nil, !run.code, let link = run.link, let id = WikiLinks.documentId(fromHref: link) else { return run }
+                var next = run; next.link = nil; next.wiki = WikiTarget(documentId: id, title: run.text); return next
+            })
+        }
+        return blocks.map { block in
+            switch block {
+            case .heading(let level, let r): .heading(level: level, runs: runs(r))
+            case .paragraph(let r): .paragraph(runs: runs(r))
+            case .quote(let inner): .quote(wikified(inner))
+            case .list(let ordered, let start, let items):
+                .list(ordered: ordered, start: start, items: items.map { RenderBlock.ListItem(checked: $0.checked, blocks: wikified($0.blocks)) })
+            case .table(let rows): .table(rows: rows.map { $0.map(runs) })
+            default: block
+            }
+        }
     }
 
     // MARK: ProseMirror
@@ -98,7 +123,11 @@ public enum DocumentRender {
                 return run
             case "hardBreak": return InlineRun(text: "\n")
             case "fdWikiLink":
-                var run = InlineRun(text: node["attrs"]?["title"]?.stringValue ?? "Linked document"); run.object = true; return run
+                let attrs = node["attrs"]
+                let id = attrs?["documentId"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
+                var run = InlineRun(text: attrs?["title"]?.stringValue ?? "Linked document")
+                run.wiki = WikiTarget(documentId: id, title: run.text)
+                return run
             case "fdStorageImage", "image":
                 let attrs = node["attrs"]
                 var run = InlineRun(text: attrs?["alt"]?.stringValue ?? "")
