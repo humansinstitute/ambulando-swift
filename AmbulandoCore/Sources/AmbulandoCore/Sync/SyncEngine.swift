@@ -63,6 +63,7 @@ public actor SyncEngine {
     private struct Job {
         let key: String; var priority: SyncPriority; var work: Work; let sequence: UInt64
         /// Automatic retries left after a transient failure; reads only (a write is never replayed by the engine).
+        var owner: UUID?
         var retries = 0
         var attempt = 0
         /// Called when the job is removed without running (cancelled, or replaced by a newer job of its key).
@@ -75,6 +76,7 @@ public actor SyncEngine {
     private let random: @Sendable () -> Double
     private var queue: [Job] = []
     private var running: [String: Task<Void, Never>] = [:]
+    private var runningOwner: [String: UUID] = [:]
     private var runningPriority: [String: SyncPriority] = [:]
     private var reruns: [String: Job] = [:]
     private var failures: [String: Int] = [:]
@@ -136,9 +138,11 @@ public actor SyncEngine {
     }
 
     private func enqueue(_ key: String, priority: SyncPriority, force: Bool, delay: Duration?, retries: Int = 0, work: @escaping Work,
-                         dropped: (@Sendable () -> Void)?) {
+                         dropped: (@Sendable () -> Void)?, owner: UUID? = nil) {
+        if owner != nil, Task.isCancelled { dropped?(); return }
         sequence &+= 1
         var job = Job(key: key, priority: priority, work: work, sequence: sequence, dropped: dropped)
+        job.owner = owner
         job.retries = max(0, retries)
         if force { notBefore[key] = nil }
         let pendingImmediately = (reruns[key] != nil || queue.contains { $0.key == key }) && delayedUntil[key] == nil
@@ -156,6 +160,7 @@ public actor SyncEngine {
             reruns[key] = rerun
         } else if let index = queue.firstIndex(where: { $0.key == key }) {
             queue[index].dropped?()
+            queue[index].owner = owner
             queue[index].work = work
             queue[index].dropped = dropped
             queue[index].priority = max(queue[index].priority, priority)
@@ -232,15 +237,28 @@ public actor SyncEngine {
     public nonisolated func perform<T: Sendable>(_ key: String, priority: SyncPriority = .user,
                                                  _ work: @escaping @Sendable () async throws -> T) async throws -> T {
         let result = OneShot<T>()
+        let owner = UUID()
         return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
             await enqueue(key, priority: priority, force: true, delay: nil, retries: 0, work: {
                 do { result.resume(.success(try await work())) } catch { result.resume(.failure(error)) }
-            }, dropped: { result.resume(.failure(CancellationError())) })
+            }, dropped: { result.resume(.failure(CancellationError())) }, owner: owner)
             return try await result.value()
         } onCancel: {
             result.resume(.failure(CancellationError()))
-            Task { await self.cancel(key) }
+            Task { await self.cancelPerform(key, owner: owner) }
         }
+    }
+
+    /// A cancelled `perform` owns only its invocation. In particular, preserve a foreground rerun enqueued while a
+    /// background read was running, and never let a delayed cancellation cancel a newer invocation of the same key.
+    private func cancelPerform(_ key: String, owner: UUID) {
+        for job in queue where job.key == key && job.owner == owner { job.dropped?() }
+        queue.removeAll { $0.key == key && $0.owner == owner }
+        if reruns[key]?.owner == owner { reruns.removeValue(forKey: key)?.dropped?() }
+        if runningOwner[key] == owner { running[key]?.cancel() }
+        publish()
+        resumeIdleWaitersIfIdle()
     }
 
     private func pump() {
@@ -261,6 +279,7 @@ public actor SyncEngine {
 
     private func start(_ job: Job) {
         let key = job.key, work = job.work, started = generation
+        runningOwner[key] = job.owner
         runningPriority[key] = job.priority
         delayedUntil[key] = nil
         running[key] = Task.detached(priority: job.priority > .background ? .userInitiated : .utility) { [weak self] in
@@ -276,6 +295,7 @@ public actor SyncEngine {
         let key = job.key
         running[key] = nil
         runningPriority[key] = nil
+        runningOwner[key] = nil
         let family = key.split(separator: ":").first.map(String.init) ?? key
         var retry: Job?
         if let error, !(error is CancellationError), !Task.isCancelled, !((error as? URLError)?.code == .cancelled) {

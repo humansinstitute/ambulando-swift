@@ -21,6 +21,29 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return true
     }
 
+    // The fixed window starts before storage/credential startup, so a cold push cannot spend 25 seconds twice.
+
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        guard let payload = try? PushPayload.parse(userInfo: userInfo) else { completionHandler(.noData); return }
+        let target = payload.taskId ?? payload.docId ?? payload.threadId ?? payload.channelId ?? payload.notificationId ?? "workspace"
+        let key = "\(payload.origin.url.absoluteString):\(payload.workspaceId):\(target)"
+        var allowance = UIBackgroundTaskIdentifier.invalid
+        allowance = application.beginBackgroundTask(withName: "ambulando.push-refresh") { [model] in
+            model.pushRefreshWindow.cancel()
+        }
+        model.pushRefreshWindow.submit(key: key, event: payload.outboxEventId ?? payload.changeSeq.map(String.init), work: { [model] in
+            await model.refreshFromPush(payload)
+        }, completion: { result in
+            if allowance != .invalid { application.endBackgroundTask(allowance); allowance = .invalid }
+            switch result {
+            case .newData: completionHandler(.newData)
+            case .noData: completionHandler(.noData)
+            case .failed: completionHandler(.failed)
+            }
+        })
+    }
+
     // MARK: Alerts (APNs)
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

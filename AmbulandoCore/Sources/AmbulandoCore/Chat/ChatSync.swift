@@ -60,25 +60,29 @@ extension WorkspaceSync {
         let sync = self
         await engine.enqueue(Self.threadKey(workspace.id, threadId), priority: priority, force: force) {
             try await sync.identity.requireReader(npub: connection.signerNpub)
-            let api = sync.api(origin: try TowerOrigin(connection.origin))
-            var cursor: String?, keep = Set<String>(), last: MessageKey?, seen = Set<String>()
-            let started = ISO8601DateFormatter.tower.string(from: Date())
-            repeat {
-                let page = try await api.messagesPage(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channelId,
-                                                      threadId: threadId, cursor: cursor)
-                try Task.checkCancellation()
-                try await sync.store.writer.upsertMessages(page.messages)
-                for m in page.messages { keep.insert(m.id) }
-                if let tail = page.messages.last { last = MessageKey(createdAt: tail.createdAt, id: tail.id) }
-                cursor = page.nextCursor
-                if let cursor { guard seen.insert(cursor).inserted else { throw TowerError.malformed("messages cursor") } }
-            } while cursor != nil
-            try await sync.store.writer.reconcileMessages(workspaceId: workspace.id, channelId: channelId, threadId: threadId, after: nil,
-                                                          through: last ?? MessageKey(createdAt: started, id: ""), keep: keep)
-            let thread = try await api.thread(workspaceId: workspace.id, appNpub: workspace.appNpub, threadId: threadId)
-            if thread.workspaceId == workspace.id, thread.channelId == channelId {
-                try await sync.store.writer.upsertThreads(workspaceId: workspace.id, [thread])
-            }
+            try await sync.runThreadRefresh(connection, workspace, channelId: channelId, threadId: threadId)
+        }
+    }
+
+    func runThreadRefresh(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, channelId: String, threadId: String) async throws {
+        let api = self.api(origin: try TowerOrigin(connection.origin))
+        var cursor: String?, keep = Set<String>(), last: MessageKey?, seen = Set<String>()
+        let started = ISO8601DateFormatter.tower.string(from: Date())
+        repeat {
+            let page = try await api.messagesPage(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channelId,
+                                                  threadId: threadId, cursor: cursor)
+            try Task.checkCancellation()
+            try await self.store.writer.upsertMessages(page.messages)
+            for m in page.messages { keep.insert(m.id) }
+            if let tail = page.messages.last { last = MessageKey(createdAt: tail.createdAt, id: tail.id) }
+            cursor = page.nextCursor
+            if let cursor { guard seen.insert(cursor).inserted else { throw TowerError.malformed("messages cursor") } }
+        } while cursor != nil
+        try await self.store.writer.reconcileMessages(workspaceId: workspace.id, channelId: channelId, threadId: threadId, after: nil,
+                                                      through: last ?? MessageKey(createdAt: started, id: ""), keep: keep)
+        let thread = try await api.thread(workspaceId: workspace.id, appNpub: workspace.appNpub, threadId: threadId)
+        if thread.workspaceId == workspace.id, thread.channelId == channelId {
+            try await self.store.writer.upsertThreads(workspaceId: workspace.id, [thread])
         }
     }
 

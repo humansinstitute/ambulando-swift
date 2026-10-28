@@ -14,10 +14,11 @@
 	<array>
 		<string>studio.otherstuff.ambulando.native.refresh</string>
 	</array>
-	<!-- "fetch" is required for BGAppRefreshTask. No audio, location, VoIP or other keep-alive modes. -->
+	<!-- "fetch" is required for BGAppRefreshTask. "remote-notification" permits opportunistic push fetch. No keep-alive modes. -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
+		<string>remote-notification</string>
 	</array>
 </dict>
 </plist>

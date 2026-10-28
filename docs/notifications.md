@@ -94,6 +94,13 @@ A visible APNs alert reaches the device while Ambulando is closed. It is a *prom
 - **Foreground.** An alert for the thread, task or document already on screen is not shown as a second banner; others use the
   system alert channel.
 
+## Push cache refresh (iPhone/iPad build 33)
+
+The remote-notification background mode and fetch callback request a bounded cache refresh alongside visible alerts.
+Tower must send `content-available=1` for the Ambulando recipient. A cold locked launch needs **Refresh while locked**;
+iOS can defer or suppress execution, and foreground/reconnect catch-up remains required. Receiving a push never marks
+notifications read or navigates. See [the execution and recovery contract](push-background-sync.md).
+
 ## Limits (this build)
 
 - Alerts outside the app need a Tower that has an APNs provider key: until then the registration is accepted but Tower reports

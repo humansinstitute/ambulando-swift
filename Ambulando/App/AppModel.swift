@@ -243,12 +243,19 @@ final class AppModel {
         ProductionStorage.dataDirectory(applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0])
     }
 
+    #if os(iOS)
+    let pushRefreshWindow = PushRefreshWindow()
+    #endif
+
     static let backgroundPreferenceKey = "background.refresh-enabled"
 
     /// Opens the database and identity off the main actor, then shows cached data immediately. Safe to call from the
     /// scene, a background refresh launch and background URLSession event delivery: the work runs once.
-    func start() async {
+    @ObservationIgnored private var pushOnlyStartup = false
+
+    func start(pushOnly: Bool = false) async {
         if let startTask { await startTask.value; return }
+        pushOnlyStartup = pushOnly && !isActive
         let task = Task { await performStart() }
         startTask = task
         await task.value
@@ -277,6 +284,9 @@ final class AppModel {
             refresh(force: false)
             kickOutbox(force: true)
             startLive()
+            #if os(iOS)
+            catchUpAfterPushDeferral()
+            #endif
             resumePendingPushTap()   // an alert tapped while the phone was still locked
         }
     }
@@ -408,19 +418,7 @@ final class AppModel {
             }
             let selected = try await store.reader.state("selected.connection")
             connection = connections.first { $0.id == selected } ?? connections.first
-            if let connection {
-                // The stored choice exists only if the switcher was used; otherwise (or if Tower no longer lists it) the
-                // first saved workspace is shown, so the sidebar reads its scopes straight away.
-                selectedWorkspaceId = WorkspaceSelection.effective(
-                    persisted: try await store.reader.state("selected.workspace:\(connection.id)"),
-                    listed: try await store.reader.workspaces(connectionId: connection.id),
-                    listComplete: try await store.reader.state(WorkspaceSelection.listedKey(connection.id)) != nil)
-                await restoreContext()
-                await restoreChatPath()
-                // Observed only after the restore has started the sidebar, so the first list (usually the same one)
-                // is a no-op instead of a second, unawaited restore that could land after the user opened a channel.
-                observeWorkspaces(connection)
-            }
+            if !pushOnlyStartup { try await restoreConnectionView() }
             statusTask = Task { [weak self] in
                 // Sync status changes on every job start/finish; screens get at most 4 updates a second, and only
                 // real changes (Observation would otherwise invalidate every reader on each assignment).
@@ -435,14 +433,14 @@ final class AppModel {
             watchNetwork()
             observeProtectedData()
             phase = .ready
-            reconcilePush()
+            if !pushOnlyStartup { reconcilePush() }
             #if AMBULANDO_TEST
             if let fixture {
                 let readiness = "ready: sample transport; credential stores: \(type(of: fixture.secrets)), \(type(of: fixture.backgroundCredentials)), \(type(of: fixture.sessionKeys)); no Keychain"
                 try readiness.write(to: fixture.directory.appendingPathComponent("test-readiness.txt"), atomically: true, encoding: .utf8)
             }
             #endif
-            if canRead { refresh(force: false); kickOutbox() }
+            if canRead, !pushOnlyStartup { refresh(force: false); kickOutbox() }
             if isActive { startLive() }
             if let fixture { fixture.startLiveIfRequested(); await fixture.simulateBackgroundRefreshIfRequested(self) }
         } catch {
@@ -450,13 +448,33 @@ final class AppModel {
         }
     }
 
+    /// A cold push initializes the sync owner without launching view-driven work. Restore UI only on activation.
+    private func restoreConnectionView() async throws {
+        guard let store, let connection else { return }
+        // The stored choice exists only if the switcher was used; otherwise (or if Tower no longer lists it) the
+        // first saved workspace is shown, so the sidebar reads its scopes straight away.
+        selectedWorkspaceId = WorkspaceSelection.effective(
+            persisted: try await store.reader.state("selected.workspace:\(connection.id)"),
+            listed: try await store.reader.workspaces(connectionId: connection.id),
+            listComplete: try await store.reader.state(WorkspaceSelection.listedKey(connection.id)) != nil)
+        await restoreContext()
+        await restoreChatPath()
+        // Observed only after the restore has started the sidebar, so the first list (usually the same one)
+        // is a no-op instead of a second, unawaited restore that could land after the user opened a channel.
+        observeWorkspaces(connection)
+    }
+
     /// Network return is a retry trigger for unsent messages (the outbox also retries on its own backoff).
     private func watchNetwork() {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             guard path.status == .satisfied else { return }
             Task { @MainActor in
-                self?.kickOutbox(force: true)
-                self?.recoverConnection(reason: "network-return")
+                guard let self, !self.pushOnlyStartup else { return }
+                self.kickOutbox(force: true)
+                #if os(iOS)
+                self.catchUpAfterPushDeferral()
+                #endif
+                self.recoverConnection(reason: "network-return")
             }
         }
         pathMonitor.start(queue: DispatchQueue(label: "studio.otherstuff.ambulando.native.path", qos: .utility))
@@ -550,10 +568,16 @@ final class AppModel {
             startLive()
             reconcilePush()
             resumePendingPushTap()
+            #if os(iOS)
+            catchUpAfterPushDeferral()
+            #endif
         } catch { notice = error.localizedDescription }
     }
 
     func lock() async {
+        #if os(iOS)
+        pushRefreshWindow.cancel()
+        #endif
         guard let sync else { return }
         await liveStream?.stop()
         await sync.engine.cancelAll()
@@ -566,6 +590,9 @@ final class AppModel {
 
     /// Removes only this app's sealed identity and cancels sync. Cached workspace data stays until disconnect.
     func removeIdentity() async {
+        #if os(iOS)
+        pushRefreshWindow.cancel()
+        #endif
         guard let sync else { return }
         await unbindPush()   // withdraw alerts while the signer still exists; a revocation that cannot be sent waits or expires with its lease
         await liveStream?.stop()
@@ -601,6 +628,9 @@ final class AppModel {
     }
 
     func disconnect() async {
+        #if os(iOS)
+        pushRefreshWindow.cancel()
+        #endif
         guard let sync, let store, let connection else { return }
         browser.reset()
         await unbindPush()
@@ -692,10 +722,17 @@ final class AppModel {
         isActive = true
         Task {
             await retryStartIfFailed()
+            if pushOnlyStartup {
+                pushOnlyStartup = false
+                try? await restoreConnectionView()
+            }
             await refreshIdentityAvailability()
             refresh(force: false)
             kickOutbox()
             startLive()
+            #if os(iOS)
+            catchUpAfterPushDeferral()
+            #endif
             recoverConnection(reason: "foreground")
             reconcilePush()
         }

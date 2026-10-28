@@ -217,10 +217,11 @@ extension WorkspaceSync {
 
     /// Reads event pages from the stored cursor, applying and saving after each page. Stops at a short page, after
     /// `pages` pages (gap recovery) or on cancellation (progress so far is kept).
-    func pollEvents(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, pages: Int) async throws -> EventCatchUp {
+    func pollEvents(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, pages: Int, incrementalOnly: Bool = false) async throws -> EventCatchUp {
         let api = api(origin: try TowerOrigin(connection.origin))
         var result = EventCatchUp()
         guard var cursor = try await store.reader.eventCursor(connectionId: connection.id, workspaceId: workspace.id) else {
+            if incrementalOnly { return result }
             try await reseed(connection, workspace, api: api)
             result.seeded = true
             result.complete = true
@@ -233,25 +234,39 @@ extension WorkspaceSync {
                 page = try await api.events(workspaceId: workspace.id, appNpub: workspace.appNpub, cursor: cursor)
             } catch TowerError.http(400, _, _) {
                 // Tower no longer accepts this cursor: restart at the head instead of replaying from zero.
+                if incrementalOnly { return result }
                 try await reseed(connection, workspace, api: api)
                 result.gapRecovered = true
                 result.complete = true
                 return result
             } catch TowerError.http(let status, _, _) where status == 403 || status == 404 {
                 result.accessLost = true
-                await discover(connection, priority: .background, force: true)
+                if !incrementalOnly { await discover(connection, priority: .background, force: true) }
                 return result
             }
             try Task.checkCancellation()
             result.pages += 1
+            if incrementalOnly {
+                // These materialisers launch independent jobs. Keep this page replayable rather than start work
+                // outside the push window; its named resource was already fetched and foreground can hydrate the rest.
+                let needsFanout = EventPlan.make(page.events, workspaceId: workspace.id).refreshes.contains {
+                    switch $0 {
+                    case .structure, .directory, .access, .canvas, .notifications: true
+                    default: false
+                    }
+                }
+                if needsFanout { return result }
+            }
             if !page.events.isEmpty { try await applyEvents(page.events, connection, workspace) }
             result.events += page.events.count
+            try Task.checkCancellation()
             if let next = page.nextCursor, next != cursor {
                 try await store.writer.saveEventCursor(connectionId: connection.id, workspaceId: workspace.id, next)
                 cursor = next
             }
             if page.events.count + page.skipped < TowerAPI.eventPageLimit { result.complete = true; return result }
         }
+        if incrementalOnly { return result }
         // Backlog larger than the budget: skip to the head and catch the lists up directly (bounded, background).
         try await reseed(connection, workspace, api: api)
         result.gapRecovered = true

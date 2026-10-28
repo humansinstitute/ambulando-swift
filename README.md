@@ -19,6 +19,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Push cache refresh (iPhone/iPad build 33)
+
+Push fetch callbacks now refresh named content and persisted deltas in a bounded window, with foreground/unlock/network
+catch-up when iOS defers work. Receiving a push never marks an item read or changes navigation. A cold locked launch needs
+the existing **Refresh while locked** setting. Delivery remains opportunistic, including after force-quit restrictions.
+The paired Tower sender contract and implementation details are in [Push background sync](docs/push-background-sync.md).
+Exact simulator, phone installation, real push and publication evidence belongs to the release task.
+
 ## Deck and composer recovery (iPhone/iPad build 32, Mac build 23)
 
 - **Floating New thread:** a 56pt + on every iPhone/iPad Deck card, above the page dots and section bar. The Inbox +

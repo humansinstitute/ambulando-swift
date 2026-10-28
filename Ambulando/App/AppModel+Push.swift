@@ -61,6 +61,33 @@ extension AppModel {
         pushStatus = await pushCoordinator.status()
     }
 
+    #if os(iOS)
+    /// Cache refresh only: never selects a workspace or invokes the tap/open/read-state path.
+    func refreshFromPush(_ payload: PushPayload) async -> PushRefreshWindow.Result {
+        await start(pushOnly: true)
+        guard !Task.isCancelled, let sync, let connection else { return .noData }
+        do {
+            let changed = try await sync.refreshAfterPush(payload, connection: connection)
+            return changed ? .newData : .noData
+        } catch is CancellationError { return .failed }
+        catch IdentityError.locked { return .noData }
+        catch { return .failed }
+    }
+
+    /// Replays missed events for every stored workspace without moving the current UI. Keyed jobs coalesce with SSE.
+    func catchUpAfterPushDeferral() {
+        guard isActive, let sync, let connection, canRead else { return }
+        Task {
+            let listed = (try? await sync.store.reader.workspaces(connectionId: connection.id)) ?? []
+            guard connection.id == self.connection?.id, canRead else { return }
+            for workspace in listed {
+                await sync.catchUpEvents(connection, workspace, priority: .background, force: true)
+                await sync.refreshNotifications(connection, workspace, priority: .background, force: true)
+            }
+        }
+    }
+    #endif
+
     // MARK: OS callbacks
 
     func pushTokenReceived(_ token: Data) async {

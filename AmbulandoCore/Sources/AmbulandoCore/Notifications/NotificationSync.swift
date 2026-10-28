@@ -89,7 +89,7 @@ extension WorkspaceSync {
                 try await store.writer.resetNotificationCursor(connectionId: c, workspaceId: w)
                 run.reschedule = true
             } else {
-                try await repairDrift(connection, workspace, counts: counts)
+                try await repairDrift(connection, workspace, counts: counts, continueListing: continueListing)
             }
         } catch TowerAPI.NotificationReadFailure.unsupported {
             run.unsupported = true
@@ -99,7 +99,7 @@ extension WorkspaceSync {
             // Access to this workspace is gone: nothing of its inbox stays on the device.
             run.accessLost = true
             try await store.writer.purgeNotifications(connectionId: c, workspaceId: w)
-            await discover(connection, priority: .background, force: true)
+            if continueListing { await discover(connection, priority: .background, force: true) }
             return run
         } catch TowerAPI.NotificationReadFailure.resetRequired {
             // Replay was refused after a successful listing (or the listing's own cursor expired): list again next time.
@@ -111,7 +111,7 @@ extension WorkspaceSync {
             }
             throw error
         }
-        if run.reschedule {
+        if run.reschedule, continueListing {
             await refreshNotifications(connection, workspace, priority: .background, force: true)
         }
         return run
@@ -199,7 +199,7 @@ extension WorkspaceSync {
 
     /// Tower's unread count wins over a locally derived one when nothing is waiting to be sent: a mismatch means the
     /// device missed or misapplied something, so the inbox is listed again (rarely, never in a loop).
-    private func repairDrift(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, counts: NotificationCounts) async throws {
+    private func repairDrift(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, counts: NotificationCounts, continueListing: Bool = true) async throws {
         let c = connection.id, w = workspace.id
         guard try await store.reader.pendingNotificationIds(connectionId: c, workspaceId: w).isEmpty else { return }
         let local = try await store.reader.notificationUnreadCount(connectionId: c, workspaceId: w)
@@ -207,7 +207,7 @@ extension WorkspaceSync {
         let status = try await store.reader.notificationStatus(connectionId: c, workspaceId: w)
         if let last = Self.parseStamp(status.resetAt), Date().timeIntervalSince(last) < Self.notificationDriftResetInterval { return }
         try await store.writer.resetNotificationCursor(connectionId: c, workspaceId: w)
-        await refreshNotifications(connection, workspace, priority: .background, force: true)
+        if continueListing { await refreshNotifications(connection, workspace, priority: .background, force: true) }
     }
 
     /// The archived partition, fetched only when the user asks for it and resumable like the inbox: a page budget per job, the
