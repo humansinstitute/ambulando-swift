@@ -5,12 +5,15 @@
 // document as JSON (rich documents) or Markdown (Markdown documents), which it saves through its own lease, draft and
 // version checks. Untouched content goes back exactly as stored (document-preserve.js).
 //
-// In:  window.ambulandoDocument.load / command / insertUploads / replaceUpload / setImage / setStyle / snapshot / focus
-// Out: webkit.messageHandlers.document.postMessage(JSON): ready, loaded, change, state, need-image, paste-files, error;
+// In:  window.ambulandoDocument.load / command / insertUploads / replaceUpload / setImage / setStyle / snapshot / focus /
+//      wikiInsert / wikiBind / wikiTitles / wikiSelection
+// Out: webkit.messageHandlers.document.postMessage(JSON): ready, loaded, change, state, need-image, paste-files, error,
+//      wiki (a link was opened), wiki-query (`[[` typing);
 //      webkit.messageHandlers.documentFile.postMessage(`<index>\n<name>\n<type>\n<base64>`): one pasted file.
 import { captureSelection, revealSelection } from './document-selection.js';
 import { Editor, getSchema } from '@tiptap/core';
 import { createFlightDeckTiptapExtensions } from './sol/docs/editor/prosemirror-flightdeck-schema.js';
+import { wikiExtension, insertWikiLink, bindWikiTitle, collectWikiRefs, occurrenceOf } from './document-wiki.js';
 import {
   KeptBlock, KeptInline, KEPT_BLOCK, KEPT_INLINE, scanDocument, preservingExtensions, reuseMap, restoreDocument, nodeTypes,
   markdownSource, markdownFromEditor,
@@ -32,12 +35,25 @@ let touched = false;
 const images = new Map(); // objectId -> data URL from the app
 const requested = new Set();
 
+/// Current titles of the pages links point at (id -> title), pushed by the app, so a renamed page shows its new name.
+let wikiTitles = {};
+
 function baseExtensions() {
-  return createFlightDeckTiptapExtensions({ placeholder: 'Start writing…', editable: true }).map((extension) => {
-    // Wiki links show their title; opening and creating pages stays with the app's reader.
+  return [...createFlightDeckTiptapExtensions({ placeholder: 'Start writing…', editable: true }).map((extension) => {
+    // Wiki links: the page only reports a click; the app decides what it opens or creates (and keeps drafts safe first).
     if (extension.name !== 'fdWikiLink') return extension;
-    return extension.configure({ resolve: (attrs) => ({ state: 'available', title: attrs.title, page: { record_id: attrs.documentId } }) });
-  });
+    return extension.configure({
+      resolve: (attrs) => (attrs.documentId
+        ? { state: 'available', title: wikiTitles[attrs.documentId] || attrs.title, page: { record_id: attrs.documentId } }
+        : { state: 'unresolved', title: attrs.title }),
+      open: (documentId) => post({ type: 'wiki', action: 'activate', documentId, title: wikiTitles[documentId] || '', occurrence: 0 }),
+      create: (title, range, ed) => {
+        const ref = { title, from: range.from, to: range.to, documentId: null };
+        post({ type: 'wiki', action: 'activate', documentId: null, title, occurrence: occurrenceOf(collectWikiRefs(ed.state.doc), ref), from: range.from, to: range.to });
+      },
+      error: (message) => post({ type: 'wiki', action: 'error', message }),
+    });
+  }), wikiExtension({ post })];
 }
 
 /// The edited document as the app stores it: JSON text (rich) or Markdown.
@@ -312,6 +328,31 @@ Object.defineProperty(window, 'ambulandoDocument', {
       return result.state === 'found';
     },
     focus() { editor?.commands.focus(); return true; },
+    /// Puts a link where the `[[` query was (or at the selection). `json`: {documentId|null, title, from?, to?}.
+    wikiInsert(json) {
+      if (!editor) return false;
+      touched = true;
+      return insertWikiLink(editor, JSON.parse(json));
+    },
+    /// A created page's id into this page's unresolved links with that title. `json`: {title, documentId, occurrence|null}. Returns the count.
+    wikiBind(json) {
+      if (!editor) return 0;
+      const count = bindWikiTitle(editor, JSON.parse(json));
+      if (count) touched = true;
+      return count;
+    },
+    /// Titles of the pages links point at; links redraw with them.
+    wikiTitles(json) {
+      wikiTitles = JSON.parse(json) || {};
+      if (editor) editor.view.dispatch(editor.state.tr.setMeta('wikiRefresh', true).setMeta('addToHistory', false));
+      return true;
+    },
+    /// The selection as the toolbar link command needs it: {from, to, text}.
+    wikiSelection() {
+      if (!editor) return null;
+      const { from, to } = editor.state.selection;
+      return JSON.stringify({ from, to, text: editor.state.doc.textBetween(from, to, ' ') });
+    },
   }),
 });
 

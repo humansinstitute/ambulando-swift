@@ -45,7 +45,9 @@ body { font: var(--doc-body)/1.65 -apple-system, BlinkMacSystemFont, "SF Pro Tex
 .doc-rich-editor .ProseMirror .column-resize-handle { position: absolute; right: -2px; top: 0; bottom: 0; width: 4px; background: #7c5cc4; pointer-events: none; }
 .doc-rich-editor .ProseMirror .selectedCell::after { content: ""; position: absolute; inset: 0; background: rgba(124, 92, 196, 0.12); pointer-events: none; }
 .doc-rich-editor .ProseMirror .fd-mention, .doc-rich-editor .ProseMirror .mention-link { color: var(--primary); font-weight: 600; }
-.doc-rich-editor .ProseMirror .fd-wiki-link { color: var(--primary); text-decoration: underline dotted; }
+.doc-rich-editor .ProseMirror .fd-wiki-link { color: var(--primary); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; cursor: pointer; border-radius: 3px; }
+.doc-rich-editor .ProseMirror .fd-wiki-link.fd-wiki-unresolved, .doc-rich-editor .ProseMirror .fd-wiki-literal { color: var(--primary); text-decoration: underline; text-decoration-style: dashed; text-underline-offset: 2px; cursor: pointer; }
+.doc-rich-editor .ProseMirror .fd-wiki-link:focus-visible { outline: 2px solid #7c5cc4; outline-offset: 1px; }
 .doc-rich-editor .ProseMirror .fd-storage-file-card { display: inline-block; padding: 0.4em 0.7em; border: 1px solid var(--rule); border-radius: 8px; margin: 0 0 0.75em; }
 .doc-rich-editor .ProseMirror .doc-rich-upload-placeholder { padding: 0.6em 0.8em; border: 1px dashed var(--rule); border-radius: 8px; color: var(--muted-ink); margin: 0 0 0.75em; font-size: 0.9em; }
 .doc-rich-editor .ProseMirror .fd-kept { background: var(--kept-bg); color: var(--primary); border-radius: 6px; font-size: 0.85em; }
