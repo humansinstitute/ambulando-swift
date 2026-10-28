@@ -361,3 +361,148 @@ final class WikiMoveTests: XCTestCase {
         XCTAssertTrue(fromNote.lines.contains { $0.contains("private note-to-self") })
     }
 }
+
+/// Create-and-link: one durable write creates the page and the source learns its id, even across lost responses and a source
+/// that cannot be saved right now.
+final class WikiCreateTests: XCTestCase {
+    private func sourceBody(_ text: String = "See [[Dashboard]] today") -> Data {
+        let state = JSONValue.object([("type", .string("doc")), ("content", .array([.object([("type", .string("paragraph")),
+            ("content", .array([.object([("type", .string("text")), ("text", .string(text))])]))])]))])
+        let model = JSONValue.object(ProseMirrorMarkdown.contentModelFields(state))
+        return JSONValue.object([("format", .string(DocumentBody.envelopeFormat)), ("content_model", model)]).serialized()
+    }
+
+    private func sender(_ h: WorkHarness, failBinding: Bool = false) -> WriteSender {
+        let store = h.store, saver = h.saver, workspace = h.workspace
+        return WriteSender(store: store, engine: h.engine, identity: h.chat.identity, transport: h.transport, staging: h.staging,
+                           afterWikiCreate: { connection, item, created in
+            if failBinding { throw URLError(.cannotConnectToHost) }
+            _ = try await WikiBinder.bind(title: item.string(WikiCreate.titleKey) ?? "", to: created.id, occurrence: (item.payloadObject[WikiCreate.occurrenceKey] as? Int),
+                                          sourceDocId: item.string(WikiCreate.sourceKey) ?? "", connection: connection, workspace: workspace, store: store, saver: saver)
+        })
+    }
+
+    private func intent(_ h: WorkHarness, source: String, channel: String = Fixtures.channel2, title: String = "Dashboard") throws -> WriteIntent {
+        let created = DocumentBody.newDocument(text: "")
+        let name = UUID().uuidString.lowercased() + ".document.json"
+        try FileManager.default.createDirectory(at: h.staging, withIntermediateDirectories: true)
+        try created.bytes.write(to: h.staging.appendingPathComponent(name))
+        var payload: [String: any Sendable] = ["channel_id": channel, "title": title, "staged": name, "content_type": created.contentType, "file_name": title + ".document.json"]
+        payload.merge(WikiCreate.linkPayload(sourceDocId: source, title: title, occurrence: nil)) { $1 }
+        return WriteIntent(kind: .docCreate, targetId: channel, payload: payload)
+    }
+
+    private func seededSource(_ h: WorkHarness) async throws -> String {
+        let id = h.work.seedDoc(scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "Petes Notes", body: sourceBody(), contentType: DocumentBody.envelopeContentType)
+        await h.sync.refreshDoc(h.connection, h.workspace, docId: id); await h.engine.waitUntilIdle()
+        return id
+    }
+
+    private func savedMarkdown(_ h: WorkHarness, _ id: String) -> String { DocumentBody(bytes: h.work.docBody(id)!, contentType: nil).markdown }
+
+    func testCreateAndLinkCreatesOnePageInTheChosenChannelAndLinksTheSource() async throws {
+        let h = try await WorkHarness.make()
+        let source = try await seededSource(h)
+        let writer = sender(h)
+        try await writer.submit(intent(h, source: source), connection: h.connection, workspace: h.workspace)
+        await h.settled()
+        let docs = try await h.store.reader.docs(workspaceId: h.workspace.id)
+        let created = try XCTUnwrap(docs.first { $0.title == "Dashboard" })
+        XCTAssertEqual(created.channelId, Fixtures.channel2, "created where the person chose, not in the source channel")
+        XCTAssertEqual(docs.filter { $0.title == "Dashboard" }.count, 1)
+        XCTAssertEqual(savedMarkdown(h, source), "See [Dashboard](wiki:\(created.id)) today")
+        let rest = try await h.pending()
+        XCTAssertTrue(rest.isEmpty, "the write is retired only after the link was recorded")
+    }
+
+    func testLostResponseRetryNeitherDuplicatesThePageNorLosesTheLink() async throws {
+        let h = try await WorkHarness.make()
+        let source = try await seededSource(h)
+        h.work.inject(.dropResponseAfterCommit, matching: "/channels/\(Fixtures.channel2)/docs")
+        let writer = sender(h)
+        try await writer.submit(intent(h, source: source), connection: h.connection, workspace: h.workspace)
+        await h.settled()
+        await writer.kick(h.connection, force: true); await h.engine.waitUntilIdle()
+        let docs = try await h.store.reader.docs(workspaceId: h.workspace.id)
+        XCTAssertEqual(docs.filter { $0.title == "Dashboard" }.count, 1, "the retry found the page created by the lost attempt")
+        let created = try XCTUnwrap(docs.first { $0.title == "Dashboard" })
+        XCTAssertTrue(savedMarkdown(h, source).contains("wiki:\(created.id)"))
+    }
+
+    func testSourceThatCannotBeSavedKeepsTheLinkInADraftAndTheCreatedPage() async throws {
+        let h = try await WorkHarness.make()
+        let source = try await seededSource(h)
+        h.work.inject(.offline, matching: "/storage/prepare")   // the page's own upload goes first and may use it, so arm after creation below
+        h.work.inject(.offline, matching: "/edit-leases/acquire")
+        let writer = sender(h)
+        try await writer.submit(intent(h, source: source), connection: h.connection, workspace: h.workspace)
+        await h.settled()
+        await writer.kick(h.connection, force: true); await h.engine.waitUntilIdle()
+        let docs = try await h.store.reader.docs(workspaceId: h.workspace.id)
+        let created = try XCTUnwrap(docs.first { $0.title == "Dashboard" }, "the created page exists")
+        XCTAssertEqual(docs.filter { $0.title == "Dashboard" }.count, 1)
+        let key = DocDraft.key(connectionId: h.connection.id, workspaceId: h.workspace.id, docId: source)
+        let draftRow = try await h.store.reader.docDraft(key: key)
+        let draft = try XCTUnwrap(draftRow, "the source link survives as an unsaved draft")
+        XCTAssertTrue(DocumentBody(bytes: draft.body, contentType: draft.contentType).markdown.contains("wiki:\(created.id)"))
+        // The person (or a later retry) saves it once online again.
+        guard case .saved = await h.saver.save(draft, connection: h.connection, workspace: h.workspace) else { return XCTFail("saves later") }
+        XCTAssertTrue(savedMarkdown(h, source).contains("wiki:\(created.id)"))
+    }
+
+    func testFailedLinkingKeepsTheWriteQueuedAndTheRetryDoesNotCreateASecondPage() async throws {
+        let h = try await WorkHarness.make()
+        let source = try await seededSource(h)
+        let failing = sender(h, failBinding: true)
+        try await failing.submit(intent(h, source: source), connection: h.connection, workspace: h.workspace)
+        await h.settled()
+        var rows = try await h.pending()
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.lastCode, "wiki_link_pending")
+        let working = sender(h)
+        await working.kick(h.connection, force: true); await h.engine.waitUntilIdle()
+        rows = try await h.pending()
+        XCTAssertTrue(rows.isEmpty)
+        let docs = try await h.store.reader.docs(workspaceId: h.workspace.id)
+        XCTAssertEqual(docs.filter { $0.title == "Dashboard" }.count, 1)
+        let created = try XCTUnwrap(docs.first { $0.title == "Dashboard" })
+        XCTAssertTrue(savedMarkdown(h, source).contains("wiki:\(created.id)"))
+    }
+
+    func testUnsavedEditsInTheSourceReceiveTheLinkWithoutBeingUploaded() async throws {
+        let h = try await WorkHarness.make()
+        let source = try await seededSource(h)
+        let stored = try await h.store.reader.docBody(workspaceId: h.workspace.id, docId: source)
+        let cached = try XCTUnwrap(stored)
+        let mine = sourceBody("My new words and [[Dashboard]]")
+        let draft = DocDraft(connectionId: h.connection.id, workspaceId: h.workspace.id, docId: source, title: "Petes Notes", body: mine,
+                             contentType: DocumentBody.envelopeContentType, baseRowVersion: cached.docRowVersion, baseSha256: cached.sha256,
+                             baseStorageObjectId: cached.storageObjectId, state: .editing)
+        try await h.store.writer.saveDocDraft(draft)
+        let writer = sender(h)
+        try await writer.submit(intent(h, source: source), connection: h.connection, workspace: h.workspace)
+        await h.settled()
+        let docs = try await h.store.reader.docs(workspaceId: h.workspace.id)
+        let created = try XCTUnwrap(docs.first { $0.title == "Dashboard" })
+        let after = try await h.store.reader.docDraft(key: draft.key)
+        let kept = try XCTUnwrap(after)
+        XCTAssertEqual(DocumentBody(bytes: kept.body, contentType: kept.contentType).markdown, "My new words and [Dashboard](wiki:\(created.id))")
+        XCTAssertFalse(savedMarkdown(h, source).contains("wiki:"), "the person's unsaved edits were not uploaded for them")
+        XCTAssertFalse(savedMarkdown(h, source).contains("My new words"))
+    }
+
+    func testRepeatRequestsFindThePendingOrExistingPageInsteadOfCreatingAnother() async throws {
+        let h = try await WorkHarness.make()
+        let source = try await seededSource(h)
+        let queued = try await h.writes.submit(intent(h, source: source), connection: h.connection, workspace: h.workspace)
+        let pending = try await h.pending()
+        let docs = try await h.store.reader.docs(workspaceId: h.workspace.id)
+        if case .pending(let item)? = WikiCreate.existing(title: " dashboard ", channelId: Fixtures.channel2, docs: docs, pending: pending) { XCTAssertEqual(item.id, queued.id) }
+        else if !pending.isEmpty { XCTFail("a queued creation must be found") }
+        XCTAssertNil(WikiCreate.existing(title: "Dashboard", channelId: Fixtures.channel1, docs: docs, pending: []))
+        await h.settled()
+        let after = try await h.store.reader.docs(workspaceId: h.workspace.id)
+        guard case .page(let page)? = WikiCreate.existing(title: "Dashboard", channelId: Fixtures.channel2, docs: after, pending: []) else { return XCTFail("existing page") }
+        XCTAssertEqual(page.channelId, Fixtures.channel2)
+    }
+}

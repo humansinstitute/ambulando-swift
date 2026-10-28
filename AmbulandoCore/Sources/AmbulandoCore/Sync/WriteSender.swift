@@ -30,11 +30,16 @@ public struct WriteSender: Sendable {
     /// Called after Tower accepted a notification change, so the inbox job can pick up the item versions it produced
     /// (the one sync owner schedules it; the sender never reads the inbox itself).
     public let afterNotificationWrite: (@Sendable (ConnectionRecord, String) async -> Void)?
+    /// Called when Tower accepted a "create and link" document, before the write is retired: the screen that owns the
+    /// source document puts the new page's id into its link. Throwing keeps the write queued, and the retry finds the
+    /// already created page, so a source that could not be updated yet never loses the link or creates a second page.
+    public let afterWikiCreate: (@Sendable (ConnectionRecord, WriteItem, DocRecord) async throws -> Void)?
 
     public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport, staging: URL,
-                transfers: BackgroundTransfers? = nil, afterNotificationWrite: (@Sendable (ConnectionRecord, String) async -> Void)? = nil) {
+                transfers: BackgroundTransfers? = nil, afterNotificationWrite: (@Sendable (ConnectionRecord, String) async -> Void)? = nil,
+                afterWikiCreate: (@Sendable (ConnectionRecord, WriteItem, DocRecord) async throws -> Void)? = nil) {
         self.store = store; self.engine = engine; self.identity = identity; self.transport = transport; self.staging = staging
-        self.transfers = transfers; self.afterNotificationWrite = afterNotificationWrite
+        self.transfers = transfers; self.afterNotificationWrite = afterNotificationWrite; self.afterWikiCreate = afterWikiCreate
     }
 
     public static func key(_ connection: ConnectionRecord) -> String { "writes:\(connection.id)" }
@@ -88,6 +93,17 @@ public struct WriteSender: Sendable {
             }
             switch outcome {
             case .done(let ack):
+                if item.kind == .docCreate, item.string(WikiCreate.sourceKey) != nil, let created = ack.docs.first, let bind = afterWikiCreate {
+                    do { try await bind(connection, item, created) }
+                    catch {
+                        if Task.isCancelled || error is CancellationError { throw CancellationError() }
+                        try await store.writer.markWrite(id: item.id, state: .retrying, status: nil, code: "wiki_link_pending",
+                                                         error: "The page was created; its link in the source document will be added on the next attempt.", countAttempt: true)
+                        blocked.insert(item.groupKey)
+                        nextRetry = min(nextRetry ?? .max, item.attempts + 1)
+                        continue
+                    }
+                }
                 try await store.writer.acknowledgeWrite(id: item.id, workspaceId: item.workspaceId, ack)
                 if item.kind == .notificationState || item.kind == .notificationBulk { await afterNotificationWrite?(connection, item.workspaceId) }
                 if item.kind == .fileUpload || item.kind == .docCreate, let staged = item.string("staged") { try? FileManager.default.removeItem(at: staging.appendingPathComponent(staged)) }
