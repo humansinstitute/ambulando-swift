@@ -97,3 +97,79 @@ extension WorkspaceSync {
         return thread
     }
 }
+
+/// Renaming a conversation (web `saveThreadTitle`, `updateTowerPgThreadTitleFromLocal`): `PATCH …/threads/:t` with the
+/// new `title` and the stored `row_version`. A confirmed online request, not queued: Tower decides who may rename, and the
+/// person sees the result or the reason. A stale version is refreshed from Tower once and tried again, as the web does; a
+/// second stale answer is reported as a conflict rather than overwritten blindly.
+public enum ThreadTitle {
+    public static let maxLength = 120
+
+    /// The title the web sends: whitespace collapsed and trimmed. Throws the message shown beside the field.
+    public static func normalized(_ value: String) throws -> String {
+        let title = value.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        guard !title.isEmpty else { throw ManagementError.invalid("Enter a thread title.") }
+        guard title.count <= maxLength else { throw ManagementError.invalid("Thread titles can be up to \(maxLength) characters.") }
+        return title
+    }
+}
+
+extension WorkspaceSync {
+    /// Renames `threadId` and stores Tower's answer, so the header, list rows and cached title follow at once.
+    public func renameThread(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, threadId: String, title rawTitle: String,
+                             rowVersion: Int?, originalTitle: String?) async throws -> ThreadRecord {
+        let title = try ThreadTitle.normalized(rawTitle)
+        guard let rowVersion, rowVersion > 0 else {
+            throw ManagementError.conflict("The original thread version is unavailable. Your draft is kept; reopen the editor to load it.")
+        }
+        do { try await identity.requireSigner(npub: connection.signerNpub) } catch { throw ManagementError.locked }
+        let api = api(origin: try TowerOrigin(connection.origin))
+        let path = try TowerAPI.base(workspace.id) + "/threads/" + TowerAPI.uuid(threadId)
+
+        func exchange(_ method: String, _ body: [String: Any]?) async throws -> (status: Int, object: [String: Any]) {
+            let json = try body.map { try JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }
+            do {
+                let result = try await api.client.exchange(method: method, path: path, appNpub: workspace.appNpub, jsonBody: json)
+                return (result.status, ((try? JSONSerialization.jsonObject(with: result.body)) as? [String: Any]) ?? [:])
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw ManagementError.offline(error.localizedDescription)
+            }
+        }
+        func isStale(_ reply: (status: Int, object: [String: Any])) -> Bool {
+            reply.status == 409 && ((reply.object["code"] as? String) ?? (reply.object["error"] as? String)) == "stale_row_version"
+        }
+        func patch(_ version: Int?) async throws -> (status: Int, object: [String: Any]) {
+            var body: [String: Any] = ["title": title]
+            if let version, version > 0 { body["row_version"] = version }
+            return try await exchange("PATCH", body)
+        }
+
+        var reply = try await patch(rowVersion)
+        if isStale(reply) {
+            let fresh = try await exchange("GET", nil)
+            guard (200..<300).contains(fresh.status) else {
+                throw ManagementError.classify(status: fresh.status, object: fresh.object, operation: .renameThread)
+            }
+            guard let row = fresh.object["thread"] as? [String: Any], let version = row["row_version"] as? Int, version > 0 else {
+                throw ManagementError.unexpected("Tower did not return the thread's current version. Nothing was changed.")
+            }
+            let current = try ThreadRecord(raw: JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]))
+            _ = try await store.writer.upsertThreads(workspaceId: workspace.id, [current])
+            guard current.title == originalTitle else {
+                throw ManagementError.conflict("This thread was renamed elsewhere. Current title: “\(current.title ?? "Untitled")”. Your draft is kept. Cancel and reopen to edit the current title.")
+            }
+            // Only unrelated row-version churn may retry against the fresh version.
+            reply = try await patch(version)
+            if isStale(reply) { throw ManagementError.conflict("This thread was renamed elsewhere while you were saving. Reopen it and try again.") }
+        }
+        guard (200..<300).contains(reply.status) else {
+            throw ManagementError.classify(status: reply.status, object: reply.object, operation: .renameThread)
+        }
+        guard let row = reply.object["thread"] as? [String: Any] else { throw ManagementError.unexpected("Tower's answer had no thread.") }
+        let thread = try ThreadRecord(raw: JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]))
+        _ = try await store.writer.upsertThreads(workspaceId: workspace.id, [thread])
+        return thread
+    }
+}

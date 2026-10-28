@@ -292,9 +292,9 @@ public struct ViewStateRecord: Sendable, Equatable, Identifiable {
     }
 }
 
-/// The six reactions Tower accepts (`reactionEmojis`), with the glyph shown for each.
+/// The seven reactions Tower accepts (`reactionEmojis`), with the glyph shown for each.
 public enum ReactionEmoji: String, Sendable, CaseIterable, Codable {
-    case thumbsUp = "thumbs_up", smile, heart, eyes, party, check = "white_check_mark"
+    case thumbsUp = "thumbs_up", smile, heart, eyes, party, shaka, check = "white_check_mark"
     public var name: String {
         switch self {
         case .thumbsUp: "Thumbs up"
@@ -302,6 +302,7 @@ public enum ReactionEmoji: String, Sendable, CaseIterable, Codable {
         case .heart: "Heart"
         case .eyes: "Eyes"
         case .party: "Party"
+        case .shaka: "Shaka"
         case .check: "Done"
         }
     }
@@ -314,6 +315,7 @@ public enum ReactionEmoji: String, Sendable, CaseIterable, Codable {
         case .heart: "heart.fill"
         case .eyes: "eyes"
         case .party: "party.popper.fill"
+        case .shaka: "hand.wave.fill"
         case .check: "checkmark.seal.fill"
         }
     }
@@ -325,6 +327,7 @@ public enum ReactionEmoji: String, Sendable, CaseIterable, Codable {
         case .heart: "❤️"
         case .eyes: "👀"
         case .party: "🎉"
+        case .shaka: "🤙"
         case .check: "✅"
         }
     }

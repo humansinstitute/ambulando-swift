@@ -27,6 +27,8 @@ enum Amb {
     static let warning = dynamic(0x805400, 0xF3CF80)
     static let warningBackground = dynamic(0xFFF3D6, 0x40331C)
     static let info = dynamic(0x215C85, 0xADD2F0)
+    /// Web addresses in messages and documents: a clear blue, always underlined, so a link never reads as plain text.
+    static let link = dynamic(0x0B5CC7, 0x8CC4FF)
     static let infoBackground = dynamic(0xE8F1F9, 0x20384C)
     /// Selected row (sol `.sidebar-scope-channel-row.active`, `.reaction-pill-active`): muted fill, primary text.
     static let selectedFill = muted

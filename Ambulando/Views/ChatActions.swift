@@ -81,8 +81,10 @@ struct MessageCell: View, Equatable {
                 }
             }
             .overlay(alignment: .topTrailing) { messageControls }
-            ReactionBar(reactions: reactions, me: model.identity.npub) { toggle($0) }
-                .padding(.leading, 60).padding(.trailing, 16)
+            if model.identity.npub != nil && !message.deleted {
+                ReactionBar(reactions: reactions, me: model.identity.npub) { toggle($0) }
+                    .padding(.leading, 60).padding(.trailing, 16)
+            }
             ForEach(writes.filter { [.messageEdit, .messageDelete].contains($0.kind) }) { item in
                 WriteStatusLine(item: item, label: item.kind == .messageEdit ? "Edit" : "Delete").padding(.leading, 60).padding(.trailing, 16).padding(.bottom, 6)
             }
@@ -234,34 +236,110 @@ struct MessageCell: View, Equatable {
     }
 }
 
+/// The web's reaction bar (sol `.reaction-bar`), always under a message: one bordered pill per reaction with its symbol and
+/// count (yours on the muted fill), a quiet grey thumbs-up that reacts in one tap, and a + that opens the emoji picker.
+/// Tapping a pill, the thumbs-up or a picker emoji adds your reaction, or removes it when you already made it.
+/// Packs pills into bounded rows, including at accessibility text sizes.
+private struct ReactionFlowLayout: Layout {
+    let spacing: CGFloat
+
+    private func arrangement(width: CGFloat, subviews: Subviews) -> (CGSize, [CGPoint]) {
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        var points: [CGPoint] = []
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > width { x = 0; y += rowHeight + spacing; rowHeight = 0 }
+            points.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return (CGSize(width: width, height: y + rowHeight), points)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrangement(width: proposal.width ?? 320, subviews: subviews).0
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let points = arrangement(width: bounds.width, subviews: subviews).1
+        for (index, view) in subviews.enumerated() {
+            view.place(at: CGPoint(x: bounds.minX + points[index].x, y: bounds.minY + points[index].y), anchor: .topLeading, proposal: .unspecified)
+        }
+    }
+}
+
 struct ReactionBar: View {
     let reactions: [ReactionRecord]
     let me: String?
     let toggle: (String) -> Void
+    @State private var picking = false
+
+    @ScaledMetric(relativeTo: .footnote) private var scaledSide: CGFloat = 32
+    private var side: CGFloat {
+        #if os(macOS)
+        32 * TextScale.shared.factor
+        #else
+        scaledSide
+        #endif
+    }
 
     var body: some View {
         let counts = Dictionary(grouping: reactions, by: \.emoji)
         let ordered = ReactionEmoji.allCases.filter { counts[$0.rawValue] != nil }
-        if !ordered.isEmpty {
-            HStack(spacing: 6) {
-                ForEach(ordered, id: \.self) { emoji in
-                    let list = counts[emoji.rawValue] ?? []
-                    let mine = list.contains { $0.reactorNpub == me }
-                    Button { toggle(emoji.rawValue) } label: {
-                        HStack(spacing: 4) { Image(systemName: emoji.symbol); Text("\(list.count)") }.font(.amb(.caption).weight(.semibold))
-                            .foregroundStyle(emoji == .heart ? Amb.destructive : Amb.primary)
-                            .padding(.horizontal, 8).padding(.vertical, 3)
-                            // sol `.reaction-pill` / `.reaction-pill-active`: bordered on white; yours on the muted fill.
-                            .background(mine ? Amb.selectedFill : Amb.card, in: Capsule())
-                            .overlay(Capsule().stroke(mine ? Amb.primary : Amb.border, lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(emoji.name), \(list.count)\(mine ? ", including you" : "")")
-                    .accessibilityIdentifier("reaction.\(emoji.rawValue)")
+        ReactionFlowLayout(spacing: 4) {
+            ForEach(ordered, id: \.self) { emoji in
+                let list = counts[emoji.rawValue] ?? []
+                let mine = list.contains { $0.reactorNpub == me }
+                Button { toggle(emoji.rawValue) } label: {
+                    HStack(spacing: 4) { Image(systemName: emoji.symbol).foregroundStyle(emoji == .heart ? Amb.destructive : (mine ? Amb.primary : Amb.foreground)); Text("\(list.count)") }
+                        .font(.amb(.footnote).weight(.semibold)).foregroundStyle(mine ? Amb.primary : Amb.foreground)
+                        .padding(.horizontal, 8).frame(minWidth: side, minHeight: side)
+                        .background(mine ? Amb.selectedFill : Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+                        .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl).stroke(Amb.border, lineWidth: 1))
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(emoji.name), \(list.count)\(mine ? ", including you" : "")")
+                .accessibilityAddTraits(mine ? .isSelected : [])
+                .accessibilityIdentifier("reaction.\(emoji.rawValue)")
             }
-            .padding(.bottom, 6)
+            Button { toggle(ReactionEmoji.thumbsUp.rawValue) } label: {
+                Image(systemName: ReactionEmoji.thumbsUp.symbol).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).opacity(0.8)
+                    .frame(width: side, height: side).background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+                    .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl).stroke(Amb.border, lineWidth: 1)).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("React with thumbs up")
+            .accessibilityIdentifier("reaction.quick")
+            Button { picking = true } label: {
+                Image(systemName: "plus").font(.amb(.footnote).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
+                    .frame(width: side, height: side).background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+                    .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl).stroke(Amb.border, lineWidth: 1)).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add reaction")
+            .accessibilityIdentifier("reaction.add")
+            .popover(isPresented: $picking, arrowEdge: .bottom) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 40))], spacing: 4) {
+                    ForEach(ReactionEmoji.allCases, id: \.self) { emoji in
+                        Button { picking = false; toggle(emoji.rawValue) } label: {
+                            Image(systemName: emoji.symbol).font(.system(size: 20)).foregroundStyle(emoji == .heart ? Amb.destructive : Amb.primary).frame(width: 40, height: 40).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(emoji.name)
+                        .accessibilityIdentifier("react.\(emoji.rawValue)")
+                    }
+                }
+                .padding(8)
+                .frame(width: 220)
+                .presentationCompactAdaptation(.popover)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("reaction.picker")
+            }
         }
+        .padding(.top, 6).padding(.bottom, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("reaction.bar")
     }
 }
 
@@ -565,6 +643,10 @@ struct NativeMessageActions: NSViewRepresentable {
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.items = items
         button.isEnabled = !items.isEmpty
+        button.setAccessibilityIdentifier(identifier)
+        button.setAccessibilityLabel(label)
+        button.setAccessibilityHelp(help)
+        button.identifier = NSUserInterfaceItemIdentifier(identifier)
     }
 
     final class Coordinator: NSObject {

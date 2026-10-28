@@ -22,6 +22,16 @@ extension AppModel {
         }
     }
 
+    /// Renames a conversation through Tower (`PATCH …/threads/:t`). Throws what the rename sheet shows: a refusal, a conflict
+    /// with another rename, being offline or locked. On success the stored thread follows, so the header, the channel's
+    /// thread rows and Deck show the new title without a refresh.
+    func renameThread(_ threadId: String, to title: String, in workspace: WorkspaceRecord, originalTitle: String?, rowVersion: Int?) async throws {
+        guard let sync, let connection, store != nil, workspace.id == selectedWorkspace?.id else {
+            throw ManagementError.unexpected("Open this thread from its own workspace to rename it.")
+        }
+        _ = try await sync.renameThread(connection, workspace, threadId: threadId, title: title, rowVersion: rowVersion, originalTitle: originalTitle)
+    }
+
     /// The Autopilot live-session address for a message that came from an Autopilot session.
     func autopilotURL(for message: MessageRecord, in workspace: WorkspaceRecord) async -> URL? {
         guard let session = AutopilotSessionLink.sessionId(in: message.raw) else { return nil }

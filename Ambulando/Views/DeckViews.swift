@@ -344,6 +344,10 @@ struct DeckInboxCard: View {
         } label: {
             Image(systemName: "ellipsis.circle").font(.amb(.body)).frame(width: 30, height: 30)
         }
+        // On the Mac a bare Menu is a pop-up button that stretched across the card's header; it is one small icon.
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
         .accessibilityLabel("Inbox read actions")
         .accessibilityIdentifier("deck.inbox.readMenu")
     }

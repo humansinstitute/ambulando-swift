@@ -850,6 +850,8 @@ struct Composer: View {
     @State private var pasteNotice: String?
     @State private var focused = false
     @State private var recordSuggestions: (query: MentionQuery, rows: [MentionSuggestion]) = (MentionQuery(""), [])
+    /// What this person tagged most recently, for the bare `@` list.
+    @State private var recentTags: [Mention] = []
     /// The row of the mention list that Return or Tab picks (Up and Down move it).
     @State private var highlighted = 0
     /// Escape closes the list for the text as it stands; typing more opens it again.
@@ -861,16 +863,26 @@ struct Composer: View {
     /// The `@` lookahead as on the web: people and agents from the directory, and documents, tasks, conversations,
     /// channels and scopes from the local store, filtered by the name typed so far (a `doc:` style prefix narrows it).
     private var suggestions: [MentionSuggestion] {
-        guard let composer, composer.visibleText != dismissedAt, let typed = MentionCodec.activeQuery(in: composer.visibleText) else { return [] }
+        guard let composer, composer.visibleText != dismissedAt, let typed = activeQuery else { return [] }
         let query = MentionQuery(typed)
         let records = recordSuggestions.query == query ? recordSuggestions.rows : []
-        return MentionRanking.merge(actors: members.value.map { (Mention(member: $0.member), $0.member.npub) }, records: records, query: query)
+        return MentionRanking.merge(actors: members.value.map { (Mention(member: $0.member), $0.member.npub) }, records: records, query: query,
+                                    recent: recentTags)
+    }
+
+    /// The `@` being typed, none once a name from the list has been picked (the list closes and stays closed as typing goes on).
+    private var activeQuery: String? {
+        guard let composer else { return nil }
+        return MentionCodec.activeQuery(in: composer.visibleText, excluding: composer.mentions)
     }
 
     /// Records matching the active `@` query, read off the main actor as it changes.
     private func lookUpRecords(_ typed: String?) async {
         guard let typed, let store = model.store else { return }
         let query = MentionQuery(typed), workspaceId = target.workspaceId
+        if typed.isEmpty, let me = model.identity.npub, let rows = try? await store.reader.recentMentions(workspaceId: workspaceId, senderNpub: me) {
+            recentTags = rows
+        }
         // A short pause lets fast typing settle before the store is read; a newer keystroke cancels this one.
         try? await Task.sleep(for: .milliseconds(60))
         guard !Task.isCancelled, let rows = try? await store.reader.mentionSuggestions(workspaceId: workspaceId, query: query, limit: query.limit) else { return }
@@ -992,8 +1004,8 @@ struct Composer: View {
                 guard let composer else { throw TextAttachmentError.missing }; try await composer.commitAttachment(next)
             }
         }
-        .onChange(of: MentionCodec.activeQuery(in: composer?.visibleText ?? "")) { _, _ in highlighted = 0 }
-        .task(id: MentionCodec.activeQuery(in: composer?.visibleText ?? "")) { await lookUpRecords(MentionCodec.activeQuery(in: composer?.visibleText ?? "")) }
+        .onChange(of: activeQuery) { _, _ in highlighted = 0 }
+        .task(id: activeQuery) { await lookUpRecords(activeQuery) }
         .onChange(of: photos) { _, items in
             guard !items.isEmpty else { return }
             photos = []
@@ -1124,32 +1136,56 @@ struct MentionPicker: View {
     let people: [MentionCandidate]
     var highlighted = 0
     let pick: (MentionSuggestion) -> Void
+    /// One row's height, growing with the text size so the cap below always shows whole rows.
+    @ScaledMetric(relativeTo: .subheadline) private var rowHeight = 46
+
+    /// The list shows at most this many rows and scrolls for the rest, so the composer and the message above it stay
+    /// visible with the keyboard up (the iPhone's list had taken over the screen).
+    static var visibleRows: Int {
+        #if os(iOS)
+        7
+        #else
+        8
+        #endif
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ForEach(suggestions) { suggestion in
-                let selected = suggestion.id == suggestions[min(highlighted, suggestions.count - 1)].id
-                Button { pick(suggestion) } label: {
-                    HStack(spacing: 10) {
-                        MentionIcon(mention: suggestion.mention, people: people)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(suggestion.mention.label).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
-                            Text(suggestion.detail).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+        let current = suggestions[min(highlighted, suggestions.count - 1)].id
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(suggestions) { suggestion in
+                        let selected = suggestion.id == current
+                        Button { pick(suggestion) } label: {
+                            HStack(spacing: 10) {
+                                MentionIcon(mention: suggestion.mention, people: people)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(suggestion.mention.label).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+                                    Text(suggestion.detail).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: rowHeight)
+                            .background(selected ? Amb.selectedFill : Color.clear)
+                            .contentShape(Rectangle())
                         }
-                        Spacer()
+                        .buttonStyle(.plain)
+                        .id(suggestion.id)
+                        .accessibilityLabel("\(suggestion.mention.label), \(suggestion.detail)")
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                        .accessibilityIdentifier("mention.\(suggestion.mention.label)")
                     }
-                    .padding(.horizontal, 14).padding(.vertical, 6)
-                    .background(selected ? Amb.selectedFill : Color.clear)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(suggestion.mention.label), \(suggestion.detail)")
-                .accessibilityAddTraits(selected ? .isSelected : [])
-                .accessibilityIdentifier("mention.\(suggestion.mention.label)")
             }
+            .frame(height: min(CGFloat(suggestions.count), CGFloat(Self.visibleRows)) * rowHeight)
+            .scrollBounceBehavior(.basedOnSize)
+            .onChange(of: current) { _, id in withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id) } }
         }
         .padding(.vertical, 4)
         .background(Amb.card)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("mention.list")
     }
 }
 

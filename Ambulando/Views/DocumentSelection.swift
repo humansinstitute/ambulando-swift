@@ -43,7 +43,11 @@ struct DocumentSelectableText: NSViewRepresentable {
             var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
             if run.underline { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
             if run.strike { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-            if let link = run.link, let url = URL(string: link), RichLinks.isSafeWeb(url) { attrs[.link] = url }
+            if let link = run.link, let url = URL(string: link), RichLinks.isSafeWeb(url) {
+                attrs[.link] = url
+                attrs[.foregroundColor] = NSColor(Amb.link)
+                attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            }
             if let kind = run.mentionKind, let id = run.mentionId { attrs[.link] = RichLinks.mentionURL(kind: kind, id: id) }
             result.append(NSAttributedString(string: run.text, attributes: attrs))
         }

@@ -442,7 +442,8 @@ enum InlineText {
             if run.code { part.backgroundColor = Amb.card }
             if let link = run.link, let url = URL(string: link), RichLinks.isSafeWeb(url) {
                 part.link = url
-                part.foregroundColor = Amb.primary
+                part.foregroundColor = Amb.link
+                part.underlineStyle = .single
             }
             if run.mention {
                 part.foregroundColor = run.mentionKind == "person" || run.mentionKind == "agent" || run.mentionKind == nil ? Amb.primary : Amb.info

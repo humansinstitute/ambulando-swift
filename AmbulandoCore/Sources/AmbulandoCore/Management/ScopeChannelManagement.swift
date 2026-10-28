@@ -286,7 +286,7 @@ public enum ManagementPermissions {
 }
 
 public enum ManagementOperation: Sendable {
-    case readPermissions, createChannel, manageChannel, createScope, manageScope, scopeOrder
+    case readPermissions, createChannel, manageChannel, createScope, manageScope, scopeOrder, renameThread
 
     var permissionSentence: String {
         switch self {
@@ -296,6 +296,7 @@ public enum ManagementOperation: Sendable {
         case .createScope: "You don't have permission to create scopes in this workspace."
         case .manageScope: "You need Manage access on this scope."
         case .scopeOrder: "Your scope order couldn't be saved for this workspace."
+        case .renameThread: "You don't have permission to rename this thread."
         }
     }
 }
