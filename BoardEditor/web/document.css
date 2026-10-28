@@ -56,6 +56,6 @@ body { font: var(--doc-body)/1.65 -apple-system, BlinkMacSystemFont, "SF Pro Tex
 .doc-rich-editor .ProseMirror p.is-editor-empty:first-child::before { content: attr(data-placeholder); color: #9aa0ae; float: left; height: 0; pointer-events: none; }
 ::selection { background: rgba(124, 92, 196, 0.28); }
 
-.document-mention-picker { position: fixed; top: 12px; left: 12px; right: 12px; max-height: 45vh; overflow-y: auto; background: white; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 4px 18px #0002; z-index: 20; }
+.document-mention-picker { position: fixed; top: 12px; left: 12px; right: 12px; box-sizing: border-box; max-height: min(90vh, calc(100vh - 24px)); overflow-y: auto; overscroll-behavior: contain; background: white; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 4px 18px #0002; z-index: 20; }
 .document-mention-picker button { display: block; width: 100%; min-height: 44px; text-align: left; border: 0; padding: 8px 12px; background: white; color: #222; font: inherit; }
 .document-mention-picker button[aria-selected=true] { background: #e5efff; }

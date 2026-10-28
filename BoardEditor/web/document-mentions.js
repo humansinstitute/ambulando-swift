@@ -33,6 +33,24 @@ export function documentMentions({ post, changed }) {
   let active = null, last = '', rows = [], selected = 0, popup = null, editor = null, dismissed = '', gesture = null;
   const close = () => { popup?.remove(); popup = null; rows = []; };
   const pick = row => { if (editor && active && insertMention(editor, row, active)) changed(); close(); };
+  const position = () => {
+    if (!popup) return;
+    // WKWebView can resize its layout viewport or only its visual viewport for the keyboard.
+    const viewport = window.visualViewport;
+    const height = viewport?.height ?? window.innerHeight;
+    popup.style.top = `${(viewport?.offsetTop ?? 0) + 12}px`;
+    popup.style.maxHeight = `${Math.max(0, Math.min(height * 0.9, height - 24))}px`;
+  };
+  const revealSelected = () => {
+    const item = popup?.children[selected];
+    if (!item) return;
+    // scrollIntoView can also scroll the document/caret underneath this fixed overlay.
+    if (item.offsetTop < popup.scrollTop) popup.scrollTop = item.offsetTop;
+    else if (item.offsetTop + item.offsetHeight > popup.scrollTop + popup.clientHeight) {
+      popup.scrollTop = item.offsetTop + item.offsetHeight - popup.clientHeight;
+    }
+  };
+  const resize = () => { position(); revealSelected(); };
   const render = () => {
     popup?.remove(); popup = null;
     if (!rows.length || !active || !editor) return;
@@ -43,7 +61,7 @@ export function documentMentions({ post, changed }) {
       button.addEventListener('mousedown', e => e.preventDefault()); button.addEventListener('click', () => pick(row)); popup.append(button);
     });
     document.body.append(popup);
-    popup.children[selected]?.scrollIntoView({ block: 'nearest' });
+    resize();
   };
   return {
     deliver(request) {
@@ -92,13 +110,26 @@ export function documentMentions({ post, changed }) {
             return false;
           },
         },
-        view: () => ({ update(view) {
-          active = mentionRange(view.state);
-          const next = active ? JSON.stringify(active) : '';
-          if (next === last) return;
-          last = next; close();
-          if (next !== dismissed) post({ type: 'mention-query', range: active });
-        }, destroy() { close(); editor = null; } }),
+        view: () => {
+          window.addEventListener('resize', resize);
+          window.visualViewport?.addEventListener('resize', resize);
+          window.visualViewport?.addEventListener('scroll', position);
+          return {
+            update(view) {
+              active = mentionRange(view.state);
+              const next = active ? JSON.stringify(active) : '';
+              if (next === last) return;
+              last = next; close();
+              if (next !== dismissed) post({ type: 'mention-query', range: active });
+            },
+            destroy() {
+              window.removeEventListener('resize', resize);
+              window.visualViewport?.removeEventListener('resize', resize);
+              window.visualViewport?.removeEventListener('scroll', position);
+              close(); editor = null;
+            },
+          };
+        },
       })]; },
     }),
   };

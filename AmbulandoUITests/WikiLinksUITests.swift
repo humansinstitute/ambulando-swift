@@ -29,6 +29,42 @@ final class WikiLinksUITests: XCTestCase {
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
     }
 
+    func testDocumentAtPickerUsesKeyboardVisibleHeightAndScrollsToLaterResult() {
+        let app = launch()
+        let page = app.webViews["doc.editor"].firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 20))
+        let prose = page.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Pick one of'")).firstMatch
+        XCTAssertTrue(prose.waitForExistence(timeout: 20))
+        prose.tap(); app.typeText(" @")
+        let picker = app.webViews.otherElements["Link to a record"].firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let viewport = page.frame, popup = picker.frame, keyboard = app.keyboards.firstMatch.frame
+        print("PICKER_GEOMETRY viewport=\(viewport) popup=\(popup) keyboard=\(keyboard)")
+        XCTAssertGreaterThan(popup.height, viewport.height * 0.75, "substantially more than the old 45% cap")
+        XCTAssertLessThanOrEqual(popup.maxY, min(viewport.maxY, keyboard.minY) + 1)
+        attach(app, "document-picker-keyboard-height")
+        let options = picker.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS ' · '"))
+        let initiallyVisible = Set(options.allElementsBoundByIndex.filter { popup.intersects($0.frame) }.map(\.label))
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        origin.withOffset(CGVector(dx: popup.midX, dy: popup.maxY - 12))
+            .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: popup.midX, dy: popup.minY + 12)))
+        let later = options.allElementsBoundByIndex.last(where: {
+            popup.contains($0.frame) && !$0.frame.isEmpty && !initiallyVisible.contains($0.label)
+        })
+        XCTAssertNotNil(later, "a later result is reachable by scrolling")
+        let chosen = later?.label.components(separatedBy: " · ").first ?? ""
+        XCTAssertFalse(chosen.isEmpty)
+        later?.tap()
+        XCTAssertFalse(picker.exists)
+        XCTAssertTrue(page.links.containing(NSPredicate(format: "label CONTAINS %@", chosen)).firstMatch.waitForExistence(timeout: 5), "the newly revealed result was inserted")
+        app.typeText(" kept typing")
+        XCTAssertTrue(page.staticTexts.containing(NSPredicate(format: "label CONTAINS 'kept typing'")).firstMatch.waitForExistence(timeout: 5))
+        app.typeText(" @")
+        XCTAssertTrue(picker.waitForExistence(timeout: 10), "fresh trigger reopens without losing editor focus")
+        attach(app, "document-picker-reopened")
+    }
+
     func testDocumentAtPickerInsertsAndReopensRecordLink() {
         let app = launch()
         let page = app.webViews["doc.editor"].firstMatch

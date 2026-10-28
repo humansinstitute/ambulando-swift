@@ -30,3 +30,18 @@ The document editor's app side is `Ambulando/Views/DocumentEditorWeb.swift` (web
 `Ambulando/Views/DocumentEditing.swift` (lease, drafts, saves, uploads, images). The board editor's app side is `Ambulando/Views/BoardEditorView.swift` (web view, bridge and navigation policy) and
 `AmbulandoCore/Sources/AmbulandoCore/Surfaces/BoardEditing.swift` (all board reads, drafts, saves, versions and
 conflicts, through Tower's file routes).
+
+The document record picker targets 90% of the usable visual viewport, bounded by 12px edge insets, and updates
+on keyboard/window changes. Selection scrolling stays inside the popup. The native WebKit geometry and interaction
+check uses synthetic documents and the built editor bundle (no app account/container):
+
+```sh
+scripts/build-board-editor.sh
+swiftc -parse-as-library scripts/tests/document-picker-webkit.swift -o /tmp/document-picker-check
+/tmp/document-picker-check "$PWD/BoardEditor/dist" "$PWD/tmp/docs/handoffs/picker-height"
+```
+
+Create the ignored evidence directory first. The check compares the old height cap in the same engine, exercises
+small/rotated/large-text/Mac viewport bounds, later-row keyboard and pointer choices, caret/document scroll,
+close/reopen, record serialization and wiki insertion. iPhone keyboard integration is covered separately by
+`WikiLinksUITests/testDocumentAtPickerUsesKeyboardVisibleHeightAndScrollsToLaterResult` in the isolated Test app.
