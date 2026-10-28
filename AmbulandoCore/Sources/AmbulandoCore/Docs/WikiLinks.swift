@@ -5,7 +5,10 @@ import Foundation
 public struct WikiTarget: Sendable, Equatable {
     public var documentId: String?
     public var title: String
-    public init(documentId: String? = nil, title: String) { self.documentId = documentId; self.title = title }
+    /// For a title-only reference: which of the document's same-title title-only references this is, in reading order. It lets
+    /// "create this page" or "choose this page" change exactly the reference that was opened. Zero for a bound link.
+    public var occurrence: Int
+    public init(documentId: String? = nil, title: String, occurrence: Int = 0) { self.documentId = documentId; self.title = title; self.occurrence = occurrence }
 }
 
 /// How a reference resolves against the documents saved on this device.
@@ -62,6 +65,62 @@ public enum WikiLinks {
             if cursor < ns.length { var after = run; after.text = ns.substring(from: cursor); out.append(after) }
         }
         return out
+    }
+
+    // MARK: Reading order and current titles
+
+    /// Numbers each title-only reference among the same-title title-only references in reading order, and returns the blocks.
+    static func numbered(_ blocks: [RenderBlock]) -> [RenderBlock] {
+        var counts: [String: Int] = [:]
+        func runs(_ list: [InlineRun]) -> [InlineRun] {
+            list.map { run in
+                guard var wiki = run.wiki, wiki.documentId == nil else { return run }
+                let key = normalized(wiki.title)
+                wiki.occurrence = counts[key, default: 0]
+                counts[key, default: 0] += 1
+                var next = run; next.wiki = wiki; return next
+            }
+        }
+        func walk(_ blocks: [RenderBlock]) -> [RenderBlock] {
+            blocks.map { block in
+                switch block {
+                case .heading(let level, let r): .heading(level: level, runs: runs(r))
+                case .paragraph(let r): .paragraph(runs: runs(r))
+                case .quote(let inner): .quote(walk(inner))
+                case .list(let ordered, let start, let items):
+                    .list(ordered: ordered, start: start, items: items.map { RenderBlock.ListItem(checked: $0.checked, blocks: walk($0.blocks)) })
+                case .table(let rows): .table(rows: rows.map { $0.map(runs) })
+                default: block
+                }
+            }
+        }
+        return walk(blocks)
+    }
+
+    /// Shows each bound link under its page's current title (after a rename), leaving the stored text alone. A link whose page
+    /// is not among `docs` keeps the title it was written with.
+    public static func retitled(_ blocks: [RenderBlock], docs: [DocRecord]) -> [RenderBlock] {
+        let titles = Dictionary(docs.filter { !$0.archived }.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        func runs(_ list: [InlineRun]) -> [InlineRun] {
+            list.map { run in
+                guard let id = run.wiki?.documentId, let current = titles[id], current != run.text else { return run }
+                var next = run; next.text = current; return next
+            }
+        }
+        func walk(_ blocks: [RenderBlock]) -> [RenderBlock] {
+            blocks.map { block in
+                switch block {
+                case .heading(let level, let r): .heading(level: level, runs: runs(r))
+                case .paragraph(let r): .paragraph(runs: runs(r))
+                case .quote(let inner): .quote(walk(inner))
+                case .list(let ordered, let start, let items):
+                    .list(ordered: ordered, start: start, items: items.map { RenderBlock.ListItem(checked: $0.checked, blocks: walk($0.blocks)) })
+                case .table(let rows): .table(rows: rows.map { $0.map(runs) })
+                default: block
+                }
+            }
+        }
+        return walk(blocks)
     }
 
     // MARK: Resolution

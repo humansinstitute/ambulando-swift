@@ -76,6 +76,21 @@ final class WikiLinkTests: XCTestCase {
         XCTAssertTrue(runs.allSatisfy { $0.wiki == nil })
     }
 
+    func testTitleOnlyReferencesAreNumberedInReadingOrderPerTitle() {
+        let body = DocumentBody(bytes: Data("[[A]] and [Bound](wiki:x) and [[B]], [[a]] then [[A]]".utf8), contentType: "text/markdown")
+        let targets = wikiRuns(DocumentRender.blocks(body)).compactMap(\.wiki)
+        XCTAssertEqual(targets.map(\.title), ["A", "Bound", "B", "a", "A"])
+        XCTAssertEqual(targets.map(\.occurrence), [0, 0, 0, 1, 2], "same title, any case, counted together; bound links are not counted")
+    }
+
+    func testRenamedPagesShowTheirCurrentTitleWhileStoredTextIsUntouched() {
+        let body = richBody([paragraph([text("See "), wikiNode("D1", "Old name"), text(" and "), wikiNode("gone", "Missing")])])
+        let shown = WikiLinks.retitled(DocumentRender.blocks(body), docs: [doc("D1", "New name")])
+        XCTAssertEqual(wikiRuns(shown).map(\.text), ["New name", "Missing"])
+        XCTAssertEqual(wikiRuns(shown).map { $0.wiki?.title }, ["Old name", "Missing"], "the reference still carries what was written")
+        XCTAssertTrue(body.markdown.contains("Old name"))
+    }
+
     // MARK: Resolution
 
     func testBoundIdOpensFromAnyChannelAndScope() {

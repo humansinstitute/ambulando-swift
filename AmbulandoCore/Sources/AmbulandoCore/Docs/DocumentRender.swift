@@ -42,8 +42,8 @@ public indirect enum RenderBlock: Sendable, Equatable {
 public enum DocumentRender {
     /// Blocks for any decoded body.
     public static func blocks(_ body: DocumentBody) -> [RenderBlock] {
-        if let state = body.editorState { return wikified((state["content"]?.arrayValue ?? []).map(block)) }
-        return wikified(markdownBlocks(body.markdown))
+        if let state = body.editorState { return WikiLinks.numbered(wikified((state["content"]?.arrayValue ?? []).map(block))) }
+        return WikiLinks.numbered(wikified(markdownBlocks(body.markdown)))
     }
 
     /// Document text only: canonical `[Title](wiki:<id>)` links and literal `[[Title]]` become wiki references. Code stays
