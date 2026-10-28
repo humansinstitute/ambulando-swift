@@ -1,6 +1,6 @@
 import XCTest
 
-/// Build 35 chat changes against the local sample data (`-AmbulandoUITestFixture`): visible links that open the in-app
+/// Build 36 chat changes against the local sample data (`-AmbulandoUITestFixture`): visible links that open the in-app
 /// browser (with an explicit Open in Safari), the @ list closing after a pick with recently tagged people first and at most
 /// seven rows, the web-style reaction bar, and renaming a thread. Only Tower is replaced by an in-process stand-in; this
 /// is not evidence of live Tower behaviour.
@@ -150,17 +150,27 @@ final class NativeChatReleaseUITests: XCTestCase {
         XCTAssertTrue(list.waitForExistence(timeout: 5))
         let shown = rows(app).filter { $0.exists && $0.frame.height > 0 }.sorted { $0.frame.minY < $1.frame.minY }
         XCTAssertEqual(shown.first?.identifier, "mention.rick", "the most recently tagged person is first")
+        // Measure the actual clipped scroll viewport. The enclosing accessibility group's bounds
+        // can include offscreen children on smaller phones.
+        let viewport = app.scrollViews.containing(.button, identifier: "mention.rick").firstMatch
+        capture(app, "mention-cap-before-measurement")
+        XCTAssertTrue(viewport.exists)
+        let hierarchy = XCTAttachment(string: app.debugDescription); hierarchy.lifetime = .keepAlways; add(hierarchy)
         // At most seven rows are visible; the rest scrolls.
         let heights = shown.map(\.frame.height)
         let rowHeight = heights.min() ?? 46
-        XCTAssertLessThanOrEqual(list.frame.height, rowHeight * 7 + 16, "the list is capped at seven rows")
-        XCTAssertGreaterThan(list.frame.height, rowHeight * 2, "and still shows several")
+        XCTAssertLessThanOrEqual(viewport.frame.height, rowHeight * 7 + 16, "the list is capped at seven rows")
+        XCTAssertGreaterThan(viewport.frame.height, rowHeight * 2, "and still shows several")
         capture(app, "mention-recent-first-seven-rows")
         let before = Set(rows(app).filter { $0.isHittable }.map(\.identifier))
-        list.swipeUp()
+        viewport.swipeUp()
         let after = Set(rows(app).filter { $0.isHittable }.map(\.identifier))
         XCTAssertNotEqual(before, after, "the remainder is reached by scrolling")
-        XCTAssertTrue(app.buttons["composer.send"].exists, "the composer stays usable with the list open")
+        XCTAssertTrue(composer.isHittable, "the composer stays usable with the list open")
+        XCTAssertTrue(app.buttons["composer.send"].isHittable, "Send stays reachable with the list and keyboard open")
+        if app.keyboards.firstMatch.exists {
+            XCTAssertLessThanOrEqual(composer.frame.maxY, app.keyboards.firstMatch.frame.minY + 1, "the keyboard does not cover the field")
+        }
     }
 
     // MARK: Reactions

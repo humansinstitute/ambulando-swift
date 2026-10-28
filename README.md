@@ -19,7 +19,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
-## Chat links, mentions, reactions and thread titles (iPhone/iPad build 35, Mac build 24)
+## Chat links, mentions, reactions and thread titles (iPhone/iPad build 36, Mac build 25)
 
 - **Links are visible.** Web addresses (Markdown links and bare URLs) are blue and underlined in messages and documents.
   They open the in-app signed browser, including from a focused thread (which is presented outside the shell and had
@@ -167,7 +167,7 @@ large pasted crash reports. The iPhone/iPad composer is unchanged. See [Mac vali
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (35); Mac version 0.1.0 (24). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (36); Mac version 0.1.0 (25). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 

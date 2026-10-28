@@ -979,6 +979,8 @@ struct Composer: View {
             .padding(.horizontal, 10).padding(.vertical, 8)
         }
         .background(Amb.card)
+        // Reserve the compose controls and suggestion viewport before the history takes remaining space.
+        .layoutPriority(1)
         .task(id: target) {
             if let previous = composer { model.uploads?.detach(previous); previous.saveNow() }
             let composerModel = ComposerModel(target: target, store: store)
@@ -1178,7 +1180,9 @@ struct MentionPicker: View {
                     }
                 }
             }
-            .frame(height: min(CGFloat(suggestions.count), CGFloat(Self.visibleRows)) * rowHeight)
+            // Seven is a ceiling: yield vertical space to the composer/keyboard on short phones.
+            .frame(idealHeight: min(CGFloat(suggestions.count), CGFloat(Self.visibleRows)) * rowHeight,
+                   maxHeight: min(CGFloat(suggestions.count), CGFloat(Self.visibleRows)) * rowHeight)
             .scrollBounceBehavior(.basedOnSize)
             .onChange(of: current) { _, id in withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id) } }
         }
