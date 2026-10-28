@@ -151,7 +151,7 @@ final class DocEditorModel: UploadTokenHost {
             let id = (message["documentId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             let title = (message["title"] as? String) ?? ""
             let range = (message["from"] as? Int).flatMap { from in (message["to"] as? Int).map { WikiEditorRange(from: from, to: $0) } }
-            wiki?.activate(WikiTarget(documentId: id, title: title, occurrence: message["occurrence"] as? Int ?? 0), range: range)
+            wiki?.activate(WikiTarget(documentId: id, title: title, occurrence: message["occurrence"] as? Int ?? 0, count: message["count"] as? Int ?? 0), range: range)
         case "error":
             if let text = message["message"] as? String { setStatus(text, .warning) }
         default: break
@@ -163,15 +163,33 @@ final class DocEditorModel: UploadTokenHost {
         wikiQuery = WikiQuery(text: message["query"] as? String ?? "", range: WikiEditorRange(from: from, to: to))
     }
 
+    enum WikiBinding: Equatable {
+        /// Bound in the page and stored as a durable draft.
+        case bound
+        /// Nothing needed binding.
+        case nothingToBind
+        /// The references with that title changed after the page was requested; nothing was bound by position.
+        case noLongerRequested
+        /// The page was not ready or the draft could not be stored: the caller keeps the creation write queued.
+        case failed
+    }
+
     /// Binds a created page into this open page and makes the result a durable draft before the creation write is retired.
-    /// False: the page is not ready, so the caller keeps the write queued and tries again.
-    func bindWiki(title: String, documentId: String, occurrence: Int?) async -> Bool {
-        guard pageReady, let page, let count = await page.wikiBind(title: title, documentId: documentId, occurrence: occurrence) else { return false }
-        if count > 0 {
-            dirty = true
-            _ = await persistDraft(state: .editing)
-        }
-        return true
+    func bindWiki(title: String, documentId: String, occurrence: Int?, expectedCount: Int?) async -> WikiBinding {
+        guard pageReady, let page, let count = await page.wikiBind(title: title, documentId: documentId, occurrence: occurrence, expectedCount: expectedCount)
+        else { return .failed }
+        if count < 0 { return .noLongerRequested }
+        if count == 0 { return .nothingToBind }
+        dirty = true
+        return await checkpoint() ? .bound : .failed
+    }
+
+    /// Stores the current text as the durable draft. True when nothing is unsaved or the draft was written; false when it
+    /// could not be (the caller must not leave, or retire anything that depends on it).
+    func checkpoint() async -> Bool {
+        if pageReady, let now = await page?.snapshot(), now != content { content = now; dirty = true }
+        if !dirty { return true }
+        return await persistDraft(state: .editing) != nil
     }
 
     /// The document moved: its drafts and the next save are based on the version the move produced.
@@ -315,7 +333,10 @@ final class DocEditorModel: UploadTokenHost {
             let draft = DocDraft(connectionId: identity.0, workspaceId: identity.1, docId: identity.2, title: title.isEmpty ? doc.title : title,
                                  body: bytes.0, contentType: bytes.1, baseRowVersion: base.rowVersion, baseSha256: base.sha,
                                  baseStorageObjectId: base.object, state: draftState)
-            try? await store.writer.saveDocDraft(draft)
+            do { try await store.writer.saveDocDraft(draft) } catch {
+                setStatus("Your edits could not be stored on this \(Device.name): \(error.localizedDescription)", .error)
+                return nil
+            }
             return draft
         }
     }

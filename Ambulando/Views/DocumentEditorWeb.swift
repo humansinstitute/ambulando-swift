@@ -115,19 +115,22 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
     }
 
     /// Puts a link at `range` (the typed `[[` query) or at the selection. Returns which same-title title-only link it is
-    /// (reading order), -1 for a bound link, nil when the page is not available.
-    func wikiInsert(documentId: String?, title: String, range: (from: Int, to: Int)?) async -> Int? {
+    /// (reading order; -1 for a bound link) and how many such links there are now; nil when the page is not available.
+    func wikiInsert(documentId: String?, title: String, range: (from: Int, to: Int)?) async -> (occurrence: Int, count: Int)? {
         var request: [String: Any] = ["title": title, "documentId": documentId ?? NSNull()]
         if let range { request["from"] = range.from; request["to"] = range.to }
         guard let data = try? JSONSerialization.data(withJSONObject: request), let webView else { return nil }
         let result = try? await webView.callAsyncJavaScript("return window.ambulandoDocument ? window.ambulandoDocument.wikiInsert(a0) : null",
                                                             arguments: ["a0": String(decoding: data, as: UTF8.self)], contentWorld: .page)
-        return (result as? NSNumber)?.intValue
+        guard let text = result as? String, let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
+              let occurrence = object["occurrence"] as? Int, let count = object["count"] as? Int else { return nil }
+        return (occurrence, count)
     }
 
-    /// Gives this page's unresolved links titled `title` the created page's id; the count bound (nil: no page to ask).
-    func wikiBind(title: String, documentId: String, occurrence: Int?) async -> Int? {
-        let request: [String: Any] = ["title": title, "documentId": documentId, "occurrence": occurrence ?? NSNull()]
+    /// Gives this page's unresolved links titled `title` the created page's id. Returns how many were bound, -1 when the
+    /// references with that title changed since the page was requested (none bound), nil when there is no page to ask.
+    func wikiBind(title: String, documentId: String, occurrence: Int?, expectedCount: Int?) async -> Int? {
+        let request: [String: Any] = ["title": title, "documentId": documentId, "occurrence": occurrence ?? NSNull(), "expectedCount": expectedCount ?? NSNull()]
         guard ready, let data = try? JSONSerialization.data(withJSONObject: request), let webView else { return nil }
         let result = try? await webView.callAsyncJavaScript("return window.ambulandoDocument ? window.ambulandoDocument.wikiBind(a0) : null",
                                                             arguments: ["a0": String(decoding: data, as: UTF8.self)], contentWorld: .page)

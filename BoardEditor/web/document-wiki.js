@@ -48,12 +48,18 @@ export function occurrenceOf(refs, ref) {
   return 0;
 }
 
+/// How many title-only references share this one's title.
+export function countOf(refs, ref) {
+  const wanted = normalizeTitle(ref.title);
+  return refs.filter((other) => !other.documentId && normalizeTitle(other.title) === wanted).length;
+}
+
 export function refAt(doc, pos) {
   return collectWikiRefs(doc).find((ref) => pos >= ref.from && pos <= ref.to) || null;
 }
 
-/// Replaces `[from, to)` (or the selection) with a link node and returns which same-title title-only reference it is (reading
-/// order), or -1 for a bound link. `documentId` null makes a title-only link, which the app then resolves or creates.
+/// Replaces `[from, to)` (or the selection) with a link node and returns {occurrence, count}: which same-title title-only
+/// reference it is (reading order, -1 for a bound link) and how many there are now. `documentId` null makes a title-only link, which the app then resolves or creates.
 export function insertWikiLink(editor, { documentId = null, title, from, to }) {
   const size = editor.state.doc.content.size;
   const range = Number.isInteger(from) && Number.isInteger(to) && from >= 0 && to <= size && from <= to
@@ -62,15 +68,17 @@ export function insertWikiLink(editor, { documentId = null, title, from, to }) {
   const tr = editor.state.tr.replaceWith(range.from, range.to, node);
   editor.view.dispatch(tr.scrollIntoView());
   editor.view.focus();
-  if (documentId) return -1;
+  if (documentId) return { occurrence: -1, count: 0 };
   const refs = collectWikiRefs(editor.state.doc);
   const mine = refs.find((ref) => ref.kind === 'node' && ref.from === range.from);
-  return mine ? occurrenceOf(refs, mine) : 0;
+  const wanted = normalizeTitle(title);
+  const count = refs.filter((ref) => !ref.documentId && normalizeTitle(ref.title) === wanted).length;
+  return { occurrence: mine ? occurrenceOf(refs, mine) : 0, count };
 }
 
 /// Gives the page's unresolved links titled `title` the created page's id (one occurrence, or all when `occurrence` is null).
 /// Literal `[[Title]]` text outside code becomes a bound link node. Returns how many references were bound.
-export function bindWikiTitle(editor, { title, documentId, occurrence = null }) {
+export function bindWikiTitle(editor, { title, documentId, occurrence = null, expectedCount = null }) {
   const wanted = normalizeTitle(title);
   let seen = 0;
   const wanting = [];
@@ -80,6 +88,8 @@ export function bindWikiTitle(editor, { title, documentId, occurrence = null }) 
     seen += 1;
     if (occurrence === null || occurrence === undefined || occurrence === mine) wanting.push(ref);
   }
+  // The references with this title changed after the page was requested: the opened one cannot be told apart, so none is bound.
+  if (Number.isInteger(expectedCount) && expectedCount !== seen) return -1;
   if (!wanting.length) return 0;
   const tr = editor.state.tr;
   for (const ref of wanting.reverse()) {
@@ -101,7 +111,8 @@ export function wikiExtension({ post, isEditing = () => true }) {
     post(range ? { type: 'wiki-query', active: true, query: range.query, from: range.from, to: range.to } : { type: 'wiki-query', active: false });
   };
   const activate = (view, ref) => {
-    post({ type: 'wiki', action: 'activate', title: ref.title, documentId: ref.documentId, occurrence: occurrenceOf(collectWikiRefs(view.state.doc), ref), from: ref.from, to: ref.to });
+    const refs = collectWikiRefs(view.state.doc);
+    post({ type: 'wiki', action: 'activate', title: ref.title, documentId: ref.documentId, occurrence: occurrenceOf(refs, ref), count: countOf(refs, ref), from: ref.from, to: ref.to });
   };
   return Extension.create({
     name: 'ambulandoWiki',

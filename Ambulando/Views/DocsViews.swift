@@ -206,13 +206,17 @@ struct DocumentView: View {
         .environment(\.openWiki, OpenWikiAction { [wiki] target in wiki.activate(target) })
         .wikiSheets(wiki, workspace: workspace)
         .safeAreaInset(edge: .top, spacing: 0) {
-            if let banner = wiki.banner {
-                HStack(alignment: .top) {
-                    Notice(tone: wiki.bannerIsProblem ? .warning : .info, text: banner).accessibilityIdentifier("wiki.banner")
-                    Button { wiki.banner = nil } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain).accessibilityLabel("Dismiss")
-                }.padding(.horizontal, 12).padding(.top, 6)
+            VStack(spacing: 6) {
+                if let banner = wiki.banner {
+                    HStack(alignment: .top) {
+                        Notice(tone: wiki.bannerIsProblem ? .warning : .info, text: banner).accessibilityIdentifier("wiki.banner")
+                        Button { wiki.banner = nil } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).accessibilityLabel("Dismiss")
+                    }
+                }
+                WikiPendingView(wiki: wiki)
             }
+            .padding(.horizontal, 12).padding(.top, 6)
         }
         .onChange(of: snapshot.value.titles) { _, titles in wiki.titles = titles }
         #if os(iOS)
@@ -232,6 +236,8 @@ struct DocumentView: View {
         .onAppear {
             model.openDoc(docId, in: workspace); model.markViewed(.document, docId, in: workspace)
             // Back from a linked page: the editor opens again on the draft that was kept when this screen was left.
+            wiki.isVisible = true
+            Task { await wiki.refresh() }
             openFormattedPage()
         }
         .onChange(of: snapshot.value.doc?.id) { _, _ in takeEditRequest(); openFormattedPage() }
@@ -240,6 +246,7 @@ struct DocumentView: View {
         .onChange(of: model.docEditRequest) { _, _ in takeEditRequest() }
         .onDisappear {
             // Leaving for a linked page keeps the text as a draft; coming back opens the editor on that draft.
+            wiki.isVisible = false
             if let leaving = editor {
                 editor = nil; wiki.editor = nil
                 Task { _ = await leaving.persistDraft(state: .editing); leaving.close() }
@@ -266,7 +273,7 @@ struct DocumentView: View {
         let created = DocEditorModel(doc: doc, workspace: workspace, store: store, connection: connection, app: model)
         created.wiki = wiki
         wiki.editor = created
-        wiki.beforeLeaving = { [weak created] in _ = await created?.persistDraft(state: .editing) }
+        wiki.beforeLeaving = { [weak created] in await created?.checkpoint() ?? true }
         editor = created
         Task {
             await created.load()

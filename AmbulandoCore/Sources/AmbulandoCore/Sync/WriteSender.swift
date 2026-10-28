@@ -93,12 +93,19 @@ public struct WriteSender: Sendable {
             }
             switch outcome {
             case .done(let ack):
-                if item.kind == .docCreate, item.string(WikiCreate.sourceKey) != nil, let created = ack.docs.first, let bind = afterWikiCreate {
-                    do { try await bind(connection, item, created) }
+                if item.kind == .docCreate, item.string(WikiCreate.sourceKey) != nil, item.payloadObject[WikiCreate.boundKey] as? Bool != true,
+                   let created = ack.docs.first, let bind = afterWikiCreate {
+                    // Where the page is, kept on the write so a link that cannot be added yet can still be reached.
+                    try? await store.writer.updateWritePayload(id: item.id, merging: [WikiCreate.createdKey: created.id])
+                    do {
+                        try await bind(connection, item, created)
+                        try? await store.writer.updateWritePayload(id: item.id, merging: [WikiCreate.boundKey: true])
+                    }
                     catch {
                         if Task.isCancelled || error is CancellationError { throw CancellationError() }
+                        let reason = (error as? LocalizedError)?.errorDescription ?? "The link will be added on the next attempt."
                         try await store.writer.markWrite(id: item.id, state: .retrying, status: nil, code: "wiki_link_pending",
-                                                         error: "The page was created; its link in the source document will be added on the next attempt.", countAttempt: true)
+                                                         error: "The page was created. \(reason)", countAttempt: true)
                         blocked.insert(item.groupKey)
                         nextRetry = min(nextRetry ?? .max, item.attempts + 1)
                         continue

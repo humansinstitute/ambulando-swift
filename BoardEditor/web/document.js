@@ -13,7 +13,7 @@
 import { captureSelection, revealSelection } from './document-selection.js';
 import { Editor, getSchema } from '@tiptap/core';
 import { createFlightDeckTiptapExtensions } from './sol/docs/editor/prosemirror-flightdeck-schema.js';
-import { wikiExtension, insertWikiLink, bindWikiTitle, collectWikiRefs, occurrenceOf } from './document-wiki.js';
+import { wikiExtension, insertWikiLink, bindWikiTitle, collectWikiRefs, occurrenceOf, countOf } from './document-wiki.js';
 import {
   KeptBlock, KeptInline, KEPT_BLOCK, KEPT_INLINE, scanDocument, preservingExtensions, reuseMap, restoreDocument, nodeTypes,
   markdownSource, markdownFromEditor,
@@ -49,7 +49,8 @@ function baseExtensions() {
       open: (documentId) => post({ type: 'wiki', action: 'activate', documentId, title: wikiTitles[documentId] || '', occurrence: 0 }),
       create: (title, range, ed) => {
         const ref = { title, from: range.from, to: range.to, documentId: null };
-        post({ type: 'wiki', action: 'activate', documentId: null, title, occurrence: occurrenceOf(collectWikiRefs(ed.state.doc), ref), from: range.from, to: range.to });
+        const refs = collectWikiRefs(ed.state.doc);
+        post({ type: 'wiki', action: 'activate', documentId: null, title, occurrence: occurrenceOf(refs, ref), count: countOf(refs, ref), from: range.from, to: range.to });
       },
       error: (message) => post({ type: 'wiki', action: 'error', message }),
     });
@@ -328,17 +329,17 @@ Object.defineProperty(window, 'ambulandoDocument', {
       return result.state === 'found';
     },
     focus() { editor?.commands.focus(); return true; },
-    /// Puts a link where the `[[` query was (or at the selection). `json`: {documentId|null, title, from?, to?}. Returns the new link's occurrence (-1: bound).
+    /// Puts a link where the `[[` query was (or at the selection). `json`: {documentId|null, title, from?, to?}. Returns JSON {occurrence, count} (occurrence -1: bound).
     wikiInsert(json) {
       if (!editor) return null;
       touched = true;
-      return insertWikiLink(editor, JSON.parse(json));
+      return JSON.stringify(insertWikiLink(editor, JSON.parse(json)));
     },
-    /// A created page's id into this page's unresolved links with that title. `json`: {title, documentId, occurrence|null}. Returns the count.
+    /// A created page's id into this page's unresolved links with that title. `json`: {title, documentId, occurrence|null, expectedCount|null}. Returns how many were bound (-1: the references changed since the request, none bound).
     wikiBind(json) {
       if (!editor) return 0;
       const count = bindWikiTitle(editor, JSON.parse(json));
-      if (count) touched = true;
+      if (count > 0) touched = true;
       return count;
     },
     /// Titles of the pages links point at; links redraw with them.

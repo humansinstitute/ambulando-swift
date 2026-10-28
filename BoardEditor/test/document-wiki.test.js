@@ -61,10 +61,10 @@ test('binding without an occurrence binds every match; nothing matching changes 
 test('insert replaces the typed query range with a link and falls back to the selection for a stale range', () => {
   const editor = fakeEditor(doc(para(text('See [[Das'))));
   const start = editor.state.doc.textContent.indexOf('[[') + 1;
-  expect(insertWikiLink(editor, { documentId: 'd1', title: 'Dashboard', from: start, to: start + 5 })).toBe(-1);
+  expect(insertWikiLink(editor, { documentId: 'd1', title: 'Dashboard', from: start, to: start + 5 })).toEqual({ occurrence: -1, count: 0 });
   expect(editor.state.doc.toJSON().content[0].content.map((node) => node.text ?? node.attrs.title).join('')).toBe('See Dashboard');
   expect(collectWikiRefs(editor.state.doc)[0]).toMatchObject({ kind: 'node', documentId: 'd1', title: 'Dashboard' });
-  expect(insertWikiLink(editor, { documentId: null, title: 'New page', from: 9999, to: 10000 })).toBe(0);
+  expect(insertWikiLink(editor, { documentId: null, title: 'New page', from: 9999, to: 10000 })).toEqual({ occurrence: 0, count: 1 });
   expect(collectWikiRefs(editor.state.doc).some((ref) => ref.documentId === null && ref.title === 'New page')).toBe(true);
 });
 
@@ -73,4 +73,12 @@ test('a title-only link inserted by the picker is saved as a title-only node, no
   editor.state = editor.state.apply(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, 2)));
   insertWikiLink(editor, { title: 'Draft page' });
   expect(editor.state.doc.toJSON().content[0].content.some((node) => node.type === 'fdWikiLink' && !node.attrs.documentId)).toBe(true);
+});
+
+test('a changed reference count means nothing is bound by position', () => {
+  const editor = fakeEditor(doc(para(text('[[A]] and [[A]]'))));
+  const before = editor.state.doc;
+  expect(bindWikiTitle(editor, { title: 'A', documentId: 'new', occurrence: 1, expectedCount: 3 })).toBe(-1);
+  expect(editor.state.doc).toBe(before);
+  expect(bindWikiTitle(editor, { title: 'A', documentId: 'new', occurrence: 1, expectedCount: 2 })).toBe(1);
 });

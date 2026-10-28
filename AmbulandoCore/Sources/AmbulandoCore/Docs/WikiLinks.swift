@@ -8,7 +8,12 @@ public struct WikiTarget: Sendable, Equatable {
     /// For a title-only reference: which of the document's same-title title-only references this is, in reading order. It lets
     /// "create this page" or "choose this page" change exactly the reference that was opened. Zero for a bound link.
     public var occurrence: Int
-    public init(documentId: String? = nil, title: String, occurrence: Int = 0) { self.documentId = documentId; self.title = title; self.occurrence = occurrence }
+    /// How many same-title title-only references the document had where this one was read; a page requested for this
+    /// reference is only linked back if that number is still true (see `WikiCreate.expectedCountKey`).
+    public var count: Int
+    public init(documentId: String? = nil, title: String, occurrence: Int = 0, count: Int = 0) {
+        self.documentId = documentId; self.title = title; self.occurrence = occurrence; self.count = count
+    }
 }
 
 /// How a reference resolves against the documents saved on this device.
@@ -72,11 +77,26 @@ public enum WikiLinks {
     /// Numbers each title-only reference among the same-title title-only references in reading order, and returns the blocks.
     static func numbered(_ blocks: [RenderBlock]) -> [RenderBlock] {
         var counts: [String: Int] = [:]
+        var totals: [String: Int] = [:]
+        func tally(_ list: [InlineRun]) { for run in list { if let wiki = run.wiki, wiki.documentId == nil { totals[normalized(wiki.title), default: 0] += 1 } } }
+        func count(_ blocks: [RenderBlock]) {
+            for block in blocks {
+                switch block {
+                case .heading(_, let r), .paragraph(let r): tally(r)
+                case .quote(let inner): count(inner)
+                case .list(_, _, let items): for item in items { count(item.blocks) }
+                case .table(let rows): for row in rows { for cell in row { tally(cell) } }
+                default: break
+                }
+            }
+        }
+        count(blocks)
         func runs(_ list: [InlineRun]) -> [InlineRun] {
             list.map { run in
                 guard var wiki = run.wiki, wiki.documentId == nil else { return run }
                 let key = normalized(wiki.title)
                 wiki.occurrence = counts[key, default: 0]
+                wiki.count = totals[key, default: 0]
                 counts[key, default: 0] += 1
                 var next = run; next.wiki = wiki; return next
             }

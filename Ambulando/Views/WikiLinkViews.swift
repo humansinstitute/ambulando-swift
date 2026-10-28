@@ -55,12 +55,27 @@ struct WikiQuery: Equatable, Sendable {
 enum WikiEditors {
     private final class Box { weak var editor: DocEditorModel?; init(_ editor: DocEditorModel) { self.editor = editor } }
     private static var open: [String: Box] = [:]
-    private static func key(_ workspaceId: String, _ docId: String) -> String { "\(workspaceId):\(docId)" }
-    static func register(_ editor: DocEditorModel) { open[key(editor.workspace.id, editor.doc.id)] = Box(editor) }
+    /// Keyed by connection too, so a background creation can never bind into an editor of another account or backend.
+    private static func key(_ connectionId: String, _ workspaceId: String, _ docId: String) -> String { "\(connectionId):\(workspaceId):\(docId)" }
+    static func register(_ editor: DocEditorModel) { open[key(editor.connection.id, editor.workspace.id, editor.doc.id)] = Box(editor) }
     static func unregister(_ editor: DocEditorModel) {
-        if open[key(editor.workspace.id, editor.doc.id)]?.editor === editor { open[key(editor.workspace.id, editor.doc.id)] = nil }
+        let k = key(editor.connection.id, editor.workspace.id, editor.doc.id)
+        if open[k]?.editor === editor { open[k] = nil }
     }
-    static func editor(workspaceId: String, docId: String) -> DocEditorModel? { open[key(workspaceId, docId)]?.editor }
+    static func editor(connectionId: String, workspaceId: String, docId: String) -> DocEditorModel? { open[key(connectionId, workspaceId, docId)]?.editor }
+}
+
+/// Screens that asked for a page to be created, by request id, so the page can be opened for the person when it exists and
+/// only if they are still on the screen that asked.
+@MainActor
+enum WikiControllers {
+    private final class Box { weak var controller: WikiLinkController?; init(_ controller: WikiLinkController) { self.controller = controller } }
+    private static var requests: [String: Box] = [:]
+    static func register(_ request: String, _ controller: WikiLinkController) { requests[request] = Box(controller) }
+    static func created(request: String?, _ doc: DocRecord, connectionId: String) {
+        guard let request, let box = requests.removeValue(forKey: request), let controller = box.controller else { return }
+        controller.openCreated(doc, connectionId: connectionId)
+    }
 }
 
 // MARK: Places
@@ -113,13 +128,14 @@ final class WikiLinkController {
 
     enum Sheet: Identifiable, Equatable {
         case create(WikiTarget, WikiEditorRange?)
-        case ambiguous(WikiTarget, [DocRecord], WikiEditorRange?)
+        /// Pages already share this title: choose one (nothing is picked or created arbitrarily). `reason` explains why.
+        case choose(Pick, title: String, [DocRecord], reason: String)
         case picker(Pick, query: String)
         case move
         var id: String {
             switch self {
             case .create(let t, _): "create:\(t.title):\(t.occurrence)"
-            case .ambiguous(let t, _, _): "ambiguous:\(t.title):\(t.occurrence)"
+            case .choose(_, let title, _, _): "choose:\(title)"
             case .picker: "picker"
             case .move: "move"
             }
@@ -139,8 +155,11 @@ final class WikiLinkController {
     @ObservationIgnored var titles: [String: String] = [:] { didSet { if titles != oldValue { pushTitles() } } }
     @ObservationIgnored private let store: LocalStore
     @ObservationIgnored weak var editor: DocEditorModel?
-    /// Keeps the person's unsaved text safe before the screen is left for a linked page.
-    @ObservationIgnored var beforeLeaving: () async -> Void = {}
+    /// Keeps the person's unsaved text safe before the screen is left for a linked page. False: it could not be stored, and the
+    /// screen stays where it is with the text in front of the person.
+    @ObservationIgnored var beforeLeaving: () async -> Bool = { true }
+    /// The source screen is showing; a page created for it opens only then.
+    @ObservationIgnored var isVisible = false
 
     init(workspace: WorkspaceRecord, sourceDocId: String, store: LocalStore) {
         self.workspace = workspace; self.sourceDocId = sourceDocId; self.store = store
@@ -172,9 +191,23 @@ final class WikiLinkController {
     /// by id and shows why when it cannot be opened (deleted, or not shared with this account).
     func openPage(_ id: String) {
         Task {
-            await beforeLeaving()
+            guard await beforeLeaving() else {
+                show("Your edits could not be stored on this device, so the other page was not opened. Nothing was lost; they are still here.", problem: true)
+                return
+            }
             app?.openRecord(kind: "doc", id: id)
         }
+    }
+
+    /// A page made for a link in this document now exists and the link is recorded: open it, but only for a person who is
+    /// still here (never taking over a screen they have left for something else).
+    func openCreated(_ doc: DocRecord, connectionId: String) {
+        guard isVisible, sheet == nil, app?.connection?.id == connectionId else {
+            show("“\(doc.title)” was created and linked.", problem: false)
+            return
+        }
+        show("Created “\(doc.title)”.", problem: false)
+        openPage(doc.id)
     }
 
     /// A tapped or clicked reference.
@@ -183,9 +216,14 @@ final class WikiLinkController {
         Task {
             await refresh()
             switch WikiLinks.resolve(target, in: context.docs, sourceChannelId: sourceChannelId) {
-            case .available(let doc): openPage(doc.id)
+            case .available(let doc):
+                // A title that resolves to one page becomes a stable link to it, so renaming or moving the page later cannot
+                // turn this link into an offer to create a duplicate. Opening goes ahead whether or not that could be saved.
+                _ = await bind(title: target.title, documentId: doc.id, occurrence: target.occurrence, expectedCount: target.count > 0 ? target.count : nil)
+                openPage(doc.id)
             case .unresolved: sheet = .create(target, range)
-            case .ambiguous(_, let matches): sheet = .ambiguous(target, matches, range)
+            case .ambiguous(_, let matches):
+                sheet = .choose(.reference(target), title: target.title, matches, reason: "Several pages are called “\(target.title)”. Choose the one this link means.")
             case .unavailable(let id): openPage(id)
             }
         }
@@ -204,8 +242,9 @@ final class WikiLinkController {
                     show("The link could not be added because the editor is not ready. Try again.", problem: true); return
                 }
                 editor?.wikiQuery = nil
+                _ = await editor?.checkpoint()
             case .reference(let target):
-                guard await bind(title: target.title, documentId: doc.id, occurrence: target.occurrence) else {
+                guard await bind(title: target.title, documentId: doc.id, occurrence: target.occurrence, expectedCount: target.count > 0 ? target.count : nil) else {
                     show("The link could not be saved yet. The page was not changed.", problem: true); return
                 }
             }
@@ -226,22 +265,33 @@ final class WikiLinkController {
                 show("“\(title)” already exists in \(context.place(ofChannel: channelId)), so it was linked instead of creating another.", problem: false)
                 choose(existing, for: pick, openAfter: false)
                 return
+            case .several(let matches)?:
+                sheet = .choose(pick, title: title, matches,
+                                reason: "Several pages in \(context.place(ofChannel: channelId)) are already called “\(title)”. Choose one to link; no new page is made.")
+                return
             case .pending?:
                 show("“\(title)” is already being created in \(context.place(ofChannel: channelId)).", problem: false)
                 return
             case nil: break
             }
             var occurrence: Int?
+            var count: Int?
             switch pick {
-            case .reference(let target): occurrence = target.occurrence
+            case .reference(let target):
+                occurrence = target.occurrence
+                count = target.count > 0 ? target.count : nil
             case .insert(let range):
                 guard let page = editor?.page, editor?.pageReady == true,
                       let placed = await page.wikiInsert(documentId: nil, title: title, range: range.map { ($0.from, $0.to) }) else {
                     show("The page was not created because the editor is not ready. Try again.", problem: true); return
                 }
-                occurrence = placed >= 0 ? placed : nil
+                occurrence = placed.occurrence >= 0 ? placed.occurrence : nil
+                count = placed.occurrence >= 0 ? placed.count : nil
                 editor?.wikiQuery = nil
-                _ = await editor?.persistDraft(state: .editing)
+            }
+            // The text with the new link in it is stored before anything is asked of Tower.
+            if let editor, !(await editor.checkpoint()) {
+                show("Your edits could not be stored on this device, so the page was not created. Nothing was lost; try again.", problem: true); return
             }
             guard let model = app, let staging = model.staging else { return }
             let created = DocumentBody.newDocument(text: "")
@@ -249,11 +299,14 @@ final class WikiLinkController {
             do {
                 try created.bytes.write(to: staging.appendingPathComponent(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             } catch { show(error.localizedDescription, problem: true); return }
+            let request = UUID().uuidString.lowercased()
             var payload: [String: any Sendable] = ["channel_id": channelId, "title": title, "staged": name, "content_type": created.contentType,
                                                    "file_name": String(title.prefix(60)) + ".document.json"]
-            payload.merge(WikiCreate.linkPayload(sourceDocId: sourceDocId, title: title, occurrence: occurrence)) { _, new in new }
+            payload.merge(WikiCreate.linkPayload(sourceDocId: sourceDocId, title: title, occurrence: occurrence, expectedCount: count, request: request)) { _, new in new }
+            WikiControllers.register(request, self)
             if model.submit(WriteIntent(kind: .docCreate, targetId: channelId, payload: payload), in: workspace) {
-                show("Creating the \(context.kindWord(forChannel: channelId)) “\(title)” in \(context.place(ofChannel: channelId)). The link is added when it is saved.", problem: false)
+                show("Creating the \(context.kindWord(forChannel: channelId)) “\(title)” in \(context.place(ofChannel: channelId)). It opens when it is ready; until then it is listed below.", problem: false)
+                await refresh()
             } else {
                 show("The page was not created because this device is not connected to the workspace.", problem: true)
             }
@@ -261,15 +314,21 @@ final class WikiLinkController {
     }
 
     /// Binds a title-only reference to a page: in the open editor when there is one, otherwise in the saved draft path.
-    private func bind(title: String, documentId: String, occurrence: Int?) async -> Bool {
+    private func bind(title: String, documentId: String, occurrence: Int?, expectedCount: Int? = nil) async -> Bool {
         if let editor {
-            guard await editor.bindWiki(title: title, documentId: documentId, occurrence: occurrence) else { return false }
-            return true
+            switch await editor.bindWiki(title: title, documentId: documentId, occurrence: occurrence, expectedCount: expectedCount) {
+            case .bound, .nothingToBind: return true
+            case .noLongerRequested:
+                show("The text changed, so the link was not changed automatically. Choose the page again from the link picker.", problem: true); return false
+            case .failed: return false
+            }
         }
-        guard let model = app, let outcome = try? await model.bindWikiLink(title: title, documentId: documentId, occurrence: occurrence,
+        guard let model = app, let outcome = try? await model.bindWikiLink(title: title, documentId: documentId, occurrence: occurrence, expectedCount: expectedCount,
                                                                           sourceDocId: sourceDocId, workspace: workspace) else { return false }
         switch outcome {
         case .alreadyBound, .saved: return true
+        case .noLongerRequested:
+            show("The text changed, so the link was not changed automatically. Choose the page again from the link picker.", problem: true); return false
         case .keptInDraft(let message): show("The link is kept as an unsaved edit on this device: \(message)", problem: false); return true
         case .sourceNotSaved: return false
         }
@@ -298,7 +357,7 @@ extension View {
         sheet(item: Binding(get: { wiki.sheet }, set: { wiki.sheet = $0 })) { sheet in
             switch sheet {
             case .create(let target, _): WikiCreateSheet(wiki: wiki, target: target)
-            case .ambiguous(let target, let matches, _): WikiAmbiguousSheet(wiki: wiki, target: target, matches: matches)
+            case .choose(let pick, let title, let matches, let reason): WikiChooseSheet(wiki: wiki, pick: pick, title: title, matches: matches, reason: reason)
             case .picker(let pick, let query): WikiPickerSheet(wiki: wiki, pick: pick, initialQuery: query)
             case .move: DocumentMoveSheet(wiki: wiki, workspace: workspace)
             }
@@ -363,18 +422,24 @@ struct WikiCreateSheet: View {
     }
 }
 
-struct WikiAmbiguousSheet: View {
+/// Pages already share a title: the person chooses which one the link means. Nothing is picked or created for them.
+struct WikiChooseSheet: View {
     @Environment(\.dismiss) private var dismiss
     let wiki: WikiLinkController
-    let target: WikiTarget
+    let pick: WikiLinkController.Pick
+    let title: String
     let matches: [DocRecord]
+    let reason: String
+
+    /// Choosing for a link already in the text opens the page; choosing while creating or inserting a link stays in the document.
+    private var opensPage: Bool { if case .reference = pick { true } else { false } }
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Several pages are called “\(target.title)”. Choose the one this link means.") {
+                Section(reason) {
                     ForEach(matches) { doc in
-                        Button { wiki.choose(doc, for: .reference(target), openAfter: true) } label: {
+                        Button { wiki.choose(doc, for: pick, openAfter: opensPage) } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(doc.title).font(.amb(.body).weight(.semibold))
                                 Text(wiki.context.place(of: doc)).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
@@ -657,5 +722,43 @@ struct WikiBacklinksView: View {
             return WikiLinks.backlinks(to: target, docs: docs, bodies: bodies)
         }.value
         result = found
+    }
+}
+
+
+// MARK: Pending pages
+
+/// Pages being created for links in this document that have not finished (offline, locked, or the link could not be added
+/// yet). Each can be retried, opened if it already exists on Tower, or discarded.
+struct WikiPendingView: View {
+    @Environment(AppModel.self) private var model
+    let wiki: WikiLinkController
+
+    private var items: [WriteItem] {
+        wiki.context.pending.filter { $0.kind == .docCreate && $0.string(WikiCreate.sourceKey) == wiki.sourceDocId }
+    }
+
+    var body: some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(items) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        WriteStatusLine(item: item, label: "New page “\(item.string("title") ?? "")”")
+                        HStack(spacing: 12) {
+                            if let created = item.string(WikiCreate.createdKey) {
+                                Button("Open the created page") { wiki.openPage(created) }.accessibilityIdentifier("wiki.pending.open")
+                            }
+                            if item.state == .retrying || item.state == .queued {
+                                Button("Stop waiting", role: .destructive) { Task { try? await model.store?.writer.discardWrite(id: item.id); await wiki.refresh() } }
+                                    .accessibilityIdentifier("wiki.pending.stop")
+                            }
+                        }
+                        .font(.amb(.caption).weight(.semibold)).buttonStyle(.borderless)
+                    }
+                }
+            }
+            .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: 8))
+            .accessibilityElement(children: .contain).accessibilityIdentifier("wiki.pending")
+        }
     }
 }

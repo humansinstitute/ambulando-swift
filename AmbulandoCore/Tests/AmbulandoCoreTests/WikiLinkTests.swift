@@ -39,7 +39,7 @@ final class WikiLinkTests: XCTestCase {
     func testRichNodeKeepsStableIdAndTitleInsteadOfALabelOnlyObject() {
         let body = richBody([paragraph([text("See "), wikiNode("D1", "Plan"), text(" now")])])
         let runs = wikiRuns(DocumentRender.blocks(body))
-        XCTAssertEqual(runs.map(\.wiki), [WikiTarget(documentId: "D1", title: "Plan")])
+        XCTAssertEqual(runs.map { [$0.wiki?.documentId, $0.wiki?.title] }, [["D1", "Plan"]])
         XCTAssertFalse(runs[0].object)
         XCTAssertNil(runs[0].link)
     }
@@ -47,7 +47,7 @@ final class WikiLinkTests: XCTestCase {
     func testCanonicalMarkdownLinkAndLiteralTitleBecomeWikiReferences() {
         let body = DocumentBody(bytes: Data("Open [Plan](wiki:abc%2D1) and [[Dashboard]] today".utf8), contentType: "text/markdown")
         let runs = wikiRuns(DocumentRender.blocks(body))
-        XCTAssertEqual(runs.map(\.wiki), [WikiTarget(documentId: "abc-1", title: "Plan"), WikiTarget(title: "Dashboard")])
+        XCTAssertEqual(runs.map { [$0.wiki?.documentId, $0.wiki?.title] }, [["abc-1", "Plan"], [nil, "Dashboard"]])
     }
 
     func testLiteralTitleInRichTextBecomesAReferenceButCodeStaysLiteral() {
@@ -56,7 +56,7 @@ final class WikiLinkTests: XCTestCase {
             .object([("type", .string("codeBlock")), ("content", .array([text("[[Fenced]]")]))]),
         ])
         let blocks = DocumentRender.blocks(body)
-        XCTAssertEqual(wikiRuns(blocks).map(\.wiki), [WikiTarget(title: "Dashboard")])
+        XCTAssertEqual(wikiRuns(blocks).map { $0.wiki?.title }, ["Dashboard"])
         guard case .paragraph(let runs) = blocks[0] else { return XCTFail("paragraph") }
         XCTAssertTrue(runs.contains { $0.code && $0.text == "[[InCode]]" && $0.wiki == nil })
         guard case .code(_, let code) = blocks[1] else { return XCTFail("code block") }
@@ -81,6 +81,7 @@ final class WikiLinkTests: XCTestCase {
         let targets = wikiRuns(DocumentRender.blocks(body)).compactMap(\.wiki)
         XCTAssertEqual(targets.map(\.title), ["A", "Bound", "B", "a", "A"])
         XCTAssertEqual(targets.map(\.occurrence), [0, 0, 0, 1, 2], "same title, any case, counted together; bound links are not counted")
+        XCTAssertEqual(targets.map(\.count), [3, 0, 1, 3, 3], "each reference knows how many share its title")
     }
 
     func testRenamedPagesShowTheirCurrentTitleWhileStoredTextIsUntouched() {
@@ -455,8 +456,7 @@ final class WikiCreateTests: XCTestCase {
         return WriteSender(store: store, engine: h.engine, identity: h.chat.identity, transport: h.transport, staging: h.staging,
                            afterWikiCreate: { connection, item, created in
             if failBinding { throw URLError(.cannotConnectToHost) }
-            _ = try await WikiBinder.bind(title: item.string(WikiCreate.titleKey) ?? "", to: created.id, occurrence: (item.payloadObject[WikiCreate.occurrenceKey] as? Int),
-                                          sourceDocId: item.string(WikiCreate.sourceKey) ?? "", connection: connection, workspace: workspace, store: store, saver: saver)
+            _ = try await WikiBinder.complete(item: item, created: created, connection: connection, workspace: workspace, store: store, saver: saver)
         })
     }
 
@@ -569,6 +569,68 @@ final class WikiCreateTests: XCTestCase {
         XCTAssertFalse(savedMarkdown(h, source).contains("My new words"))
     }
 
+    func testChangedReferencesAfterTheRequestAreNotGuessedAt() async throws {
+        let h = try await WorkHarness.make()
+        let id = h.work.seedDoc(scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "Notes", body: sourceBody("First [[Dashboard]] then [[Dashboard]]"),
+                                contentType: DocumentBody.envelopeContentType)
+        await h.sync.refreshDoc(h.connection, h.workspace, docId: id); await h.engine.waitUntilIdle()
+        // The person asked for the second one with two present; one was deleted before the page existed.
+        var payload = try intent(h, source: id).payload
+        payload[WikiCreate.occurrenceKey] = 1
+        payload[WikiCreate.expectedCountKey] = 2
+        let stored = try await h.store.reader.docBody(workspaceId: h.workspace.id, docId: id)
+        let cached = try XCTUnwrap(stored)
+        let edited = "Only [[Dashboard]] remains"
+        let one = DocumentBody(bytes: sourceBody(edited), contentType: DocumentBody.envelopeContentType)
+        let draft = DocDraft(connectionId: h.connection.id, workspaceId: h.workspace.id, docId: id, title: "Notes", body: one.encodedForTest(),
+                             contentType: DocumentBody.envelopeContentType, baseRowVersion: cached.docRowVersion, baseSha256: cached.sha256,
+                             baseStorageObjectId: cached.storageObjectId, state: .editing)
+        try await h.store.writer.saveDocDraft(draft)
+        let writer = sender(h)
+        try await writer.submit(WriteIntent(kind: .docCreate, targetId: Fixtures.channel2, payload: payload), connection: h.connection, workspace: h.workspace)
+        await h.settled()
+        let after = try await h.store.reader.docDraft(key: draft.key)
+        let kept = try XCTUnwrap(after)
+        XCTAssertFalse(DocumentBody(bytes: kept.body, contentType: kept.contentType).markdown.contains("wiki:"), "a different occurrence was not bound by position")
+        let rest = try await h.pending()
+        XCTAssertTrue(rest.isEmpty, "the page exists and the write is complete")
+    }
+
+    func testSourceThatIsNotSavedHereKeepsTheWriteQueuedWithThePageLocation() async throws {
+        let h = try await WorkHarness.make()
+        let writer = sender(h)
+        try await writer.submit(intent(h, source: "f1c70000-0000-4000-8000-0000000000ee"), connection: h.connection, workspace: h.workspace)
+        await h.settled()
+        let rows = try await h.pending()
+        XCTAssertEqual(rows.count, 1, "never retired as if linked")
+        XCTAssertEqual(rows.first?.lastCode, "wiki_link_pending")
+        let createdId = try XCTUnwrap(rows.first?.string(WikiCreate.createdKey), "the write records where the page is")
+        XCTAssertEqual(h.work.doc(createdId)?["title"] as? String, "Dashboard", "and that page exists on Tower")
+    }
+
+    func testRetryNeverBindsASecondReferenceAfterTheFirstSucceeded() async throws {
+        let h = try await WorkHarness.make()
+        let source = h.work.seedDoc(scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "Notes", body: sourceBody("[[Dashboard]] and [[Dashboard]]"),
+                                    contentType: DocumentBody.envelopeContentType)
+        await h.sync.refreshDoc(h.connection, h.workspace, docId: source); await h.engine.waitUntilIdle()
+        var payload = try intent(h, source: source).payload
+        payload[WikiCreate.occurrenceKey] = 0
+        let writer = sender(h)
+        try await writer.submit(WriteIntent(kind: .docCreate, targetId: Fixtures.channel2, payload: payload), connection: h.connection, workspace: h.workspace)
+        await h.settled()
+        let created = try await h.store.reader.docs(workspaceId: h.workspace.id).first { $0.title == "Dashboard" }
+        let id = try XCTUnwrap(created).id
+        let body = DocumentBody(bytes: h.work.docBody(source)!, contentType: nil)
+        XCTAssertEqual(WikiLinks.references(in: body).filter { $0.documentId == id }.count, 1)
+        // Running the completion again (a retry after a crash before the write was retired) changes nothing.
+        let item = WriteItem(id: "x", connectionId: h.connection.id, origin: h.connection.origin, signerNpub: h.connection.signerNpub, workspaceId: h.workspace.id,
+                             appNpub: h.workspace.appNpub, kind: .docCreate, targetId: Fixtures.channel2, groupKey: "doc:x",
+                             payload: try JSONSerialization.data(withJSONObject: payload), request: nil, state: .queued, attempts: 0, lastStatus: nil, lastCode: nil,
+                             lastError: nil, createdAt: "")
+        let again = try await WikiBinder.complete(item: item, created: XCTUnwrap(created), connection: h.connection, workspace: h.workspace, store: h.store, saver: h.saver)
+        XCTAssertEqual(again, .alreadyBound)
+    }
+
     func testRepeatRequestsFindThePendingOrExistingPageInsteadOfCreatingAnother() async throws {
         let h = try await WorkHarness.make()
         let source = try await seededSource(h)
@@ -582,5 +644,16 @@ final class WikiCreateTests: XCTestCase {
         let after = try await h.store.reader.docs(workspaceId: h.workspace.id)
         guard case .page(let page)? = WikiCreate.existing(title: "Dashboard", channelId: Fixtures.channel2, docs: after, pending: []) else { return XCTFail("existing page") }
         XCTAssertEqual(page.channelId, Fixtures.channel2)
+        // Two pages with the title in the destination: the person chooses; nothing is picked and no third page is made.
+        let twin = DocRecord(workspaceId: page.workspaceId, id: "twin", scopeId: page.scopeId, channelId: page.channelId, storageObjectId: nil, title: "dashboard",
+                             summary: nil, rowVersion: 1, createdAt: "", updatedAt: "")
+        guard case .several(let both)? = WikiCreate.existing(title: "Dashboard", channelId: Fixtures.channel2, docs: after + [twin], pending: []) else { return XCTFail("several") }
+        XCTAssertEqual(Set(both.map(\.id)), [page.id, "twin"])
     }
+}
+
+
+private extension DocumentBody {
+    /// The body's bytes, for building a draft in tests.
+    func encodedForTest() -> Data { (try? encoded(editorState: editorState ?? .object([]))).map(\.bytes) ?? Data() }
 }
