@@ -69,12 +69,16 @@ enum WikiEditors {
 /// only if they are still on the screen that asked.
 @MainActor
 enum WikiControllers {
-    private final class Box { weak var controller: WikiLinkController?; init(_ controller: WikiLinkController) { self.controller = controller } }
+    private final class Box {
+        weak var controller: WikiLinkController?
+        let visit: WikiVisit
+        @MainActor init(_ controller: WikiLinkController) { self.controller = controller; visit = controller.visit }
+    }
     private static var requests: [String: Box] = [:]
     static func register(_ request: String, _ controller: WikiLinkController) { requests[request] = Box(controller) }
     static func created(request: String?, _ doc: DocRecord, connectionId: String) {
         guard let request, let box = requests.removeValue(forKey: request), let controller = box.controller else { return }
-        controller.openCreated(doc, connectionId: connectionId)
+        controller.openCreated(doc, connectionId: connectionId, from: box.visit)
     }
 }
 
@@ -159,7 +163,15 @@ final class WikiLinkController {
     /// screen stays where it is with the text in front of the person.
     @ObservationIgnored var beforeLeaving: () async -> Bool = { true }
     /// The source screen is showing; a page created for it opens only then.
-    @ObservationIgnored var isVisible = false
+    @ObservationIgnored private var visitEpoch = 0
+    @ObservationIgnored var isVisible = false {
+        didSet { if isVisible != oldValue { visitEpoch &+= 1 } }
+    }
+
+    var visit: WikiVisit {
+        WikiVisit(connectionId: app?.connection?.id, workspaceId: app?.selectedWorkspaceId ?? "",
+                  visible: isVisible, epoch: visitEpoch, actorId: app?.identity.npub, contextEpoch: app?.wikiContextEpoch ?? 0)
+    }
 
     init(workspace: WorkspaceRecord, sourceDocId: String, store: LocalStore) {
         self.workspace = workspace; self.sourceDocId = sourceDocId; self.store = store
@@ -189,38 +201,43 @@ final class WikiLinkController {
 
     /// Opens a page by its stable id: the saved copy shows at once and refreshes behind it; a page not saved here is fetched
     /// by id and shows why when it cannot be opened (deleted, or not shared with this account).
-    func openPage(_ id: String) {
+    func openPage(_ id: String, from origin: WikiVisit? = nil) {
+        let start = origin ?? visit
+        guard start.visible, start.workspaceId == workspace.id, start == visit else { return }
         Task {
-            guard await beforeLeaving() else {
+            let result = await WikiNavigation.open(id, from: start, now: { self.visit },
+                                                   checkpoint: { await self.beforeLeaving() },
+                                                   navigate: { self.app?.openRecord(kind: "doc", id: $0) })
+            if result == .draftNotStored, visit == start {
                 show("Your edits could not be stored on this device, so the other page was not opened. Nothing was lost; they are still here.", problem: true)
-                return
             }
-            app?.openRecord(kind: "doc", id: id)
         }
     }
 
-    /// A page made for a link in this document now exists and the link is recorded: open it, but only for a person who is
-    /// still here (never taking over a screen they have left for something else).
-    func openCreated(_ doc: DocRecord, connectionId: String) {
-        guard isVisible, sheet == nil, app?.connection?.id == connectionId else {
+    /// A creation callback retains the visit that requested it, including account and workspace transitions.
+    func openCreated(_ doc: DocRecord, connectionId: String, from origin: WikiVisit) {
+        guard origin == visit, origin.visible, origin.workspaceId == workspace.id,
+              doc.workspaceId == workspace.id, sheet == nil, origin.connectionId == connectionId else {
             show("“\(doc.title)” was created and linked.", problem: false)
             return
         }
         show("Created “\(doc.title)”.", problem: false)
-        openPage(doc.id)
+        openPage(doc.id, from: origin)
     }
 
     /// A tapped or clicked reference.
     func activate(_ target: WikiTarget, range: WikiEditorRange? = nil) {
         if let id = target.documentId { openPage(id); return }
+        let origin = visit
         Task {
             await refresh()
+            guard visit == origin else { return }
             switch WikiLinks.resolve(target, in: context.docs, sourceChannelId: sourceChannelId) {
             case .available(let doc):
                 // A title that resolves to one page becomes a stable link to it, so renaming or moving the page later cannot
                 // turn this link into an offer to create a duplicate. Opening goes ahead whether or not that could be saved.
                 _ = await bind(title: target.title, documentId: doc.id, occurrence: target.occurrence, expectedCount: target.count > 0 ? target.count : nil)
-                openPage(doc.id)
+                openPage(doc.id, from: origin)
             case .unresolved: sheet = .create(target, range)
             case .ambiguous(_, let matches):
                 sheet = .choose(.reference(target), title: target.title, matches, reason: "Several pages are called “\(target.title)”. Choose the one this link means.")
@@ -234,6 +251,7 @@ final class WikiLinkController {
     /// Links to an existing page the person chose.
     func choose(_ doc: DocRecord, for pick: Pick, openAfter: Bool) {
         sheet = nil
+        let origin = visit
         Task {
             switch pick {
             case .insert(let range):
@@ -248,7 +266,7 @@ final class WikiLinkController {
                     show("The link could not be saved yet. The page was not changed.", problem: true); return
                 }
             }
-            if openAfter { openPage(doc.id) }
+            if openAfter { openPage(doc.id, from: origin) }
         }
     }
 
@@ -258,8 +276,10 @@ final class WikiLinkController {
         let title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         sheet = nil
+        let origin = visit
         Task {
             await refresh()
+            guard visit == origin else { return }
             switch WikiCreate.existing(title: title, channelId: channelId, docs: context.docs, pending: context.pending) {
             case .page(let existing)?:
                 show("“\(title)” already exists in \(context.place(ofChannel: channelId)), so it was linked instead of creating another.", problem: false)
@@ -293,7 +313,7 @@ final class WikiLinkController {
             if let editor, !(await editor.checkpoint()) {
                 show("Your edits could not be stored on this device, so the page was not created. Nothing was lost; try again.", problem: true); return
             }
-            guard let model = app, let staging = model.staging else { return }
+            guard visit == origin, let model = app, let staging = model.staging else { return }
             let created = DocumentBody.newDocument(text: "")
             let name = UUID().uuidString.lowercased() + ".document.json"
             do {

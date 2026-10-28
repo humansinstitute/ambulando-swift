@@ -59,6 +59,7 @@ final class AppModel {
     private(set) var identity: IdentityState = .none {
         didSet {
             guard identity != oldValue else { return }
+            wikiContextEpoch &+= 1
             // window.nostr follows the identity: locking cancels and refuses every request; removing it forgets sites.
             browser.setLocked(!isUnlocked)
             if identity == .none, oldValue != .none { browser.reset() }
@@ -68,8 +69,14 @@ final class AppModel {
     @ObservationIgnored let browser = BrowserModel()
     /// Why an existing identity cannot be opened (sealed while the iPhone is locked, or a damaged file).
     private(set) var vaultProblem: VaultReadProblem?
-    private(set) var connection: ConnectionRecord?
-    private(set) var selectedWorkspaceId: String?
+    private(set) var connection: ConnectionRecord? {
+        didSet { if connection != oldValue { wikiContextEpoch &+= 1 } }
+    }
+    private(set) var selectedWorkspaceId: String? {
+        didSet { if selectedWorkspaceId != oldValue { wikiContextEpoch &+= 1 } }
+    }
+    /// Invalidates delayed wiki navigation even when an account/workspace switches away and back during a wait.
+    @ObservationIgnored private(set) var wikiContextEpoch = 0
     private(set) var syncStatus = SyncSnapshot()
     /// Navigation inside the Chat tab for the selected workspace; persisted per connection and workspace.
     var chatPath: [ChatRoute] = [] {

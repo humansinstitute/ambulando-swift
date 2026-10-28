@@ -38,7 +38,13 @@ source is updated: an open editor receives the link and makes it a durable draft
 (and saves it when the source had no unsaved edits of its own). If that cannot happen the write **stays queued** with the page's
 location (`wiki_created_doc`), and the document screen lists it with Open the created page / Stop waiting. If the source's
 same-title references changed after the request, nothing is bound by position and the person is told. The page opens for the
-person only if they are still on the screen that asked.
+person only if they are still on the same visit to the screen that asked, with the same connection, account and workspace.
+Leaving and returning starts a new visit; a delayed checkpoint or creation cannot take over that visit.
+
+A durable draft is local recovery, not a canonical Tower save: the normal Save action still publishes unsaved edits. Every
+editor binding outcome checkpoints dirty text, including a retry whose link is already in memory. A failed checkpoint keeps
+the creation pending. Offline creation also stays pending until connectivity and source-link recovery succeed; retries reuse
+the created page rather than making another.
 
 ## Move
 

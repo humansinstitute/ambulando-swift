@@ -444,12 +444,13 @@ final class WikiMoveTests: XCTestCase {
 /// Create-and-link: one durable write creates the page and the source learns its id, even across lost responses and a source
 /// that cannot be saved right now.
 final class WikiCreateTests: XCTestCase {
-    private func sourceBody(_ text: String = "See [[Dashboard]] today") -> Data {
+    static func body(_ text: String = "See [[Dashboard]] today") -> Data {
         let state = JSONValue.object([("type", .string("doc")), ("content", .array([.object([("type", .string("paragraph")),
             ("content", .array([.object([("type", .string("text")), ("text", .string(text))])]))])]))])
         let model = JSONValue.object(ProseMirrorMarkdown.contentModelFields(state))
         return JSONValue.object([("format", .string(DocumentBody.envelopeFormat)), ("content_model", model)]).serialized()
     }
+    private func sourceBody(_ text: String = "See [[Dashboard]] today") -> Data { Self.body(text) }
 
     private func sender(_ h: WorkHarness, failBinding: Bool = false) -> WriteSender {
         let store = h.store, saver = h.saver, workspace = h.workspace
@@ -461,6 +462,10 @@ final class WikiCreateTests: XCTestCase {
     }
 
     private func intent(_ h: WorkHarness, source: String, channel: String = Fixtures.channel2, title: String = "Dashboard") throws -> WriteIntent {
+        try Self.intent(h, source: source, channel: channel, title: title)
+    }
+
+    static func intent(_ h: WorkHarness, source: String, channel: String = Fixtures.channel2, title: String = "Dashboard") throws -> WriteIntent {
         let created = DocumentBody.newDocument(text: "")
         let name = UUID().uuidString.lowercased() + ".document.json"
         try FileManager.default.createDirectory(at: h.staging, withIntermediateDirectories: true)
@@ -500,7 +505,7 @@ final class WikiCreateTests: XCTestCase {
         let writer = sender(h)
         try await writer.submit(intent(h, source: source), connection: h.connection, workspace: h.workspace)
         await h.settled()
-        await writer.kick(h.connection, force: true); await h.engine.waitUntilIdle()
+        await writer.kick(h.connection, force: true); await h.settled()
         let docs = try await h.store.reader.docs(workspaceId: h.workspace.id)
         XCTAssertEqual(docs.filter { $0.title == "Dashboard" }.count, 1, "the retry found the page created by the lost attempt")
         let created = try XCTUnwrap(docs.first { $0.title == "Dashboard" })
@@ -515,7 +520,7 @@ final class WikiCreateTests: XCTestCase {
         let writer = sender(h)
         try await writer.submit(intent(h, source: source), connection: h.connection, workspace: h.workspace)
         await h.settled()
-        await writer.kick(h.connection, force: true); await h.engine.waitUntilIdle()
+        await writer.kick(h.connection, force: true); await h.settled()
         let docs = try await h.store.reader.docs(workspaceId: h.workspace.id)
         let created = try XCTUnwrap(docs.first { $0.title == "Dashboard" }, "the created page exists")
         XCTAssertEqual(docs.filter { $0.title == "Dashboard" }.count, 1)
@@ -656,4 +661,152 @@ final class WikiCreateTests: XCTestCase {
 private extension DocumentBody {
     /// The body's bytes, for building a draft in tests.
     func encodedForTest() -> Data { (try? encoded(editorState: editorState ?? .object([]))).map(\.bytes) ?? Data() }
+}
+
+
+/// The retry-critical paths of "create and link" and of leaving for a linked page.
+final class WikiRecoveryTests: XCTestCase {
+    /// An editor stand-in: a bind marks it dirty; its checkpoint can be made to fail.
+    @MainActor final class FakeEditor {
+        var bound = false, dirty = false, durable = false, checkpointWorks = true
+        func bind() async -> WikiEditorBinding {
+            let count = bound ? 0 : 1
+            if count > 0 { bound = true; dirty = true }
+            return await WikiEditorBinding.outcome(pageCount: count) { [self] in
+                if !dirty { return true }
+                guard checkpointWorks else { return false }
+                dirty = false; durable = true
+                return true
+            }
+        }
+    }
+
+    @MainActor func testRetryAfterAFailedCheckpointNeverRetiresWithTheLinkOnlyInMemory() async {
+        let editor = FakeEditor()
+        editor.checkpointWorks = false
+        let first = await editor.bind()
+        XCTAssertEqual(first, .failed, "bound in the page but not stored")
+        let retry = await editor.bind()   // the page now reports nothing to bind
+        XCTAssertEqual(retry, .failed, "a retry that finds nothing to bind still must not succeed while the text is not stored")
+        XCTAssertFalse(editor.durable)
+        editor.checkpointWorks = true
+        let done = await editor.bind()
+        XCTAssertEqual(done, .nothingToBind)
+        XCTAssertTrue(editor.durable, "retired only once the source is durable")
+    }
+
+    @MainActor func testOutcomesForBoundAndChangedReferences() async {
+        let a = await WikiEditorBinding.outcome(pageCount: 2) { true }
+        let b = await WikiEditorBinding.outcome(pageCount: -1) { true }
+        let c = await WikiEditorBinding.outcome(pageCount: -1) { false }
+        XCTAssertEqual([a, b, c], [.bound, .noLongerRequested, .failed])
+    }
+
+    func testCreationWriteStaysQueuedUntilTheEditorCheckpointSucceeds() async throws {
+        let h = try await WorkHarness.make()
+        let state = WikiFakeState()
+        let source = h.work.seedDoc(scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "Notes", body: WikiCreateTests.body("x [[Dashboard]]"),
+                                    contentType: DocumentBody.envelopeContentType)
+        let store = h.store
+        let writer = WriteSender(store: store, engine: h.engine, identity: h.chat.identity, transport: h.transport, staging: h.staging,
+                                 afterWikiCreate: { _, _, _ in
+            let outcome = await state.bindOnce()
+            if outcome == .failed { throw WikiBindError.notReady }
+        })
+        let creation = try WikiCreateTests.intent(h, source: source)
+        try await writer.submit(creation, connection: h.connection, workspace: h.workspace)
+        await h.settled()
+        var rows = try await h.pending()
+        XCTAssertEqual(rows.count, 1, "failed checkpoint: still pending")
+        let beforeRetry = await state.attemptCount
+        await state.setWorks(false)
+        await writer.kick(h.connection, force: true); await h.settled()
+        let afterRetry = await state.attemptCount
+        XCTAssertGreaterThan(afterRetry, beforeRetry, "the forced retry actually exercised count 0")
+        rows = try await h.pending()
+        XCTAssertEqual(rows.count, 1, "retry with count 0 and a failing checkpoint: still pending")
+        await state.setWorks(true)
+        await writer.kick(h.connection, force: true); await h.settled()
+        rows = try await h.pending()
+        XCTAssertTrue(rows.isEmpty, "retired after the durable checkpoint")
+        let docs = try await h.store.reader.docs(workspaceId: h.workspace.id).filter { $0.title == "Dashboard" }
+        XCTAssertEqual(docs.count, 1)
+    }
+
+    @MainActor func testSuspendedCheckpointCannotOpenOnAReturnVisit() async {
+        var visit = WikiVisit(connectionId: "c1", workspaceId: "w1", visible: true, epoch: 1)
+        let origin = visit
+        let started = expectation(description: "checkpoint suspended")
+        var resume: CheckedContinuation<Bool, Never>?
+        var opened = false
+        let navigation = Task { @MainActor in
+            await WikiNavigation.open("page", from: origin, now: { visit }, checkpoint: {
+                await withCheckedContinuation { continuation in
+                    resume = continuation
+                    started.fulfill()
+                }
+            }, navigate: { _ in opened = true })
+        }
+        await fulfillment(of: [started], timeout: 5)
+        // A person leaves and comes back while the source draft write is suspended.
+        visit.epoch += 2
+        resume?.resume(returning: true)
+        let result = await navigation.value
+        XCTAssertEqual(result, .leftTheScreen)
+        XCTAssertFalse(opened)
+    }
+
+    @MainActor func testSlowCheckpointNeverCarriesSomeoneToAPageTheyLeft() async {
+        var visit = WikiVisit(connectionId: "c1", workspaceId: "w1", visible: true, epoch: 1)
+        let start = visit
+        var opened: [String] = []
+        // Leaving the screen during the wait.
+        var result = await WikiNavigation.open("page", from: start, now: { visit }, checkpoint: { visit.visible = false; return true }, navigate: { opened.append($0) })
+        XCTAssertEqual(result, .leftTheScreen)
+        // Switching workspace during the wait.
+        visit = start
+        result = await WikiNavigation.open("page", from: start, now: { visit }, checkpoint: { visit.workspaceId = "w2"; return true }, navigate: { opened.append($0) })
+        XCTAssertEqual(result, .leftTheScreen)
+        // Switching account during the wait.
+        visit = start
+        result = await WikiNavigation.open("page", from: start, now: { visit }, checkpoint: { visit.connectionId = "c2"; return true }, navigate: { opened.append($0) })
+        XCTAssertEqual(result, .leftTheScreen)
+        // Actor changed on the same connection.
+        visit = start
+        result = await WikiNavigation.open("page", from: start, now: { visit }, checkpoint: { visit.actorId = "other"; return true }, navigate: { opened.append($0) })
+        XCTAssertEqual(result, .leftTheScreen)
+        // Workspace/account A → B → A still invalidates the old request.
+        visit = start
+        result = await WikiNavigation.open("page", from: start, now: { visit }, checkpoint: { visit.contextEpoch += 2; return true }, navigate: { opened.append($0) })
+        XCTAssertEqual(result, .leftTheScreen)
+        // Leaving and coming back (a new visit) during the wait.
+        visit = start
+        result = await WikiNavigation.open("page", from: start, now: { visit }, checkpoint: { visit.epoch += 1; return true }, navigate: { opened.append($0) })
+        XCTAssertEqual(result, .leftTheScreen)
+        XCTAssertTrue(opened.isEmpty)
+        // A checkpoint that cannot store the text keeps the person where they are.
+        visit = start
+        result = await WikiNavigation.open("page", from: start, now: { visit }, checkpoint: { false }, navigate: { opened.append($0) })
+        XCTAssertEqual(result, .draftNotStored)
+        XCTAssertTrue(opened.isEmpty)
+        // Undisturbed, it opens.
+        visit = start
+        result = await WikiNavigation.open("page", from: start, now: { visit }, checkpoint: { true }, navigate: { opened.append($0) })
+        XCTAssertEqual(result, .opened)
+        XCTAssertEqual(opened, ["page"])
+    }
+}
+
+actor WikiFakeState {
+    private var bound = false, dirty = false, works = false
+    private(set) var attemptCount = 0
+    func setWorks(_ value: Bool) { works = value }
+    func bindOnce() async -> WikiEditorBinding {
+        attemptCount += 1
+        let count = bound ? 0 : 1
+        if count > 0 { bound = true; dirty = true }
+        let stored: Bool
+        if !dirty { stored = true } else if works { dirty = false; stored = true } else { stored = false }
+        return WikiEditorBinding.outcome(pageCount: count, stored: stored)
+    }
 }

@@ -163,25 +163,14 @@ final class DocEditorModel: UploadTokenHost {
         wikiQuery = WikiQuery(text: message["query"] as? String ?? "", range: WikiEditorRange(from: from, to: to))
     }
 
-    enum WikiBinding: Equatable {
-        /// Bound in the page and stored as a durable draft.
-        case bound
-        /// Nothing needed binding.
-        case nothingToBind
-        /// The references with that title changed after the page was requested; nothing was bound by position.
-        case noLongerRequested
-        /// The page was not ready or the draft could not be stored: the caller keeps the creation write queued.
-        case failed
-    }
+    typealias WikiBinding = WikiEditorBinding
 
     /// Binds a created page into this open page and makes the result a durable draft before the creation write is retired.
     func bindWiki(title: String, documentId: String, occurrence: Int?, expectedCount: Int?) async -> WikiBinding {
         guard pageReady, let page, let count = await page.wikiBind(title: title, documentId: documentId, occurrence: occurrence, expectedCount: expectedCount)
         else { return .failed }
-        if count < 0 { return .noLongerRequested }
-        if count == 0 { return .nothingToBind }
-        dirty = true
-        return await checkpoint() ? .bound : .failed
+        if count > 0 { dirty = true }
+        return await WikiEditorBinding.outcome(pageCount: count) { await self.checkpoint() }
     }
 
     /// Stores the current text as the durable draft. True when nothing is unsaved or the draft was written; false when it
