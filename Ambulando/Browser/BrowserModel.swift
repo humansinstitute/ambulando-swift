@@ -242,6 +242,17 @@ final class BrowserModel {
         return true
     }
 
+    /// The page menu's **Open in Safari**: hands the address to the system's browser. It does not go through `openURL`,
+    /// which inside the app opens an in-app tab (the default for links), so the choice here is always explicit.
+    func openInSystemBrowser(_ url: URL) {
+        guard url.scheme?.lowercased() == "https" else { return }
+        #if os(iOS)
+        UIApplication.shared.open(url)
+        #else
+        NSWorkspace.shared.open(url)
+        #endif
+    }
+
     /// The globe button: back to the open tabs, or a new tab when there are none.
     func show() {
         if tabs.isEmpty { open(nil) } else { presented = true }

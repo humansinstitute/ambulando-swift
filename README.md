@@ -19,6 +19,28 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Chat links, mentions, reactions and thread titles (iPhone/iPad build 35, Mac build 24)
+
+- **Links are visible.** Web addresses (Markdown links and bare URLs) are blue and underlined in messages and documents.
+  They open the in-app signed browser, including from a focused thread (which is presented outside the shell and had
+  fallen back to Safari). **Open in Safari** in the browser's ••• menu is the explicit choice; it no longer loops back into
+  an in-app tab. HTTPS-only policy, per-site Nostr consent and Ambulando's return to the same channel and draft are unchanged.
+- **`@` mentions.** Choosing a name closes the list and typing on never reopens it; the composer shows `@Name ` and the
+  stored body token and structured `mentions` entry still come from the same picked value. A bare `@` lists what you
+  tagged most recently first (read from your own stored messages, resolved to current names and eligible records), then
+  the previous defaults. The list shows at most seven rows on iPhone/iPad (eight on the Mac) and scrolls for the rest.
+- **Reactions** match the web bar: a bordered pill per reaction with its count (yours on the muted fill), a quiet thumbs-up and
+  a + that opens a picker of the web's seven reactions (shaka added), under every message. Tapping adds or removes yours
+  through the existing queued reaction writes. Pills wrap on narrow screens and with larger text. Symbols are SF Symbols, not emoji, so they render on every device.
+- **Rename thread** is in the thread menu beside pin and close. It uses Tower's `PATCH …/threads/:id` with `row_version`:
+  the editor captures the original title and version. A stale version retries only when the title is unchanged; a
+  concurrent rename shows the current title and keeps your draft. A refusal shows the permission message. The stored
+  thread (header, channel rows, Deck) follows Tower's answer. It is a confirmed online request, not queued.
+- **Mac:** the Inbox read-actions menu is a small icon instead of a pop-up button stretched across the card header.
+
+Per-item evidence and the test that covers each item: [Native chat release matrix](docs/chat-release-matrix.md). Exact
+installation and publication status belongs to the release handoff.
+
 ## Push cache refresh (iPhone/iPad build 33)
 
 Push fetch callbacks now refresh named content and persisted deltas in a bounded window, with foreground/unlock/network
@@ -145,7 +167,7 @@ large pasted crash reports. The iPhone/iPad composer is unchanged. See [Mac vali
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (31); Mac version 0.1.0 (22). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (35); Mac version 0.1.0 (24). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 

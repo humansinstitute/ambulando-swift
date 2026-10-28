@@ -38,7 +38,7 @@ final class ThreadFocusUITests: XCTestCase {
         let general = app.buttons["channel.general"]
         if general.waitForExistence(timeout: 10) { general.tap() }
         XCTAssertTrue(app.navigationBars["#general"].waitForExistence(timeout: 10))
-        let thread = app.buttons["thread.\(replies)"].firstMatch
+        let thread = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "thread.\(replies)", "Inbox counts mentions and tasks")).firstMatch
         for _ in 0..<6 where !(thread.exists && thread.isHittable) { app.scrollViews.firstMatch.swipeDown() }
         thread.tap()
         XCTAssertTrue(focus(app).waitForExistence(timeout: 10), "the thread opens focused")
@@ -158,7 +158,9 @@ final class ThreadFocusUITests: XCTestCase {
         let panel = focus(app)
         XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "composer.field").count, 1,
                        "the channel composer behind the thread is hidden from accessibility")
-        let root = panel.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND identifier != 'thread.focus.title'", "Ship it")).firstMatch
+        // This fixture's first message is Inbox counts; “Ship it” is its third reply. With
+        // reaction rows, that reply is below the viewport when correctly scrolled to the first message.
+        let root = panel.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND identifier != 'thread.focus.title'", "Inbox counts mentions and tasks")).firstMatch
         XCTAssertTrue(root.waitForExistence(timeout: 10))
         let reply = composer(in: panel)
         reply.tap()
@@ -176,7 +178,12 @@ final class ThreadFocusUITests: XCTestCase {
         sleep(1)
         XCTAssertFalse(root.isHittable, "the thread is longer than the screen")
         let list = panel.scrollViews.firstMatch
-        for _ in 0..<8 where !(root.exists && root.isHittable) { list.swipeDown() }
+        capture(app, "thread-reading-before-scroll")
+        for _ in 0..<12 where !(root.exists && root.isHittable) { list.swipeDown() }
+        if !root.isHittable {
+            capture(app, "thread-reading-scroll-failure")
+            let hierarchy = XCTAttachment(string: app.debugDescription); hierarchy.lifetime = .keepAlways; add(hierarchy)
+        }
         XCTAssertTrue(root.isHittable, "scrolled up to the first message")
         XCTAssertFalse(newest.isHittable)
         capture(app, "thread-focus-scrolled-up")

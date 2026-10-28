@@ -7,6 +7,10 @@ import AmbulandoCore
 extension MacThreadRegression {
     static func richFormattingCheck(_ window: NSWindow, model: AppModel) async throws {
         TextScale.shared.reset()
+        guard let readMenu = find(window, "deck.inbox.readMenu") else { throw Failure(description: "Missing Inbox read-actions menu") }
+        let menuFrame = frame(of: readMenu)
+        print("INBOX_MENU_FRAME width=\(menuFrame.width) height=\(menuFrame.height)")
+        try require(menuFrame.width > 0 && menuFrame.width <= 56 && menuFrame.height <= 48, "Inbox read-actions menu stays compact")
         let emphasis = InlineText.attributed(MarkdownBlocks.inline("Regular **bold** regular"))
         for run in emphasis.runs {
             let text = String(emphasis[run.range].characters)
@@ -22,6 +26,23 @@ extension MacThreadRegression {
               let workspace = model.selectedWorkspace, let fixture = model.fixture, let store = model.store else {
             throw Failure(description: "Missing isolated rich thread")
         }
+        // Exercise the shared reaction controls through the actual Mac window and popover.
+        try press(window, "reaction.quick")
+        for _ in 0..<20 where find(window, "reaction.thumbs_up") == nil { await settle() }
+        try require(find(window, "reaction.thumbs_up") != nil, "quick reaction renders a persisted pill")
+        try press(window, "reaction.thumbs_up")
+        for _ in 0..<20 where find(window, "reaction.thumbs_up") != nil { await settle() }
+        try require(find(window, "reaction.thumbs_up") == nil, "tapping your pill removes the reaction")
+        for emoji in ReactionEmoji.allCases {
+            try press(window, "reaction.add"); await settle()
+            guard let pickerWindow = NSApp.windows.first(where: { find($0, "react.\(emoji.rawValue)") != nil }) else {
+                throw Failure(description: "Missing Mac reaction picker")
+            }
+            try press(pickerWindow, "react.\(emoji.rawValue)")
+            for _ in 0..<20 where find(window, "reaction.\(emoji.rawValue)") == nil { await settle() }
+            try require(find(window, "reaction.\(emoji.rawValue)") != nil, "picker reaction renders: \(emoji.rawValue)")
+        }
+        print("REACTION_CONTROLS_PASS addRemove=true pickerSeven=true")
         let body = """
         ## A clearer reading rhythm
 

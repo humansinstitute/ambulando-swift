@@ -525,6 +525,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
                 else { return (404, ["code": "thread_not_found"]) }
                 return (200, ["thread": thread(for: root)])
             }
+        case ("PATCH", 2, "threads"):
+            return renameThread(rest[1], request)
         case ("POST", 3, "channels") where rest[2] == "messages":
             return try post(request, workspace: w, channel: rest[1])
         case ("GET", 1, "events"):
@@ -1057,8 +1059,37 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         ["actor": ["actor_id": UUID().uuidString.lowercased(), "npub": npub, "kind": kind, "display_name": name.map { $0 as Any } ?? NSNull()]]
     }
     private func thread(for root: [String: Any]) -> [String: Any] {
-        ["id": root["thread_id"]!, "workspace_id": root["workspace_id"]!, "channel_id": root["channel_id"]!, "source_message_id": root["id"]!,
-         "title": MentionCodec.plain(root["body"] as? String ?? ""), "record_state": "active", "row_version": 1, "updated_at": root["updated_at"]!]
+        let edit = manageMap("threadTitles")[root["thread_id"] as? String ?? ""]
+        return ["id": root["thread_id"]!, "workspace_id": root["workspace_id"]!, "channel_id": root["channel_id"]!, "source_message_id": root["id"]!,
+                "title": (edit?["title"] as? String) ?? MentionCodec.plain(root["body"] as? String ?? ""), "record_state": "active",
+                "row_version": (edit?["row_version"] as? Int) ?? 1, "updated_at": (edit?["updated_at"] as? String) ?? root["updated_at"]!]
+    }
+
+    /// `PATCH …/threads/:t` as Tower answers it: a title change guarded by `row_version` (a stale one is a 409
+    /// `stale_row_version`), and a refusal for a title containing "deny" so the sample can show the permission message.
+    private func renameThread(_ id: String, _ request: URLRequest) -> (Int, Any) {
+        let body = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:]
+        return lock.withLock {
+            guard let root = allMessages().first(where: { $0["thread_id"] as? String == id && $0["id"] as? String == $0["thread_source_message_id"] as? String })
+            else { return (404, ["code": "thread_not_found"]) }
+            let title = (body["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty, title.count <= 120 else { return (400, ["code": "validation_error"]) }
+            if title.lowercased().contains("deny") { return (403, ["code": "forbidden", "error": "Permission denied"]) }
+            let current = thread(for: root)["row_version"] as? Int ?? 1
+            if title == "Simulate title conflict" {
+                var edits = manageMap("threadTitles")
+                edits[id] = ["title": "Title from another editor", "row_version": current + 1, "updated_at": ISO8601DateFormatter.fixture.string(from: Date())]
+                managed["threadTitles"] = edits
+                persistManaged()
+                return (409, ["code": "stale_row_version"])
+            }
+            if let sent = body["row_version"] as? Int, sent != current { return (409, ["code": "stale_row_version"]) }
+            var edits = manageMap("threadTitles")
+            edits[id] = ["title": title, "row_version": current + 1, "updated_at": ISO8601DateFormatter.fixture.string(from: Date())]
+            managed["threadTitles"] = edits
+            persistManaged()
+            return (200, ["thread": thread(for: root)])
+        }
     }
 }
 

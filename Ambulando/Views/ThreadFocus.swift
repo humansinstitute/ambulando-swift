@@ -264,6 +264,9 @@ private struct ThreadFocusContainer: View {
                 }
             }
         }
+        // This view is presented from outside the shell, so it does not see the shell's link handler: without this a link
+        // tapped in a thread left for Safari instead of opening a tab of the in-app browser.
+        .environment(\.openURL, OpenURLAction { model.browser.handleLink($0) })
         #if os(iOS)
         .presentationBackground { if card { ThreadFocusBackdrop { model.focusedThread = nil } } else { Amb.background } }
         // Links open in-app browser tabs above the thread (the shell's own browser cover cannot present over this one).
@@ -312,6 +315,7 @@ private struct NewThreadContainer: View {
             }
         }
         .background(ThreadFocusBackdrop { model.composingThread = false })
+        .environment(\.openURL, OpenURLAction { model.browser.handleLink($0) })
     }
 }
 #endif
@@ -381,7 +385,7 @@ private struct ThreadFocusPanel: View {
             if let workspace = model.selectedWorkspace, workspace.id == focus.workspaceId {
                 PinToggleButton(type: .thread, id: focus.threadId, workspace: workspace)
                 // Only this thread's own targets: a context left by another thread is never acted on.
-                ThreadHeaderMenu(context: menu?.threadId == focus.threadId ? menu : nil, workspace: workspace)
+                ThreadHeaderMenu(context: menu?.threadId == focus.threadId ? menu : nil, workspace: workspace, title: title)
             }
             #if os(macOS)
             Button { expanded.toggle() } label: {
@@ -430,12 +434,15 @@ private struct ThreadFocusPanel: View {
 
 /// The web's thread menu (sol `.thread-title-menu`) beside pin, full screen and close: Get it done and Copy message for
 /// the first message, the thread's Autopilot Link and FD Ref, and Delete message for its author, with the same rules as
-/// the message menu. Renaming and archiving a thread stay on the web (the app has no write for them).
+/// the message menu, and Rename thread (Tower decides who may rename). Archiving a thread stays on the web.
 private struct ThreadHeaderMenu: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openURL) private var openURL
     let context: ThreadMenuContext?
     let workspace: WorkspaceRecord
+    /// The title the header shows, for the rename field until the stored full title is read.
+    var title = ""
+    @State private var renaming = false
     @State private var gettingItDone: MessageRecord?
     @State private var deleting: MessageRecord?
 
@@ -453,6 +460,7 @@ private struct ThreadHeaderMenu: View {
 
     private var items: [Item] {
         var items: [Item] = []
+        if context != nil { items.append(Item(id: "rename", title: "Rename thread", symbol: "pencil") { renaming = true }) }
         if let liveRoot { items.append(Item(id: "getitdone", title: "Get it done", symbol: "checkmark.circle") { gettingItDone = liveRoot }) }
         if let root { items.append(Item(id: "copy", title: "Copy message", symbol: "doc.on.doc") { Pasteboard.copy(MentionCodec.plain(root.body)) }) }
         if let source = context?.autopilotSource {
@@ -472,7 +480,12 @@ private struct ThreadHeaderMenu: View {
         menuButton(items)
             .disabled(items.isEmpty)
             .help("Thread menu")
+            .accessibilityLabel("Thread menu")
+            .accessibilityIdentifier("thread.focus.actions")
             .sheet(item: $gettingItDone) { GetItDoneSheet(message: $0, workspace: workspace) }
+            .sheet(isPresented: $renaming) {
+                if let threadId = context?.threadId { RenameThreadSheet(threadId: threadId, workspace: workspace, shownTitle: title) }
+            }
             .confirmationDialog("Delete this message for everyone?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                                 titleVisibility: .visible, presenting: deleting) { message in
                 Button("Delete", role: .destructive) {
@@ -513,5 +526,84 @@ private struct ThreadHeaderMenu: View {
             return
         }
         openURL(url)
+    }
+}
+
+
+/// Edits a conversation's title through Tower. Save stays disabled for an empty or unchanged title; a refusal, a conflict or
+/// being offline is shown here with the typed title kept, so nothing is lost and it can be tried again.
+struct RenameThreadSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let threadId: String
+    let workspace: WorkspaceRecord
+    let shownTitle: String
+    @State private var text = ""
+    @State private var original = ""
+    @State private var originalTitle: String?
+    @State private var originalVersion: Int?
+    @State private var saving = false
+    @State private var failure: String?
+    @FocusState private var focused: Bool
+
+    private var normalized: String? { try? ThreadTitle.normalized(text) }
+    private var canSave: Bool { !saving && originalVersion != nil && normalized != nil && normalized != original }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Thread title", text: $text)
+                    .focused($focused)
+                    .submitLabel(.done)
+                    .onSubmit { if canSave { save() } }
+                    .disabled(saving)
+                    .accessibilityIdentifier("thread.rename.field")
+                if text.count > ThreadTitle.maxLength {
+                    Text("Thread titles can be up to \(ThreadTitle.maxLength) characters.").font(.amb(.footnote)).foregroundStyle(Amb.destructive)
+                        .accessibilityIdentifier("thread.rename.length")
+                }
+                if let failure {
+                    Text(failure).font(.amb(.footnote)).foregroundStyle(Amb.destructive).accessibilityIdentifier("thread.rename.error")
+                }
+            }
+            .navigationTitle("Rename thread")
+            .inlineTitle()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving).accessibilityIdentifier("thread.rename.cancel") }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button { save() } label: { if saving { ProgressView().controlSize(.small) } else { Text("Save") } }
+                        .disabled(!canSave).accessibilityIdentifier("thread.rename.save")
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 380, minHeight: 170)
+        #endif
+        .task {
+            guard originalVersion == nil else { return }
+            // Capture the edit base once on opening, before sync can change the cache while typing.
+            let stored = try? await model.store?.reader.thread(workspaceId: workspace.id, id: threadId)
+            originalTitle = stored?.title
+            originalVersion = stored?.rowVersion
+            if originalVersion == nil { failure = "The thread version could not be loaded. Cancel and reopen to try again." }
+            let current = stored?.title.map(MentionCodec.plain).flatMap { $0.isEmpty ? nil : $0 } ?? shownTitle
+            original = current.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            if text.isEmpty { text = current }
+            focused = true
+        }
+    }
+
+    private func save() {
+        guard let title = normalized else { return }
+        saving = true; failure = nil
+        Task { @MainActor in
+            do {
+                try await model.renameThread(threadId, to: title, in: workspace, originalTitle: originalTitle, rowVersion: originalVersion)
+                dismiss()
+            } catch {
+                saving = false
+                failure = error.localizedDescription
+            }
+        }
     }
 }

@@ -187,6 +187,18 @@ public enum MentionCodec {
         return String(query)
     }
 
+    /// `activeQuery(in:)`, except that an `@` which begins an already picked mention (`@Rick ` after choosing Rick) is not
+    /// a query: choosing from the list closes it, and typing on after the name never reopens it.
+    public static func activeQuery(in text: String, excluding picked: [Mention]) -> String? {
+        guard let query = activeQuery(in: text), let at = text.lastIndex(of: "@") else { return nil }
+        for mention in picked {
+            // Encoding/pills bind the picked value to its first complete visible occurrence. A later
+            // @Rick Smith or @Rick-Jones is a new query even though its prefix names the same person.
+            if let range = visibleRange(of: mention, in: text), range.lowerBound == at { return nil }
+        }
+        return query
+    }
+
     /// Replaces the trailing `@query` with the mention's visible text and a trailing space.
     public static func complete(_ text: String, with mention: Mention) -> String {
         guard activeQuery(in: text) != nil, let at = text.lastIndex(of: "@") else { return text + mention.visible + " " }

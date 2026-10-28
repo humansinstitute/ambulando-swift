@@ -162,7 +162,8 @@ struct BrowserView: View {
                 Button { browser.toggleFavourite(tab) } label: { Label("Add to Favourites", systemImage: "star") }
             }
             ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
-            Button { openURL(url) } label: { Label("Open in Safari", systemImage: "safari") }
+            Button { browser.openInSystemBrowser(url) } label: { Label("Open in Safari", systemImage: "safari") }
+                .accessibilityIdentifier("browser.openInSafari")
         }
     }
 

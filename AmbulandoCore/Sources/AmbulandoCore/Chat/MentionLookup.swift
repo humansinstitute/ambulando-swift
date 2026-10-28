@@ -48,8 +48,9 @@ public struct MentionQuery: Sendable, Equatable {
         return only == type || (only == .person && type == .agent)
     }
 
-    /// How many suggestions are offered: 8 for a bare `@`, 10 once a name is typed, every channel for `channel:`.
-    public var limit: Int { text.isEmpty && only == nil ? 8 : only == .channel ? 500 : 10 }
+    /// How many suggestions are offered: 15 for a bare `@` (recently tagged first, the rest scrolls), 10 once a name is typed,
+    /// every channel for `channel:`.
+    public var limit: Int { text.isEmpty && only == nil ? 15 : only == .channel ? 500 : 10 }
 
     /// Where `label` matches: 0 exact, 1 at the start, 2 inside; nil no match. Case is ignored in any script.
     public func rank(_ label: String) -> Int? {
@@ -70,7 +71,7 @@ extension StoreReader {
     /// Typed ASCII uses SQLite's `LIKE` (case-insensitive for ASCII); other text uses `amb_ifind`, which ignores case in
     /// any script (and declines all-ASCII names from their bytes). Each kind is one scan of that workspace's rows found
     /// through the `(workspace_id, channel_id)` index: a few milliseconds for 16,000 titles (`MentionLookupTests`).
-    public func mentionSuggestions(workspaceId: String, query: MentionQuery, limit: Int = 10) throws -> [MentionSuggestion] {
+    public func mentionSuggestions(workspaceId: String, query: MentionQuery, limit: Int = 10, resolving mention: Mention? = nil) throws -> [MentionSuggestion] {
         let needle = query.text
         let ascii = needle.unicodeScalars.allSatisfy(\.isASCII)
         let escaped = needle.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%")
@@ -84,9 +85,11 @@ extension StoreReader {
 
         var out: [MentionSuggestion] = []
         func run(_ type: MentionType, _ sql: String, _ make: (SQLiteConnection.Statement) -> MentionSuggestion?) throws {
-            guard query.allows(type) else { return }
-            let s = try db.prepare("SELECT * FROM (\(sql)) WHERE \(match) ORDER BY \(starts) DESC, updated_at DESC, label LIMIT ?5")
-            try s.bind(binds)
+            guard query.allows(type), mention == nil || mention?.type == type else { return }
+            let identity = type == .chat ? "channel_id || '#' || root" : "id"
+            let exact = mention == nil ? "" : " AND \(identity) = ?6"
+            let s = try db.prepare("SELECT * FROM (\(sql)) WHERE \(match)\(exact) ORDER BY \(starts) DESC, updated_at DESC, label LIMIT ?5")
+            try s.bind(binds + (mention.map { [.text($0.id)] } ?? []))
             while try s.step() { if let row = make(s) { out.append(row) } }
         }
         try run(.doc, "SELECT id, title AS label, updated_at FROM docs WHERE workspace_id = ?1 AND archived = 0 AND \(listed)") { s in
@@ -102,7 +105,7 @@ extension StoreReader {
             FROM threads t
             JOIN messages r ON r.workspace_id = t.workspace_id AND r.id = coalesce(t.source_message_id,
               (SELECT m.id FROM messages m WHERE m.workspace_id = t.workspace_id AND m.thread_id = t.id ORDER BY m.created_at, m.id LIMIT 1))
-            WHERE t.workspace_id = ?1 AND t.deleted = 0 AND r.deleted = 0 AND t.\(listed)
+            WHERE t.workspace_id = ?1 AND t.deleted = 0 AND t.archived = 0 AND r.deleted = 0 AND t.\(listed)
             """) { s in
             guard let channel = s.text(3), let root = s.text(4) else { return nil }
             let label = String(MentionCodec.plain(s.text(1) ?? "").split(whereSeparator: \.isNewline).first ?? "").prefix(60)
@@ -116,6 +119,30 @@ extension StoreReader {
             let level = (s.text(3) ?? "").lowercased()
             let detail = level == "product" ? "Product" : level == "project" ? "Project" : level == "deliverable" ? "Deliverable" : "Scope"
             return MentionSuggestion(mention: Mention(type: .scope, npub: s.text(0)!, label: Self.label(s.text(1))), detail: detail, updatedAt: s.text(2) ?? "")
+        }
+        return out
+    }
+
+    /// What this person tagged most recently in this workspace, newest message first (and in order within a message), each
+    /// once: read from the `@[Label](mention:type:id)` tokens of their own stored messages, so existing history counts and
+    /// nothing new is stored. Feeds the bare `@` list.
+    public func recentMentions(workspaceId: String, senderNpub: String, limit: Int = 8, scan: Int = 300) throws -> [Mention] {
+        let s = try db.prepare("""
+            SELECT body FROM messages WHERE workspace_id = ?1 AND sender_npub = ?2 AND deleted = 0 AND body LIKE '%(mention:%'
+            ORDER BY created_at DESC, id DESC LIMIT ?3
+            """)
+        try s.bind([.text(workspaceId), .text(senderNpub), .int(Int64(scan))])
+        var seen = Set<String>(), out: [Mention] = []
+        while try s.step(), out.count < limit {
+            for mention in MentionRanking.mentions(inBody: s.text(0) ?? "") where seen.insert(mention.type.rawValue + ":" + mention.npub).inserted {
+                // Resolve each identity independently: an old but eligible record need not be in the
+                // truncated default results. Never reuse the historical label or resurrect removed rows.
+                if mention.type.isActor { out.append(mention) }
+                else if let current = try mentionSuggestions(workspaceId: workspaceId, query: MentionQuery(""), limit: 1, resolving: mention).first {
+                    out.append(current.mention)
+                }
+                if out.count >= limit { break }
+            }
         }
         return out
     }
@@ -146,14 +173,36 @@ public enum MentionRanking {
     /// People and agents from the directory (`actors`, each with extra text it also matches, such as the npub) and
     /// records, merged as the web orders them: grouped by kind in the web's order, an exact person or agent first;
     /// inside a kind, names starting with the text first, then the most recent.
-    public static func merge(actors: [(mention: Mention, also: String)], records: [MentionSuggestion], query: MentionQuery) -> [MentionSuggestion] {
+    /// The mentions a stored body carries, in order. People, agents and the picker's record kinds only; the web's
+    /// `document` spelling counts as `doc`.
+    public static func mentions(inBody body: String) -> [Mention] {
+        MentionCodec.segments(body).compactMap { segment in
+            switch segment {
+            case .mention(let mention): return mention
+            case .reference(let label, let kind, let id):
+                guard let type = MentionType(rawValue: kind == "document" ? "doc" : kind) else { return nil }
+                return Mention(type: type, npub: id, label: label)
+            case .text: return nil
+            }
+        }
+    }
+
+    public static func merge(actors: [(mention: Mention, also: String)], records: [MentionSuggestion], query: MentionQuery,
+                             recent: [Mention] = []) -> [MentionSuggestion] {
         let limit = query.limit
         let people = actors.filter { query.allows($0.mention.type) && (query.rank($0.mention.label) != nil || query.text.isEmpty
                                                                         || $0.also.range(of: query.text, options: .caseInsensitive) != nil) }
             .map { MentionSuggestion(mention: $0.mention, detail: $0.mention.type.label, updatedAt: "") }
         if query.text.isEmpty && query.only == nil {
-            // Bare `@` (sol getDefaultMentionResults): 2 people, the 3 most recent documents, then 2 of each other kind.
-            var out = Array(people.prefix(2))
+            // Bare `@`: what was tagged most recently comes first (people and agents only while the directory still lists
+            // them, under their current name), then sol's getDefaultMentionResults: 2 people, the 3 most recent documents,
+            // then 2 of each other kind.
+            let directory = Dictionary(actors.map { ($0.mention.npub, $0.mention) }, uniquingKeysWith: { first, _ in first })
+            var out: [MentionSuggestion] = recent.compactMap { mention in
+                if mention.type.isActor { return directory[mention.npub].map { MentionSuggestion(mention: $0, detail: $0.type.label, updatedAt: "") } }
+                return MentionSuggestion(mention: mention, detail: mention.type.label, updatedAt: "")
+            }
+            out += people.prefix(2)
             let byKind = Dictionary(grouping: records, by: \.mention.type)
             let quota: [MentionType: Int] = [.doc: 3, .task: 2, .chat: 2, .channel: 2, .scope: 2]
             for type in order where !type.isActor {

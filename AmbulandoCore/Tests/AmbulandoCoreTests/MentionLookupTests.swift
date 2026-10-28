@@ -60,7 +60,7 @@ final class MentionLookupTests: XCTestCase {
         XCTAssertFalse(MentionQuery("agent:").allows(.person))
         XCTAssertTrue(MentionQuery("flow:q4").unavailable, "flows are not stored on this device")
         XCTAssertFalse(MentionQuery("flow:q4").allows(.doc))
-        XCTAssertEqual(MentionQuery("").limit, 8)
+        XCTAssertEqual(MentionQuery("").limit, 15)
         XCTAssertEqual(MentionQuery("pl").limit, 10)
         XCTAssertEqual(MentionQuery("channel:").limit, 500)
         let q = MentionQuery("plan")
@@ -135,6 +135,108 @@ final class MentionLookupTests: XCTestCase {
         let bare = MentionRanking.merge(actors: [(rick, rick.npub), (ann, "npub1ann"), (ann, "dup")], records: records, query: MentionQuery(""))
         XCTAssertEqual(bare.map(\.mention.type), [.agent, .person, .doc, .doc, .channel])
         XCTAssertTrue(MentionRanking.merge(actors: [(rick, rick.npub)], records: records, query: MentionQuery("task:")).isEmpty)
+    }
+
+    // MARK: Recently tagged first
+
+    func testBareAtListsWhatWasTaggedMostRecentlyFirstAndFollowsTheDirectoryName() async throws {
+        let store = try LocalStore(directory: temporaryDirectory())
+        let brick = Mention(type: .agent, npub: "npub1brick", label: "Brick")
+        let ann = Mention(type: .person, npub: "npub1ann", label: "Ann")
+        let planned = Mention(type: .doc, npub: id(1), label: "Release plan")
+        func message(_ n: Int, _ body: String, at day: Int, from sender: String = TestKeys.npub) -> MessageRecord {
+            MessageRecord(workspaceId: w, id: id(100 + n), channelId: Fixtures.channel1, threadId: nil, threadSourceId: nil, body: body,
+                          senderNpub: sender, createdAt: String(format: "2026-10-%02dT00:00:00.000Z", day))
+        }
+        try await store.writer.upsertMessages([
+            message(1, "ping \(ann.token) please", at: 10),
+            message(2, "\(rick.token) and \(brick.token)", at: 12),
+            message(3, "see @[Release plan](mention:document:\(id(1)))", at: 11),
+            message(4, "\(rick.token) again", at: 13),
+            message(5, "\(ann.token) from someone else", at: 14, from: "npub1someoneelse"),
+            message(6, "no tags here", at: 15)])
+        try await store.writer.upsertChannels(workspaceId: w, scopeId: Fixtures.scopeA,
+            [try ChannelRecord(raw: Fixtures.json(Fixtures.channel(Fixtures.channel1, scope: Fixtures.scopeA, name: "general")))], complete: false)
+        try await store.writer.upsertDocs(workspaceId: w, [try doc(1, "Release plan")])
+        let recent = try await store.reader.recentMentions(workspaceId: w, senderNpub: TestKeys.npub)
+        XCTAssertEqual(recent.map(\.npub), [rick.npub, brick.npub, planned.npub, ann.npub], "newest message first, once each; the web's document spelling counts; others' messages do not")
+        XCTAssertEqual(recent.map(\.type), [.agent, .agent, .doc, .person])
+
+        // A deleted person is not offered; a renamed agent shows the directory's current name.
+        let renamed = Mention(type: .agent, npub: rick.npub, label: "Rick Renamed")
+        let bare = MentionRanking.merge(actors: [(ann, ann.npub), (renamed, rick.npub)], records: [], query: MentionQuery(""), recent: recent)
+        XCTAssertEqual(bare.map(\.mention.label), ["Rick Renamed", "Release plan", "Ann"], "Brick left the directory; Rick leads under the current name; the rest follow")
+        XCTAssertEqual(bare.first?.detail, "Agent")
+        // Typing narrows as before: recents only order the bare list.
+        XCTAssertEqual(MentionRanking.merge(actors: [(ann, ann.npub), (renamed, rick.npub)], records: [], query: MentionQuery("an"), recent: recent).map(\.mention.label), ["Ann"])
+    }
+
+    func testRecentRecordsResolveCurrentNamesAndEligibilityBeyondDefaultLimit() async throws {
+        let store = try LocalStore(directory: temporaryDirectory())
+        try await store.writer.upsertChannels(workspaceId: w, scopeId: Fixtures.scopeA,
+            [try ChannelRecord(raw: Fixtures.json(Fixtures.channel(Fixtures.channel1, scope: Fixtures.scopeA, name: "general")))], complete: false)
+        var docs = try (1...25).map { try doc($0, "Newer \($0)", updated: "2026-10-27T00:00:00.000Z") }
+        docs += [try doc(40, "Renamed old document", updated: "2026-10-01T00:00:00.000Z"), try doc(41, "Archived", archived: true)]
+        try await store.writer.upsertDocs(workspaceId: w, docs)
+        try await store.writer.upsertTasks(workspaceId: w, [try task(43, "Archived task", state: "archived")])
+        let root = id(45), thread = id(46)
+        try await store.writer.upsertThreads(workspaceId: w, [try ThreadRecord(raw: Fixtures.json([
+            "id": thread, "workspace_id": w, "channel_id": Fixtures.channel1, "source_message_id": root,
+            "title": "Deleted thread", "record_state": "deleted", "row_version": 1, "updated_at": "x"]))])
+        try await store.writer.upsertMessages([MessageRecord(workspaceId: w, id: root, channelId: Fixtures.channel1, threadId: thread, threadSourceId: root,
+            body: "Deleted root", senderNpub: TestKeys.npub, createdAt: "2026-10-20T00:00:00.000Z")])
+        let tags = [Mention(type: .doc, npub: id(40), label: "Old name"), Mention(type: .doc, npub: id(41), label: "Archived"),
+                    Mention(type: .doc, npub: id(42), label: "Absent"), Mention(type: .task, npub: id(43), label: "Archived task"),
+                    Mention(type: .chat, npub: "\(Fixtures.channel1)#\(root)", label: "Deleted thread")]
+        try await store.writer.upsertMessages([MessageRecord(workspaceId: w, id: id(50), channelId: Fixtures.channel1, threadId: nil, threadSourceId: nil,
+            body: tags.map(\.token).joined(separator: " "), senderNpub: TestKeys.npub, createdAt: "2026-10-28T00:00:00.000Z")])
+        let withDeletedThread = try await store.reader.recentMentions(workspaceId: w, senderNpub: TestKeys.npub)
+        XCTAssertEqual(withDeletedThread, [Mention(type: .doc, npub: id(40), label: "Renamed old document")])
+        // Archiving a thread also removes its recent reference, without deleting its messages.
+        try await store.writer.upsertThreads(workspaceId: w, [try ThreadRecord(raw: Fixtures.json([
+            "id": thread, "workspace_id": w, "channel_id": Fixtures.channel1, "source_message_id": root,
+            "title": "Archived thread", "record_state": "archived", "row_version": 2, "updated_at": "z"]))])
+        let defaults = try await store.reader.mentionSuggestions(workspaceId: w, query: MentionQuery(""), limit: 15)
+        XCTAssertFalse(defaults.contains { $0.mention.id == id(40) }, "the renamed record is outside the default search window")
+        let recent = try await store.reader.recentMentions(workspaceId: w, senderNpub: TestKeys.npub)
+        XCTAssertEqual(recent, [Mention(type: .doc, npub: id(40), label: "Renamed old document")])
+        let ranked = MentionRanking.merge(actors: [], records: defaults, query: MentionQuery(""), recent: recent)
+        XCTAssertEqual(ranked.first?.mention.label, "Renamed old document")
+    }
+
+    func testRecentMentionsAreCappedAndSkipDeletedMessages() async throws {
+        let store = try LocalStore(directory: temporaryDirectory())
+        var rows: [MessageRecord] = []
+        for n in 0..<12 {
+            rows.append(MessageRecord(workspaceId: w, id: id(200 + n), channelId: Fixtures.channel1, threadId: nil, threadSourceId: nil,
+                                      body: "@[Person \(n)](mention:person:npub1p\(n))", senderNpub: TestKeys.npub,
+                                      createdAt: String(format: "2026-10-%02dT00:00:00.000Z", 10 + n)))
+        }
+        try await store.writer.upsertMessages(rows)
+        let recent = try await store.reader.recentMentions(workspaceId: w, senderNpub: TestKeys.npub, limit: 8)
+        XCTAssertEqual(recent.map(\.label), (0..<8).map { "Person \(11 - $0)" })
+    }
+
+    func testPickedMentionClosesTheListAndTypingOnNeverReopensIt() {
+        let ann = Mention(type: .person, npub: "npub1ann", label: "Ann Lee")
+        XCTAssertEqual(MentionCodec.activeQuery(in: "@Ricky", excluding: [rick]), "Ricky")
+        XCTAssertEqual(MentionCodec.activeQuery(in: "@Rick and @Ricky", excluding: [rick]), "Ricky")
+        XCTAssertEqual(MentionCodec.activeQuery(in: "@Rick @", excluding: [rick]), "")
+        XCTAssertEqual(MentionCodec.activeQuery(in: "@Rick @Rick Smith", excluding: [rick]), "Rick Smith")
+        XCTAssertEqual(MentionCodec.activeQuery(in: "@Rick @Rick-Jones", excluding: [rick]), "Rick-Jones")
+        XCTAssertNil(MentionCodec.activeQuery(in: "@Rick, please", excluding: [rick]))
+        XCTAssertEqual(MentionCodec.activeQuery(in: "hi @An", excluding: [ann]), "An", "an unfinished @ is still a query")
+        let picked = MentionCodec.complete("hi @An", with: ann)
+        XCTAssertEqual(picked, "hi @Ann Lee ")
+        XCTAssertNotNil(MentionCodec.activeQuery(in: picked), "the plain query would stay open on the picked name")
+        XCTAssertNil(MentionCodec.activeQuery(in: picked, excluding: [ann]), "choosing the name closes the list")
+        XCTAssertNil(MentionCodec.activeQuery(in: picked + "and", excluding: [ann]), "typing the next word does not reopen it")
+        XCTAssertNil(MentionCodec.activeQuery(in: picked + "and then", excluding: [ann]))
+        XCTAssertEqual(MentionCodec.activeQuery(in: picked + "and @Ri", excluding: [ann]), "Ri", "a new @ after it is a query again")
+        // The visible name and the structured entry still come from the one picked value.
+        let (body, routed) = MentionCodec.encode(text: picked + "and then", selected: [ann])
+        XCTAssertEqual(body, "hi \(ann.token) and then")
+        XCTAssertEqual(routed, [ann])
     }
 
     /// The lookahead runs on every keystroke: with a large workspace stored locally it stays well inside a frame budget.

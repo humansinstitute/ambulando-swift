@@ -78,6 +78,9 @@ enum MacThreadRegression {
             }
             try press(window, "section.deck")
             await settle()
+            // Rich and composer checks need one selected channel before opening New thread.
+            model.selectContext(WorkContext(scopeId: FixtureTower.scopeAmbulando, channelId: FixtureTower.generalChannel))
+            await settle()
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacRichFormattingCheck") {
                 try await richFormattingCheck(window, model: model)
                 print("PASS: rich thread formatting, widths, menus and draft retention"); fflush(stdout); exit(0)
@@ -97,6 +100,11 @@ enum MacThreadRegression {
                 try await repeatedSends(window, model: model, count: ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMenuProbe") ? 1 : 5)
                 print("PASS: isolated repeated post-save interactions"); fflush(stdout); exit(0)
             }
+            // The Inbox read-actions menu is one small icon, not a pop-up button stretched across the card's header.
+            guard let readMenu = find(window, "deck.inbox.readMenu") else { throw Failure(description: "Missing Inbox read-actions menu") }
+            let menuFrame = frame(of: readMenu)
+            print("INBOX_MENU_FRAME width=\(menuFrame.width) height=\(menuFrame.height)")
+            try require(menuFrame.width > 0 && menuFrame.width <= 56 && menuFrame.height <= 48, "the Inbox read-actions menu must be compact (\(menuFrame))")
             try press(window, "deck.inbox.new")
             await settle()
             print("After +: composing=\(model.composingThread), focusedThread=\(model.focusedThread != nil), composerVisible=\(find(window, "deck.compose") != nil), backgroundAccessible=\(find(window, "section.deck") != nil), attachedSheet=\(window.attachedSheet != nil)")
@@ -107,8 +115,14 @@ enum MacThreadRegression {
             await settle()
             try press(window, "mention.Ana Lima")
             await settle()
-            let draft = try textView(window).string
+            var draft = try textView(window).string
             try require(draft.contains("@Ana"), "picked mention must appear in the native field")
+            try require(find(window, "mention.list") == nil, "choosing a mention must close the suggestions")
+            try type(window, "next words")
+            await settle()
+            try require(find(window, "mention.list") == nil, "typing after a picked mention must not reopen the suggestions")
+            try require(try textView(window).string.contains("@Ana Lima next words"), "the composer reads naturally after the pick")
+            draft = try textView(window).string
             try press(window, "deck.compose.cancel")
             await settle()
             try require(!model.composingThread && find(window, "section.chat") != nil, "cancel must restore background controls")
@@ -736,6 +750,12 @@ enum MacThreadRegression {
             if let match = find(child, id, depth: depth + 1) { return match }
         }
         return nil
+    }
+    static func frame(of node: NSObject) -> NSRect {
+        let selector = NSSelectorFromString("accessibilityFrame")
+        guard node.responds(to: selector) else { return .zero }
+        typealias Frame = @convention(c) (AnyObject, Selector) -> NSRect
+        return unsafeBitCast(node.method(for: selector), to: Frame.self)(node, selector)
     }
     static func press(_ window: NSWindow, _ id: String) throws {
         guard let node = find(window, id) else { throw Failure(description: "Missing control: \(id)") }
