@@ -394,9 +394,12 @@ AMBULANDO_LIVE_ORIGIN=https://<tower> swift test --package-path AmbulandoCore --
 signing teams, provisioning profiles, device identifiers or build output. Keep run evidence in the
 ignored `tmp/` directory or on the Flight Deck task.
 
-The brand artwork in `Ambulando/Assets.xcassets` is copied from `sol/public/ambulando`.
-`passage-app.png` and `passage-512.png` are byte-identical copies. The app icon is a `sips`
-proportional resample of `passage-master.png` (SHA-256 `8f3988cf…244b`) to 1024 px on its original
-opaque white backing. The Mac icon sizes (`AppIcon-mac-*.png`) are that icon inside the standard macOS rounded tile,
-rendered by `swiftc -o /tmp/mac-icon scripts/mac-icon.swift && /tmp/mac-icon <AppIcon-1024.png> <appiconset dir>`.
-The artwork retains its private provenance.
+The brand artwork in `Ambulando/Assets.xcassets` retains its private provenance.
+`passage-app.png` and `passage-512.png` remain byte-identical copies from `sol/public/ambulando`.
+The iOS app icon (build 34) uses the approved dark navy artwork, proportionally resized with
+`sips -z 1024 1024 <approved-square.png> --out Ambulando/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png`.
+It is opaque and full bleed. The catalog selects this single universal iOS master for both light and dark
+appearances; there are no appearance-specific or alternate iOS icons. Xcode generates the required device sizes.
+The separate Mac icon sizes (`AppIcon-mac-*.png`) retain the earlier white-backed artwork inside the standard
+macOS rounded tile. Do not regenerate them from the iOS master: `scripts/mac-icon.swift` is a separate Mac
+artwork workflow and must receive the intended Mac source explicitly.
