@@ -72,6 +72,10 @@ enum MacThreadRegression {
                 try await overnightCheck(window, model: model)
                 print("PASS: lightbox, canvas window and Board items"); fflush(stdout); exit(0)
             }
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacWikiLinkCheck") {
+                try await wikiLinkCheck(window, model: model)
+                print("PASS: wiki links open, ask, create and link in the Mac reader"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacChannelRegression") {
                 try await channelSends(window, model: model)
                 print("PASS: channel Messages repeated sends"); fflush(stdout); exit(0)

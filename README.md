@@ -19,6 +19,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Wiki links between documents (iPhone/iPad build 37, Mac build 26)
+
+- Links between documents work on iPhone, iPad and Mac: tap a link to open its page, tap a missing `[[Title]]` to create it in a
+  channel you choose and have it linked, type `[[` or use **Link to doc or note** to pick a page (this channel first, other
+  scopes on request, each result labelled Scope / channel), and **Move…** a document to another channel or scope with its access
+  consequences stated first. Links keep opening the same page after it is renamed or moved. A link never grants access.
+- Full behaviour, the contract it keeps and its limits: [docs/wiki-links.md](docs/wiki-links.md). Tested on sample data in the
+  simulator and the isolated Mac Test app; not checked against a live Tower. Installation status belongs to the release handoff.
+
 ## Chat links, mentions, reactions and thread titles (iPhone/iPad build 36, Mac build 25)
 
 - **Links are visible.** Web addresses (Markdown links and bare URLs) are blue and underlined in messages and documents.
@@ -167,7 +176,7 @@ large pasted crash reports. The iPhone/iPad composer is unchanged. See [Mac vali
 
 ## What this build does
 
-iPhone/iPad version 0.1.0 (36); Mac version 0.1.0 (25). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
+iPhone/iPad version 0.1.0 (37); Mac version 0.1.0 (26). You import your own `nsec` (sealed with a PIN plus a device-only Keychain secret),
 enter your Tower's HTTPS origin, and the app reads the public nStack descriptor. It then lists your
 workspaces, scopes (in your personal scope order, collapsible) and channels, and stores them locally.
 

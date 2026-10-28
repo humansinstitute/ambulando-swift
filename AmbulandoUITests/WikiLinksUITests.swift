@@ -60,13 +60,24 @@ final class WikiLinksUITests: XCTestCase {
         XCTAssertTrue(app.pickers["wiki.destination"].exists || app.buttons["wiki.destination"].exists || app.staticTexts["Create in"].exists)
         attach(app, "wiki-create-sheet")
         confirm.tap()
-        XCTAssertTrue(app.staticTexts["wiki.banner"].waitForExistence(timeout: 10) || app.otherElements["wiki.banner"].waitForExistence(timeout: 10))
-        // Back in the list, the new page exists exactly once.
+        // The page is made, linked into the hub, and opened for the person who is still on the hub.
+        let title = app.textFields["editor.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 30), "the created page opened")
+        XCTAssertEqual(title.value as? String, "Fresh page")
+        attach(app, "wiki-created-page-open")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        // Back on the hub the text is a stable link to that page: tapping it opens it, with no second offer to create.
+        let again = link(app, "Fresh page")
+        XCTAssertTrue(again.waitForExistence(timeout: 20))
+        again.tap()
+        XCTAssertFalse(app.buttons["wiki.create.confirm"].waitForExistence(timeout: 3), "no second creation offer")
+        XCTAssertEqual(app.textFields["editor.title"].value as? String, "Fresh page")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         app.buttons["editor.close"].tap()
         if app.buttons["editor.keepDraft"].waitForExistence(timeout: 3) { app.buttons["editor.keepDraft"].firstMatch.tap() }
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.buttons["doc.Fresh page"].waitForExistence(timeout: 30), "the page was created")
-        XCTAssertEqual(app.buttons.matching(identifier: "doc.Fresh page").count, 1)
+        XCTAssertTrue(app.buttons["doc.Fresh page"].waitForExistence(timeout: 30))
+        XCTAssertEqual(app.buttons.matching(identifier: "doc.Fresh page").count, 1, "exactly one page was made")
     }
 
     func testToolbarPickerSearchesThisChannelFirstShowsPlacesAndOffersEverywhere() {
