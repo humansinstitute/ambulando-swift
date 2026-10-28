@@ -286,6 +286,49 @@ extension StoreWriter {
         await emit([ChangeKey(.docDrafts, draft.workspaceId)])
     }
 
+    /// Replaces a draft only if it is still exactly `expected` (same body, base and state), in one statement, so a later edit
+    /// made while a caller was awaiting the network is never overwritten by an older snapshot. False: it changed; nothing written.
+    @discardableResult
+    public func replaceDocDraft(ifUnchanged expected: DocDraft, with next: DocDraft) async throws -> Bool {
+        try db.prepare("""
+        UPDATE doc_drafts SET title = ?, body = ?, content_type = ?, base_row_version = ?, base_sha256 = ?, base_storage_object_id = ?, state = ?,
+          last_error = ?, recovery_id = ?, updated_at = ?
+        WHERE key = ? AND body = ? AND base_row_version = ? AND base_sha256 = ? AND state = ? AND title = ?
+        """).run([.text(next.title), .blob(next.body), .text(next.contentType), .int(Int64(next.baseRowVersion)), .text(next.baseSha256),
+                  .text(next.baseStorageObjectId), .text(next.state.rawValue), next.lastError.sql, next.recoveryId.sql, .text(now()),
+                  .text(expected.key), .blob(expected.body), .int(Int64(expected.baseRowVersion)), .text(expected.baseSha256),
+                  .text(expected.state.rawValue), .text(expected.title)])
+        let changed = db.changes > 0
+        if changed { await emit([ChangeKey(.docDrafts, next.workspaceId)]) }
+        return changed
+    }
+
+    /// Moves a draft's base to a new row version only while it is still based on `from` (a document move changes the row
+    /// version, not the text). The body is never touched. False: no such draft, or it is based on another version.
+    @discardableResult
+    public func rebaseDocDraft(key: String, workspaceId: String, from: Int, to: Int) async throws -> Bool {
+        try db.prepare("UPDATE doc_drafts SET base_row_version = ?, updated_at = ? WHERE key = ? AND base_row_version = ?")
+            .run([.int(Int64(to)), .text(now()), .text(key), .int(Int64(from))])
+        let changed = db.changes > 0
+        if changed { await emit([ChangeKey(.docDrafts, workspaceId)]) }
+        return changed
+    }
+
+    /// Stores a draft only if none exists yet (a clean document's first draft). False: another draft appeared first.
+    @discardableResult
+    public func insertDocDraftIfAbsent(_ draft: DocDraft) async throws -> Bool {
+        try db.prepare("""
+        INSERT INTO doc_drafts(key, connection_id, workspace_id, doc_id, title, body, content_type, base_row_version, base_sha256,
+                               base_storage_object_id, state, last_error, recovery_id, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(key) DO NOTHING
+        """).run([.text(draft.key), .text(draft.connectionId), .text(draft.workspaceId), .text(draft.docId), .text(draft.title), .blob(draft.body),
+                  .text(draft.contentType), .int(Int64(draft.baseRowVersion)), .text(draft.baseSha256), .text(draft.baseStorageObjectId),
+                  .text(draft.state.rawValue), draft.lastError.sql, draft.recoveryId.sql, .text(now())])
+        let changed = db.changes > 0
+        if changed { await emit([ChangeKey(.docDrafts, draft.workspaceId)]) }
+        return changed
+    }
+
     public func deleteDocDraft(key: String, workspaceId: String) async throws {
         try db.prepare("DELETE FROM doc_drafts WHERE key = ?").run([.text(key)])
         await emit([ChangeKey(.docDrafts, workspaceId)])

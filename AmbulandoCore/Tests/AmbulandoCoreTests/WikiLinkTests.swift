@@ -264,7 +264,7 @@ final class WikiMoveTests: XCTestCase {
         let id = try await seed(h)
         let destination = try await channel(h, Fixtures.channel2)
         let result = await h.saver.move(docId: id, to: destination, rowVersion: 1, connection: h.connection, workspace: h.workspace)
-        guard case .moved(let doc) = result else { return XCTFail("not moved: \(result)") }
+        guard case .moved(let doc, _) = result else { return XCTFail("not moved: \(result)") }
         XCTAssertEqual(doc.id, id)
         XCTAssertEqual(doc.channelId, Fixtures.channel2)
         XCTAssertEqual(doc.rowVersion, 2)
@@ -299,17 +299,80 @@ final class WikiMoveTests: XCTestCase {
         XCTAssertEqual(cached?.channelId, Fixtures.channel1)
     }
 
-    func testOfflineMoveIsNotQueuedAndSaysNothingMoved() async throws {
+    func testOfflineMoveIsNotQueuedAndTowerIsAskedWhereTheDocumentIs() async throws {
         let h = try await WorkHarness.make()
         let id = try await seed(h)
         h.work.inject(.offline, matching: "/move")
         let result = await h.saver.move(docId: id, to: try await channel(h, Fixtures.channel2), rowVersion: 1, connection: h.connection, workspace: h.workspace)
+        // The request failed, the read-back works: Tower confirms the document never moved.
         guard case .notMoved(let message) = result else { return XCTFail("expected notMoved: \(result)") }
-        XCTAssertTrue(message.contains("nothing was changed"))
+        XCTAssertTrue(message.contains("still has the document where it was"))
         let queued = try await h.pending()
         XCTAssertTrue(queued.isEmpty, "a move is never queued for a blind retry")
         let cached = try await h.store.reader.doc(workspaceId: h.workspace.id, id: id)
         XCTAssertEqual(cached?.channelId, Fixtures.channel1)
+        XCTAssertEqual(h.transport.recorded.filter { $0.url?.path.hasSuffix("/move") == true }.count, 1, "no automatic second attempt")
+    }
+
+    func testLostResponseAfterTowerAcceptedIsReconciledAsMovedByReadingTheDocument() async throws {
+        let h = try await WorkHarness.make()
+        let id = try await seed(h)
+        h.work.inject(.dropResponseAfterCommit, matching: "/move")
+        let result = await h.saver.move(docId: id, to: try await channel(h, Fixtures.channel2), rowVersion: 1, connection: h.connection, workspace: h.workspace)
+        guard case .moved(let doc, _) = result else { return XCTFail("expected moved after read-back: \(result)") }
+        XCTAssertEqual(doc.channelId, Fixtures.channel2)
+        let cached = try await h.store.reader.doc(workspaceId: h.workspace.id, id: id)
+        XCTAssertEqual(cached?.channelId, Fixtures.channel2)
+        XCTAssertEqual(h.transport.recorded.filter { $0.url?.path.hasSuffix("/move") == true }.count, 1, "the move was not sent twice")
+    }
+
+    func testServerErrorWhoseOutcomeCannotBeReadBackIsReportedUnknownNotUnchanged() async throws {
+        let h = try await WorkHarness.make()
+        let id = try await seed(h)
+        h.work.inject(.status(503, "unavailable"), matching: "/move")
+        h.work.inject(.offline, matching: "/docs/\(id)")   // the read-back fails too
+        let result = await h.saver.move(docId: id, to: try await channel(h, Fixtures.channel2), rowVersion: 1, connection: h.connection, workspace: h.workspace)
+        guard case .unknown(let message) = result else { return XCTFail("expected unknown: \(result)") }
+        XCTAssertFalse(message.contains("nothing was changed"))
+        XCTAssertTrue(message.contains("not known whether the document moved"))
+    }
+
+    func testDraftCompareAndSetNeverOverwritesALaterEdit() async throws {
+        let h = try await WorkHarness.make()
+        let id = try await seed(h)
+        let stored = try await h.store.reader.docBody(workspaceId: h.workspace.id, docId: id)
+        let cached = try XCTUnwrap(stored)
+        let first = DocDraft(connectionId: h.connection.id, workspaceId: h.workspace.id, docId: id, title: "Plan", body: Data("one".utf8), contentType: "text/markdown",
+                             baseRowVersion: 1, baseSha256: cached.sha256, baseStorageObjectId: cached.storageObjectId, state: .editing)
+        try await h.store.writer.saveDocDraft(first)
+        // The editor saves newer text while a move (or a link binding) was in flight.
+        let later = DocDraft(connectionId: first.connectionId, workspaceId: first.workspaceId, docId: id, title: "Plan", body: Data("two, typed meanwhile".utf8),
+                             contentType: "text/markdown", baseRowVersion: 1, baseSha256: cached.sha256, baseStorageObjectId: cached.storageObjectId, state: .editing)
+        try await h.store.writer.saveDocDraft(later)
+        let replaced = try await h.store.writer.replaceDocDraft(ifUnchanged: first, with: first.with(state: .failed, error: "stale snapshot"))
+        XCTAssertFalse(replaced, "the older snapshot is refused")
+        let current = try await h.store.reader.docDraft(key: first.key)
+        XCTAssertEqual(current?.body, later.body)
+        // A re-base touches only the base version, and only while the draft is based on the version that moved.
+        let rebased = try await h.store.writer.rebaseDocDraft(key: first.key, workspaceId: first.workspaceId, from: 1, to: 2)
+        let again = try await h.store.writer.rebaseDocDraft(key: first.key, workspaceId: first.workspaceId, from: 1, to: 3)
+        XCTAssertTrue(rebased); XCTAssertFalse(again)
+        let after = try await h.store.reader.docDraft(key: first.key)
+        XCTAssertEqual(after?.baseRowVersion, 2)
+        XCTAssertEqual(after?.body, later.body)
+    }
+
+    func testSavingDraftBlocksTheMove() async throws {
+        let h = try await WorkHarness.make()
+        let id = try await seed(h)
+        let stored = try await h.store.reader.docBody(workspaceId: h.workspace.id, docId: id)
+        let cached = try XCTUnwrap(stored)
+        let saving = DocDraft(connectionId: h.connection.id, workspaceId: h.workspace.id, docId: id, title: "Plan", body: cached.bytes, contentType: cached.contentType,
+                              baseRowVersion: 1, baseSha256: cached.sha256, baseStorageObjectId: cached.storageObjectId, state: .saving)
+        try await h.store.writer.saveDocDraft(saving)
+        let result = await h.saver.move(docId: id, to: try await channel(h, Fixtures.channel2), rowVersion: 1, connection: h.connection, workspace: h.workspace)
+        guard case .notMoved = result else { return XCTFail("expected notMoved: \(result)") }
+        XCTAssertFalse(h.transport.recorded.contains { $0.url?.path.hasSuffix("/move") == true })
     }
 
     func testDraftOnTheMovedVersionSurvivesAndSavesWithoutAConflict() async throws {

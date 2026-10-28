@@ -32,6 +32,9 @@ public enum WikiCreate {
     }
 }
 
+/// The source changed while the link was being added; the caller keeps its write queued and tries again on the new text.
+public enum WikiBindError: Error, Equatable, Sendable { case sourceChanged }
+
 public enum WikiBindOutcome: Sendable, Equatable {
     /// Nothing referred to the title any more (already linked, or edited away): nothing to do.
     case alreadyBound
@@ -80,7 +83,11 @@ public enum WikiBinder {
         } else {
             return .sourceNotSaved
         }
-        try await store.writer.saveDocDraft(draft)
+        // Written only if nothing changed the draft since it was read: edits made meanwhile are never overwritten.
+        let stored: Bool
+        if let existingDraft { stored = try await store.writer.replaceDocDraft(ifUnchanged: existingDraft, with: draft) }
+        else { stored = try await store.writer.insertDocDraftIfAbsent(draft) }
+        guard stored else { throw WikiBindError.sourceChanged }
         // Someone's own unsaved edits are not uploaded behind their back; a clean source is saved right away.
         if let existingDraft {
             return .keptInDraft(existingDraft.lastError ?? "The link was added to your unsaved edits on this device.")
