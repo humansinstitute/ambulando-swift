@@ -846,11 +846,46 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             w.seedDoc(scope: a, channel: design, title: "Release board (Markdown)", body: Data(markdown.utf8), contentType: "text/markdown")
         }
 
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureWiki") { seedWikiDocuments(w) }
+
         seedNotificationsIfNeeded(task: review, doc: plan)
         w.seedViewState(type: "task", resource: review, scope: a, channel: general, activity: 3, viewed: 1, attention: 3)
         w.seedViewState(type: "document", resource: plan, scope: a, channel: general, activity: 2, viewed: 1)
         w.seedViewState(type: "thread", resource: Self.uuid(39, "f1c7bbbb"), scope: a, channel: general, activity: 4, viewed: 2)
         w.markSeeded()
+    }
+
+    static let wikiTarget = "f1c70000-0000-4000-8000-0000000000d1"
+    static let wikiHub = "f1c70000-0000-4000-8000-0000000000d2"
+
+    /// Disposable documents for wiki-link checks (`-AmbulandoFixtureWiki`): a hub that links to an existing page by its stable id,
+    /// to a missing page, to a title two pages share, and has the same text inside code; a page in another scope; a markdown hub.
+    func seedWikiDocuments(_ w: SampleWorkTower) {
+        let a = Self.scopeAmbulando, ops = Self.scopeOps, general = Self.generalChannel, design = Self.designChannel, deploys = Self.deploysChannel
+        func t(_ s: String, _ marks: [String] = []) -> JSONValue {
+            var pairs: [(String, JSONValue)] = [("type", .string("text")), ("text", .string(s))]
+            if !marks.isEmpty { pairs.append(("marks", .array(marks.map { .object([("type", .string($0))]) }))) }
+            return .object(pairs)
+        }
+        func para(_ content: [JSONValue]) -> JSONValue { .object([("type", .string("paragraph")), ("content", .array(content))]) }
+        func rich(_ blocks: [JSONValue]) -> Data {
+            let state = JSONValue.object([("type", .string("doc")), ("content", .array(blocks))])
+            return JSONValue.object([("format", .string(DocumentBody.envelopeFormat)),
+                                     ("content_model", .object(ProseMirrorMarkdown.contentModelFields(state)))]).serialized()
+        }
+        func plain(_ text: String) -> Data { rich([para([t(text)])]) }
+        w.seedDoc(id: Self.wikiTarget, scope: a, channel: general, title: "Wiki target", body: plain("The page the stable link points at."), contentType: DocumentBody.envelopeContentType)
+        w.seedDoc(scope: a, channel: design, title: "Twin", body: plain("First twin."), contentType: DocumentBody.envelopeContentType)
+        w.seedDoc(scope: a, channel: design, title: "Twin", body: plain("Second twin."), contentType: DocumentBody.envelopeContentType)
+        w.seedDoc(scope: ops, channel: deploys, title: "Ops runbook", body: plain("Lives in another scope."), contentType: DocumentBody.envelopeContentType)
+        let link = JSONValue.object([("type", .string("fdWikiLink")), ("attrs", .object([("documentId", .string(Self.wikiTarget)), ("title", .string("Old target name"))]))])
+        w.seedDoc(id: Self.wikiHub, scope: a, channel: design, title: "Wiki hub", body: rich([
+            para([t("Open "), link, t(".")]),
+            para([t("Create [[Fresh page]] from here.")]),
+            para([t("Pick one of [[Twin]].")]),
+            para([t("Keep "), t("[[Literal in code]]", ["code"]), t(" as it is.")]),
+        ]), contentType: DocumentBody.envelopeContentType)
+        w.seedDoc(scope: a, channel: design, title: "Wiki hub (Markdown)", body: Data("Open [Old target name](wiki:\(Self.wikiTarget)) and [[Fresh markdown page]] and `[[Literal in code]]`.".utf8), contentType: "text/markdown")
     }
 
     /// A realistic inbox: a mention in a conversation (three updates), an assignment, a document comment tag, a direct message,

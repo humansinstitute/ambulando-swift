@@ -86,6 +86,7 @@ struct RichBlocksView: View {
     var muted = false
     var workspace: WorkspaceRecord?
     @Environment(\.openMention) private var openMention
+    @Environment(\.openWiki) private var openWiki
     @Environment(\.openURL) private var parentOpenURL
 
     var body: some View {
@@ -98,6 +99,7 @@ struct RichBlocksView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .environment(\.openURL, OpenURLAction { url in
             if let target = RichLinks.mentionTarget(url) { openMention(kind: target.kind, id: target.id); return .handled }
+            if let target = RichLinks.wikiTarget(url) { openWiki(target); return .handled }
             guard RichLinks.isSafeWeb(url) else { return .discarded }
             parentOpenURL(url)
             return .handled
@@ -444,6 +446,11 @@ enum InlineText {
                 part.link = url
                 part.foregroundColor = Amb.link
                 part.underlineStyle = .single
+            }
+            if let wiki = run.wiki, let url = RichLinks.wikiURL(wiki) {
+                part.link = url
+                part.foregroundColor = Amb.link
+                part.underlineStyle = wiki.documentId == nil ? Text.LineStyle(pattern: .dash) : .single
             }
             if run.mention {
                 part.foregroundColor = run.mentionKind == "person" || run.mentionKind == "agent" || run.mentionKind == nil ? Amb.primary : Amb.info

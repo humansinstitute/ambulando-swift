@@ -328,9 +328,9 @@ Object.defineProperty(window, 'ambulandoDocument', {
       return result.state === 'found';
     },
     focus() { editor?.commands.focus(); return true; },
-    /// Puts a link where the `[[` query was (or at the selection). `json`: {documentId|null, title, from?, to?}.
+    /// Puts a link where the `[[` query was (or at the selection). `json`: {documentId|null, title, from?, to?}. Returns the new link's occurrence (-1: bound).
     wikiInsert(json) {
-      if (!editor) return false;
+      if (!editor) return null;
       touched = true;
       return insertWikiLink(editor, JSON.parse(json));
     },

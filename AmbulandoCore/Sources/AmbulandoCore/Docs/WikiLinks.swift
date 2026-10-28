@@ -125,7 +125,7 @@ public enum WikiLinks {
 
     // MARK: Resolution
 
-    static func normalized(_ title: String) -> String { title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+    public static func normalized(_ title: String) -> String { title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
 
     /// Resolves one reference. Ids are looked up by id alone, whatever channel or scope the document is in now; a title
     /// is matched only among the source channel's pages (default local matching).

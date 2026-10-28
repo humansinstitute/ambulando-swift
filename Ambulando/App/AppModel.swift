@@ -361,6 +361,9 @@ final class AppModel {
                 // The sync job is the only reader of the inbox: it picks up the item versions Tower produced.
                 guard let workspace = try? await store.reader.workspaces(connectionId: connection.id).first(where: { $0.id == workspaceId }) else { return }
                 await sync.refreshNotifications(connection, workspace, priority: .background)
+            }, afterWikiCreate: { [weak self] connection, item, created in
+                // "Create and link": the new page's id goes into its source document before the write is retired.
+                try await self?.bindCreatedWikiPage(connection, item, created)
             })
             self.notificationActions = self.writes.map { NotificationActions(store: store, writes: $0) }
             #if os(iOS)

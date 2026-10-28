@@ -49,6 +49,11 @@ struct DocumentSelectableText: NSViewRepresentable {
                 attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
             }
             if let kind = run.mentionKind, let id = run.mentionId { attrs[.link] = RichLinks.mentionURL(kind: kind, id: id) }
+            if let wiki = run.wiki, let url = RichLinks.wikiURL(wiki) {
+                attrs[.link] = url
+                attrs[.foregroundColor] = NSColor(Amb.link)
+                attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue | (wiki.documentId == nil ? NSUnderlineStyle.patternDash.rawValue : 0)
+            }
             result.append(NSAttributedString(string: run.text, attributes: attrs))
         }
         let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = 5

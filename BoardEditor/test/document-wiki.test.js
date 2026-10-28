@@ -61,10 +61,10 @@ test('binding without an occurrence binds every match; nothing matching changes 
 test('insert replaces the typed query range with a link and falls back to the selection for a stale range', () => {
   const editor = fakeEditor(doc(para(text('See [[Das'))));
   const start = editor.state.doc.textContent.indexOf('[[') + 1;
-  insertWikiLink(editor, { documentId: 'd1', title: 'Dashboard', from: start, to: start + 5 });
+  expect(insertWikiLink(editor, { documentId: 'd1', title: 'Dashboard', from: start, to: start + 5 })).toBe(-1);
   expect(editor.state.doc.toJSON().content[0].content.map((node) => node.text ?? node.attrs.title).join('')).toBe('See Dashboard');
   expect(collectWikiRefs(editor.state.doc)[0]).toMatchObject({ kind: 'node', documentId: 'd1', title: 'Dashboard' });
-  insertWikiLink(editor, { documentId: null, title: 'New page', from: 9999, to: 10000 });
+  expect(insertWikiLink(editor, { documentId: null, title: 'New page', from: 9999, to: 10000 })).toBe(0);
   expect(collectWikiRefs(editor.state.doc).some((ref) => ref.documentId === null && ref.title === 'New page')).toBe(true);
 });
 

@@ -31,12 +31,17 @@ final class DocEditorModel: UploadTokenHost {
     /// Upload placeholders this session put into the page; the page's next change event may not have arrived yet.
     private(set) var insertedTokens: [String] = []
 
+    /// The `[[` the person is typing in the page (query text and the range to replace), while a link search is open.
+    var wikiQuery: WikiQuery?
+
     @ObservationIgnored let doc: DocRecord
     @ObservationIgnored let workspace: WorkspaceRecord
     @ObservationIgnored let store: LocalStore
     @ObservationIgnored let connection: ConnectionRecord
     @ObservationIgnored private weak var app: AppModel?
     @ObservationIgnored weak var page: DocumentEditorPage?
+    /// Opens, creates and picks wiki links for this document; set by the screen that shows the editor.
+    @ObservationIgnored weak var wiki: WikiLinkController?
     @ObservationIgnored private var body: DocumentBody?
     @ObservationIgnored private var original: JSONValue?
     @ObservationIgnored private var payload: String?
@@ -93,7 +98,22 @@ final class DocEditorModel: UploadTokenHost {
     // MARK: Page
 
     func pageAttached() {
+        // A page created again (the screen came back from a linked document) opens on the latest edit, not the stored text.
+        if !content.isEmpty { rebuildPayloadFromContent() }
         if let payload { page?.load(payload) }
+        WikiEditors.register(self)
+    }
+
+    /// The load message for the page, from the latest edit it reported.
+    private func rebuildPayloadFromContent() {
+        guard !content.isEmpty else { return }
+        switch mode {
+        case .rich:
+            if let state = try? JSONValue.parse(Data(content.utf8)) { payload = Self.payload([("mode", .string("rich")), ("state", state)]) }
+        case .markdown:
+            payload = Self.payload([("mode", .string("markdown")), ("markdown", .string(content))])
+        default: break
+        }
     }
 
     func pageLoaded(ok: Bool, message: String?) {
@@ -105,6 +125,7 @@ final class DocEditorModel: UploadTokenHost {
             #endif
             // Uploads for this document (also ones that finished while it was closed) apply once the page has it.
             app?.uploads?.attach(self)
+            wiki?.pushTitles()
             #if DEBUG
             if app?.fixture != nil, ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDocBridgeProbe") { page?.probeBridge() }
             #endif
@@ -120,6 +141,51 @@ final class DocEditorModel: UploadTokenHost {
     }
 
     func pageError(_ message: String) { setStatus(message, .error) }
+
+    // MARK: Wiki links in the page
+
+    /// A link was opened in the page (`activate`), or the page reported a problem with one.
+    func pageWiki(_ message: [String: Any]) {
+        switch message["action"] as? String {
+        case "activate":
+            let id = (message["documentId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let title = (message["title"] as? String) ?? ""
+            let range = (message["from"] as? Int).flatMap { from in (message["to"] as? Int).map { WikiEditorRange(from: from, to: $0) } }
+            wiki?.activate(WikiTarget(documentId: id, title: title, occurrence: message["occurrence"] as? Int ?? 0), range: range)
+        case "error":
+            if let text = message["message"] as? String { setStatus(text, .warning) }
+        default: break
+        }
+    }
+
+    func pageWikiQuery(_ message: [String: Any]) {
+        guard message["active"] as? Bool == true, let from = message["from"] as? Int, let to = message["to"] as? Int else { wikiQuery = nil; return }
+        wikiQuery = WikiQuery(text: message["query"] as? String ?? "", range: WikiEditorRange(from: from, to: to))
+    }
+
+    /// Binds a created page into this open page and makes the result a durable draft before the creation write is retired.
+    /// False: the page is not ready, so the caller keeps the write queued and tries again.
+    func bindWiki(title: String, documentId: String, occurrence: Int?) async -> Bool {
+        guard pageReady, let page, let count = await page.wikiBind(title: title, documentId: documentId, occurrence: occurrence) else { return false }
+        if count > 0 {
+            dirty = true
+            _ = await persistDraft(state: .editing)
+        }
+        return true
+    }
+
+    /// The document moved: its drafts and the next save are based on the version the move produced.
+    func rebase(rowVersion: Int) {
+        if let current = base { base = (rowVersion, current.sha, current.object) }
+    }
+
+    /// Back on screen after another document was shown: the lease and upload results are taken up again.
+    func reopen() {
+        guard pageReady else { return }
+        holdLease()
+        app?.uploads?.attach(self)
+        WikiEditors.register(self)
+    }
 
     /// The page's process ended; it reloads and gets the latest edit back (the draft, or what it last reported).
     func pageTerminated() {
@@ -174,6 +240,7 @@ final class DocEditorModel: UploadTokenHost {
 
     /// Ends the session: stops renewing, releases the lease and stops receiving upload results.
     func close() {
+        WikiEditors.unregister(self)
         debounce?.cancel()
         renew?.cancel()
         imagePoll?.cancel()

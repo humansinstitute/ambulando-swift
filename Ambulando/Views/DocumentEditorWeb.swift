@@ -106,6 +106,44 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
 
     func focus() { call("focus") }
 
+    // MARK: Wiki links
+
+    /// Current titles of the pages links point at (id → title), so a renamed page shows its new name in the editor.
+    func setWikiTitles(_ titles: [String: String]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: titles, options: [.sortedKeys]) else { return }
+        call("wikiTitles", String(decoding: data, as: UTF8.self))
+    }
+
+    /// Puts a link at `range` (the typed `[[` query) or at the selection. Returns which same-title title-only link it is
+    /// (reading order), -1 for a bound link, nil when the page is not available.
+    func wikiInsert(documentId: String?, title: String, range: (from: Int, to: Int)?) async -> Int? {
+        var request: [String: Any] = ["title": title, "documentId": documentId ?? NSNull()]
+        if let range { request["from"] = range.from; request["to"] = range.to }
+        guard let data = try? JSONSerialization.data(withJSONObject: request), let webView else { return nil }
+        let result = try? await webView.callAsyncJavaScript("return window.ambulandoDocument ? window.ambulandoDocument.wikiInsert(a0) : null",
+                                                            arguments: ["a0": String(decoding: data, as: UTF8.self)], contentWorld: .page)
+        return (result as? NSNumber)?.intValue
+    }
+
+    /// Gives this page's unresolved links titled `title` the created page's id; the count bound (nil: no page to ask).
+    func wikiBind(title: String, documentId: String, occurrence: Int?) async -> Int? {
+        let request: [String: Any] = ["title": title, "documentId": documentId, "occurrence": occurrence ?? NSNull()]
+        guard ready, let data = try? JSONSerialization.data(withJSONObject: request), let webView else { return nil }
+        let result = try? await webView.callAsyncJavaScript("return window.ambulandoDocument ? window.ambulandoDocument.wikiBind(a0) : null",
+                                                            arguments: ["a0": String(decoding: data, as: UTF8.self)], contentWorld: .page)
+        return (result as? NSNumber)?.intValue
+    }
+
+    /// The selection in the page, for the toolbar link command.
+    func wikiSelection() async -> (from: Int, to: Int, text: String)? {
+        guard ready, let webView else { return nil }
+        let result = try? await webView.callAsyncJavaScript("return window.ambulandoDocument ? window.ambulandoDocument.wikiSelection() : null",
+                                                            arguments: [:], contentWorld: .page)
+        guard let text = result as? String, let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
+              let from = object["from"] as? Int, let to = object["to"] as? Int else { return nil }
+        return (from, to, object["text"] as? String ?? "")
+    }
+
     func reveal(_ anchor: DocumentAnchor) {
         guard let data = try? JSONSerialization.data(withJSONObject: anchor.metadata) else { return }
         call("reveal", String(decoding: data, as: UTF8.self))
@@ -194,6 +232,10 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
             if let id = object["objectId"] as? String { editor?.pageNeedsImage(id) }
         case "paste-files":
             editor?.pageAnnouncedPaste(skipped: object["skipped"] as? Int ?? 0, tooLarge: object["tooLarge"] as? Int ?? 0)
+        case "wiki":
+            editor?.pageWiki(object)
+        case "wiki-query":
+            editor?.pageWikiQuery(object)
         case "error":
             editor?.pageError(object["message"] as? String ?? "The editor reported an error.")
         default:

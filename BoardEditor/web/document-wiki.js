@@ -52,8 +52,8 @@ export function refAt(doc, pos) {
   return collectWikiRefs(doc).find((ref) => pos >= ref.from && pos <= ref.to) || null;
 }
 
-/// Replaces `[from, to)` (or the selection) with a link node. `documentId` null makes a title-only link, which the app then
-/// resolves or creates.
+/// Replaces `[from, to)` (or the selection) with a link node and returns which same-title title-only reference it is (reading
+/// order), or -1 for a bound link. `documentId` null makes a title-only link, which the app then resolves or creates.
 export function insertWikiLink(editor, { documentId = null, title, from, to }) {
   const size = editor.state.doc.content.size;
   const range = Number.isInteger(from) && Number.isInteger(to) && from >= 0 && to <= size && from <= to
@@ -62,7 +62,10 @@ export function insertWikiLink(editor, { documentId = null, title, from, to }) {
   const tr = editor.state.tr.replaceWith(range.from, range.to, node);
   editor.view.dispatch(tr.scrollIntoView());
   editor.view.focus();
-  return true;
+  if (documentId) return -1;
+  const refs = collectWikiRefs(editor.state.doc);
+  const mine = refs.find((ref) => ref.kind === 'node' && ref.from === range.from);
+  return mine ? occurrenceOf(refs, mine) : 0;
 }
 
 /// Gives the page's unresolved links titled `title` the created page's id (one occurrence, or all when `occurrence` is null).

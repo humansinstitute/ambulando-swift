@@ -151,6 +151,8 @@ struct DocumentSnapshot: Sendable, Equatable {
     var pendingComments: [WriteItem] = []
     var names: [String: String] = [:]
     var choice = ScopeChoice()
+    /// Current titles of every page saved here (id → title): wiki links show these, and the editor page is given them.
+    var titles: [String: String] = [:]
 }
 
 /// A document as a white page on a faint lavender surround. iPhone/iPad open straight into formatted editing with
@@ -162,6 +164,7 @@ struct DocumentView: View {
     let workspace: WorkspaceRecord
     let store: LocalStore
     @State private var snapshot = LiveQuery<DocumentSnapshot>(initial: DocumentSnapshot())
+    @State private var wiki: WikiLinkController
     @State private var editor: DocEditorModel?
     @State private var showingComments = false
     @State private var automaticEditing = true
@@ -170,6 +173,11 @@ struct DocumentView: View {
     @State private var replyTo: CommentRecord?
     @State private var revealed: DocumentAnchor?
     @State private var revealRevision = 0
+
+    init(docId: String, workspace: WorkspaceRecord, store: LocalStore) {
+        self.docId = docId; self.workspace = workspace; self.store = store
+        _wiki = State(initialValue: WikiLinkController(workspace: workspace, sourceDocId: docId, store: store))
+    }
 
     private var canEdit: Bool { snapshot.value.editable || snapshot.value.draft != nil }
 
@@ -180,13 +188,33 @@ struct DocumentView: View {
         .inlineTitle()
         .toolbar {
             ToolbarItem(placement: .trailingBar) {
-                if editor == nil {
-                    Button(snapshot.value.draft == nil ? "Edit" : "Continue editing") { beginEditing() }
-                        .disabled(!canEdit)
-                        .accessibilityIdentifier("doc.edit")
+                HStack(spacing: 10) {
+                    Menu {
+                        Button("Move…") { Task { await wiki.refresh(); wiki.sheet = .move } }
+                            .disabled(snapshot.value.doc == nil || !model.isUnlocked)
+                            .accessibilityIdentifier("doc.move")
+                    } label: { Image(systemName: "ellipsis.circle") }
+                        .accessibilityLabel("Document actions").accessibilityIdentifier("doc.actions")
+                    if editor == nil {
+                        Button(snapshot.value.draft == nil ? "Edit" : "Continue editing") { beginEditing() }
+                            .disabled(!canEdit)
+                            .accessibilityIdentifier("doc.edit")
+                    }
                 }
             }
         }
+        .environment(\.openWiki, OpenWikiAction { [wiki] target in wiki.activate(target) })
+        .wikiSheets(wiki, workspace: workspace)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let banner = wiki.banner {
+                HStack(alignment: .top) {
+                    Notice(tone: wiki.bannerIsProblem ? .warning : .info, text: banner).accessibilityIdentifier("wiki.banner")
+                    Button { wiki.banner = nil } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).accessibilityLabel("Dismiss")
+                }.padding(.horizontal, 12).padding(.top, 6)
+            }
+        }
+        .onChange(of: snapshot.value.titles) { _, titles in wiki.titles = titles }
         #if os(iOS)
         .sheet(isPresented: $showingComments) {
             NavigationStack {
@@ -200,13 +228,23 @@ struct DocumentView: View {
         }
         #endif
         .refreshable { model.openDoc(docId, in: workspace, force: true) }
-        .task { start() }
-        .onAppear { model.openDoc(docId, in: workspace); model.markViewed(.document, docId, in: workspace) }
+        .task { wiki.attach(model); start() }
+        .onAppear {
+            model.openDoc(docId, in: workspace); model.markViewed(.document, docId, in: workspace)
+            // Back from a linked page: the editor opens again on the draft that was kept when this screen was left.
+            openFormattedPage()
+        }
         .onChange(of: snapshot.value.doc?.id) { _, _ in takeEditRequest(); openFormattedPage() }
         .onChange(of: snapshot.value.hasBody) { _, _ in openFormattedPage() }
         .onChange(of: snapshot.value.editable) { _, _ in openFormattedPage() }
         .onChange(of: model.docEditRequest) { _, _ in takeEditRequest() }
-        .onDisappear { if let editor { Task { _ = await editor.persistDraft(state: .editing); editor.close() } } }
+        .onDisappear {
+            // Leaving for a linked page keeps the text as a draft; coming back opens the editor on that draft.
+            if let leaving = editor {
+                editor = nil; wiki.editor = nil
+                Task { _ = await leaving.persistDraft(state: .editing); leaving.close() }
+            }
+        }
         .onChange(of: scenePhase) { _, phase in if phase != .active, let editor { Task { _ = await editor.persistDraft(state: .editing) } } }
     }
 
@@ -226,6 +264,9 @@ struct DocumentView: View {
     private func beginEditing() {
         guard editor == nil, let doc = snapshot.value.doc, let connection = model.connection else { return }
         let created = DocEditorModel(doc: doc, workspace: workspace, store: store, connection: connection, app: model)
+        created.wiki = wiki
+        wiki.editor = created
+        wiki.beforeLeaving = { [weak created] in _ = await created?.persistDraft(state: .editing) }
         editor = created
         Task {
             await created.load()
@@ -327,6 +368,10 @@ struct DocumentView: View {
             if let reason = snapshot.value.readOnlyReason { Notice(tone: .info, text: reason) }
             if snapshot.value.hasBody {
                 documentBlocks
+                if snapshot.value.doc != nil {
+                    WikiBacklinksView(docId: docId, workspace: workspace, store: store, context: wiki.context)
+                        .padding(.top, 8)
+                }
             } else if snapshot.loaded {
                 SyncNote(text: model.syncError(forKey: WorkspaceSync.docKey(workspace.id, docId))
                          ?? (model.isUnlocked ? "Loading document…" : "This document is not saved on this \(Device.name) yet. Unlock to load it."))
@@ -431,7 +476,7 @@ struct DocumentView: View {
 
     private func start() {
         let w = workspace.id, id = docId, store = store, connection = model.connection?.id ?? ""
-        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.docs, .docBodies, .docDrafts, .comments, .writes, .members, .channels].contains($0.table)) || $0.table == .profiles }) {
+        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.docs, .docBodies, .docDrafts, .comments, .writes, .members, .channels, .scopes].contains($0.table)) || $0.table == .profiles }) {
             async let doc = store.reader.doc(workspaceId: w, id: id)
             async let cached = store.reader.docBody(workspaceId: w, docId: id)
             async let draft = store.reader.docDraft(key: DocDraft.key(connectionId: connection, workspaceId: w, docId: id))
@@ -439,14 +484,17 @@ struct DocumentView: View {
             async let writes = store.reader.writes(connectionId: connection, workspaceId: w, targetId: id)
             async let names = directoryNames(store, w)
             async let choice = scopeChoice(store, w)
+            async let everyDoc = store.reader.docs(workspaceId: w, limit: 2000)
+            let pages = try await everyDoc
             var snapshot = DocumentSnapshot(doc: try await doc, draft: try await draft, comments: try await comments,
                                             pendingComments: try await writes.filter { $0.kind == .docComment },
                                             names: try await names, choice: try await choice)
+            snapshot.titles = Dictionary(pages.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
             // Decoding and layout preparation happen here, off the main actor.
             if let body = try await cached {
                 let decoded = DocumentBody(bytes: body.bytes, contentType: body.contentType)
                 snapshot.hasBody = true
-                snapshot.blocks = DocumentRender.blocks(decoded)
+                snapshot.blocks = WikiLinks.retitled(DocumentRender.blocks(decoded), docs: pages)
                 snapshot.spans = decoded.editorState.map(DocumentAnchors.spans) ?? DocumentAnchors.markdownSpans(decoded.markdown, blocks: snapshot.blocks)
                 snapshot.editable = decoded.isEditable
                 if case .readOnly(let reason) = decoded.editing { snapshot.readOnlyReason = reason + " Open it on the web to edit." }
@@ -644,6 +692,8 @@ struct DocumentFormatBar: View {
                 }
                 Button { href = f.link ?? ""; linking = true } label: { icon("link", active: f.link != nil) }
                     .help("Link").accessibilityLabel("Link").accessibilityIdentifier("editor.format.link")
+                Button { editor.wiki?.openToolbarPicker() } label: { icon("link.badge.plus", active: false) }
+                    .help("Link to doc or note").accessibilityLabel("Link to doc or note").accessibilityIdentifier("editor.format.wikilink")
                 divider
                 tool("list.bullet", "Bulleted list", f.bulletList, "bulletList")
                 tool("list.number", "Numbered list", f.orderedList, "orderedList")
@@ -760,6 +810,11 @@ struct DocumentEditSurface: View {
                 }
             case .unavailable(let reason):
                 Notice(tone: .info, text: reason)
+            }
+        }
+        .overlay(alignment: .top) {
+            if let query = editor.wikiQuery, let wiki = editor.wiki {
+                WikiQueryPanel(wiki: wiki, query: query).padding(.top, 96)
             }
         }
         .onChange(of: model.syncStatus) { _, _ in editor.deliverImages() }
