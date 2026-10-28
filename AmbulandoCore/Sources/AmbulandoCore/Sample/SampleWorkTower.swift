@@ -395,6 +395,16 @@ public final class SampleWorkTower: @unchecked Sendable {
             return (200, ["doc": docOut(d), "body": ["object_id": objectId, "content_type": o["content_type"] ?? "", "size_bytes": Data(base64Encoded: b64)?.count ?? 0,
                                                      "sha256_hex": o["sha256_hex"] ?? NSNull(), "encoding": "base64", "base64_data": b64]])
         case ("PATCH", 2, "docs"): return patchDoc(p[1], object)
+        case ("POST", 3, "docs") where p[2] == "move":
+            // Tower's move: same record id, new channel and scope, row_version + 1; stale and same-destination are refused.
+            guard var row = table("docs")[p[1]] else { return error(404, "doc_not_found") }
+            guard let destination = object["destination_channel_id"] as? String else { return error(400, "validation_error") }
+            if destination == row["channel_id"] as? String { return error(409, "same_destination") }
+            if let expected = object["row_version"] as? Int, expected != row["row_version"] as? Int { return error(409, "stale_row_version") }
+            row["channel_id"] = destination
+            if let scope = object["destination_scope_id"] as? String { row["scope_id"] = scope }
+            bump(&row); put("docs", p[1], row)
+            return (200, ["doc": docOut(row)])
         case ("GET", 3, "docs") where p[2] == "comments":
             guard table("docs")[p[1]] != nil else { return error(404, "doc_not_found") }
             return page(table("doc_comments").values.filter { $0["doc_id"] as? String == p[1] }.sorted { ($0["created_at"] as! String) < ($1["created_at"] as! String) },

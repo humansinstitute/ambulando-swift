@@ -244,3 +244,120 @@ final class WikiLinkTests: XCTestCase {
         XCTAssertEqual(again["content_model"]?["editor_state"], state)
     }
 }
+
+
+/// Moving a document (online only) and keeping every link, draft and cached row coherent.
+final class WikiMoveTests: XCTestCase {
+    private func seed(_ h: WorkHarness, title: String = "Plan") async throws -> String {
+        let id = h.work.seedDoc(scope: Fixtures.scopeA, channel: Fixtures.channel1, title: title, body: DocumentBody.newDocument(text: "Hello").bytes,
+                                contentType: DocumentBody.envelopeContentType)
+        await h.sync.refreshDoc(h.connection, h.workspace, docId: id); await h.engine.waitUntilIdle()
+        return id
+    }
+    private func channel(_ h: WorkHarness, _ id: String) async throws -> ChannelRecord {
+        let all = try await h.store.reader.channels(workspaceId: h.workspace.id)
+        return try XCTUnwrap(all.first { $0.id == id })
+    }
+
+    func testMoveKeepsTheRecordIdAndUpdatesTheCachedLocation() async throws {
+        let h = try await WorkHarness.make()
+        let id = try await seed(h)
+        let destination = try await channel(h, Fixtures.channel2)
+        let result = await h.saver.move(docId: id, to: destination, rowVersion: 1, connection: h.connection, workspace: h.workspace)
+        guard case .moved(let doc) = result else { return XCTFail("not moved: \(result)") }
+        XCTAssertEqual(doc.id, id)
+        XCTAssertEqual(doc.channelId, Fixtures.channel2)
+        XCTAssertEqual(doc.rowVersion, 2)
+        let cached = try await h.store.reader.doc(workspaceId: h.workspace.id, id: id)
+        XCTAssertEqual(cached?.channelId, Fixtures.channel2, "an old link resolves to the same record at its new location")
+        let body = try await h.store.reader.docBody(workspaceId: h.workspace.id, docId: id)
+        XCTAssertNotNil(body, "the cached body is unchanged")
+        let sent = try XCTUnwrap(h.transport.recorded.last { $0.url?.path.hasSuffix("/move") == true })
+        let json = try JSONSerialization.jsonObject(with: sent.httpBody!) as! [String: Any]
+        XCTAssertEqual(json["row_version"] as? Int, 1)
+        XCTAssertEqual(json["destination_channel_id"] as? String, Fixtures.channel2)
+    }
+
+    func testStaleMoveChangesNothing() async throws {
+        let h = try await WorkHarness.make()
+        let id = try await seed(h)
+        h.work.externalDocSave(id, body: DocumentBody.newDocument(text: "Theirs").bytes, contentType: DocumentBody.envelopeContentType)
+        let result = await h.saver.move(docId: id, to: try await channel(h, Fixtures.channel2), rowVersion: 1, connection: h.connection, workspace: h.workspace)
+        guard case .stale = result else { return XCTFail("expected stale: \(result)") }
+        let cached = try await h.store.reader.doc(workspaceId: h.workspace.id, id: id)
+        XCTAssertEqual(cached?.channelId, Fixtures.channel1)
+    }
+
+    func testMoveToTheSameChannelAndRefusedMovesAreReportedWithoutClaimingSuccess() async throws {
+        let h = try await WorkHarness.make()
+        let id = try await seed(h)
+        let here = try await channel(h, Fixtures.channel1), there = try await channel(h, Fixtures.channel2)
+        guard case .sameDestination = await h.saver.move(docId: id, to: here, rowVersion: 1, connection: h.connection, workspace: h.workspace) else { return XCTFail("same destination") }
+        h.work.inject(.status(403, "forbidden"), matching: "/move")
+        guard case .denied = await h.saver.move(docId: id, to: there, rowVersion: 1, connection: h.connection, workspace: h.workspace) else { return XCTFail("denied") }
+        let cached = try await h.store.reader.doc(workspaceId: h.workspace.id, id: id)
+        XCTAssertEqual(cached?.channelId, Fixtures.channel1)
+    }
+
+    func testOfflineMoveIsNotQueuedAndSaysNothingMoved() async throws {
+        let h = try await WorkHarness.make()
+        let id = try await seed(h)
+        h.work.inject(.offline, matching: "/move")
+        let result = await h.saver.move(docId: id, to: try await channel(h, Fixtures.channel2), rowVersion: 1, connection: h.connection, workspace: h.workspace)
+        guard case .notMoved(let message) = result else { return XCTFail("expected notMoved: \(result)") }
+        XCTAssertTrue(message.contains("nothing was changed"))
+        let queued = try await h.pending()
+        XCTAssertTrue(queued.isEmpty, "a move is never queued for a blind retry")
+        let cached = try await h.store.reader.doc(workspaceId: h.workspace.id, id: id)
+        XCTAssertEqual(cached?.channelId, Fixtures.channel1)
+    }
+
+    func testDraftOnTheMovedVersionSurvivesAndSavesWithoutAConflict() async throws {
+        let h = try await WorkHarness.make()
+        let id = try await seed(h)
+        let stored = try await h.store.reader.docBody(workspaceId: h.workspace.id, docId: id)
+        let cached = try XCTUnwrap(stored)
+        let body = DocumentBody(bytes: cached.bytes, contentType: cached.contentType)
+        let edited = try body.encoded(editorState: try DocumentEditor.setText(try XCTUnwrap(body.editorState), path: [0], text: "Unsaved words"))
+        let draft = DocDraft(connectionId: h.connection.id, workspaceId: h.workspace.id, docId: id, title: "Plan", body: edited.bytes, contentType: edited.contentType,
+                             baseRowVersion: cached.docRowVersion, baseSha256: cached.sha256, baseStorageObjectId: cached.storageObjectId, state: .editing)
+        try await h.store.writer.saveDocDraft(draft)
+        guard case .moved = await h.saver.move(docId: id, to: try await channel(h, Fixtures.channel2), rowVersion: 1, connection: h.connection, workspace: h.workspace)
+        else { return XCTFail("move") }
+        let keptDraft = try await h.store.reader.docDraft(key: draft.key)
+        let kept = try XCTUnwrap(keptDraft)
+        XCTAssertEqual(kept.body, draft.body, "the unsaved text is untouched")
+        XCTAssertEqual(kept.baseRowVersion, 2, "its base follows the document")
+        guard case .saved = await h.saver.save(kept, connection: h.connection, workspace: h.workspace) else { return XCTFail("saves after the move without a recovery copy") }
+        XCTAssertEqual(h.work.recoveryCount, 0)
+    }
+
+    func testDraftBasedOnAnOlderVersionBlocksTheMove() async throws {
+        let h = try await WorkHarness.make()
+        let id = try await seed(h)
+        let stored = try await h.store.reader.docBody(workspaceId: h.workspace.id, docId: id)
+        let cached = try XCTUnwrap(stored)
+        let old = DocDraft(connectionId: h.connection.id, workspaceId: h.workspace.id, docId: id, title: "Plan", body: cached.bytes, contentType: cached.contentType,
+                           baseRowVersion: 0, baseSha256: cached.sha256, baseStorageObjectId: cached.storageObjectId, state: .editing)
+        try await h.store.writer.saveDocDraft(old)
+        let result = await h.saver.move(docId: id, to: try await channel(h, Fixtures.channel2), rowVersion: 1, connection: h.connection, workspace: h.workspace)
+        guard case .notMoved(let message) = result else { return XCTFail("expected notMoved: \(result)") }
+        XCTAssertTrue(message.contains("unsaved edits"))
+        XCTAssertFalse(h.transport.recorded.contains { $0.url?.path.hasSuffix("/move") == true }, "nothing was sent")
+    }
+
+    func testConsequencesNameTheAccessChangeAndPrivateConversations() {
+        let shared = ChannelRecord(workspaceId: "w", id: "c1", scopeId: "s1", name: "general", updatedAt: "")
+        let other = ChannelRecord(workspaceId: "w", id: "c2", scopeId: "s2", name: "team", updatedAt: "")
+        let note = ChannelRecord(workspaceId: "w", id: "c3", scopeId: "s3", name: "DM: me", kind: "dm", updatedAt: "",
+                                 raw: Data(#"{"participants":["npub1me"],"description":"dm:npub1me"}"#.utf8))
+        let across = DocMovePlan.consequences(from: shared, to: other, viewerNpub: "npub1me")
+        XCTAssertFalse(across.touchesPrivateConversation)
+        XCTAssertTrue(across.lines.contains { $0.contains("Access follows team") })
+        XCTAssertTrue(across.lines.contains { $0.contains("changes scope") })
+        XCTAssertTrue(across.lines.contains { $0.contains("never grants access") })
+        let fromNote = DocMovePlan.consequences(from: note, to: shared, viewerNpub: "npub1me")
+        XCTAssertTrue(fromNote.touchesPrivateConversation)
+        XCTAssertTrue(fromNote.lines.contains { $0.contains("private note-to-self") })
+    }
+}
