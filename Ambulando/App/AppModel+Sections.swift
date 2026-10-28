@@ -136,6 +136,8 @@ extension AppModel {
         case "doc", "document":
             mode = .docs; docsPath.append(.doc(workspaceId: workspace, docId: record))
             adoptContext(for: .doc(workspaceId: workspace, docId: record))
+        case "canvas":
+            mode = .docs; docsPath.append(.canvas(workspaceId: workspace, canvasId: record))
         case "file":
             mode = .files; filesPath.append(.file(workspaceId: workspace, fileId: record))
             adoptContext(for: .file(workspaceId: workspace, fileId: record))

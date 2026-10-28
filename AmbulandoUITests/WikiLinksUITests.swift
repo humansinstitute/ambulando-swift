@@ -29,6 +29,53 @@ final class WikiLinksUITests: XCTestCase {
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
     }
 
+    func testDocumentAtPickerInsertsAndReopensRecordLink() {
+        let app = launch()
+        let page = app.webViews["doc.editor"].firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 20))
+        let prose = page.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Pick one of'")).firstMatch
+        XCTAssertTrue(prose.waitForExistence(timeout: 20))
+        prose.tap()
+        app.typeText(" @doc:Wiki target")
+        let option = page.otherElements.matching(NSPredicate(format: "label == 'Wiki target · Doc'")).firstMatch
+        // The panel is a page-level overlay beside the editor root.
+        let fallback = app.webViews.otherElements.matching(NSPredicate(format: "label == 'Wiki target · Doc'")).firstMatch
+        XCTAssertTrue(option.waitForExistence(timeout: 8) || fallback.waitForExistence(timeout: 5))
+        (option.exists ? option : fallback).tap()
+        let linked = page.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Wiki target'")).firstMatch
+        XCTAssertTrue(linked.waitForExistence(timeout: 10))
+        attach(app, "document-at-link-inserted")
+        let reference = page.links.matching(NSPredicate(format: "label == 'Wiki target'")).firstMatch
+        XCTAssertTrue(reference.waitForExistence(timeout: 10))
+        reference.tap()
+        let title = app.textFields["editor.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 15))
+        XCTAssertEqual(title.value as? String, "Wiki target")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(page.waitForExistence(timeout: 15))
+        XCTAssertTrue(page.links.matching(NSPredicate(format: "label == 'Wiki target'")).firstMatch.waitForExistence(timeout: 10), "the stored local draft reopens with the stable record link")
+    }
+
+    func testDocumentAtCanvasLinkOpensNativeCanvasAndBackKeepsDraft() {
+        let app = launch()
+        let page = app.webViews["doc.editor"].firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 20))
+        let prose = page.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Pick one of'")).firstMatch
+        XCTAssertTrue(prose.waitForExistence(timeout: 20))
+        prose.tap(); app.typeText(" @canvas:Launch board")
+        let option = app.webViews.otherElements.matching(NSPredicate(format: "label == 'Launch board · Canvas'")).firstMatch
+        XCTAssertTrue(option.waitForExistence(timeout: 10))
+        option.tap()
+        let reference = page.links.matching(NSPredicate(format: "label == 'Launch board'")).firstMatch
+        XCTAssertTrue(reference.waitForExistence(timeout: 10))
+        reference.tap()
+        XCTAssertTrue(app.buttons["canvas.items"].waitForExistence(timeout: 20), "the native canvas opens rather than a browser tab")
+        attach(app, "document-at-canvas-opened")
+        app.buttons["canvas.back"].tap()
+        XCTAssertTrue(page.waitForExistence(timeout: 15))
+        XCTAssertTrue(page.links.matching(NSPredicate(format: "label == 'Launch board'")).firstMatch.waitForExistence(timeout: 10), "Back restores the draft with its portable canvas link")
+    }
+
     func testStableLinkOpensItsPageUnderTheCurrentTitleAndBackKeepsTheDraft() {
         let app = launch()
         let page = app.webViews["doc.editor"].firstMatch

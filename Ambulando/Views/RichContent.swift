@@ -86,6 +86,7 @@ struct RichBlocksView: View {
     var muted = false
     var workspace: WorkspaceRecord?
     @Environment(\.openMention) private var openMention
+    @Environment(AppModel.self) private var model
     @Environment(\.openWiki) private var openWiki
     @Environment(\.openURL) private var parentOpenURL
 
@@ -100,6 +101,12 @@ struct RichBlocksView: View {
         .environment(\.openURL, OpenURLAction { url in
             if let target = RichLinks.mentionTarget(url) { openMention(kind: target.kind, id: target.id); return .handled }
             if let target = RichLinks.wikiTarget(url) { openWiki(target); return .handled }
+            if url.scheme == nil, url.host == nil, url.path == "/canvas.html", let workspace {
+                if model.selectedWorkspaceId == workspace.id, let id = DocumentRecordLink.canvas(url, workspaceId: workspace.id) {
+                    model.openRecord(kind: "canvas", id: id)
+                } else { model.notice = "This canvas link belongs to another workspace or is invalid." }
+                return .handled
+            }
             guard RichLinks.isSafeWeb(url) else { return .discarded }
             parentOpenURL(url)
             return .handled
@@ -442,7 +449,7 @@ enum InlineText {
             if !intent.isEmpty { part.inlinePresentationIntent = intent }
             if run.underline { part.underlineStyle = .single }
             if run.code { part.backgroundColor = Amb.card }
-            if let link = run.link, let url = URL(string: link), RichLinks.isSafeWeb(url) {
+            if let link = run.link, let url = URL(string: link), (RichLinks.isSafeWeb(url) || (url.scheme == nil && url.host == nil && url.path == "/canvas.html")) {
                 part.link = url
                 part.foregroundColor = Amb.link
                 part.underlineStyle = .single

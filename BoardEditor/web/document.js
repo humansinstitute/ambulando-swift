@@ -10,6 +10,7 @@
 // Out: webkit.messageHandlers.document.postMessage(JSON): ready, loaded, change, state, need-image, paste-files, error,
 //      wiki (a link was opened), wiki-query (`[[` typing);
 //      webkit.messageHandlers.documentFile.postMessage(`<index>\n<name>\n<type>\n<base64>`): one pasted file.
+import { documentMentions } from './document-mentions.js';
 import { captureSelection, revealSelection } from './document-selection.js';
 import { Editor, getSchema } from '@tiptap/core';
 import { createFlightDeckTiptapExtensions } from './sol/docs/editor/prosemirror-flightdeck-schema.js';
@@ -38,9 +39,17 @@ const requested = new Set();
 /// Current titles of the pages links point at (id -> title), pushed by the app, so a renamed page shows its new name.
 let wikiTitles = {};
 
+let mentions;
 function baseExtensions() {
+  mentions = documentMentions({ post, changed: () => { touched = true; scheduleChange(); } });
   return [...createFlightDeckTiptapExtensions({ placeholder: 'Start writing…', editable: true }).map((extension) => {
     // Wiki links: the page only reports a click; the app decides what it opens or creates (and keeps drafts safe first).
+    if (extension.name === 'fdMention') return extension.extend({
+      renderHTML({ HTMLAttributes }) {
+        const dom = this.parent({ HTMLAttributes });
+        dom[1] = { ...dom[1], role: 'link', tabindex: '0' }; return dom;
+      },
+    });
     if (extension.name !== 'fdWikiLink') return extension;
     return extension.configure({
       resolve: (attrs) => (attrs.documentId
@@ -54,7 +63,7 @@ function baseExtensions() {
       },
       error: (message) => post({ type: 'wiki', action: 'error', message }),
     });
-  }), wikiExtension({ post })];
+  }), wikiExtension({ post }), mentions.extension];
 }
 
 /// The edited document as the app stores it: JSON text (rich) or Markdown.
@@ -280,6 +289,7 @@ Object.defineProperty(window, 'ambulandoDocument', {
       }
       return true;
     },
+    mentionSuggestions(json) { return mentions?.deliver(JSON.parse(json)) || false; },
     command(name, json) { return command(name, json ? JSON.parse(json) : {}); },
     insertUploads(json) {
       if (!editor) return false;

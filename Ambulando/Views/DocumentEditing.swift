@@ -142,6 +142,60 @@ final class DocEditorModel: UploadTokenHost {
 
     func pageError(_ message: String) { setStatus(message, .error) }
 
+    // MARK: Document record links (navigation only; never chat instructions)
+
+    @ObservationIgnored private var mentionLookup: Task<Void, Never>?
+
+    func pageMentionQuery(_ message: [String: Any]) {
+        mentionLookup?.cancel()
+        guard let range = message["range"] as? [String: Any], let typed = range["query"] as? String else { return }
+        let w = workspace.id
+        mentionLookup = Task { [weak self] in
+            guard let self else { return }
+            let query = MentionQuery(typed)
+            let canvasOnly = typed.lowercased().hasPrefix("canvas:")
+            let canvasText = canvasOnly ? String(typed.dropFirst(7)).trimmingCharacters(in: .whitespaces) : typed
+            var rows: [[String: String]] = []
+            if query.only == nil || canvasOnly {
+                let canvases = (try? await store.reader.canvases(workspaceId: w)) ?? []
+                for canvas in canvases where canvasText.isEmpty || canvas.title.localizedCaseInsensitiveContains(canvasText) {
+                    var url = URLComponents(); url.path = "/canvas.html"
+                    url.queryItems = [URLQueryItem(name: "workspaceid", value: w), URLQueryItem(name: "canvasid", value: canvas.id)]
+                    if let link = url.string { rows.append(["id": canvas.id, "label": canvas.title, "detail": "Canvas", "url": link]) }
+                }
+            }
+            if !canvasOnly {
+                let records = (try? await store.reader.mentionSuggestions(workspaceId: w, query: query, limit: query.limit)) ?? []
+                let ranked = MentionRanking.merge(actors: [], records: records.filter { $0.mention.type != .scope }, query: query)
+                rows += ranked.map { ["id": $0.mention.id, "type": $0.mention.type.rawValue, "label": $0.mention.label, "detail": $0.detail] }
+            }
+            guard !Task.isCancelled, wiki?.isVisible == true, app?.selectedWorkspaceId == w else { return }
+            page?.mentionSuggestions(["range": range, "rows": Array(rows.prefix(30))])
+        }
+    }
+
+    func pageRecordLink(_ message: [String: Any]) {
+        let kind = message["kind"] as? String, id = message["id"] as? String, link = message["url"] as? String
+        Task { [weak self] in
+            guard let self, wiki?.isVisible == true, await checkpoint(), wiki?.isVisible == true, app?.selectedWorkspaceId == workspace.id else { return }
+            if let kind, let id, !id.isEmpty {
+                if kind == "agent" || kind == "person" {
+                    pageError("This identity link is saved. Open People to view this person or agent.")
+                } else { app?.openRecord(kind: kind, id: id) }
+                return
+            }
+            guard let link, let url = URL(string: link) else { return }
+            if let target = DocumentRecordLink.canvas(url, workspaceId: workspace.id) {
+                guard (try? await store.reader.canvas(workspaceId: workspace.id, id: target)) != nil else {
+                    pageError("This canvas is unavailable or is not saved on this device. Your link and draft are unchanged."); return
+                }
+                app?.openRecord(kind: "canvas", id: target)
+            } else if url.scheme == nil && url.host == nil && url.path == "/canvas.html" {
+                pageError("This canvas link belongs to another workspace or is invalid. Switch workspace to open it.")
+            } else if RichLinks.isSafeWeb(url) { app?.browser.open(url) }
+        }
+    }
+
     // MARK: Wiki links in the page
 
     /// A link was opened in the page (`activate`), or the page reported a problem with one.
@@ -248,6 +302,7 @@ final class DocEditorModel: UploadTokenHost {
     /// Ends the session: stops renewing, releases the lease and stops receiving upload results.
     func close() {
         WikiEditors.unregister(self)
+        mentionLookup?.cancel()
         debounce?.cancel()
         renew?.cancel()
         imagePoll?.cancel()

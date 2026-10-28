@@ -43,7 +43,7 @@ struct DocumentSelectableText: NSViewRepresentable {
             var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
             if run.underline { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
             if run.strike { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-            if let link = run.link, let url = URL(string: link), RichLinks.isSafeWeb(url) {
+            if let link = run.link, let url = URL(string: link), (RichLinks.isSafeWeb(url) || (url.scheme == nil && url.host == nil && url.path == "/canvas.html")) {
                 attrs[.link] = url
                 attrs[.foregroundColor] = NSColor(Amb.link)
                 attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue

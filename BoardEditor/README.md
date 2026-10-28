@@ -12,6 +12,7 @@ folder builds those two pages; the rest of the app stays native.
   vendored unchanged in `web/sol/docs` and `web/sol/utils`). It talks to the app over `webkit.messageHandlers.document`
   (small messages) and `documentFile` (one pasted file per message) and `window.ambulandoDocument` in; it has no signer,
   keys, `window.nostr` or network (CSP `connect-src 'none'`), and the app refuses every navigation away from it.
+- `web/document-mentions.js`: native-owned document `@` search bridge, ID-based insertion, accessible keyboard/touch picker, click/drag guards and navigation callbacks. It never posts agent instructions. Tests: `test/document-mentions.test.js`.
 - `web/document-preserve.js`: lossless editing. Unknown nodes become kept atoms, unknown attributes and marks are added
   to the schema for that document, and unchanged nodes and marks are written back as the stored JSON; Markdown
   documents keep the source of unchanged blocks. Tests: `bun test` (`test/document-preserve.test.js`).

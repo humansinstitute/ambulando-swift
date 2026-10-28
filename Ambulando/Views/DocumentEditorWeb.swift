@@ -104,6 +104,11 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
 
     func setImage(_ objectId: String, dataURL: String) { call("setImage", objectId, dataURL) }
 
+    func mentionSuggestions(_ request: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: request) else { return }
+        call("mentionSuggestions", String(decoding: data, as: UTF8.self))
+    }
+
     func focus() { call("focus") }
 
     // MARK: Wiki links
@@ -235,6 +240,10 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
             if let id = object["objectId"] as? String { editor?.pageNeedsImage(id) }
         case "paste-files":
             editor?.pageAnnouncedPaste(skipped: object["skipped"] as? Int ?? 0, tooLarge: object["tooLarge"] as? Int ?? 0)
+        case "mention-query":
+            editor?.pageMentionQuery(object)
+        case "record-link":
+            editor?.pageRecordLink(object)
         case "wiki":
             editor?.pageWiki(object)
         case "wiki-query":

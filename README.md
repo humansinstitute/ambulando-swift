@@ -19,6 +19,21 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Record links in document bodies (iPhone/iPad build 38, Mac build 27)
+
+Type `@` in the formatted document editor to search saved canvases, documents, tasks, channels and conversations.
+Choose a result by touch/click or Up/Down and Return/Tab; Escape dismisses the list. Prefixes such as `canvas:`, `doc:` and
+`task:` narrow the search. Links use existing stable record identities, so renaming a target does not break a saved link.
+Canvas references use the web's existing `/canvas.html?workspaceid=…&canvasid=…` URL; other records retain `fdMention`
+marks and their canonical Markdown tokens. Clicking checkpoints the local draft before navigation. Existing wiki links,
+formatting, comments, saves and offline drafts keep their original paths.
+
+Search uses records already saved on this device. A missing canvas explains that it is unavailable; cross-workspace canvas
+links explain that the user must switch workspace. Native-created canvas URLs are relative because the native connection
+stores a Tower origin rather than a web frontend origin. Existing absolute web canvas URLs open in the browser; only portable relative canvas URLs open the native canvas. Actor suggestions
+are withheld while document-body agent dispatch policy is reviewed; existing saved actor references remain preserved.
+Source/build, simulator, physical install and authenticated live evidence are recorded separately on the implementation task.
+
 ## Wiki links between documents (iPhone/iPad build 37, Mac build 26)
 
 - Links between documents work on iPhone, iPad and Mac: tap a link to open its page, tap a missing `[[Title]]` to create it in a
