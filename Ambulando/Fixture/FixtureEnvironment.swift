@@ -885,6 +885,12 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             para([t("Pick one of [[Twin]].")]),
             para([t("Keep "), t("[[Literal in code]]", ["code"]), t(" as it is.")]),
         ]), contentType: DocumentBody.envelopeContentType)
+        // Starts with a marked record link, matching the iPhone Return regression without using a real document.
+        let mention = JSONValue.object([("type", .string("text")), ("text", .string("Wiki target")),
+            ("marks", .array([.object([("type", .string("fdMention")), ("attrs", .object([
+                ("label", .string("Wiki target")), ("mentionType", .string("doc")), ("mentionId", .string(Self.wikiTarget))
+            ]))])]))])
+        w.seedDoc(scope: a, channel: design, title: "Return before link", body: rich([para([mention])]), contentType: DocumentBody.envelopeContentType)
         w.seedDoc(scope: a, channel: design, title: "Wiki hub (Markdown)", body: Data("Open [Old target name](wiki:\(Self.wikiTarget)) and [[Fresh markdown page]] and `[[Literal in code]]`.".utf8), contentType: "text/markdown")
     }
 

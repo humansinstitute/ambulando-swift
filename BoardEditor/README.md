@@ -45,3 +45,20 @@ Create the ignored evidence directory first. The check compares the old height c
 small/rotated/large-text/Mac viewport bounds, later-row keyboard and pointer choices, caret/document scroll,
 close/reopen, record serialization and wiki insertion. iPhone keyboard integration is covered separately by
 `WikiLinksUITests/testDocumentAtPickerUsesKeyboardVisibleHeightAndScrollsToLaterResult` in the isolated Test app.
+
+The iOS Return path in the pinned `prosemirror-view` invokes key handlers with an undispatched synthetic
+`Event` (`input.ts`, `domchange.ts`, `dom.ts:keyEvent`), whose `target` is null. Record-link handlers resolve
+only Element targets or a Text node's parent Element; other targets fall through to normal editing. Ordinary
+Return keeps splitting paragraphs, while focused record links and Ctrl/Cmd+Return keep their navigation behavior.
+
+Run the Return regression against the built page in macOS WebKit:
+
+```sh
+swiftc -parse-as-library scripts/tests/document-return-webkit.swift -o /tmp/document-return-check
+/tmp/document-return-check "$PWD/BoardEditor/dist"
+```
+
+This uses disposable Markdown and rich documents, exercises null and non-Element targets, synthetic Return before
+the first record link, continued typing and caret placement, snapshot/reload and stable link activation callbacks.
+`BoardEditor/test/document-mentions.test.js` also covers selection gestures and keyboard activation. This check
+provides embedded-page evidence; installed-app save/rename and iPhone keyboard checks are separate UI tests.

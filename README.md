@@ -19,6 +19,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Return before document links (iPhone/iPad build 40, Mac build 29)
+
+Return and typing before the first document link preserve the text, caret and link identity. The native
+link handler accepts ProseMirror's synthetic iOS Return events, which have no DOM target, and resolves
+text-node targets through their parent element for ordinary link activation. Save/reopen and title
+renaming retain the existing document pipeline. Regression checks use disposable local documents;
+source/build, installation and authenticated live status belong to the release handoff.
+
 ## Taller document link picker (iPhone/iPad build 39, Mac build 28)
 
 The document-body `@` picker uses up to 90% of the keyboard-visible editor viewport, with space at its edges.

@@ -29,6 +29,46 @@ final class WikiLinksUITests: XCTestCase {
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
     }
 
+    func testReturnBeforeFirstRecordLinkKeepsCaretTextSaveRenameAndReopen() {
+        let app = launch(document: "Return before link")
+        let page = app.webViews["doc.editor"].firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 20))
+        let reference = page.links.matching(NSPredicate(format: "label == 'Wiki target'")).firstMatch
+        XCTAssertTrue(reference.waitForExistence(timeout: 20))
+        // A touch immediately before the first glyph places the insertion point before the first marked link.
+        reference.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: -2, dy: 0)).tap()
+        app.typeText("Before first link")
+        app.typeText("\n")
+        app.typeText("Caret stays here")
+        let before = page.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Before first link'")).firstMatch
+        let after = page.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Caret stays here'")).firstMatch
+        XCTAssertTrue(before.waitForExistence(timeout: 10))
+        XCTAssertTrue(after.waitForExistence(timeout: 10), "typing after Return follows the new caret")
+        XCTAssertLessThan(before.frame.minY, after.frame.minY, "Return split the paragraph before the link")
+        XCTAssertTrue(reference.exists, "text insertion leaves the record link intact")
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'TypeError'")).firstMatch.exists)
+        attach(app, "return-before-first-record-link")
+        let title = app.textFields["editor.title"]
+        title.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        let oldTitle = (title.value as? String) ?? ""
+        title.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: oldTitle.count) + "Return before link renamed")
+        XCTAssertEqual(title.value as? String, "Return before link renamed")
+        app.buttons["editor.save"].tap()
+        XCTAssertTrue(app.staticTexts["Saved."].waitForExistence(timeout: 20))
+        app.terminate()
+        let reopened = launch(reset: false, document: "Return before link renamed")
+        let saved = reopened.webViews["doc.editor"].firstMatch
+        XCTAssertTrue(saved.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Before first link'")).firstMatch.waitForExistence(timeout: 20))
+        XCTAssertTrue(saved.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Caret stays here'")).firstMatch.exists)
+        XCTAssertEqual(reopened.textFields["editor.title"].value as? String, "Return before link renamed")
+        let retained = saved.links.matching(NSPredicate(format: "label == 'Wiki target'")).firstMatch
+        XCTAssertTrue(retained.waitForExistence(timeout: 10))
+        attach(reopened, "return-before-first-record-link-reopened")
+        retained.tap()
+        XCTAssertTrue(reopened.textFields["editor.title"].waitForExistence(timeout: 15))
+        XCTAssertEqual(reopened.textFields["editor.title"].value as? String, "Wiki target", "the saved record identity still navigates normally")
+    }
+
     func testDocumentAtPickerUsesKeyboardVisibleHeightAndScrollsToLaterResult() {
         let app = launch()
         let page = app.webViews["doc.editor"].firstMatch

@@ -23,6 +23,14 @@ export function insertMention(editor, candidate, range) {
   return true;
 }
 
+// ProseMirror calls key handlers with undispatched synthetic events for iOS Return.
+// Those have no target; text-node targets should still resolve their enclosing link.
+function closestEventElement(event, selector) {
+  const target = event.target;
+  const element = target?.nodeType === 3 ? target.parentElement : target;
+  return typeof element?.closest === 'function' ? element.closest(selector) : null;
+}
+
 export function recordLinkClickAllowed(start, event) {
   if (event.shiftKey || event.button !== 0) return false;
   if (!start) return event.detail === 0;
@@ -75,7 +83,7 @@ export function documentMentions({ post, changed }) {
         props: {
           handleDOMEvents: {
             pointerdown(view, event) {
-              const target = event.target.closest?.('[data-mention-id], a[href]');
+              const target = closestEventElement(event, '[data-mention-id], a[href]');
               gesture = target ? { target, x: event.clientX, y: event.clientY, cancelled: event.shiftKey || event.button !== 0 } : null;
               return false;
             },
@@ -85,7 +93,7 @@ export function documentMentions({ post, changed }) {
             },
             pointercancel() { gesture = null; return false; },
             click(view, event) {
-              const target = event.target.closest?.('[data-mention-id], a[href]');
+              const target = closestEventElement(event, '[data-mention-id], a[href]');
               const start = gesture; gesture = null;
               if (!target || (start && start.target !== target) || !recordLinkClickAllowed(start, event)) return false;
               const type = target.dataset.mentionType, id = target.dataset.mentionId;
@@ -95,7 +103,7 @@ export function documentMentions({ post, changed }) {
             },
           },
           handleKeyDown(view, event) {
-            const focused = event.target.closest?.('[data-mention-id]');
+            const focused = closestEventElement(event, '[data-mention-id]');
             if (event.key === 'Enter' && focused) {
               event.preventDefault(); post({ type: 'record-link', kind: focused.dataset.mentionType, id: focused.dataset.mentionId }); return true;
             }
