@@ -559,95 +559,94 @@ struct DeckPinnedCard: View {
     @Environment(AppModel.self) private var model
     let workspace: WorkspaceRecord
     @State private var draggedPin: (item: PinnedItem, token: String)?
-    private var dragType: String { UTType.text.identifier }
-    @State private var targetedPin: String?
-    #if DEBUG
-    @State private var dragEvidence = "idle"
-    #endif
-
-    private func traceDrag(_ stage: String) {
-        #if DEBUG
-        if model.fixture != nil { dragEvidence = stage; NSLog("PIN_DRAG %@", stage) }
-        #endif
-    }
-
     var body: some View {
         let snapshot = model.pins.value
         let items = snapshot.items.filter { snapshot.isPinned($0.pin.resourceType, $0.pin.resourceId) }
         DeckCardFrame(title: "Pinned items", identifier: "pinned") { EmptyView() } content: {
             ForEach(items) { item in
-                HStack(spacing: 8) {
-                    Image(systemName: "line.3.horizontal")
-                        .frame(width: 44, height: 44).contentShape(Rectangle())
-                        .onDrag {
-                            let token = UUID().uuidString
-                            draggedPin = (item, token)
-                            traceDrag("started; standard token provider offered")
-                            return NSItemProvider(object: token as NSString)
-                        }
-                        .accessibilityLabel("Move \(item.title ?? label(item.pin.resourceType))")
-                        .accessibilityIdentifier("pin.move.\(item.pin.resourceType.rawValue).\(item.pin.resourceId)")
-                        .accessibilityAction(named: "Move up") { move(item, by: -1, in: items) }
-                        .accessibilityAction(named: "Move down") { move(item, by: 1, in: items) }
-                    Menu {
-                        Button("Move up") { move(item, by: -1, in: items) }.disabled(item.id == items.first?.id)
-                        Button("Move down") { move(item, by: 1, in: items) }.disabled(item.id == items.last?.id)
-                    } label: { Image(systemName: "arrow.up.arrow.down").frame(width: 32, height: 44) }
-                    .accessibilityLabel("Arrange \(item.title ?? label(item.pin.resourceType))")
-                    open(item) {
-                        HStack(spacing: 10) {
-                            Image(systemName: icon(item.pin.resourceType)).foregroundStyle(Amb.mutedForeground).frame(width: 20)
-                            Text(item.title ?? unavailable(item.pin.resourceType))
-                                .font(.amb(.subheadline)).foregroundStyle(item.title == nil ? Amb.mutedForeground : Amb.foreground).lineLimit(2)
-                            Spacer(minLength: 0)
-                            if snapshot.pending[PinsSnapshot.key(item.pin.resourceType, item.pin.resourceId)]?.isPending == true {
-                                ProgressView().controlSize(.mini).accessibilityLabel("Saving pin")
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .accessibilityLabel("\(label(item.pin.resourceType)): \(item.title ?? unavailable(item.pin.resourceType))")
-                    .accessibilityIdentifier("deck.pinned.\(item.title ?? item.pin.resourceId)")
-                    Button { model.setPinned(false, type: item.pin.resourceType, id: item.pin.resourceId, in: workspace) } label: {
-                        Image(systemName: "pin.slash").frame(width: 28, height: 26)
-                    }
-                    .buttonStyle(.plain).foregroundStyle(Amb.mutedForeground)
-                    .accessibilityLabel("Unpin \(item.title ?? label(item.pin.resourceType))")
-                }
-                .modifier(DeckRowStyle())
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(targetedPin == item.id ? Amb.primary : .clear, lineWidth: 2))
-                .onDrop(of: [dragType], isTargeted: Binding(get: { targetedPin == item.id }, set: { targetedPin = $0 ? item.id : nil })) { providers in drop(providers, before: item) }
+                pinRow(item, items: items, snapshot: snapshot)
             }
-            Text("Move to end").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
-                .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
-                .onDrop(of: [dragType], isTargeted: nil) { providers in drop(providers, before: nil) }
-            if let write = snapshot.orderWrite {
+            if let write = snapshot.orderWrite, let error = write.lastError {
                 HStack {
-                    Text(write.lastError ?? "Saving pin order…").font(.amb(.caption))
+                    Text(error).font(.amb(.caption))
                     if !write.isPending, let store = model.store {
                         Button("Discard move") { Task { try? await store.writer.discardWrite(id: write.id) } }
                     }
                 }
             }
-            #if DEBUG
-            if model.fixture != nil { Text(dragEvidence).font(.caption).accessibilityIdentifier("pin.drag.evidence") }
-            #endif
-            DeckNote(text: "Drag a handle before another item or to Move to end. Move up/down is also available in its menu. Order synchronizes across apps.")
         }
     }
 
+    private func pinRow(_ item: PinnedItem, items: [PinnedItem], snapshot: PinsSnapshot) -> some View {
+        HStack(spacing: 8) {
+            pinAction(item, items: items, snapshot: snapshot)
+            Button { model.setPinned(false, type: item.pin.resourceType, id: item.pin.resourceId, in: workspace) } label: {
+                Image(systemName: "pin.slash").frame(width: 28, height: 26)
+            }
+            .buttonStyle(.plain).foregroundStyle(Amb.mutedForeground)
+            .accessibilityLabel("Unpin \(item.title ?? label(item.pin.resourceType))")
+        }
+        .modifier(DeckRowStyle())
+        .modifier(PinInsertionTarget(enabled: draggedPin != nil) { providers, after in
+            guard let index = items.firstIndex(where: { $0.id == item.id }) else { return false }
+            let anchor = after ? (index + 1 < items.count ? items[index + 1] : nil) : item
+            return drop(providers, before: anchor)
+        })
+    }
+
+    private func pinAction(_ item: PinnedItem, items: [PinnedItem], snapshot: PinsSnapshot) -> some View {
+        let action = open(item) { pinLabel(item, snapshot: snapshot) }
+        .onDrag {
+            let token = UUID().uuidString
+            draggedPin = (item, token)
+            #if DEBUG
+            if model.fixture != nil { NSLog("PIN_DRAG main action started") }
+            #endif
+            return NSItemProvider(object: token as NSString)
+        }
+        return action
+        .accessibilityAction(named: "Move up") { move(item, by: -1, in: items) }
+        .accessibilityAction(named: "Move down") { move(item, by: 1, in: items) }
+        .accessibilityAction(named: "Move to end") { model.movePin(item, before: nil, in: workspace) }
+        .onKeyPress(keys: [.upArrow], phases: .down) { press in
+            guard press.modifiers.contains([.command, .option]) else { return .ignored }
+            move(item, by: -1, in: items)
+            return .handled
+        }
+        .onKeyPress(keys: [.downArrow], phases: .down) { press in
+            guard press.modifiers.contains([.command, .option]) else { return .ignored }
+            move(item, by: 1, in: items)
+            return .handled
+        }
+        .accessibilityLabel("\(label(item.pin.resourceType)): \(item.title ?? unavailable(item.pin.resourceType))")
+        .accessibilityIdentifier("deck.pinned.\(item.title ?? item.pin.resourceId)")
+    }
+
+    private func pinLabel(_ item: PinnedItem, snapshot: PinsSnapshot) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon(item.pin.resourceType)).foregroundStyle(Amb.mutedForeground).frame(width: 20)
+            Text(item.title ?? unavailable(item.pin.resourceType))
+                .font(.amb(.subheadline)).foregroundStyle(item.title == nil ? Amb.mutedForeground : Amb.foreground).lineLimit(2)
+            Spacer(minLength: 0)
+            if snapshot.pending[PinsSnapshot.key(item.pin.resourceType, item.pin.resourceId)]?.isPending == true {
+                ProgressView().controlSize(.mini).accessibilityLabel("Saving pin")
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
     private func drop(_ providers: [NSItemProvider], before anchor: PinnedItem?) -> Bool {
-        traceDrag("drop invoked; providers=\(providers.count); source=\(draggedPin == nil ? "missing" : "present")")
+        #if DEBUG
+        if model.fixture != nil { NSLog("PIN_DRAG drop received") }
+        #endif
         guard let drag = draggedPin, let provider = providers.first, drag.item.id != anchor?.id else { return false }
         provider.loadObject(ofClass: NSString.self) { value, _ in
             let token = value as? String
             Task { @MainActor in
-                guard token == drag.token, draggedPin?.token == drag.token else { traceDrag("token decode/state rejected"); return }
-                traceDrag("token decoded")
+                guard token == drag.token, draggedPin?.token == drag.token else { return }
                 draggedPin = nil
                 guard model.pins.value.items.contains(where: { $0.pin == drag.item.pin }),
-                      model.pins.value.isPinned(drag.item.pin.resourceType, drag.item.pin.resourceId) else { traceDrag("current pin guard rejected"); return }
-                traceDrag("current pin valid; enqueue requested")
+                      model.pins.value.isPinned(drag.item.pin.resourceType, drag.item.pin.resourceId) else { return }
                 model.movePin(drag.item, before: anchor, in: workspace)
             }
         }
@@ -696,6 +695,47 @@ struct DeckPinnedCard: View {
         case .task: "Task not on this \(Device.name)"
         case .document: "Document not on this \(Device.name)"
         case .channel: "Channel not available"
+        }
+    }
+}
+
+/// Drop on a row's upper/lower half to insert before/after it, including after the last row.
+/// Feedback follows native drag enter/exit, so cancelling leaves no idle target behind.
+private struct PinInsertionTarget: ViewModifier {
+    let enabled: Bool
+    let drop: ([NSItemProvider], Bool) -> Bool
+    @State private var height: CGFloat = 44
+    @State private var after: Bool?
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+            .overlay(alignment: after == true ? .bottom : .top) {
+                if after != nil {
+                    Capsule().fill(Amb.primary.opacity(0.6)).frame(height: 2).allowsHitTesting(false)
+                }
+            }
+            .onDrop(of: [UTType.text.identifier], delegate: InsertionDelegate(
+                enabled: enabled, height: height, after: $after, drop: drop))
+    }
+
+    private struct InsertionDelegate: DropDelegate {
+        let enabled: Bool
+        let height: CGFloat
+        @Binding var after: Bool?
+        let drop: ([NSItemProvider], Bool) -> Bool
+
+        func validateDrop(info: DropInfo) -> Bool { enabled && info.hasItemsConforming(to: [UTType.text.identifier]) }
+        func dropEntered(info: DropInfo) { after = info.location.y >= height / 2 }
+        func dropUpdated(info: DropInfo) -> DropProposal? {
+            after = info.location.y >= height / 2
+            return DropProposal(operation: .move)
+        }
+        func dropExited(info: DropInfo) { after = nil }
+        func performDrop(info: DropInfo) -> Bool {
+            let lowerHalf = info.location.y >= height / 2
+            after = nil
+            return drop(info.itemProviders(for: [UTType.text.identifier]), lowerHalf)
         }
     }
 }

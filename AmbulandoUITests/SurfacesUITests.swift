@@ -139,11 +139,14 @@ final class SurfacesUITests: XCTestCase {
     func testDragMixedPinsPersistsWithoutOpeningOrUnpinning() {
         let app = launch()
         app.section("Deck"); app.deckCard("pinned")
-        let all = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'pin.move.'"))
+        let all = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'deck.pinned.'"))
         XCTAssertTrue(all.firstMatch.waitForExistence(timeout: 15))
         let first = all.element(boundBy: 0), last = all.element(boundBy: 1)
         let firstId = first.identifier, lastId = last.identifier
-        last.press(forDuration: 0.8, thenDragTo: first)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Arrange '")).firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["Move to end"].exists)
+        capture(app, "pin-clean-idle-phone")
+        last.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.8, thenDragTo: first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)))
         let ordered = NSPredicate { _, _ in
             let source = all.matching(identifier: lastId).firstMatch
             let anchor = all.matching(identifier: firstId).firstMatch
@@ -152,7 +155,6 @@ final class SurfacesUITests: XCTestCase {
         let orderExpectation = expectation(for: ordered, evaluatedWith: nil)
         let orderResult = XCTWaiter.wait(for: [orderExpectation], timeout: 10)
         capture(app, "batch-pin-drag-result")
-        print("PIN_DRAG_EVIDENCE \(app.staticTexts["pin.drag.evidence"].label)")
         XCTAssertEqual(orderResult, .completed)
         XCTAssertTrue(app.buttons["deck.pinned.design"].exists)
         XCTAssertFalse(app.navigationBars["#design"].exists, "drag does not open the channel")
@@ -160,11 +162,31 @@ final class SurfacesUITests: XCTestCase {
         app.terminate()
         let again = launch(reset: false)
         again.section("Deck"); again.deckCard("pinned")
-        let restored = again.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'pin.move.'"))
+        let restored = again.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'deck.pinned.'"))
         XCTAssertTrue(restored.firstMatch.waitForExistence(timeout: 15))
         XCTAssertLessThan(restored.matching(identifier: lastId).firstMatch.frame.midY,
                           restored.matching(identifier: firstId).firstMatch.frame.midY)
         XCTAssertNotEqual(firstId, lastId)
+        // Lower half of the last row is the end target; no extra idle row is needed.
+        let moved = restored.matching(identifier: lastId).firstMatch
+        let bottom = restored.matching(identifier: firstId).firstMatch
+        moved.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.8, thenDragTo: bottom.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)))
+        let atEnd = NSPredicate { _, _ in moved.exists && bottom.exists && moved.frame.midY > bottom.frame.midY }
+        let endExpectation = expectation(for: atEnd, evaluatedWith: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [endExpectation], timeout: 10), .completed)
+        XCTAssertEqual(restored.count, 2)
+        XCTAssertFalse(again.staticTexts["Move to end"].exists)
+        capture(again, "pin-clean-after-end-phone")
+        again.terminate()
+        let final = launch(reset: false)
+        final.section("Deck"); final.deckCard("pinned")
+        let finalRows = final.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'deck.pinned.'"))
+        XCTAssertTrue(finalRows.firstMatch.waitForExistence(timeout: 15))
+        XCTAssertGreaterThan(finalRows.matching(identifier: lastId).firstMatch.frame.midY,
+                             finalRows.matching(identifier: firstId).firstMatch.frame.midY)
+        // Unpin is independent from both the open action and drag surface.
+        final.buttons["Unpin design"].tap()
+        XCTAssertFalse(final.buttons["deck.pinned.design"].exists)
     }
 
     func testPinsShowOnDecksPinnedCardAndPinUnpinFromARecord() {

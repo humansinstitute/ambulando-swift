@@ -4,6 +4,64 @@ import AmbulandoCore
 import WebKit
 
 extension MacThreadRegression {
+    /// Focused UI check: sends pointer events through AppKit; never substitutes model.movePin for a drag.
+    static func pinCardCheck(_ window: NSWindow, model: AppModel) async throws {
+        model.mode = .deck
+        window.setFrame(NSRect(x: 20, y: 20, width: 1400, height: 900), display: true)
+        await settle()
+        let ids = model.pins.value.items.map { "deck.pinned.\($0.title ?? $0.pin.resourceId)" }
+        try require(ids.count >= 2, "two fixture pins")
+        try await waitFor(window, ids[0], "pinned main action")
+        try snapshot(window, model: model, name: "pin-clean-mac-desktop")
+        func point(_ id: String, fraction: CGFloat) throws -> NSPoint {
+            guard let node = find(window, id) else { throw Failure(description: "Missing pin " + id) }
+            let rect = frame(of: node)
+            return window.convertPoint(fromScreen: NSPoint(x: rect.midX, y: rect.maxY - rect.height * fraction))
+        }
+        func pointerDrag(_ source: String, _ target: String, fraction: CGFloat) async throws {
+            let start = try point(source, fraction: 0.5), end = try point(target, fraction: fraction)
+            let screenHeight = NSScreen.screens.first!.frame.height
+            let screenStart = window.convertPoint(toScreen: start), screenEnd = window.convertPoint(toScreen: end)
+            print("PIN_POINTER source=\(start) target=\(end) hit=\(String(describing: window.contentView?.hitTest(window.contentView!.convert(start, from: nil)))))")
+            // Address the calling app only; no Accessibility permission or other app identity is borrowed.
+            DispatchQueue.global().async {
+                for step in 0...30 {
+                    let t = Double(step) / 30
+                    let point = CGPoint(x: screenStart.x + (screenEnd.x - screenStart.x) * t,
+                        y: screenHeight - (screenStart.y + (screenEnd.y - screenStart.y) * t))
+                    CGWarpMouseCursorPosition(point)
+                    let kind: CGEventType = step == 0 ? .leftMouseDown : (step == 30 ? .leftMouseUp : .leftMouseDragged)
+                    CGEvent(mouseEventSource: nil, mouseType: kind, mouseCursorPosition: point, mouseButton: .left)?.postToPid(getpid())
+                    Thread.sleep(forTimeInterval: step == 0 ? 0.8 : 0.04)
+                }
+            }
+            try? await Task.sleep(for: .seconds(3))
+            await settle(); await settle()
+        }
+        window.setFrame(NSRect(x: 20, y: 20, width: 900, height: 1200), display: true)
+        await settle()
+        try snapshot(window, model: model, name: "pin-clean-mac-narrow")
+        window.setFrame(NSRect(x: 20, y: 20, width: 1400, height: 900), display: true)
+        await settle()
+        let original = model.pins.value.items.map(\.id)
+        try await pointerDrag(ids[1], ids[0], fraction: 0.15)
+        try snapshot(window, model: model, name: "pin-mac-after-pointer-before")
+        try require(model.mode == .deck, "pointer drag does not open")
+        try require(model.pins.value.items.map(\.id) == [original[1], original[0]], "actual pointer moved last before first")
+        try await pointerDrag(ids[1], ids[0], fraction: 0.85)
+        try require(model.pins.value.items.map(\.id) == original, "actual pointer lower-half drop moves to end")
+        guard let store = model.store, let connection = model.connection, let workspace = model.selectedWorkspace else { throw Failure(description: "Fixture store") }
+        let saved = try await store.reader.pinnedItems(connectionId: connection.id, workspaceId: workspace.id)
+        try require(saved.map(\.id) == original, "drag order durable")
+        window.setFrame(NSRect(x: 20, y: 20, width: 900, height: 1200), display: true)
+        await settle()
+        try snapshot(window, model: model, name: "pin-clean-mac-narrow")
+        window.setFrame(NSRect(x: 20, y: 20, width: 1400, height: 900), display: true)
+        await settle()
+        try sendClick(window, point: point(ids[0], fraction: 0.5)); await settle()
+        try require(model.mode != .deck, "short pointer click opens channel")
+    }
+
     static func batchCheck(_ window: NSWindow, model: AppModel) async throws {
         // The actual native composer is hit through the real AppKit window, including lower blank padding.
         model.mode = .chat

@@ -1,10 +1,12 @@
 # Composer, personal pin ordering and browser files
 
-The shared native iPhone/Mac client uses Tower's existing personal pin contract. A handle in Deck's Pinned items
-moves a channel, conversation, task or document before another item, or to the end. Its menu and accessibility
-actions also offer Move up/down. Movement changes ordering only; the separate open and unpin controls retain their
-behavior. The queue permits one pending move and waits for pending selection changes. The UI shows saving or failure;
-a stale move requires discarding it and deliberately moving again.
+The shared native iPhone/Mac client uses Tower's existing personal pin contract. Hold and drag a pinned card's main
+content onto the upper/lower half of another row to insert before/after it, including after the last item. A subtle
+insertion line appears only while dragging over a row. Idle cards retain their resource icon, title and Unpin, with
+no arrangement controls or instructions. Accessibility actions offer Move up/down/to end; Command–Option–Up/Down
+moves the focused card. A short tap still opens the record and Unpin remains independent. The queue permits one pending
+move and waits for pending selection changes. Order errors appear only on failure; a stale move requires discarding
+it and deliberately moving again.
 
 `POST /me/pin-order` carries the typed resource, its observed `expected_row_version`, a typed/versioned `before`
 anchor (or null), and an immutable `mutation_id`. The existing signed write queue sends it; WorkspaceSync owns reads.

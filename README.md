@@ -19,10 +19,12 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
-## Batch interactions (iPhone/iPad build 51, Mac build 40)
+## Batch interactions (iPhone/iPad build 52, Mac build 41)
 
-Click or tap the blank part of a chat composer to focus its existing draft. Drag a handle in Deck’s mixed personal pins
-before another item or to **Move to end**; its separate arrange menu also offers Move up/down. Changes use Tower’s
+Click or tap the blank part of a chat composer to focus its existing draft. Hold and drag a pinned card’s main content
+onto the upper/lower half of another row to place it before/after that row, including at the end. Idle rows keep only
+the resource icon, title and Unpin. Accessibility actions offer movement; Command–Option–Up/Down moves the focused card.
+Changes use Tower’s
 existing versioned pin-order API, synchronize through the native store, and preserve newer unpins and concurrent new pins.
 The record toolbar keeps Search, Notifications, Pin, Browser and Avatar in that order; pushed screens retain Back.
 

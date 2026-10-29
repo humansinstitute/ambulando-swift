@@ -68,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacPinCheck") {
+                try await pinCardCheck(window, model: model)
+                print("PASS: focused pin check completed"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacBatchCheck") {
                 try await batchCheck(window, model: model)
                 print("PASS: batch composer focus, pin move and browser file flows"); fflush(stdout); exit(0)
