@@ -30,3 +30,17 @@ manager operation without admin group access, denied unrelated-channel permissio
 transient read retry, and channel/grant/group/member events discovering newly eligible channels and removing revoked ones.
 Sample UI/transport checks use synthetic data and cannot establish a real account's authority. Installation, shipped
 builds, real-device behavior and cross-client authenticated checks must be recorded separately on the release task.
+
+## Healthy-stream fallback (build 55 / Mac 44)
+
+The stream previously had no periodic structure reconciliation while heartbeats remained healthy. Even though delivered
+channel/access events correctly relisted channels, a missing hint could leave navigation stale until restart reseeded
+it. Every 60 seconds of an open foreground stream, native now schedules one existing keyed workspace-structure refresh
+and a bounded event catch-up (two pages). Existing SyncEngine concurrency, coalescing, backoff and read authorization
+remain in force. The periodic structure read skips directory refresh and does not refetch completed channel histories.
+Offline retries retain exponential backoff (capped at 300 seconds) rather than forcing repeated immediate attempts.
+Successful lists determine eligibility and purge revoked content; no membership or grants are inferred.
+The timer is a child of the stream attempt, so stream stop, lock, workspace switch or background cancellation ends it.
+It does not run in the background or create a second network owner. Tests use a short injected interval and a healthy
+heartbeat-only transport to prove newly eligible channels appear, revocations disappear and polling stops on stream stop.
+A user's restart recovering a channel supports this convergence gap; it does not identify why a specific hint was missed.

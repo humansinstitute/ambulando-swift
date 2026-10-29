@@ -571,6 +571,10 @@ means row version 0 (the whole history), so the client never opens without one.
 - **Bounded catch-up.** A poll reads at most 10 pages (background: 5). A longer backlog, or a cursor Tower rejects
   (400), is a gap: the job reseeds at the head and schedules the list catch-ups. 403/404 on the event route reruns
   discovery, which removes a workspace that is no longer listed.
+- **Foreground convergence.** An open healthy SSE connection also schedules an authoritative workspace structure
+  refresh and bounded two-page event catch-up every 60 seconds. Heartbeats alone cannot prove no hint was missed.
+  Both use the same background keyed jobs and existing backoff. The connection's child task cancels with the stream;
+  no periodic network work survives backgrounding, lock or workspace switch.
 - **Access loss.** A complete scope or channel list that no longer contains a channel deletes the channel's stored
   messages, threads, tasks, docs and bodies, files, folders, comments, reactions and view states. Drafts and unsent
   rows stay. Cached downloaded file bytes of that channel remain in Caches until disconnect or system purge (gap).

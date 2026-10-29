@@ -50,7 +50,8 @@ public struct WorkspaceSync: Sendable {
     }
 
     /// Scopes job for one workspace; on success schedules one channel job per scope.
-    public func refreshWorkspace(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, priority: SyncPriority = .visible, force: Bool = false) async {
+    public func refreshWorkspace(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, priority: SyncPriority = .visible, force: Bool = false,
+                                 includeDirectory: Bool = true) async {
         let sync = self
         await engine.enqueue("scopes:\(workspace.id)", priority: priority, force: force, retries: SyncBackoff.readRetries) {
             try await sync.identity.requireReader(npub: connection.signerNpub)
@@ -58,7 +59,7 @@ public struct WorkspaceSync: Sendable {
             let scopes = try await api.scopes(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
             try await sync.store.writer.upsertScopes(workspaceId: workspace.id, scopes, complete: true)
-            await sync.refreshDirectory(connection, workspace, priority: .background)
+            if includeDirectory { await sync.refreshDirectory(connection, workspace, priority: .background) }
             for scope in scopes {
                 await sync.engine.enqueue("channels:\(workspace.id):\(scope.id)", priority: priority, force: force, retries: SyncBackoff.readRetries) {
                     try await sync.identity.requireReader(npub: connection.signerNpub)

@@ -442,3 +442,87 @@ final class LiveStreamOverflowTests: XCTestCase {
         await live.stop()
     }
 }
+
+extension LiveStreamTests {
+    final class HeartbeatOnlyStreams: EventStreamTransport, @unchecked Sendable {
+        let opens = LockedValue(0)
+        func open(_ request: URLRequest) async throws -> (HTTPURLResponse, EventChunks) {
+            opens.value += 1
+            let stream = AsyncThrowingStream<Data, Error> { continuation in
+                let producer = Task {
+                    continuation.yield(Data("event: connected\ndata: {}\n\n".utf8))
+                    do {
+                        while true {
+                            try await Task.sleep(for: .milliseconds(30))
+                            continuation.yield(Data(": heartbeat\n\n".utf8))
+                        }
+                    } catch { continuation.finish() }
+                }
+                continuation.onTermination = { _ in producer.cancel() }
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!, EventChunks(stream))
+        }
+    }
+
+    func testHealthyHeartbeatWithoutStructureHintsConvergesAndStopsPolling() async throws {
+        let h = try await LiveHarness.make(), eligible = LockedValue(false), scopeReads = LockedValue(0)
+        let baseHandler = h.tower.handler()
+        h.transport.setHandler { request in
+            if request.url!.path.hasSuffix("/scopes") {
+                scopeReads.value += 1
+                let scopes = [Fixtures.scope(Fixtures.scopeB, name: "Existing")] + (eligible.value ? [Fixtures.scope(Fixtures.scopeA, name: "Research")] : [])
+                return (200, ["scopes": scopes, "next_cursor": NSNull()])
+            }
+            if request.url!.path.contains("/scopes/"), request.url!.path.hasSuffix("/channels") {
+                let visible = eligible.value && request.url!.path.contains(Fixtures.scopeA)
+                return (200, ["channels": visible ? [Fixtures.channel(Fixtures.channel1, scope: Fixtures.scopeA, name: "Newly eligible")] : [], "next_cursor": NSNull()])
+            }
+            return try baseHandler(request)
+        }
+        _ = try await h.sync.catchUpEventsAndWait(h.connection, h.workspace)
+        await h.sync.engine.waitUntilIdle()
+        let initialMemberReads = h.transport.recorded.filter { $0.url!.path.hasSuffix("/members") }.count
+        let streams = HeartbeatOnlyStreams()
+        let live = LiveStream(sync: h.sync, transport: streams, idleTimeout: .seconds(2), reconciliationInterval: .milliseconds(200))
+        await live.start(h.connection, h.workspace)
+        let feed = await h.sync.live.feed(h.workspace.id)
+        let deadline = Date().addingTimeInterval(5)
+        while await feed.status.stream != .connected, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        let connected = await feed.status.stream
+        XCTAssertEqual(connected, .connected)
+        eligible.value = true
+        var appeared = false
+        while !appeared, Date() < deadline {
+            appeared = try await h.store.reader.channels(workspaceId: h.workspace.id).contains { $0.id == Fixtures.channel1 }
+            if !appeared { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(appeared, "Authoritative lists discover a channel while SSE sends only heartbeats")
+        let scopes = try await h.store.reader.scopes(workspaceId: h.workspace.id)
+        XCTAssertTrue(scopes.contains { $0.id == Fixtures.scopeA }, "A newly eligible scope appears too")
+        await h.sync.engine.waitUntilIdle()
+        let historyReads = h.transport.recorded.filter { $0.url!.path.hasSuffix("/messages") }.count
+        let readsBeforeTick = scopeReads.value
+        while scopeReads.value == readsBeforeTick, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        await h.sync.engine.waitUntilIdle()
+        XCTAssertEqual(h.transport.recorded.filter { $0.url!.path.hasSuffix("/members") }.count, initialMemberReads, "Periodic structure reads must not amplify directory work")
+        XCTAssertEqual(h.transport.recorded.filter { $0.url!.path.hasSuffix("/messages") }.count, historyReads, "Completed history is not downloaded again each tick")
+        let message = h.chat.tower.seed(channel: Fixtures.channel1, body: "Revoked cached content")
+        try await h.store.writer.upsertMessages([try MessageRecord(raw: rawJSON(message))])
+        eligible.value = false
+        var removed = false
+        while !removed, Date() < deadline {
+            removed = try await !h.store.reader.channels(workspaceId: h.workspace.id).contains { $0.id == Fixtures.channel1 }
+            if !removed { try await Task.sleep(for: .milliseconds(20)) }
+        }
+        XCTAssertTrue(removed, "The same fallback respects revoked channel eligibility")
+        let revokedMessage = try await h.store.reader.message(workspaceId: h.workspace.id, id: message["id"] as! String)
+        XCTAssertNil(revokedMessage, "Revoked scope content must be purged, not just hidden")
+        XCTAssertEqual(streams.opens.value, 1, "No restart or stream reconnect was needed")
+        await live.stop()
+        await h.sync.engine.waitUntilIdle()
+        let readsAtStop = scopeReads.value
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(scopeReads.value, readsAtStop, "Foreground fallback must stop with its stream")
+        XCTAssertLessThanOrEqual(readsAtStop, 6, "One keyed structure job per tick, not a busy polling loop")
+    }
+}

@@ -20,6 +20,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Foreground channel reconciliation (iPhone/iPad build 55, Mac build 44)
+
+An open app now checks the selected workspace's readable scopes and channels every minute, alongside event catch-up,
+even while the event stream keeps sending healthy heartbeats. A missed structure or access hint no longer requires
+restarting the app to discover an eligible channel. Authoritative list refreshes also remove revoked channels; the
+fallback uses existing background sync jobs and stops with the foreground stream. This is a tested convergence fix;
+installation and real-device acceptance remain separate. See [channel access](docs/channel-access.md).
+
 ## Channel access (iPhone/iPad build 54, Mac build 43)
 
 Choose explicit people and group access when creating a channel. The creator retains Manage; an empty list creates a

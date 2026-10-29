@@ -14,17 +14,20 @@ public actor LiveStream {
     let open: Opener
     let idleTimeout: Duration
     let batchWindow: Duration
+    let reconciliationInterval: Duration
     let random: @Sendable () -> Double
     private var task: Task<Void, Never>?
     private var generation: UInt64 = 0
     private var current: (connection: String, workspace: String)?
 
     public init(sync: WorkspaceSync, transport: EventStreamTransport, idleTimeout: Duration = .seconds(60), batchWindow: Duration = .milliseconds(250),
+                reconciliationInterval: Duration = .seconds(60),
                 random: @escaping @Sendable () -> Double = { Double.random(in: 0...1) }) {
         self.sync = sync
         self.open = { try await transport.open($0) }
         self.idleTimeout = idleTimeout
         self.batchWindow = batchWindow
+        self.reconciliationInterval = max(.milliseconds(100), reconciliationInterval)
         self.random = random
     }
 
@@ -115,6 +118,16 @@ public actor LiveStream {
                 while true {
                     try await Task.sleep(for: idleTimeout / 4)
                     if await activity.idle(for: idleTimeout) { return .reconnect }
+                }
+            }
+            group.addTask { [reconciliationInterval] in
+                // A heartbeat proves transport liveness, not that every authority/structure hint was delivered.
+                // Reconcile readable lists while this foreground connection is alive, through the same keyed jobs.
+                while true {
+                    try await Task.sleep(for: reconciliationInterval)
+                    try Task.checkCancellation()
+                    await sync.catchUpEvents(connection, workspace, pages: 2, priority: .background)
+                    await sync.refreshWorkspace(connection, workspace, priority: .background, includeDirectory: false)
                 }
             }
             group.addTask {
