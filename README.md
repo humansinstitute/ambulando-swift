@@ -20,6 +20,16 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Channel access (iPhone/iPad build 54, Mac build 43)
+
+Choose explicit people and group access when creating a channel. The creator retains Manage; an empty list creates a
+channel private to its creator. Channel settings opens access review/editing directly, with named recipients, current
+standard levels and protected custom permissions. Scope roles are shown separately and do not share channel content.
+Existing person grants use Tower's canonical identity mapping. Failed recipient lookup can retry without losing the
+form. Channel-list refreshes retry transient failures and an explicit refresh bypasses their backoff; authoritative
+lists still remove revoked channels. See [channel access contracts and validation](docs/channel-access.md).
+Build and simulator checks are separate from installation, distribution and authenticated live acceptance.
+
 ## Batch interactions (iPhone/iPad build 52, Mac build 41)
 
 Click or tap the blank part of a chat composer to focus its existing draft. Hold and drag a pinned card’s main content

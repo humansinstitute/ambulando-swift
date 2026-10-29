@@ -102,6 +102,11 @@ struct NewChannelSheet: View {
     @State private var prompt = ""
     @State private var person: String?
     @State private var members: [MemberRecord] = []
+    @State private var accessMembers: [AdministrationRow] = []
+    @State private var accessGroups: [AdministrationRow] = []
+    @State private var grants: [InitialChannelGrant] = []
+    @State private var accessRecipient = ""
+    @State private var accessLoadError: String?
     @State private var phase = ManagementPhase.idle
 
     private var isDirect: Bool { ManagementPermissions.isDirectMessageScope(scope) }
@@ -123,13 +128,35 @@ struct NewChannelSheet: View {
                         Text("An existing conversation with this person opens instead of a new one.")
                     }
                 } else {
-                    Section {
-                        Label("Channel access", systemImage: "person.badge.key").font(.amb(.subheadline).weight(.semibold))
-                        Text("This creates the channel with no extra permissions: you get Manage access, and nobody else is added. To give people or groups access, use Manage Workspace › Permissions › Channel access.")
+                    Section("Channel access") {
+                        Text("You receive Manage access. Add people or groups below; leaving this list empty keeps the channel private to you. Scope roles do not share channel content.")
                             .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+                        Picker("Add person or group", selection: $accessRecipient) {
+                            Text("Choose a recipient").tag("")
+                            ForEach(accessMembers.filter { $0.fields["npub"] != model.connection?.signerNpub }) { row in Text("Person or agent · " + row.title).tag("actor:" + row.id) }
+                            ForEach(accessGroups) { row in Text("Group · " + row.title).tag("group:" + row.id) }
+                        }.accessibilityIdentifier("newChannel.accessRecipient")
+                        Button("Add access") {
+                            let parts = accessRecipient.split(separator: ":", maxSplits: 1).map(String.init)
+                            guard parts.count == 2 else { return }
+                            let row = InitialChannelGrant(principalType: parts[0], principalId: parts[1])
+                            if !grants.contains(where: { $0.id == row.id }) { grants.append(row) }
+                            accessRecipient = ""
+                        }.disabled(accessRecipient.isEmpty).accessibilityIdentifier("newChannel.addAccess")
+                        ForEach($grants) { $grant in
+                            VStack(alignment: .leading) {
+                                Text((grant.principalType == "group" ? accessGroups : accessMembers).first { $0.id == grant.principalId }?.title ?? grant.principalId)
+                                Picker("Access", selection: $grant.access) {
+                                    Text("View").tag("view"); Text("Contribute").tag("contribute"); Text("Manage").tag("manage")
+                                }
+                                Button("Remove", role: .destructive) { grants.removeAll { $0.id == grant.id } }
+                            }
+                        }
+                        if let accessLoadError {
+                            Text(accessLoadError).font(.caption).foregroundStyle(.secondary)
+                            Button("Retry recipients") { Task { await loadAccessRecipients() } }.accessibilityIdentifier("newChannel.retryRecipients")
+                        }
                     }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("newChannel.limited")
                     Section("Channel name") {
                         TextField("e.g. general, design, ops", text: $name)
                             .noCapitalization()
@@ -160,14 +187,38 @@ struct NewChannelSheet: View {
             }
             .interactiveDismissDisabled(phase.isWorking)
             .task {
-                guard isDirect, let store = model.store, let w = model.selectedWorkspace?.id else { return }
-                members = (try? await store.reader.directoryMembers(workspaceId: w)) ?? []
+                guard let store = model.store, let workspace = model.selectedWorkspace else { return }
+                if isDirect {
+                    members = (try? await store.reader.directoryMembers(workspaceId: workspace.id)) ?? []
+                } else { await loadAccessRecipients() }
             }
         }
     }
 
+    private func loadAccessRecipients() async {
+        guard let store = model.store, let workspace = model.selectedWorkspace, let connection = model.connection, let manager = model.manager else { return }
+        accessLoadError = nil
+        do {
+            try await manager.refreshAdministration(connection, workspace, list: .members)
+            let rows = try await store.reader.administrationRows(connection: connection.id, workspace: workspace.id, list: .members)
+            guard model.selectedWorkspace?.id == workspace.id, model.connection?.id == connection.id else { return }
+            accessMembers = rows
+        } catch { accessLoadError = "Recipients could not be refreshed. Retry below; your channel draft is kept." }
+        // Group choices come from existing management routes, never inferred ownership or guessed membership.
+        if let access = try? await manager.scopeAccess(connection, workspace, scope: scope.id), !access.groups.isEmpty {
+            guard model.selectedWorkspace?.id == workspace.id, model.connection?.id == connection.id else { return }
+            accessGroups = access.groups
+        } else if (try? await manager.refreshAdministration(connection, workspace, list: .groups)) != nil {
+            let rows = (try? await store.reader.administrationRows(connection: connection.id, workspace: workspace.id, list: .groups)) ?? []
+            guard model.selectedWorkspace?.id == workspace.id, model.connection?.id == connection.id else { return }
+            accessGroups = rows
+        } else {
+            accessLoadError = accessLoadError ?? "Group choices are unavailable with your current access. You can retry or choose individual recipients."
+        }
+    }
+
     private func create() {
-        let scopeId = scope.id, name = name, description = description, prompt = prompt
+        let scopeId = scope.id, name = name, description = description, prompt = prompt, grants = grants
         if isDirect, let person {
             let mine = model.connection?.signerNpub ?? ""
             if let existing = model.navigation.value.groups.first(where: { $0.id == scopeId })?.channels
@@ -182,7 +233,7 @@ struct NewChannelSheet: View {
                 if let person {
                     return try await manager.createDirectMessage(connection, workspace, scopeId: scopeId, participantNpub: person)
                 }
-                return try await manager.createChannel(connection, workspace, scopeId: scopeId, name: name, description: description, contextPrompt: prompt)
+                return try await manager.createChannel(connection, workspace, scopeId: scopeId, name: name, description: description, contextPrompt: prompt, grants: grants)
             }
             switch result {
             case .success(let channel): onCreated(channel); dismiss()
@@ -274,9 +325,11 @@ struct ChannelSettingsSheet: View {
                 }
             }
             Section {
-                Text("Manage who can read and write this channel in Manage Workspace › Permissions › Channel access.")
-                    .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let workspace = model.selectedWorkspace, let connection = model.connection {
+                    NavigationLink("Review and edit channel access") {
+                        ChannelAccessSettingsPage(channel: channel, workspace: workspace, connection: connection)
+                    }.accessibilityIdentifier("channelSettings.access")
+                }
             } header: { Text("Channel access") }
             if canManage {
                 Section {

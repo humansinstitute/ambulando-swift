@@ -66,13 +66,21 @@ public struct ScopeChannelManager: Sendable {
 
     /// Creates a named channel in `scopeId` (optional description and channel context prompt, as the web form).
     public func createChannel(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, scopeId: String, name: String,
-                              description: String?, contextPrompt: String?) async throws -> ChannelRecord {
+                              description: String?, contextPrompt: String?, grants: [InitialChannelGrant] = []) async throws -> ChannelRecord {
         guard !UploadToken.contains(in: description ?? "") else { throw ComposerUploadError.unresolved }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw ManagementError.invalid("Channel name is required.") }
         guard !UploadToken.contains(in: contextPrompt ?? "") else { throw ComposerUploadError.unresolved }
         var body: [String: Any] = ["name": trimmed, "kind": "channel",
                                    "metadata": AgentChatConfig.write([:], contextPrompt: contextPrompt ?? "")]
+        var payloads = try InitialChannelGrant.payloads(grants)
+        if grants.contains(where: { $0.principalType == "actor" }) {
+            // Initial bundles replace Tower's creator bundle. Never let a picker entry downgrade the creator.
+            let creator = try await membership(connection, workspace)
+            guard let actorId = creator.actorId else { throw ManagementError.unexpected("Tower did not identify the channel creator. Refresh before creating the channel.") }
+            payloads.removeAll { $0["principal_type"] as? String == "actor" && $0["principal_id"] as? String == actorId }
+        }
+        body["grants"] = payloads
         if let description = description?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty { body["description"] = description }
         let object = try await send(connection, workspace, method: "POST", path: try base(workspace) + "/scopes/" + TowerAPI.uuid(scopeId) + "/channels",
                                     body: body, operation: .createChannel)
@@ -390,5 +398,26 @@ extension ScopeRecord {
     /// Tower's `can_manage` from the scope list (nil when the row came from another route).
     public var canManage: Bool? {
         ((try? JSONSerialization.jsonObject(with: raw)) as? [String: Any])?["can_manage"] as? Bool
+    }
+}
+
+/// Explicit access submitted with channel creation, atomically authorized by Tower. Empty means creator only;
+/// scope roles and group ownership never silently expand a channel's audience.
+public struct InitialChannelGrant: Sendable, Equatable, Identifiable {
+    public var principalType: String
+    public var principalId: String
+    public var access: String
+    public var id: String { principalType + ":" + principalId }
+    public init(principalType: String, principalId: String, access: String = "view") {
+        self.principalType = principalType == "person" ? "actor" : principalType
+        self.principalId = principalId.lowercased(); self.access = access
+    }
+    static func payloads(_ grants: [Self]) throws -> [[String: Any]] {
+        var seen = Set<String>()
+        return try grants.map { grant in
+            guard ["actor", "group"].contains(grant.principalType), ["view", "contribute", "manage"].contains(grant.access),
+                  seen.insert(grant.id).inserted else { throw ManagementError.invalid("Choose each person or group once and select an access level.") }
+            return ["principal_type": grant.principalType, "principal_id": try TowerAPI.uuid(grant.principalId), "access_level": grant.access]
+        }
     }
 }

@@ -111,6 +111,7 @@ final class ManagementTests: XCTestCase {
         XCTAssertEqual(sent.method, "POST")
         XCTAssertEqual(sent.path, "/scopes/\(Fixtures.scopeA)/channels")
         XCTAssertEqual(sent.body["kind"] as? String, "channel")
+        XCTAssertEqual((sent.body["grants"] as? [[String: String]])?.count, 0, "No implicit broader audience")
         XCTAssertEqual(sent.body["description"] as? String, "Runbooks")
         let chat = (sent.body["metadata"] as? [String: Any])?["agent_chat"] as? [String: Any]
         XCTAssertEqual(chat?["context_prompt"] as? String, "Be brief")

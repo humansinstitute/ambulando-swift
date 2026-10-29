@@ -45,7 +45,7 @@ public struct WorkspaceSync: Sendable {
             try await sync.store.writer.replaceWorkspaces(connectionId: connection.id, workspaces)
             // Keeps an enabled background credential pinned to exactly the workspaces this identity can see.
             try? await sync.identity.updateBackgroundWorkspaces(origin: origin, workspaceIds: workspaces.map(\.id))
-            for workspace in workspaces { await sync.refreshWorkspace(connection, workspace, priority: .background) }
+            for workspace in workspaces { await sync.refreshWorkspace(connection, workspace, priority: .background, force: force) }
         }
     }
 
@@ -60,7 +60,7 @@ public struct WorkspaceSync: Sendable {
             try await sync.store.writer.upsertScopes(workspaceId: workspace.id, scopes, complete: true)
             await sync.refreshDirectory(connection, workspace, priority: .background)
             for scope in scopes {
-                await sync.engine.enqueue("channels:\(workspace.id):\(scope.id)", priority: priority) {
+                await sync.engine.enqueue("channels:\(workspace.id):\(scope.id)", priority: priority, force: force, retries: SyncBackoff.readRetries) {
                     try await sync.identity.requireReader(npub: connection.signerNpub)
                     let channels = try await api.channels(workspaceId: workspace.id, scopeId: scope.id, appNpub: workspace.appNpub)
                     try Task.checkCancellation()

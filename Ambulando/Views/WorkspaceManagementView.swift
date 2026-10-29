@@ -336,6 +336,29 @@ private struct WorkspaceAdministrationPage: View {
     }
 }
 
+/// Shared entry point from channel settings; resource managers do not need workspace administration.
+struct ChannelAccessSettingsPage: View {
+    @Environment(AppModel.self) private var model
+    let channel: ChannelRecord
+    let workspace: WorkspaceRecord
+    let connection: ConnectionRecord
+    @State private var members: [AdministrationRow] = []
+    @State private var groups: [AdministrationRow] = []
+    var body: some View {
+        ChannelAdministrationPage(channel: channel, workspace: workspace, connection: connection, members: members, groups: groups)
+            .task {
+                guard let manager = model.manager, let store = model.store else { return }
+                if (try? await manager.refreshAdministration(connection, workspace, list: .members)) != nil {
+                    members = (try? await store.reader.administrationRows(connection: connection.id, workspace: workspace.id, list: .members)) ?? []
+                }
+                if let access = try? await manager.scopeAccess(connection, workspace, scope: channel.scopeId) { groups = access.groups }
+                if groups.isEmpty, (try? await manager.refreshAdministration(connection, workspace, list: .groups)) != nil {
+                    groups = (try? await store.reader.administrationRows(connection: connection.id, workspace: workspace.id, list: .groups)) ?? []
+                }
+            }
+    }
+}
+
 private struct ChannelAdministrationPage: View {
     @Environment(AppModel.self) private var model
     let channel: ChannelRecord
@@ -347,6 +370,7 @@ private struct ChannelAdministrationPage: View {
     @State private var query = LiveQuery<[AdministrationRow]>(initial: [])
     @State private var phase = ManagementPhase.idle
     @State private var pending: AdministrationRow?
+    @State private var scopeAccess: ScopeAdministrationAccess?
 
     var body: some View {
         List {
@@ -359,9 +383,22 @@ private struct ChannelAdministrationPage: View {
             ForEach(query.value) { row in
                 Section(row.title) {
                     Text(row.detail).font(.caption)
+                    if row.fields["access_level"] == "custom" { Text(row.channelPermissions.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary) }
                     if canManage {
-                        NavigationLink("Change access") { AdministrationEditor(kind: .grant(channel.id, row), workspace: workspace, connection: connection, members: members, groups: groups, channelAuthority: canManage) }
+                        if row.fields["access_level"] != "custom" {
+                            NavigationLink("Change access") { AdministrationEditor(kind: .grant(channel.id, row), workspace: workspace, connection: connection, members: members, groups: groups, channelAuthority: canManage) }
+                        } else {
+                            Text("Custom permissions are preserved. Add access separately, or explicitly revoke this grant.").font(.caption)
+                        }
                         Button("Revoke access", role: .destructive) { pending = row }
+                    }
+                }
+            }
+            Section("Scope access") {
+                Text("Scope roles manage the scope and context tree. They do not grant access to this channel; channel grants above determine who can read and contribute.").font(.caption)
+                if let scopeAccess {
+                    ForEach(scopeAccess.grants) { row in
+                        VStack(alignment: .leading) { Text(row.title); Text(row.detail).font(.caption).foregroundStyle(.secondary) }
                     }
                 }
             }
@@ -377,6 +414,7 @@ private struct ChannelAdministrationPage: View {
             }
             await refresh()
         }
+        .onChange(of: groups) { _, _ in Task { await refresh() } }
         .onDisappear { query.stop(); canManage = false }
         .confirmationDialog("Revoke this channel grant?", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
             Button("Revoke access", role: .destructive) {
@@ -394,9 +432,11 @@ private struct ChannelAdministrationPage: View {
     private func refresh() async {
         guard let manager = model.manager else { return }
         do {
+            canManage = false
             let fresh = try await manager.membership(connection, workspace)
             let rows = try await manager.channelGrants(connection, workspace, channel: channel.id)
             canManage = AdministrationAuthority.canManageChannelGrants(membership: fresh, grants: rows, groups: groups, npub: connection.signerNpub)
+            scopeAccess = try? await manager.scopeAccess(connection, workspace, scope: channel.scopeId)
             phase = .idle
         }
         catch { canManage = false; phase = .failed((error as? ManagementError) ?? .unexpected(error.localizedDescription)) }
@@ -567,6 +607,7 @@ struct AdministrationEditor: View {
         .task {
             guard !loaded else { return }
             var initial: [String: String] = ["kind": "human", "type": "actor", "access": "view", "expires": ISO8601DateFormatter().string(from: Date().addingTimeInterval(86400))]
+            if case .grant(_, let row) = kind, let level = row?.fields["access_level"], ["view", "contribute", "manage"].contains(level) { initial["access"] = level }
             if case .profile = kind {
                 let object = (try? JSONSerialization.jsonObject(with: workspace.raw)) as? [String: Any] ?? [:]
                 initial["name"] = workspace.label; initial["slug"] = workspace.slug ?? ""; initial["description"] = object["description"] as? String ?? ""; initial["avatar"] = object["avatar_url"] as? String ?? ""

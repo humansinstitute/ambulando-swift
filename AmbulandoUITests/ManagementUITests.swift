@@ -41,6 +41,32 @@ final class ManagementUITests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
     }
 
+    func testCreateWithExplicitRecipientAndOpenChannelAccessFromSettings() {
+        let app = launch(["-AmbulandoFixtureAdmin"])
+        app.openSidebar()
+        app.buttons["sidebar.addChannel.Ambulando"].firstMatch.tap()
+        let picker = app.descendants(matching: .any).matching(identifier: "newChannel.accessRecipient").firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout: 10))
+        picker.tap()
+        let ana = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Ana'")).firstMatch
+        XCTAssertTrue(ana.waitForExistence(timeout: 5)); ana.tap()
+        app.buttons["newChannel.addAccess"].tap()
+        XCTAssertTrue(app.staticTexts["Ana"].waitForExistence(timeout: 5))
+        let name = app.textFields["newChannel.name"]
+        name.tap(); name.typeText("access-review"); doneTyping(name)
+        capture(app, "channel-explicit-creation-access")
+        app.buttons["newChannel.create"].tap()
+        XCTAssertTrue(app.navigationBars["#access-review"].waitForExistence(timeout: 10))
+        app.openSidebar()
+        app.buttons["sidebar.channelSettings.access-review"].tap()
+        let access = app.buttons["channelSettings.access"]
+        for _ in 0..<5 where !(access.exists && access.isHittable) { app.swipeUp() }
+        XCTAssertTrue(access.waitForExistence(timeout: 5)); access.tap()
+        XCTAssertTrue(app.buttons["Grant access"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Scope access"].exists)
+        capture(app, "channel-settings-direct-access")
+    }
+
     func testCreateRenamePromptMoveAndArchiveAChannelInAScopeYouManage() {
         let app = launch()
         app.openSidebar()

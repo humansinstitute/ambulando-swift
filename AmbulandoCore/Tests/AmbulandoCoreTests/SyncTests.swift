@@ -209,3 +209,82 @@ final class WorkspaceSyncTests: XCTestCase {
         XCTAssertEqual(count, 0)
     }
 }
+
+extension WorkspaceSyncTests {
+    func testForceRefreshReachesChannelJobsAndRemovesRevokedNavigation() async throws {
+        let h = try await ChatHarness.make()
+        let routes = towerRoutes()
+        let transport = StubTransport(routes)
+        let sync = WorkspaceSync(store: h.store, engine: SyncEngine(), identity: h.identity, transport: transport)
+        await sync.refreshWorkspace(h.connection, h.workspace)
+        await sync.engine.waitUntilIdle()
+        // Simulate a failed channel job already in backoff, then an explicit refresh.
+        await sync.engine.enqueue("channels:\(h.workspace.id):\(Fixtures.scopeA)", force: true) { throw URLError(.timedOut) }
+        await sync.engine.waitUntilIdle()
+        transport.setHandler { request in
+            if request.url!.path.hasSuffix("/scopes/\(Fixtures.scopeA)/channels") { return (200, ["channels": [], "next_cursor": NSNull()]) }
+            return try routes(request)
+        }
+        await sync.refreshWorkspace(h.connection, h.workspace, force: true)
+        // An unpropagated force leaves the channel backoff waiting for 2 seconds.
+        try await Task.sleep(for: .milliseconds(300))
+        let channels = try await h.store.reader.channels(workspaceId: h.workspace.id)
+        XCTAssertFalse(channels.contains { $0.id == Fixtures.channel1 }, "Successful authoritative empty list removes revoked channel immediately")
+        XCTAssertTrue(channels.contains { $0.id == Fixtures.channel2 }, "Other eligible channels remain")
+        let snapshot = await sync.engine.snapshot
+        XCTAssertFalse(snapshot.scheduled.contains("channels:\(h.workspace.id):\(Fixtures.scopeA)"))
+        await sync.engine.cancelAll()
+    }
+}
+
+extension WorkspaceSyncTests {
+    func testNewChannelAndAccessEventsRelistEligibleChannelsAndRemoveRevokedOnes() async throws {
+        let h = try await ChatHarness.make(), eligible = LockedValue(false)
+        let routes = towerRoutes()
+        let transport = StubTransport { request in
+            if request.url!.path.hasSuffix("/scopes/\(Fixtures.scopeA)/channels"), !eligible.value {
+                return (200, ["channels": [], "next_cursor": NSNull()])
+            }
+            return try routes(request)
+        }
+        let sync = WorkspaceSync(store: h.store, engine: SyncEngine(), identity: h.identity, transport: transport)
+        await sync.refreshWorkspace(h.connection, h.workspace)
+        await sync.engine.waitUntilIdle()
+        var version = 1
+        for type in ["channel", "channel_grant", "permission_grant", "group", "workspace_member"] {
+            eligible.value = true
+            try await sync.applyEvents([TowerEvent(rowVersion: version, cursor: "fixture-\(version)", workspaceId: h.workspace.id,
+                entityType: type, entityId: Fixtures.channel1, operation: "created", scopeId: Fixtures.scopeA, channelId: Fixtures.channel1)], h.connection, h.workspace)
+            await sync.engine.waitUntilIdle()
+            var channels = try await h.store.reader.channels(workspaceId: h.workspace.id)
+            XCTAssertTrue(channels.contains { $0.id == Fixtures.channel1 }, "\(type) discovers a newly eligible channel without reopening the app")
+            eligible.value = false; version += 1
+            try await sync.applyEvents([TowerEvent(rowVersion: version, cursor: "fixture-\(version)", workspaceId: h.workspace.id,
+                entityType: type, entityId: Fixtures.channel1, operation: "updated", scopeId: Fixtures.scopeA, channelId: Fixtures.channel1)], h.connection, h.workspace)
+            await sync.engine.waitUntilIdle()
+            channels = try await h.store.reader.channels(workspaceId: h.workspace.id)
+            XCTAssertFalse(channels.contains { $0.id == Fixtures.channel1 }, "\(type) respects Tower's revoked eligibility")
+            version += 1
+        }
+    }
+
+    func testChannelListTransientFailureRetriesWithoutAnotherUserTrigger() async throws {
+        let h = try await ChatHarness.make(), attempts = LockedValue(0)
+        let routes = towerRoutes()
+        let transport = StubTransport { request in
+            if request.url!.path.hasSuffix("/scopes/\(Fixtures.scopeA)/channels") {
+                attempts.value += 1
+                if attempts.value == 1 { throw URLError(.timedOut) }
+            }
+            return try routes(request)
+        }
+        let sync = WorkspaceSync(store: h.store, engine: SyncEngine(random: { 0 }), identity: h.identity, transport: transport)
+        await sync.refreshWorkspace(h.connection, h.workspace)
+        await sync.engine.waitUntilIdle()
+        let channels = try await h.store.reader.channels(workspaceId: h.workspace.id)
+        XCTAssertEqual(attempts.value, 2)
+        XCTAssertTrue(channels.contains { $0.id == Fixtures.channel1 })
+        let snapshot = await sync.engine.snapshot
+        XCTAssertTrue(snapshot.errors.isEmpty)
+    }
+}

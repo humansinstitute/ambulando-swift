@@ -234,3 +234,89 @@ extension WorkspaceAdministrationTests {
         XCTAssertEqual(transport.recorded.count, 2)
     }
 }
+
+extension WorkspaceAdministrationTests {
+    func testUnrelatedChannelManagerUnionDoesNotAuthorizeSelectedChannel() {
+        let membership = WorkspaceMembership(role: "member", permissions: ["channel.grants.manage", "channel.manage"], actorId: Fixtures.scopeA)
+        let unrelated = AdministrationRow(["principal_type": "person", "principal_id": Fixtures.scopeB, "permissions": ["channel.grants.manage"]])
+        XCTAssertFalse(AdministrationAuthority.canManageChannelGrants(membership: membership, grants: [unrelated], groups: [], npub: TestKeys.npub))
+    }
+
+    func testTowerPersonGrantRetainsRecipientAndSupportsExistingGrantEditing() throws {
+        let row = AdministrationRow(["id": Fixtures.channel1, "principal_type": "person", "stored_principal_type": "actor",
+            "principal_id": Fixtures.scopeA, "access_level": "contribute", "permissions": ["channel.read", "channel.write"],
+            "principal": ["actor_id": Fixtures.scopeA, "npub": TestKeys.npub, "display_name": "Creator", "kind": "human"]])
+        XCTAssertEqual(row.title, "Creator")
+        XCTAssertEqual(row.fields["principal_type"], "actor")
+        XCTAssertEqual(row.fields["npub"], TestKeys.npub)
+        let command = AdministrationCommand.channelGrant(channel: Fixtures.channel1, principalType: row.fields["principal_type"]!, principal: row.fields["principal_id"]!, access: "manage", update: true)
+        XCTAssertEqual(try command.request().1, "/channels/\(Fixtures.channel1)/grants/actor/\(Fixtures.scopeA)")
+        let revoke = AdministrationCommand.revokeChannelGrant(channel: Fixtures.channel1, principalType: row.fields["principal_type"]!, principal: row.fields["principal_id"]!)
+        XCTAssertEqual(try revoke.request().0, "DELETE")
+    }
+
+    func testDirectChannelManagerDoesNotNeedAdminOnlyGroupsEndpoint() async throws {
+        let h = try await ChatHarness.make()
+        let transport = StubTransport { request in
+            if request.url!.path.hasSuffix("/me") { return (200, ["actor": ["actor_id": Fixtures.scopeA], "membership": ["role": "member"], "permissions": ["workspace.read"]]) }
+            if request.httpMethod == "GET" {
+                XCTAssertTrue(request.url!.path.hasSuffix("/grants"))
+                return (200, ["grants": [["principal_type": "person", "principal_id": Fixtures.scopeA, "permissions": ["channel.grants.manage"]]]])
+            }
+            XCTAssertEqual(request.httpMethod, "PUT")
+            return (200, [:])
+        }
+        let manager = ScopeChannelManager(store: h.store, identity: h.identity, transport: transport)
+        try await manager.administer(h.connection, h.workspace, command: .channelGrant(channel: Fixtures.channel1, principalType: "actor", principal: Fixtures.scopeB, access: "view", update: true))
+        XCTAssertEqual(transport.recorded.count, 3)
+        XCTAssertFalse(transport.recorded.contains { $0.url!.path.hasSuffix("/groups") })
+    }
+
+    func testInitialChannelAccessValidationAndCreatorOnlyDefault() throws {
+        XCTAssertTrue(try InitialChannelGrant.payloads([]).isEmpty)
+        let grant = InitialChannelGrant(principalType: "person", principalId: Fixtures.scopeA, access: "contribute")
+        let payload = try InitialChannelGrant.payloads([grant])
+        XCTAssertEqual(payload.first?["principal_type"] as? String, "actor")
+        XCTAssertEqual(payload.first?["access_level"] as? String, "contribute")
+        XCTAssertThrowsError(try InitialChannelGrant.payloads([grant, grant]))
+        XCTAssertThrowsError(try InitialChannelGrant.payloads([.init(principalType: "workspace", principalId: Fixtures.scopeA)]))
+        XCTAssertThrowsError(try InitialChannelGrant.payloads([.init(principalType: "actor", principalId: "../other")]))
+        XCTAssertThrowsError(try InitialChannelGrant.payloads([.init(principalType: "actor", principalId: Fixtures.scopeA, access: "owner")]))
+    }
+
+    func testCreationSendsAccessWithChannelInOneSignedRequest() async throws {
+        let h = try await ChatHarness.make()
+        let transport = StubTransport { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertTrue(request.url!.path.hasSuffix("/scopes/\(Fixtures.scopeA)/channels"))
+            let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+            let grants = try XCTUnwrap(body["grants"] as? [[String: String]])
+            XCTAssertEqual(grants, [["principal_type": "group", "principal_id": Fixtures.scopeB, "access_level": "view"]])
+            let event = try decodeAuthorization(request)
+            XCTAssertTrue(event.tags.contains(["payload", SHA256Hex.of(request.httpBody!)]))
+            return (200, ["channel": Fixtures.channel(Fixtures.channel1, scope: Fixtures.scopeA, name: "Private research")])
+        }
+        let manager = ScopeChannelManager(store: h.store, identity: h.identity, transport: transport)
+        _ = try await manager.createChannel(h.connection, h.workspace, scopeId: Fixtures.scopeA, name: "Private research", description: nil, contextPrompt: nil,
+            grants: [.init(principalType: "group", principalId: Fixtures.scopeB)])
+        XCTAssertEqual(transport.recorded.count, 1, "No follow-up grant writes or partial sharing window")
+    }
+}
+
+extension WorkspaceAdministrationTests {
+    func testInitialPersonGrantCannotReplaceCreatorsRecoveryBundle() async throws {
+        let h = try await ChatHarness.make()
+        let transport = StubTransport { request in
+            if request.httpMethod == "GET" { return (200, ["actor": ["actor_id": Fixtures.scopeA], "membership": ["role": "member"]]) }
+            let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+            XCTAssertEqual(body["grants"] as? [[String: String]], [["principal_type": "actor", "principal_id": Fixtures.scopeB, "access_level": "contribute"]])
+            return (200, ["channel": Fixtures.channel(Fixtures.channel1, scope: Fixtures.scopeA, name: "Research")])
+        }
+        let manager = ScopeChannelManager(store: h.store, identity: h.identity, transport: transport)
+        _ = try await manager.createChannel(h.connection, h.workspace, scopeId: Fixtures.scopeA, name: "Research", description: nil, contextPrompt: nil, grants: [
+            .init(principalType: "actor", principalId: Fixtures.scopeA, access: "view"),
+            .init(principalType: "actor", principalId: Fixtures.scopeB, access: "contribute"),
+        ])
+        XCTAssertEqual(transport.recorded.map { $0.httpMethod! }, ["GET", "POST"])
+    }
+}

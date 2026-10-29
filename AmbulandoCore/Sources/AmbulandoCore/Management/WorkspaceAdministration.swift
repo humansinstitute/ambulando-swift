@@ -11,8 +11,19 @@ public struct AdministrationRow: Codable, Sendable, Equatable, Identifiable {
     public let childGroupIds: [String]
     public let filters: [String: [String]]
 
+    public var channelPermissions: [String] {
+        guard let object = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] else { return [] }
+        return (object["permissions"] as? [String] ?? [object["permission"] as? String ?? ""]).filter { !$0.isEmpty }.sorted()
+    }
+
     init(_ source: [String: Any]) {
         var object = source
+        if let principal = source["principal"] as? [String: Any] {
+            // Display metadata belongs to the recipient, while grant identity and resource remain top-level.
+            for key in ["display_name", "name", "npub", "kind"] where object[key] == nil { object[key] = principal[key] }
+            if object["principal_id"] == nil { object["principal_id"] = principal["actor_id"] ?? principal["id"] }
+        }
+        if object["principal_type"] as? String == "person" { object["principal_type"] = "actor" }
         if let actor = source["actor"] as? [String: Any] { object = source.merging(actor) { _, actorValue in actorValue } }
         if let membership = source["membership"] as? [String: Any], let role = membership["role"] { object["role"] = role }
         if let grant = source["grant"] as? [String: Any] { object = (source["installation"] as? [String: Any] ?? [:]).merging(grant) { _, value in value } }
@@ -183,7 +194,7 @@ extension ScopeChannelManager {
             switch command {
             case .channelGrant(let channel, _, _, _, _), .revokeChannelGrant(let channel, _, _):
                 let grants = try await channelGrants(connection, workspace, channel: channel)
-                try await refreshAdministration(connection, workspace, list: .groups)
+                // Group directory is admin-only on Tower; a direct channel manager must not need it.
                 let groups = try await store.reader.administrationRows(connection: connection.id, workspace: workspace.id, list: .groups)
                 guard AdministrationAuthority.canManageChannelGrants(membership: fresh, grants: grants, groups: groups, npub: connection.signerNpub) else { throw ManagementError.forbidden("Channel grant management permission is required for this channel.") }
             case .installation(let id, _):
@@ -320,7 +331,7 @@ extension ScopeChannelManager {
 
 public enum AdministrationAuthority {
     public static func canManageChannelGrants(membership: WorkspaceMembership, grants: [AdministrationRow], groups: [AdministrationRow], npub: String) -> Bool {
-        if membership.isAdmin || membership.permissions.contains("channel.grants.manage") { return true }
+        if membership.isAdmin { return true }
         return grants.contains { row in
             guard let object = (try? JSONSerialization.jsonObject(with: row.raw)) as? [String: Any] else { return false }
             let permissions = object["permissions"] as? [String] ?? [object["permission"] as? String ?? ""]
