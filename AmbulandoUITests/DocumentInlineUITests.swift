@@ -77,4 +77,22 @@ final class DocumentInlineUITests: XCTestCase {
         XCTAssertTrue(again.buttons["doc.commentSelection"].isEnabled)
     }
 
+    func testDirtyEditorAutosavesWithinOneMinuteAndRenameReopens() {
+        let app = launch(reset: true)
+        XCTAssertTrue(app.webViews["doc.editor"].waitForExistence(timeout: 15))
+        let title = app.textFields["editor.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 15))
+        title.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        let old = (title.value as? String) ?? ""
+        let started = Date()
+        title.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count) + "Minute cloud checkpoint")
+        XCTAssertTrue(app.staticTexts["Saved locally; waiting to sync."].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Saved."].waitForExistence(timeout: 65), "active dirty editor saves without pressing Save")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 66)
+        XCTAssertFalse(app.staticTexts["editor.dirty"].exists)
+        app.terminate()
+        let reopened = launch(reset: false, document: "Minute cloud checkpoint")
+        XCTAssertEqual(reopened.textFields["editor.title"].value as? String, "Minute cloud checkpoint")
+    }
+
 }

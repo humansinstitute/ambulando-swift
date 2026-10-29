@@ -249,10 +249,10 @@ struct DocumentView: View {
             wiki.isVisible = false
             if let leaving = editor {
                 editor = nil; wiki.editor = nil
-                Task { _ = await leaving.persistDraft(state: .editing); leaving.close() }
+                Task { await leaving.flush(); leaving.close() }
             }
         }
-        .onChange(of: scenePhase) { _, phase in if phase != .active, let editor { Task { _ = await editor.persistDraft(state: .editing) } } }
+        .onChange(of: scenePhase) { _, phase in editor?.setActive(phase == .active) }
     }
 
     private func openFormattedPage() {
@@ -580,7 +580,7 @@ struct DocumentEditorScreen: View {
                 ToolbarItem(placement: .confirmationAction) { DocumentSaveButton(editor: editor, onFinish: onFinish) }
             }
         }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { Task { _ = await editor.persistDraft(state: .editing) } } }
+        .onChange(of: scenePhase) { _, phase in editor.setActive(phase == .active) }
     }
 
     private var isCompact: Bool {
@@ -776,6 +776,7 @@ struct DocumentEditSurface: View {
     @Environment(AppModel.self) private var model
     @Bindable var editor: DocEditorModel
     @State private var confirmDiscard = false
+    @State private var confirmTakeover = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -783,13 +784,21 @@ struct DocumentEditSurface: View {
                 .textFieldStyle(.plain)
                 .font(Amb.editorial)
                 .foregroundStyle(Amb.paperInk)
-                .accessibilityIdentifier("editor.title")
+                .accessibilityIdentifier("editor.title").disabled(editor.takingOver)
             HStack(spacing: 6) {
                 Circle().fill(editor.leaseState.contains("lease held") ? Color.green : Amb.mutedForeground).frame(width: 7, height: 7)
                 Text(editor.leaseState).accessibilityIdentifier("editor.lease")
-                if editor.dirty { Text("· Unsaved changes").accessibilityIdentifier("editor.dirty") }
+                if editor.dirty { Text("· Changes pending sync").accessibilityIdentifier("editor.dirty") }
             }
             .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+            if let synced = editor.lastSyncedAt { Text("Last synced \(synced.formatted(date: .omitted, time: .shortened))").font(.amb(.caption)) }
+            if editor.canTakeover {
+                Button("Take over editing…") { confirmTakeover = true }
+                    .disabled(editor.saving || editor.takingOver).accessibilityIdentifier("editor.takeover")
+                    .confirmationDialog("Take over from your other device?", isPresented: $confirmTakeover, titleVisibility: .visible) {
+                        Button("Preserve my draft and load latest cloud version") { Task { await editor.takeover() } }
+                    } message: { Text("This device will load the latest cloud version and stop the previous editor from saving over it. Any divergent local edits are kept as recovery history.") }
+            }
             if let status = editor.status {
                 Notice(tone: editor.statusTone, text: status).accessibilityIdentifier("editor.status")
                 if editor.dirty, editor.statusTone == .warning || editor.statusTone == .error {
@@ -810,6 +819,7 @@ struct DocumentEditSurface: View {
             case .rich, .markdown:
                 if BoardEditorBundle.available {
                     DocumentEditorWebView(editor: editor)
+                        .allowsHitTesting(!editor.takingOver)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .accessibilityLabel("Document text")
                 } else {

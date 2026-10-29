@@ -187,6 +187,13 @@ public struct EditLease: Sendable, Equatable {
     public let id: String
     public let token: String
     public let expiresAt: String
+    public let documentEditProtocol: String?
+    public let editorSessionId: String?
+
+    public init(id: String, token: String, expiresAt: String, documentEditProtocol: String? = nil, editorSessionId: String? = nil) {
+        self.id = id; self.token = token; self.expiresAt = expiresAt
+        self.documentEditProtocol = documentEditProtocol; self.editorSessionId = editorSessionId
+    }
 }
 
 public enum LeaseError: LocalizedError, Equatable, Sendable {
@@ -203,8 +210,14 @@ public enum LeaseError: LocalizedError, Equatable, Sendable {
 extension TowerAPI {
     public static let leaseSeconds = 120
 
-    public func acquireLease(workspaceId: String, appNpub: String, entityType: String, entityId: String) async throws -> EditLease {
-        let body = try rawJSON(["entity_type": entityType, "entity_id": try Self.uuid(entityId), "ttl_seconds": Self.leaseSeconds])
+    public func acquireLease(workspaceId: String, appNpub: String, entityType: String, entityId: String, editorSessionId: String? = nil, takeoverLeaseId: String? = nil) async throws -> EditLease {
+        var fields: [String: Any] = ["entity_type": entityType, "entity_id": try Self.uuid(entityId), "ttl_seconds": Self.leaseSeconds]
+        if entityType == "document", let editorSessionId {
+            fields["document_edit_protocol"] = Self.documentEditProtocol
+            fields["editor_session_id"] = try Self.uuid(editorSessionId)
+        }
+        if let takeoverLeaseId { fields["takeover"] = true; fields["expected_lease_id"] = try Self.uuid(takeoverLeaseId) }
+        let body = try rawJSON(fields)
         let reply = try await client.exchange(method: "POST", path: try Self.base(workspaceId) + "/edit-leases/acquire", appNpub: appNpub, jsonBody: body)
         let o = (try? JSONSerialization.jsonObject(with: reply.body)) as? [String: Any]
         if reply.status == 409 {
@@ -215,7 +228,10 @@ extension TowerAPI {
         guard let lease = o?["lease"] as? [String: Any], let id = lease["id"] as? String, let token = lease["lease_token"] as? String,
               lease["entity_id"] as? String == entityId.lowercased() || (lease["entity_id"] as? String)?.lowercased() == entityId.lowercased()
         else { throw TowerError.malformed("edit lease") }
-        return EditLease(id: id, token: token, expiresAt: (lease["expires_at"] as? String) ?? "")
+        let marker = o?["document_edit_protocol"] as? String
+        if takeoverLeaseId != nil, marker != Self.documentEditProtocol { throw LeaseError.invalid("takeover_not_supported") }
+        return EditLease(id: id, token: token, expiresAt: (lease["expires_at"] as? String) ?? "", documentEditProtocol: marker,
+                         editorSessionId: lease["editor_session_id"] as? String)
     }
 
     public func renewLease(workspaceId: String, appNpub: String, lease: EditLease) async throws -> EditLease {
@@ -227,7 +243,7 @@ extension TowerAPI {
         guard (200..<300).contains(reply.status), let next = o?["lease"] as? [String: Any] else {
             throw TowerError.http(status: reply.status, code: o?["code"] as? String, stage: "edit lease")
         }
-        return EditLease(id: lease.id, token: (next["lease_token"] as? String) ?? lease.token, expiresAt: (next["expires_at"] as? String) ?? lease.expiresAt)
+        return EditLease(id: lease.id, token: (next["lease_token"] as? String) ?? lease.token, expiresAt: (next["expires_at"] as? String) ?? lease.expiresAt, documentEditProtocol: lease.documentEditProtocol, editorSessionId: lease.editorSessionId)
     }
 
     public func releaseLease(workspaceId: String, appNpub: String, lease: EditLease) async throws {

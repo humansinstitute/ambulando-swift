@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 ///   stored JSON; they are checked (`DocumentBody.checkEdited`) and encoded in the representation they came from.
 /// - Markdown documents (raw Markdown or a Markdown content model) come back as Markdown with untouched blocks in their
 ///   stored source, and are saved as Markdown.
-/// - Nothing is sent to Tower until Save. A draft is written on every pause in typing and survives relaunch.
+/// - Local drafts survive relaunch. Active dirty editors checkpoint to Tower at least every minute when connected.
 @MainActor
 @Observable
 final class DocEditorModel: UploadTokenHost {
@@ -28,6 +28,14 @@ final class DocEditorModel: UploadTokenHost {
     private(set) var leaseState = "Checking the edit lease…"
     private(set) var dirty = false
     private(set) var pageReady = false
+    private(set) var takingOver = false
+    private(set) var canTakeover = false
+    private(set) var lastSyncedAt: Date?
+    @ObservationIgnored private var editorSessionId = UUID().uuidString.lowercased()
+    @ObservationIgnored private var observedLeaseId: String?
+    @ObservationIgnored private var authorityLost = false
+    @ObservationIgnored private var active = true
+    @ObservationIgnored private var autosave: Task<Void, Never>?
     /// Upload placeholders this session put into the page; the page's next change event may not have arrived yet.
     private(set) var insertedTokens: [String] = []
 
@@ -49,6 +57,7 @@ final class DocEditorModel: UploadTokenHost {
     @ObservationIgnored private var debounce: Task<Void, Never>?
     @ObservationIgnored private var renew: Task<Void, Never>?
     @ObservationIgnored private var loading = true
+    @ObservationIgnored private var editRevision: UInt64 = 0
     @ObservationIgnored private var waitingImages: Set<String> = []
     @ObservationIgnored private var downloadsRequested: Set<String> = []
     @ObservationIgnored private var imagePoll: Task<Void, Never>?
@@ -66,6 +75,7 @@ final class DocEditorModel: UploadTokenHost {
         let store = store, w = workspace.id, d = doc.id, key = draftKey
         let draft = try? await store.reader.docDraft(key: key)
         let cached = try? await store.reader.docBody(workspaceId: w, docId: d)
+        let currentDoc = try? await store.reader.doc(workspaceId: w, id: d)
         guard let source = draft.map({ ($0.body, $0.contentType) }) ?? cached.map({ ($0.bytes, $0.contentType) }) else {
             mode = .unavailable("This document's text is not on this \(Device.name) yet. Go back, unlock and open it again.")
             loading = false
@@ -76,7 +86,7 @@ final class DocEditorModel: UploadTokenHost {
         if let draft { base = (draft.baseRowVersion, draft.baseSha256, draft.baseStorageObjectId); dirty = true; status = draft.lastError }
         else if let cached { base = (cached.docRowVersion, cached.sha256, cached.storageObjectId) }
         if let state = draft?.state, state == .recovery || state == .conflict { statusTone = .warning }
-        title = draft?.title ?? doc.title
+        title = draft?.title ?? currentDoc?.title ?? doc.title
         switch decoded.editing {
         case .proseMirror:
             original = decoded.editorState
@@ -223,14 +233,14 @@ final class DocEditorModel: UploadTokenHost {
     func bindWiki(title: String, documentId: String, occurrence: Int?, expectedCount: Int?) async -> WikiBinding {
         guard pageReady, let page, let count = await page.wikiBind(title: title, documentId: documentId, occurrence: occurrence, expectedCount: expectedCount)
         else { return .failed }
-        if count > 0 { dirty = true }
+        if count > 0 { markDirty() }
         return await WikiEditorBinding.outcome(pageCount: count) { await self.checkpoint() }
     }
 
     /// Stores the current text as the durable draft. True when nothing is unsaved or the draft was written; false when it
     /// could not be (the caller must not leave, or retire anything that depends on it).
     func checkpoint() async -> Bool {
-        if pageReady, let now = await page?.snapshot(), now != content { content = now; dirty = true }
+        if pageReady, let now = await page?.snapshot(), now != content { pageChanged(now) }
         if !dirty { return true }
         return await persistDraft(state: .editing) != nil
     }
@@ -243,6 +253,7 @@ final class DocEditorModel: UploadTokenHost {
     /// Back on screen after another document was shown: the lease and upload results are taken up again.
     func reopen() {
         guard pageReady else { return }
+        active = true
         holdLease()
         app?.uploads?.attach(self)
         WikiEditors.register(self)
@@ -282,19 +293,32 @@ final class DocEditorModel: UploadTokenHost {
         guard let saver = app?.saver, app?.isUnlocked == true else { leaseState = "Editing on this \(Device.name). Unlock to save."; return }
         let connection = connection, workspace = workspace, id = doc.id
         renew?.cancel()
+        startAutosave()
         renew = Task { [weak self] in
             do {
-                try await saver.acquire(connection, workspace, docId: id)
-                self?.leaseState = "You are editing (lease held)."
+                guard let self else { return }
+                try await saver.acquire(connection, workspace, docId: id, editorSessionId: editorSessionId)
+                leaseState = "You are editing (lease held)."
             } catch {
                 self?.leaseState = (error as? LocalizedError)?.errorDescription ?? "Could not take the edit lease; your edits stay on this \(Device.name)."
+                if error is LeaseError { self?.authorityLost = true; await self?.inspectAuthority() }
                 return
             }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard !Task.isCancelled else { return }
-                do { try await saver.renew(connection, workspace, docId: id) }
-                catch { self?.leaseState = "The edit lease expired; it is taken again when you save."; return }
+                guard let self else { return }
+                do { try await saver.renew(connection, workspace, docId: id, editorSessionId: editorSessionId) }
+                catch is LeaseError {
+                    if await saver.resumeUnchangedSession(connection, workspace, docId: id, editorSessionId: editorSessionId) {
+                        leaseState = "You are editing (lease held)."
+                        continue
+                    }
+                    authorityLost = true
+                    leaseState = "Editing authority ended. Your draft stays on this device."
+                    await inspectAuthority()
+                    return
+                } catch { leaseState = "Could not renew while offline; your draft stays on this device." }
             }
         }
     }
@@ -304,12 +328,92 @@ final class DocEditorModel: UploadTokenHost {
         WikiEditors.unregister(self)
         mentionLookup?.cancel()
         debounce?.cancel()
+        active = false
+        autosave?.cancel(); autosave = nil
         renew?.cancel()
         imagePoll?.cancel()
         app?.uploads?.detach(self)
         guard let saver = app?.saver else { return }
-        let connection = connection, workspace = workspace, id = doc.id
-        Task.detached { await saver.release(connection, workspace, docId: id) }
+        let connection = connection, workspace = workspace, id = doc.id, session = editorSessionId
+        Task.detached { await saver.release(connection, workspace, docId: id, editorSessionId: session) }
+    }
+
+    private func startAutosave() {
+        guard active, autosave == nil else { return }
+        autosave = Task { [weak self] in
+            let clock = ContinuousClock()
+            var deadline = clock.now.advanced(by: .seconds(60))
+            while !Task.isCancelled {
+                do { try await clock.sleep(until: deadline) } catch { return }
+                deadline = deadline.advanced(by: .seconds(60))
+                guard let self, active else { return }
+                if dirty, !authorityLost, !saving, !takingOver { _ = await save() }
+            }
+        }
+    }
+
+    /// iOS may suspend immediately. Local durability comes first; the cloud flush is best effort.
+    func setActive(_ value: Bool) {
+        active = value
+        if value { startAutosave() }
+        else {
+            autosave?.cancel(); autosave = nil
+            Task { [weak self] in await self?.flush() }
+        }
+    }
+
+    func flush() async {
+        _ = await checkpoint()
+        if dirty, !authorityLost, !saving, !takingOver { _ = await save() }
+    }
+
+    private func inspectAuthority() async {
+        guard let saver = app?.saver else { return }
+        do {
+            let inspected = try await saver.inspect(connection, workspace, docId: doc.id)
+            observedLeaseId = inspected.leaseId
+            canTakeover = inspected.supported && inspected.leaseId != nil && inspected.holderNpub == connection.signerNpub
+            if inspected.leaseId != nil && inspected.holderNpub == connection.signerNpub && !canTakeover {
+                leaseState = "Another editor is open. This server does not support safe takeover yet."
+            }
+        } catch { canTakeover = false }
+    }
+
+    /// Explicit confirmation keeps divergent local work as an existing Tower recovery before loading the remote head.
+    func takeover() async {
+        guard !saving, !takingOver, let expected = observedLeaseId, let saver = app?.saver, canTakeover else { return }
+        takingOver = true
+        defer { takingOver = false }
+        renew?.cancel()
+        guard await checkpoint() else { return }
+        let revision = editRevision
+        if dirty {
+            guard let draft = await persistDraft(state: .editing) else { return }
+            guard case .recovery = await saver.save(draft, connection: connection, workspace: workspace, editorSessionId: editorSessionId, asRecovery: true),
+                  revision == editRevision else {
+                setStatus("Takeover paused. Your local draft must be preserved as a cloud recovery first.", .warning)
+                return
+            }
+        }
+        let recovery = try? await store.reader.docDraft(key: draftKey)
+        let newSession = UUID().uuidString.lowercased()
+        do {
+            let (remote, _) = try await saver.takeover(connection, workspace, docId: doc.id, editorSessionId: newSession, expectedLeaseId: expected)
+            guard revision == editRevision else { throw LeaseError.invalid("draft_changed_during_takeover") }
+            if let recovery, !(try await store.writer.deleteDocDraft(ifUnchanged: recovery)) { throw LeaseError.invalid("local_draft_changed") }
+            guard revision == editRevision else { throw LeaseError.invalid("draft_changed_during_takeover") }
+            editorSessionId = newSession
+            authorityLost = false; canTakeover = false; observedLeaseId = nil
+            loading = true; dirty = false; content = ""; title = remote.title; body = nil; original = nil
+            await load()
+            lastSyncedAt = Date()
+            setStatus("Latest cloud version loaded. Earlier local edits are preserved in recovery history.", .success)
+            holdLease()
+        } catch {
+            _ = await persistDraft(state: .editing)
+            setStatus("Takeover did not finish: \(error.localizedDescription). Your recovery draft is retained.", .warning)
+            await inspectAuthority()
+        }
     }
 
     // MARK: Formatting
@@ -337,7 +441,9 @@ final class DocEditorModel: UploadTokenHost {
     // MARK: Draft persistence
 
     private func markDirty() {
+        editRevision &+= 1
         dirty = true
+        if !saving, statusTone != .warning && statusTone != .error { setStatus("Saving locally…", .info) }
         debounce?.cancel()
         debounce = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
@@ -349,8 +455,13 @@ final class DocEditorModel: UploadTokenHost {
     /// Encodes the current edit (off the main actor) and stores it as the durable draft.
     @discardableResult
     func persistDraft(state draftState: DocDraft.State) async -> DocDraft? {
-        if pageReady, let now = await page?.snapshot(), now != content { content = now; dirty = true }
+        await persistSnapshot(state: draftState)?.0
+    }
+
+    private func persistSnapshot(state draftState: DocDraft.State) async -> (DocDraft, UInt64)? {
+        if pageReady, let now = await page?.snapshot(), now != content { pageChanged(now) }
         guard let body, let base, dirty else { return nil }
+        let revision = editRevision
         let mode = mode, content = content, original = original, title = title
         let identity = (connection.id, workspace.id, doc.id)
         let encoded: Result<(Data, String), Error> = await Task.detached {
@@ -374,6 +485,9 @@ final class DocEditorModel: UploadTokenHost {
             setStatus((error as? LocalizedError)?.errorDescription ?? "This edit could not be encoded without loss, so it was not saved.", .error)
             return nil
         case .success(let bytes):
+            // Encoding can yield while typing or another save advances the base. The newer checkpoint wins.
+            guard revision == editRevision, self.base?.rowVersion == base.rowVersion,
+                  self.base?.sha == base.sha, self.base?.object == base.object else { return nil }
             let draft = DocDraft(connectionId: identity.0, workspaceId: identity.1, docId: identity.2, title: title.isEmpty ? doc.title : title,
                                  body: bytes.0, contentType: bytes.1, baseRowVersion: base.rowVersion, baseSha256: base.sha,
                                  baseStorageObjectId: base.object, state: draftState)
@@ -381,40 +495,62 @@ final class DocEditorModel: UploadTokenHost {
                 setStatus("Your edits could not be stored on this \(Device.name): \(error.localizedDescription)", .error)
                 return nil
             }
-            return draft
+            if !saving, statusTone != .warning && statusTone != .error { setStatus("Saved locally; waiting to sync.", .info) }
+            return (draft, revision)
         }
     }
 
     /// Saves through Tower (lease, expected version). True when Tower made it the canonical version.
     func save() async -> Bool {
-        guard let saver = app?.saver else { return false }
+        guard !saving, !takingOver, let saver = app?.saver else { return false }
+        guard !authorityLost else {
+            setStatus("Saved locally; editing authority ended. Explicitly take over to load the latest cloud version.", .warning)
+            await inspectAuthority()
+            return false
+        }
         debounce?.cancel()
         saving = true
         defer { saving = false }
         // Take the page's document as it is right now (a pause-in-typing event may not have arrived yet).
         if let now = await page?.snapshot(), now != content, !loading {
-            content = now
-            dirty = true
+            pageChanged(now)
         }
         guard !UploadToken.contains(in: uploadText) else { setStatus(ComposerUploadError.unresolved.localizedDescription, .warning); return false }
-        guard let draft = await persistDraft(state: .editing) else {
+        guard let (draft, submittedRevision) = await persistSnapshot(state: .editing) else {
             if !dirty { setStatus("No changes to save.", .info) }
             return !dirty
         }
         setStatus("Saving…", .info)
-        switch await saver.save(draft, connection: connection, workspace: workspace) {
+        switch await saver.save(draft, connection: connection, workspace: workspace, editorSessionId: editorSessionId) {
         case .saved(_, let saved):
-            dirty = false
             base = (saved.docRowVersion, saved.sha256, saved.storageObjectId)
-            setStatus("Saved.", .success)
-            return true
+            let timestamp = ISO8601DateFormatter()
+            timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            lastSyncedAt = timestamp.date(from: saved.fetchedAt) ?? ISO8601DateFormatter().date(from: saved.fetchedAt)
+            dirty = editRevision != submittedRevision
+            if dirty {
+                _ = await persistDraft(state: .editing)
+                setStatus("Latest edits saved locally; earlier changes synced.", .info)
+            } else { setStatus("Saved.", .success) }
+            return !dirty
         case .recovery(_, let message):
+            authorityLost = true
+            await inspectAuthority()
             // Someone saved first: show their version in the reader behind the editor (the draft stays).
             setStatus(message, .warning)
             app?.openDoc(doc.id, in: workspace, force: true)
             return false
-        case .leaseHeld(let message), .notSaved(let message):
+        case .leaseHeld(let message):
+            authorityLost = true
             setStatus(message, .warning)
+            await inspectAuthority()
+            return false
+        case .notSaved(let message):
+            if await saver.sessionLost(connection, workspace, docId: doc.id, editorSessionId: editorSessionId) {
+                authorityLost = !(await saver.resumeUnchangedSession(connection, workspace, docId: doc.id, editorSessionId: editorSessionId))
+            }
+            setStatus(message, .warning)
+            await inspectAuthority()
             return false
         }
     }

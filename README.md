@@ -19,6 +19,17 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Cloud document checkpoints (iPhone/iPad build 41, Mac build 30)
+
+Changed documents save to NStack every minute while the editor is active and connected. Local drafts survive offline
+periods; syncing retries, and the editor distinguishes local persistence, cloud success and failures. Manual Save is
+preserved. Typing or renaming during a save stays in the next draft; unchanged content is not uploaded again.
+
+On a supporting Tower, **Take over editing** deliberately loads the latest cloud version, preserves a divergent local
+draft in existing recovery history and fences the previous editor. Older servers still support ordinary saves but do
+not offer safe takeover. Background/close flushes are best effort; iOS suspension does not guarantee minute saves.
+Source/build, installed app and authenticated live verification are reported separately on the implementation task.
+
 ## Return before document links (iPhone/iPad build 40, Mac build 29)
 
 Return and typing before the first document link preserve the text, caret and link identity. The native

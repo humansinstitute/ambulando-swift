@@ -293,14 +293,43 @@ extension StoreWriter {
         try db.prepare("""
         UPDATE doc_drafts SET title = ?, body = ?, content_type = ?, base_row_version = ?, base_sha256 = ?, base_storage_object_id = ?, state = ?,
           last_error = ?, recovery_id = ?, updated_at = ?
-        WHERE key = ? AND body = ? AND base_row_version = ? AND base_sha256 = ? AND state = ? AND title = ?
+        WHERE key = ? AND body = ? AND base_row_version = ? AND base_sha256 = ? AND state = ? AND title = ? AND content_type = ? AND base_storage_object_id = ?
         """).run([.text(next.title), .blob(next.body), .text(next.contentType), .int(Int64(next.baseRowVersion)), .text(next.baseSha256),
                   .text(next.baseStorageObjectId), .text(next.state.rawValue), next.lastError.sql, next.recoveryId.sql, .text(now()),
                   .text(expected.key), .blob(expected.body), .int(Int64(expected.baseRowVersion)), .text(expected.baseSha256),
-                  .text(expected.state.rawValue), .text(expected.title)])
+                  .text(expected.state.rawValue), .text(expected.title), .text(expected.contentType), .text(expected.baseStorageObjectId)])
         let changed = db.changes > 0
         if changed { await emit([ChangeKey(.docDrafts, next.workspaceId)]) }
         return changed
+    }
+
+    /// Removes only the recovery snapshot the user deliberately replaced with the remote document.
+    @discardableResult
+    public func deleteDocDraft(ifUnchanged expected: DocDraft) async throws -> Bool {
+        try db.prepare("""
+        DELETE FROM doc_drafts WHERE key = ? AND body = ? AND title = ? AND content_type = ?
+          AND base_row_version = ? AND base_sha256 = ? AND base_storage_object_id = ? AND state = ?
+        """).run([.text(expected.key), .blob(expected.body), .text(expected.title), .text(expected.contentType),
+                  .int(Int64(expected.baseRowVersion)), .text(expected.baseSha256), .text(expected.baseStorageObjectId), .text(expected.state.rawValue)])
+        let changed = db.changes > 0
+        if changed { await emit([ChangeKey(.docDrafts, expected.workspaceId)]) }
+        return changed
+    }
+
+    /// Completes only the submitted snapshot. Typing persisted during the request keeps its body/title and advances
+    /// to the accepted base, so its next save cannot conflict with this device's own successful checkpoint.
+    public func finishDocDraftSave(_ submitted: DocDraft, saved: DocBodyRecord) async throws {
+        try db.prepare("""
+        DELETE FROM doc_drafts WHERE key = ? AND body = ? AND title = ? AND content_type = ?
+          AND base_row_version = ? AND base_sha256 = ? AND base_storage_object_id = ? AND state = ?
+        """).run([.text(submitted.key), .blob(submitted.body), .text(submitted.title), .text(submitted.contentType),
+                  .int(Int64(submitted.baseRowVersion)), .text(submitted.baseSha256), .text(submitted.baseStorageObjectId), .text(submitted.state.rawValue)])
+        try db.prepare("""
+        UPDATE doc_drafts SET base_row_version = ?, base_sha256 = ?, base_storage_object_id = ?, updated_at = ?
+        WHERE key = ? AND base_row_version = ? AND base_sha256 = ? AND base_storage_object_id = ?
+        """).run([.int(Int64(saved.docRowVersion)), .text(saved.sha256), .text(saved.storageObjectId), .text(now()),
+                  .text(submitted.key), .int(Int64(submitted.baseRowVersion)), .text(submitted.baseSha256), .text(submitted.baseStorageObjectId)])
+        await emit([ChangeKey(.docDrafts, submitted.workspaceId)])
     }
 
     /// Moves a draft's base to a new row version only while it is still based on `from` (a document move changes the row
@@ -509,6 +538,13 @@ public struct DocDraft: Sendable, Equatable {
         self.connectionId = connectionId; self.workspaceId = workspaceId; self.docId = docId; self.title = title; self.body = body
         self.contentType = contentType; self.baseRowVersion = baseRowVersion; self.baseSha256 = baseSha256
         self.baseStorageObjectId = baseStorageObjectId; self.state = state; self.lastError = lastError; self.recoveryId = recoveryId
+    }
+
+    /// State/error labels can change during a retry; body, title and complete base identity define the edit.
+    func matchesContentAndBase(_ other: DocDraft) -> Bool {
+        key == other.key && body == other.body && title == other.title && contentType == other.contentType
+            && baseRowVersion == other.baseRowVersion && baseSha256 == other.baseSha256
+            && baseStorageObjectId == other.baseStorageObjectId
     }
 
     public func with(state: State, error: String? = nil, recoveryId: String? = nil) -> DocDraft {

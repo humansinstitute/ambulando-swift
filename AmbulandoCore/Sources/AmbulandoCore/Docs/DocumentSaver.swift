@@ -25,6 +25,11 @@ public actor DocumentSaver {
     let identity: IdentityService
     let transport: HTTPTransport
     private var leases: [String: EditLease] = [:]
+    private var saving: Set<String> = []
+    private var acquiring: [String: Task<EditLease, Error>] = [:]
+    private var lostSessions: Set<String> = []
+    private var sessionIds: [String: String] = [:]
+    private var authorityGeneration: UInt64 = 0
 
     public init(store: LocalStore, identity: IdentityService, transport: HTTPTransport) {
         self.store = store; self.identity = identity; self.transport = transport
@@ -35,57 +40,163 @@ public actor DocumentSaver {
         return TowerAPI(client: TowerClient(origin: try TowerOrigin(connection.origin), transport: transport, signer: identity))
     }
 
-    static func leaseKey(_ workspaceId: String, _ docId: String) -> String { "\(workspaceId):\(docId)" }
+    static func leaseKey(_ connectionId: String, _ workspaceId: String, _ docId: String, _ session: String?) -> String {
+        "\(connectionId):\(workspaceId):\(docId):\(session ?? "default")"
+    }
 
-    public func hasLease(workspaceId: String, docId: String) -> Bool { leases[Self.leaseKey(workspaceId, docId)] != nil }
+    public func hasLease(workspaceId: String, docId: String) -> Bool { leases.keys.contains { $0.contains(":\(workspaceId):\(docId):") } }
 
     /// Acquires (or keeps) the edit lease. Throws `LeaseError.held` when another editor has it.
     @discardableResult
-    public func acquire(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String) async throws -> EditLease {
-        let key = Self.leaseKey(workspace.id, docId)
+    public func acquire(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String, editorSessionId: String? = nil) async throws -> EditLease {
+        let key = Self.leaseKey(connection.id, workspace.id, docId, editorSessionId)
         if let lease = leases[key] { return lease }
-        let lease = try await api(connection).acquireLease(workspaceId: workspace.id, appNpub: workspace.appNpub, entityType: "document", entityId: docId)
+        guard !lostSessions.contains(key) else { throw LeaseError.invalid("editor_superseded_or_expired") }
+        let generation = authorityGeneration
+        if let pending = acquiring[key] {
+            let lease = try await pending.value
+            guard generation == authorityGeneration, !lostSessions.contains(key) else { throw LeaseError.invalid("editor_closed") }
+            return lease
+        }
+        let sessionId = editorSessionId ?? sessionIds[key] ?? UUID().uuidString.lowercased()
+        sessionIds[key] = sessionId
+        let pending = Task { try await api(connection).acquireLease(workspaceId: workspace.id, appNpub: workspace.appNpub,
+                                                                   entityType: "document", entityId: docId, editorSessionId: sessionId) }
+        acquiring[key] = pending
+        defer { acquiring[key] = nil }
+        let lease = try await pending.value
+        guard generation == authorityGeneration, !lostSessions.contains(key) else {
+            try? await api(connection).releaseLease(workspaceId: workspace.id, appNpub: workspace.appNpub, lease: lease)
+            throw LeaseError.invalid("editor_closed")
+        }
         leases[key] = lease
         return lease
     }
 
     /// Renews a held lease; a lease Tower no longer honours is forgotten so the next save acquires a fresh one.
-    public func renew(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String) async throws {
-        let key = Self.leaseKey(workspace.id, docId)
+    public func renew(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String, editorSessionId: String? = nil) async throws {
+        let key = Self.leaseKey(connection.id, workspace.id, docId, editorSessionId)
         guard let lease = leases[key] else { return }
-        do { leases[key] = try await api(connection).renewLease(workspaceId: workspace.id, appNpub: workspace.appNpub, lease: lease) }
-        catch let error as LeaseError { leases[key] = nil; throw error }
+        do {
+            let renewed = try await api(connection).renewLease(workspaceId: workspace.id, appNpub: workspace.appNpub, lease: lease)
+            if leases[key] == lease, !lostSessions.contains(key) { leases[key] = renewed }
+        } catch let error as LeaseError { leases[key] = nil; lostSessions.insert(key); throw error }
     }
 
-    public func release(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String) async {
-        let key = Self.leaseKey(workspace.id, docId)
+    public func release(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String, editorSessionId: String? = nil) async {
+        let key = Self.leaseKey(connection.id, workspace.id, docId, editorSessionId)
+        if editorSessionId != nil { lostSessions.insert(key) }
         guard let lease = leases.removeValue(forKey: key) else { return }
         try? await api(connection).releaseLease(workspaceId: workspace.id, appNpub: workspace.appNpub, lease: lease)
     }
 
     /// Forgets every lease (lock, workspace switch); Tower expires them on its own.
-    public func forgetAll() { leases.removeAll() }
+    public func forgetAll() {
+        authorityGeneration &+= 1
+        let active = Set(leases.keys).union(acquiring.keys)
+        lostSessions.formUnion(active.filter { !$0.hasSuffix(":default") })
+        for pending in acquiring.values { pending.cancel() }
+        // Default background operations get a fresh identity after unlock; open editors keep their original identity.
+        sessionIds = sessionIds.filter { !$0.key.hasSuffix(":default") }
+        leases.removeAll()
+    }
 
-    public func save(_ draft: DocDraft, connection: ConnectionRecord, workspace: WorkspaceRecord) async -> DocSaveResult {
+    /// An offline-expired editor retries only its original session and only on the unchanged remote base.
+    /// A taken-over session is tombstoned by Tower and cannot pass acquire, even after the successor expires.
+    public func resumeUnchangedSession(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String,
+                                       editorSessionId: String) async -> Bool {
+        let key = Self.leaseKey(connection.id, workspace.id, docId, editorSessionId)
+        do {
+            let api = try await api(connection)
+            let inspection = try await api.inspectDocumentEdit(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: docId)
+            guard inspection.leaseId == nil else { return false }
+            let remote = try await api.docBody(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: docId)
+            let draft = try await store.reader.docDraft(key: DocDraft.key(connectionId: connection.id, workspaceId: workspace.id, docId: docId))
+            let cached = try await store.reader.docBody(workspaceId: workspace.id, docId: docId)
+            guard let version = draft?.baseRowVersion ?? cached?.docRowVersion,
+                  let sha = draft?.baseSha256 ?? cached?.sha256,
+                  version == remote.doc.rowVersion, sha == remote.body.sha256 else { return false }
+            lostSessions.remove(key)
+            do { _ = try await acquire(connection, workspace, docId: docId, editorSessionId: editorSessionId); return true }
+            catch { lostSessions.insert(key); return false }
+        } catch { return false }
+    }
+
+    public func sessionLost(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String, editorSessionId: String) -> Bool {
+        lostSessions.contains(Self.leaseKey(connection.id, workspace.id, docId, editorSessionId))
+    }
+
+    public func inspect(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String) async throws -> DocumentEditInspection {
+        try await api(connection).inspectDocumentEdit(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: docId)
+    }
+
+    /// Explicit user action only. A supporting server revokes prior authority and advances the document version.
+    public func takeover(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String,
+                         editorSessionId: String, expectedLeaseId: String) async throws -> (DocRecord, DocBodyRecord) {
+        let api = try await api(connection)
+        let inspected = try await api.inspectDocumentEdit(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: docId)
+        guard inspected.supported, inspected.leaseId == expectedLeaseId, inspected.holderNpub == connection.signerNpub
+        else { throw LeaseError.invalid("takeover_not_available") }
+        let lease = try await api.acquireLease(workspaceId: workspace.id, appNpub: workspace.appNpub, entityType: "document", entityId: docId,
+                                               editorSessionId: editorSessionId, takeoverLeaseId: expectedLeaseId)
+        let key = Self.leaseKey(connection.id, workspace.id, docId, editorSessionId)
+        leases[key] = lease
+        let fresh = try await api.docBody(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: docId)
+        try await renew(connection, workspace, docId: docId, editorSessionId: editorSessionId)
+        try await store.writer.saveDocBody(fresh.body, doc: fresh.doc, searchText: DocumentBody(bytes: fresh.body.bytes, contentType: fresh.body.contentType).markdown)
+        return (fresh.doc, fresh.body)
+    }
+
+    public func save(_ draft: DocDraft, connection: ConnectionRecord, workspace: WorkspaceRecord, editorSessionId: String? = nil, asRecovery: Bool = false) async -> DocSaveResult {
         guard draft.connectionId == connection.id, draft.workspaceId == workspace.id else { return .notSaved("This draft belongs to another workspace.") }
         guard !UploadToken.contains(in: String(decoding: draft.body, as: UTF8.self)) else { return .notSaved(ComposerUploadError.unresolved.localizedDescription) }
+        guard saving.insert(draft.key).inserted else { return .notSaved("A save is already in progress. Your latest edits stay on this device.") }
+        defer { saving.remove(draft.key) }
+        let submitted = draft.with(state: .saving)
         do {
-            try await store.writer.saveDocDraft(draft.with(state: .saving))
+            // Claim exactly this durable snapshot; a newer editor checkpoint must win.
+            if let current = try await store.reader.docDraft(key: draft.key) {
+                guard current.matchesContentAndBase(draft),
+                      try await store.writer.replaceDocDraft(ifUnchanged: current, with: submitted)
+                else { return .notSaved("Your draft changed before this save. Save again to sync the latest edits.") }
+            } else {
+                guard try await store.writer.insertDocDraftIfAbsent(submitted)
+                else { return .notSaved("Your draft changed before this save. Save again to sync the latest edits.") }
+            }
+            if !asRecovery, SHA256Hex.of(draft.body) == draft.baseSha256,
+               let cached = try await store.reader.docBody(workspaceId: workspace.id, docId: draft.docId),
+               let doc = try await store.reader.doc(workspaceId: workspace.id, id: draft.docId),
+               cached.docRowVersion == draft.baseRowVersion, cached.sha256 == draft.baseSha256,
+               cached.storageObjectId == draft.baseStorageObjectId, doc.rowVersion == draft.baseRowVersion, doc.title == draft.title {
+                try await store.writer.finishDocDraftSave(submitted, saved: cached)
+                return .saved(doc, cached)
+            }
             let api = try await api(connection)
-            let lease: EditLease
-            do { lease = try await acquire(connection, workspace, docId: draft.docId) }
+            let lease: EditLease?
+            do { lease = asRecovery ? nil : try await acquire(connection, workspace, docId: draft.docId, editorSessionId: editorSessionId) }
             catch LeaseError.held(let by, let until) {
                 let message = LeaseError.held(by: by, until: until).errorDescription ?? "Someone else is editing."
-                try await store.writer.saveDocDraft(draft.with(state: .editing, error: message))
+                try await store.writer.replaceDocDraft(ifUnchanged: submitted, with: draft.with(state: .editing, error: message))
                 return .leaseHeld(message)
             }
             let body = DocumentBody(bytes: draft.body, contentType: draft.contentType)
             let summary = body.markdown
             let fileName = String(draft.title.replacingOccurrences(of: "[^A-Za-z0-9._-]+", with: "_", options: .regularExpression).prefix(80)) + "-\(draft.docId).document.json"
-            let objectId = try await api.store(workspaceId: workspace.id, appNpub: workspace.appNpub, bytes: draft.body, contentType: draft.contentType,
+            let uploadKey = "doc.completed-upload:" + draft.key
+            let hash = SHA256Hex.of(draft.body)
+            let retained = try await store.reader.state(uploadKey).flatMap { $0.data(using: .utf8) }
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }
+            let objectId: String
+            if retained?["sha256"] == hash, retained?["content_type"] == draft.contentType,
+               let id = lowerUUID(retained?["object_id"]) { objectId = id }
+            else {
+                objectId = try await api.store(workspaceId: workspace.id, appNpub: workspace.appNpub, bytes: draft.body, contentType: draft.contentType,
                                                fileName: fileName, prepared: nil) { _ in }
-            let request = try rawJSON(["row_version": draft.baseRowVersion, "base_available": true, "base_body_sha256_hex": draft.baseSha256,
-                                       "storage_object_id": objectId, "lease_token": lease.token, "title": draft.title, "summary": summary])
+                let receipt = try rawJSON(["sha256": hash, "content_type": draft.contentType, "object_id": objectId])
+                try await store.writer.setState(uploadKey, String(decoding: receipt, as: UTF8.self))
+            }
+            let request = try rawJSON(["row_version": draft.baseRowVersion, "base_available": !asRecovery, "base_body_sha256_hex": draft.baseSha256,
+                                       "storage_object_id": objectId, "lease_token": lease?.token ?? "", "title": draft.title, "summary": summary])
             let reply = try await api.client.exchange(method: "PATCH", path: try TowerAPI.base(workspace.id) + "/docs/" + TowerAPI.uuid(draft.docId),
                                                       appNpub: workspace.appNpub, jsonBody: request)
             let object = (try? JSONSerialization.jsonObject(with: reply.body)) as? [String: Any]
@@ -98,24 +209,26 @@ public actor DocumentSaver {
                                           contentType: draft.contentType, docRowVersion: doc.rowVersion, bytes: draft.body,
                                           fetchedAt: ISO8601DateFormatter.tower.string(from: Date()))
                 try await store.writer.saveDocBody(saved, doc: doc, searchText: summary)
-                try await store.writer.deleteDocDraft(key: draft.key, workspaceId: workspace.id)
+                try await store.writer.finishDocDraftSave(submitted, saved: saved)
+                try await store.writer.setState(uploadKey, nil)
                 return .saved(doc, saved)
             }
             if reply.status == 409, code == "document_recovery_created" {
                 let recovery = (object?["recovery"] as? [String: Any])?["id"] as? String
                 let message = "The document changed before your save. Tower kept your version as a recovery copy, and your draft stays on this device."
-                try await store.writer.saveDocDraft(draft.with(state: .recovery, error: message, recoveryId: recovery))
+                try await store.writer.replaceDocDraft(ifUnchanged: submitted, with: draft.with(state: .recovery, error: message, recoveryId: recovery))
                 return .recovery(id: recovery, message: message)
             }
             if reply.status == 409, code == "stale_row_version" {
                 let message = "The document changed before your save. Your draft stays on this device."
-                try await store.writer.saveDocDraft(draft.with(state: .conflict, error: message))
+                try await store.writer.replaceDocDraft(ifUnchanged: submitted, with: draft.with(state: .conflict, error: message))
                 return .recovery(id: nil, message: message)
             }
             if reply.status == 409 {
-                leases[Self.leaseKey(workspace.id, draft.docId)] = nil
+                let key = Self.leaseKey(connection.id, workspace.id, draft.docId, editorSessionId)
+                leases[key] = nil; lostSessions.insert(key)
                 let message = LeaseError.invalid(code ?? "lease").errorDescription ?? "The edit lease expired."
-                try await store.writer.saveDocDraft(draft.with(state: .editing, error: message))
+                try await store.writer.replaceDocDraft(ifUnchanged: submitted, with: draft.with(state: .editing, error: message))
                 return .notSaved(message)
             }
             let outcome = WriteSender.classify(status: reply.status, body: reply.body, attempts: 1, what: "edit this document")
@@ -124,12 +237,12 @@ public actor DocumentSaver {
             case .conflict(let m): m
             case .done: "Saved."
             }
-            try await store.writer.saveDocDraft(draft.with(state: .failed, error: message))
+            try await store.writer.replaceDocDraft(ifUnchanged: submitted, with: draft.with(state: .failed, error: message))
             return .notSaved(message)
         } catch {
             let message = (error as? LocalizedError)?.errorDescription.map { "Not saved yet: \($0)" }
                 ?? "Not saved yet: \(OutboxSender.networkMessage(error))"
-            try? await store.writer.saveDocDraft(draft.with(state: .editing, error: message))
+            _ = try? await store.writer.replaceDocDraft(ifUnchanged: submitted, with: draft.with(state: .editing, error: message))
             return .notSaved(message)
         }
     }

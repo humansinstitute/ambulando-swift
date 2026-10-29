@@ -297,6 +297,18 @@ An attempt interrupted mid-request (lock, relaunch, network loss) is flagged amb
 - Saving: the draft is written to SQLite first; `DocumentSaver` acquires (and the editor renews every 60 s) the edit
   lease, uploads a new storage object, and `PATCH`es with base `row_version`, base body sha256 and lease token. A stale
   base yields Tower's recovery copy (409 `document_recovery_created`) and keeps the draft; nothing overwrites the head.
+- Active dirty editors checkpoint on a monotonic 60-second cadence; local durability precedes every network attempt.
+  Pausing/switching away flushes best effort; suspended iOS processes have no periodic-save guarantee. Manual Save stays available.
+  Unchanged snapshots make no upload. A completed storage object is retained locally for unchanged failed-PATCH retries.
+- Saves are serialized per connection/workspace/document. Completion conditionally clears only its submitted draft;
+  fresh typing/renaming keeps its bytes and advances its complete base identity after that device's successful save.
+- Document leases carry an additive per-editor session UUID. A supporting Tower exposes explicit same-user takeover,
+  revokes prior authority and advances the document version under the same lock used for canonical saves. Older clients
+  keep ordinary Save; pre-takeover bases become recovery. New clients retain superseded-session identity and cannot silently
+  acquire fresh authority. Expired unchanged sessions may resume the same identity after verifying the remote base.
+- Takeover preserves divergent local work using Tower's existing recovery submission, then loads verified remote content,
+  title and base together. Unsupported servers retain ordinary Save/autosave and do not offer takeover. See Tower's
+  `docs/contract/document-edit-session-v1.md` for the additive shared contract and compatibility limits.
 
 ### 4.4 Storage transfers (WP4, delivered)
 
