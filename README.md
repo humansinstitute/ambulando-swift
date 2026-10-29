@@ -26,7 +26,7 @@ The saved conversation route and all drafts remain on the device; deliberate thr
 This mitigates a reported launch beachball without claiming its unreproduced root cause is fixed. iPhone and
 iPad restoration is unchanged. See [startup recovery and regression checks](docs/mac-startup-recovery.md).
 
-## Groups management (iPhone/iPad build 46, Mac build 35)
+## Groups management (iPhone/iPad build 47, Mac build 36)
 
 Manage Workspace opens as a larger, resizable Mac sheet, including above Settings. Browse groups beside the selected
 group's direct people and nested groups; iPhone uses list and detail navigation. Inline local typeahead supports people

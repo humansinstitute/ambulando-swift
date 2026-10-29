@@ -278,10 +278,16 @@ private struct GroupQuickAdd: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(canEdit ? "Add to group" : "Search saved directory").font(.headline)
-                Spacer()
-                Picker("Add", selection: $mode) { Text("People").tag("people"); Text("Groups").tag("groups") }.pickerStyle(.segmented).frame(maxWidth: 220).accessibilityIdentifier("groups.add.mode")
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Text(canEdit ? "Add to group" : "Search saved directory").font(.headline).fixedSize()
+                    Spacer()
+                    modePicker.frame(width: 200)
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(canEdit ? "Add to group" : "Search saved directory").font(.headline)
+                    modePicker
+                }
             }
             TextField(mode == "people" ? "Type a name, actor ID or full npub" : "Type a group name or ID", text: $query)
                 .textFieldStyle(.roundedBorder).noCapitalization().autocorrectionDisabled().focused($focused).accessibilityIdentifier("groups.add.search")
@@ -299,14 +305,15 @@ private struct GroupQuickAdd: View {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(results.enumerated()), id: \.element.id) { index, row in
                             Button { add(row) } label: {
-                                HStack(spacing: 10) {
-                                    if mode == "people" { GroupPersonRow(row: row, people: people) }
-                                    else { GroupDirectoryRow(group: row) }
-                                    Spacer(minLength: 0)
-                                    if working.contains(row.id) { ProgressView().controlSize(.small) }
-                                    else if let state = state(row) { Text(state).font(.caption).foregroundStyle(.secondary) }
-                                    else if canEdit { Image(systemName: "plus.circle.fill").foregroundStyle(.tint) }
-                                    else { Text("Read only").font(.caption).foregroundStyle(.secondary) }
+                                ViewThatFits(in: .horizontal) {
+                                    HStack(spacing: 10) {
+                                        candidateIdentity(row).frame(minWidth: 180)
+                                        candidateAction(row).fixedSize()
+                                    }
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        candidateIdentity(row)
+                                        HStack { Spacer(); candidateAction(row) }
+                                    }
                                 }.padding(8).background(highlighted == index && focused ? Color.accentColor.opacity(0.10) : Color.clear, in: RoundedRectangle(cornerRadius: 8)).contentShape(Rectangle())
                             }.buttonStyle(.plain).disabled(state(row) != nil || working.contains(row.id) || !current || !canEdit)
                                 .id(row.id).accessibilityIdentifier("groups.add.\(row.id)")
@@ -357,6 +364,20 @@ private struct GroupQuickAdd: View {
         .confirmationDialog("Add new workspace member?", isPresented: $confirmNew, titleVisibility: .visible) {
             Button("Confirm enrolment") { addNew() }
         } message: { Text("\(kind == "agent" ? "Agent" : "Person"): \(fullKey)\nWorkspace: \(workspace.label)\nGroup: \(group.title)\nMember role only.") }
+    }
+    private var modePicker: some View {
+        Picker("Add", selection: $mode) { Text("People").tag("people"); Text("Groups").tag("groups") }
+            .pickerStyle(.segmented).labelsHidden().accessibilityIdentifier("groups.add.mode")
+    }
+    @ViewBuilder private func candidateIdentity(_ row: AdministrationRow) -> some View {
+        if mode == "people" { GroupPersonRow(row: row, people: people) }
+        else { GroupDirectoryRow(group: row) }
+    }
+    @ViewBuilder private func candidateAction(_ row: AdministrationRow) -> some View {
+        if working.contains(row.id) { ProgressView().controlSize(.small) }
+        else if let state = state(row) { Text(state).font(.caption).foregroundStyle(.secondary) }
+        else if canEdit { Image(systemName: "plus.circle.fill").foregroundStyle(.tint) }
+        else { Text("Read only").font(.caption).foregroundStyle(.secondary) }
     }
     private var draftValue: String { String(decoding: (try? JSONEncoder().encode(["query": query, "mode": mode, "kind": kind])) ?? Data(), as: UTF8.self) }
     private func state(_ row: AdministrationRow) -> String? {
