@@ -45,6 +45,7 @@ extension AppModel {
     func focusThread(_ focus: ThreadFocus) {
         guard focus.workspaceId == selectedWorkspace?.id ?? selectedWorkspaceId else { return }
         sidebarOpen = false
+        restoredThread = nil
         focusedThread = focus
     }
 
@@ -169,6 +170,21 @@ private struct ThreadFocusPresenter: ViewModifier {
             .modifier(ThreadFocusLifecycle())
         #else
         content
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let saved = model.restoredThread, saved.workspaceId == model.selectedWorkspace?.id {
+                    HStack(spacing: 12) {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                        Text("Your saved thread and drafts are kept.")
+                            .font(.amb(.callout))
+                        Spacer(minLength: 8)
+                        Button("Resume saved thread") { model.resumeSavedThread() }
+                            .accessibilityIdentifier("thread.resume")
+                    }
+                    .padding(12)
+                    .background(Amb.card)
+                    .overlay(alignment: .bottom) { Divider() }
+                }
+            }
             .environment(\.behindModal, focused)
             // The app behind stays exactly as it is, only out of reach: no clicks, keyboard or VoiceOver.
             .allowsHitTesting(!focused)

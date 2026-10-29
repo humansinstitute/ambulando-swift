@@ -68,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacStartupThreadCheck") {
+                try await startupThreadCheck(window, model: model)
+                print("PASS: restored/empty thread, composer focus and draft preservation"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacWorkspaceAdministrationCheck") {
                 try await workspaceAdministrationCheck(window, model: model)
                 print("PASS: native workspace administration sections and narrow Mac layout"); fflush(stdout); exit(0)
@@ -217,6 +221,84 @@ enum MacThreadRegression {
         }
         fflush(stdout)
         exit(0)
+    }
+
+    /// Exercises the restored Thread/Reply surface without modifying production data.
+    static func startupThreadCheck(_ window: NSWindow, model: AppModel) async throws {
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacStartupThreadResume") {
+            try require(model.focusedThread == nil, "launch must leave the channel usable before resuming")
+            try require(model.restoredThread?.threadId == "f1c7bbbb-0000-4000-8000-000000009999", "launch keeps persisted thread identity")
+            try require(try textView(window).string == "Keep channel startup draft", "channel draft remains available before resuming")
+            guard let store = model.store, let connection = model.connection else { throw Failure(description: "Missing fixture store") }
+            let saved = try await store.reader.state("thread-focus:\(connection.id):\(FixtureTower.studio)")
+            try require(saved?.contains("f1c7bbbb-0000-4000-8000-000000009999") == true, "launch does not erase persisted route")
+            let target = ChatTarget(connectionId: connection.id, workspaceId: FixtureTower.studio,
+                                    channelId: FixtureTower.generalChannel, threadId: "f1c7bbbb-0000-4000-8000-000000009999")
+            try require(try await store.reader.draft(target)?.text == "Keep restored reply draft", "deferred reply draft stays intact")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacStartupThreadKeepDeferred") {
+                try require(find(window, "thread.resume") != nil, "resume action remains available")
+                print("STARTUP_DEFERRED: channel usable; saved route and both drafts retained"); fflush(stdout)
+                return
+            }
+            model.selectWorkspace(FixtureTower.lab)
+            await settle()
+            try require(model.restoredThread == nil && find(window, "thread.resume") == nil, "switching workspace removes old resume banner")
+            model.selectWorkspace(FixtureTower.studio)
+            await settle()
+            try require(model.restoredThread?.threadId == target.threadId, "returning workspace restores its saved conversation")
+            try press(window, "thread.resume")
+            await settle()
+            try require(model.restoredThread == nil && model.focusedThread != nil, "explicit resume opens the saved thread")
+            try require(try textView(window).string == "Keep restored reply draft", "launch restores reply draft")
+            try press(window, "thread.focus.close")
+            await settle()
+            try require(try textView(window).string == "Keep channel startup draft", "launch preserves channel draft")
+            return
+        }
+        model.selectWorkspace(FixtureTower.studio)
+        await settle()
+        model.selectContext(WorkContext(scopeId: FixtureTower.scopeAmbulando, channelId: FixtureTower.generalChannel))
+        model.mode = .chat
+        await settle()
+        try type(window, "Keep channel startup draft")
+        await settle()
+        guard let connection = model.connection, let store = model.store else { throw Failure(description: "Missing fixture store") }
+        let focus = ThreadFocus(workspaceId: FixtureTower.studio, channelId: FixtureTower.generalChannel,
+                                threadId: "f1c7bbbb-0000-4000-8000-000000009999")
+        let target = ChatTarget(connectionId: connection.id, workspaceId: focus.workspaceId,
+                                channelId: FixtureTower.generalChannel, threadId: focus.threadId)
+        try await store.writer.saveDraft(target, Draft(text: "Keep restored reply draft", mentions: []))
+        model.restoredThread = focus
+        model.focusThread(focus)
+        await settle()
+        try require(model.restoredThread == nil, "deliberate thread opening clears deferred presentation")
+        try require(find(window, "thread.focus.close") != nil, "empty restored thread stays closable")
+        let reply = try textView(window)
+        try require(reply.string == "Keep restored reply draft", "reply draft restores")
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacStartupThreadSeed") {
+            await settle()
+            let key = "thread-focus:\(connection.id):\(focus.workspaceId)"
+            let saved = try await store.reader.state(key)
+            try require(saved?.contains(focus.threadId) == true, "focused thread persisted before process exit")
+            print("STARTUP_SEEDED: empty thread and both drafts ready for relaunch"); fflush(stdout)
+            return
+        }
+        window.makeFirstResponder(reply)
+        for _ in 0..<5 {
+            await settle()
+            try require(window.firstResponder === reply, "reply must retain keyboard focus over channel composer")
+        }
+        reply.insertText(" retained", replacementRange: reply.selectedRange())
+        await settle()
+        try press(window, "thread.focus.close")
+        await settle()
+        try require(try textView(window).string == "Keep channel startup draft", "channel draft survives thread close")
+        model.focusThread(focus)
+        await settle()
+        try require(try textView(window).string.contains("retained"), "reply edits survive reopen")
+        try require(try await store.reader.draft(target)?.text.contains("retained") == true, "reply draft remains durable")
+        try press(window, "thread.focus.close")
+        await settle()
     }
 
     /// Covers top-level Messages rather than Deck's new-thread modal or a reply panel.

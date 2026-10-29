@@ -93,6 +93,9 @@ final class AppModel {
     }
     /// Mac: the New thread composer is open over the current section (a window-filling modal, like the focused thread).
     var composingThread = false
+    /// Mac recovery: keep the saved conversation available without mounting its content during startup.
+    /// This is presentation state only; the persisted route and every composer draft remain untouched.
+    var restoredThread: ThreadFocus?
     /// Mac: a canvas to open in a window of its own (beside the main window, as the browser is). The main window opens
     /// it and clears this.
     var canvasWindowRequest: CanvasWindowRoute?
@@ -544,7 +547,7 @@ final class AppModel {
             pins.stop()
             notificationBadge.stop()
             context = .home
-            restoringPath = true; chatPath = []; focusedThread = nil; restoringPath = false
+            restoringPath = true; chatPath = []; focusedThread = nil; restoredThread = nil; restoringPath = false
             resetSectionPaths()
             membership = nil; membershipWorkspaceId = nil
             canvasViewports = [:]
@@ -667,7 +670,7 @@ final class AppModel {
             await avatars?.clear()
             resetSectionPaths()
             membership = nil; membershipWorkspaceId = nil
-            restoringPath = true; chatPath = []; focusedThread = nil; restoringPath = false
+            restoringPath = true; chatPath = []; focusedThread = nil; restoredThread = nil; restoringPath = false
         } catch { notice = error.localizedDescription }
     }
 
@@ -686,7 +689,7 @@ final class AppModel {
     private func showWorkspace(_ id: String, persist: Bool) {
         guard let store, let connection else { return }
         selectedWorkspaceId = id
-        restoringPath = true; chatPath = []; focusedThread = nil; restoringPath = false
+        restoringPath = true; chatPath = []; focusedThread = nil; restoredThread = nil; restoringPath = false
         context = .home
         navigation.stop()
         pins.stop()
@@ -1000,9 +1003,17 @@ final class AppModel {
         return "thread-focus:\(connection.id):\(workspace)"
     }
 
+    /// Deliberately resume the saved conversation; retire a legacy Chat-stack route only after opening it.
+    /// Startup itself never rewrites that route. Closing the resumed thread can then stay closed on next launch.
+    func resumeSavedThread() {
+        guard let restoredThread else { return }
+        focusThread(restoredThread)
+        persistChatPath()
+    }
+
     private func persistThreadFocus() {
         guard !restoringPath, let store, let key = threadFocusKey else { return }
-        let encoded = focusedThread.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) }
+        let encoded = (focusedThread ?? restoredThread).flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) }
         Task { try? await store.writer.setState(key, encoded) }
     }
 
@@ -1030,9 +1041,16 @@ final class AppModel {
         }
         guard key == chatPathKey, expected == (contextEdits, pathEdits) else { return }
         restoringPath = true
+        #if os(macOS)
+        // A saved thread may contain the content that made the previous process unresponsive. Start with the
+        // underlying channel usable, and let the reader explicitly resume. Do not rewrite the saved route or drafts.
+        chatPath = []
+        restoredThread = (focus ?? mine.lazy.compactMap(ThreadFocus.init).last).flatMap { $0.workspaceId == workspace ? $0 : nil }
+        #else
         // A thread in an older saved path opens focused (see `chatPath`); a saved focused thread takes precedence.
         chatPath = mine.filter { if case .thread(_, let channelId, _) = $0 { channelId == context.channelId } else { false } }
         if let focus, focus.workspaceId == workspace { focusedThread = focus }
+        #endif
         restoringPath = false
     }
 

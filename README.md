@@ -19,6 +19,13 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Mac startup recovery (Mac build 34)
+
+The Mac opens the underlying workspace screen first and offers **Resume saved thread**.
+The saved conversation route and all drafts remain on the device; deliberate thread opening is unchanged.
+This mitigates a reported launch beachball without claiming its unreproduced root cause is fixed. iPhone and
+iPad restoration is unchanged. See [startup recovery and regression checks](docs/mac-startup-recovery.md).
+
 ## Manage Workspace (iPhone/iPad build 43, Mac build 32)
 
 Open **Manage Workspace** from the sidebar workspace menu or Settings. Shared native screens cover workspace

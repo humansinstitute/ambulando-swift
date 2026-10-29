@@ -163,7 +163,16 @@ final class FixtureEnvironment {
         #if os(macOS)
         if args.contains("-AmbulandoMacThreadRegression") {
             // Each in-process interaction run is disposable, including its credentials.
+            #if AMBULANDO_TEST
+            if args.contains("-AmbulandoMacStartupThreadCheck") {
+                // Dedicated Test-only namespace permits a real quit/relaunch without touching ordinary fixtures.
+                directory = directory.appendingPathComponent("startup-thread-regression", isDirectory: true)
+            } else {
+                directory = directory.appendingPathComponent("thread-regression-" + UUID().uuidString, isDirectory: true)
+            }
+            #else
             directory = directory.appendingPathComponent("thread-regression-" + UUID().uuidString, isDirectory: true)
+            #endif
         }
         #endif
         if args.contains("-AmbulandoFixtureReset") {
