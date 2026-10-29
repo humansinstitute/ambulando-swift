@@ -19,10 +19,17 @@ extension FixtureEnvironment {
     <button onclick="setTimeout(connect, 1800)">Connect after delay</button>
     <p><a href="https://browser.sample.invalid/new-tab" target="_blank">Open target blank</a></p>
     <button onclick="window.open('https://browser.sample.invalid/popup')">Open popup</button>
+    <p><a download="batch-data.txt" href="data:text/plain;base64,YmF0Y2gtZmlsZQ==">Download data file</a></p>
+    <p><input id="upload" type="file" multiple onchange="readFiles(this)"></p>
+    <p id="files">No files chosen</p>
     <p id="result">Nothing yet</p>
     <script>
       const out = (text) => { document.getElementById('result').textContent = text; };
       if (window.nostr) document.getElementById('nostr').textContent = 'window.nostr: ready';
+      async function readFiles(input) {
+        const values = await Promise.all([...input.files].map(async f => f.name + ':' + await f.text()));
+        document.getElementById('files').textContent = values.join('|') || 'No files chosen';
+      }
       async function connect() {
         try { const key = await window.nostr.getPublicKey(); out('pubkey ' + key.slice(0, 8)); }
         catch (e) { out('error ' + e.message); }

@@ -1,5 +1,6 @@
 import AmbulandoCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 // Deck on a phone (sol `index.html` `.deck-columns-track`, `autopilot-overview-manager.js` `DECK_MOBILE_CARDS`): full-width
 // cards you swipe between, with dots below: Hello and Links, Inbox (the default), Pinned items (only with pins), Canvas,
@@ -557,6 +558,18 @@ private struct PinButton: View {
 struct DeckPinnedCard: View {
     @Environment(AppModel.self) private var model
     let workspace: WorkspaceRecord
+    @State private var draggedPin: (item: PinnedItem, token: String)?
+    private var dragType: String { UTType.text.identifier }
+    @State private var targetedPin: String?
+    #if DEBUG
+    @State private var dragEvidence = "idle"
+    #endif
+
+    private func traceDrag(_ stage: String) {
+        #if DEBUG
+        if model.fixture != nil { dragEvidence = stage; NSLog("PIN_DRAG %@", stage) }
+        #endif
+    }
 
     var body: some View {
         let snapshot = model.pins.value
@@ -564,6 +577,23 @@ struct DeckPinnedCard: View {
         DeckCardFrame(title: "Pinned items", identifier: "pinned") { EmptyView() } content: {
             ForEach(items) { item in
                 HStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal")
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                        .onDrag {
+                            let token = UUID().uuidString
+                            draggedPin = (item, token)
+                            traceDrag("started; standard token provider offered")
+                            return NSItemProvider(object: token as NSString)
+                        }
+                        .accessibilityLabel("Move \(item.title ?? label(item.pin.resourceType))")
+                        .accessibilityIdentifier("pin.move.\(item.pin.resourceType.rawValue).\(item.pin.resourceId)")
+                        .accessibilityAction(named: "Move up") { move(item, by: -1, in: items) }
+                        .accessibilityAction(named: "Move down") { move(item, by: 1, in: items) }
+                    Menu {
+                        Button("Move up") { move(item, by: -1, in: items) }.disabled(item.id == items.first?.id)
+                        Button("Move down") { move(item, by: 1, in: items) }.disabled(item.id == items.last?.id)
+                    } label: { Image(systemName: "arrow.up.arrow.down").frame(width: 32, height: 44) }
+                    .accessibilityLabel("Arrange \(item.title ?? label(item.pin.resourceType))")
                     open(item) {
                         HStack(spacing: 10) {
                             Image(systemName: icon(item.pin.resourceType)).foregroundStyle(Amb.mutedForeground).frame(width: 20)
@@ -585,9 +615,51 @@ struct DeckPinnedCard: View {
                     .accessibilityLabel("Unpin \(item.title ?? label(item.pin.resourceType))")
                 }
                 .modifier(DeckRowStyle())
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(targetedPin == item.id ? Amb.primary : .clear, lineWidth: 2))
+                .onDrop(of: [dragType], isTargeted: Binding(get: { targetedPin == item.id }, set: { targetedPin = $0 ? item.id : nil })) { providers in drop(providers, before: item) }
             }
-            DeckNote(text: "Pin channels, conversations, tasks and documents to keep them here across scopes. Reordering pins is done in the web app.")
+            Text("Move to end").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                .frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                .onDrop(of: [dragType], isTargeted: nil) { providers in drop(providers, before: nil) }
+            if let write = snapshot.orderWrite {
+                HStack {
+                    Text(write.lastError ?? "Saving pin order…").font(.amb(.caption))
+                    if !write.isPending, let store = model.store {
+                        Button("Discard move") { Task { try? await store.writer.discardWrite(id: write.id) } }
+                    }
+                }
+            }
+            #if DEBUG
+            if model.fixture != nil { Text(dragEvidence).font(.caption).accessibilityIdentifier("pin.drag.evidence") }
+            #endif
+            DeckNote(text: "Drag a handle before another item or to Move to end. Move up/down is also available in its menu. Order synchronizes across apps.")
         }
+    }
+
+    private func drop(_ providers: [NSItemProvider], before anchor: PinnedItem?) -> Bool {
+        traceDrag("drop invoked; providers=\(providers.count); source=\(draggedPin == nil ? "missing" : "present")")
+        guard let drag = draggedPin, let provider = providers.first, drag.item.id != anchor?.id else { return false }
+        provider.loadObject(ofClass: NSString.self) { value, _ in
+            let token = value as? String
+            Task { @MainActor in
+                guard token == drag.token, draggedPin?.token == drag.token else { traceDrag("token decode/state rejected"); return }
+                traceDrag("token decoded")
+                draggedPin = nil
+                guard model.pins.value.items.contains(where: { $0.pin == drag.item.pin }),
+                      model.pins.value.isPinned(drag.item.pin.resourceType, drag.item.pin.resourceId) else { traceDrag("current pin guard rejected"); return }
+                traceDrag("current pin valid; enqueue requested")
+                model.movePin(drag.item, before: anchor, in: workspace)
+            }
+        }
+        return true
+    }
+
+    private func move(_ item: PinnedItem, by step: Int, in items: [PinnedItem]) {
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        let destination = index + step
+        guard items.indices.contains(destination) else { return }
+        let before = step < 0 ? items[destination] : (destination + 1 < items.count ? items[destination + 1] : nil)
+        model.movePin(item, before: before, in: workspace)
     }
 
     @ViewBuilder private func open<Label: View>(_ item: PinnedItem, @ViewBuilder label: () -> Label) -> some View {

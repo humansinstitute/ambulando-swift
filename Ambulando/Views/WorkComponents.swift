@@ -136,18 +136,15 @@ struct WorkDestination: View {
     @ViewBuilder private var destination: some View {
         if let workspace = model.selectedWorkspace, route.workspaceId == workspace.id, let store = model.store, let connection = model.connection {
             switch route {
-            case .task(_, let id): TaskDetailView(taskId: id, workspace: workspace, store: store).pinToolbar(.task, id: id, workspace: workspace)
-            case .doc(_, let id): DocumentView(docId: id, workspace: workspace, store: store).pinToolbar(.document, id: id, workspace: workspace)
+            case .task(_, let id): TaskDetailView(taskId: id, workspace: workspace, store: store)
+            case .doc(_, let id): DocumentView(docId: id, workspace: workspace, store: store)
             case .file(_, let id): FileDetailView(fileId: id, workspace: workspace, store: store)
             case .thread(_, let channel, let thread):
                 ThreadView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channel, threadId: thread), workspace: workspace, store: store)
-                    .pinToolbar(.thread, id: thread, workspace: workspace)
             case .channel(_, let channel):
                 ChannelView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channel), workspace: workspace, store: store)
-                    .pinToolbar(.channel, id: channel, workspace: workspace)
             case .threadById(_, let thread):
                 ThreadByIdView(threadId: thread, workspace: workspace, store: store, connectionId: connection.id)
-                    .pinToolbar(.thread, id: thread, workspace: workspace)
             case .canvas(_, let canvas): CanvasBoardView(canvasId: canvas, workspace: workspace, store: store)
             case .board(_, let canvas, let naplet): BoardSceneView(canvasId: canvas, napletId: naplet, workspace: workspace, store: store)
             case .contextComponent(_, let scope, let component): ContextComponentView(scopeId: scope, componentId: component, workspace: workspace, store: store)
@@ -161,6 +158,7 @@ struct WorkDestination: View {
 
 /// A tab's navigation stack whose root renders from the store and whose pushes are `WorkRoute`s.
 struct WorkStack<Root: View, Banner: View>: View {
+    @Environment(AppModel.self) private var model
     @Binding var showSettings: Bool
     @Binding var path: [WorkRoute]
     /// Context-bound modes show the shared Scope | Channel strip; the global Inbox does not.
@@ -177,7 +175,10 @@ struct WorkStack<Root: View, Banner: View>: View {
             }
             .background(Amb.background)
             .toolbarItems(showSettings: $showSettings)
-            .navigationDestination(for: WorkRoute.self) { WorkDestination(route: $0, adoptsContext: !contextBar) }
+            .navigationDestination(for: WorkRoute.self) { route in
+                WorkDestination(route: route, adoptsContext: !contextBar)
+                    .toolbarItems(showSettings: $showSettings, pin: ToolbarPin.work(route, workspace: model.selectedWorkspace), showsSidebar: false)
+            }
         }
     }
 }

@@ -19,6 +19,19 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Batch interactions (iPhone/iPad build 50, Mac build 39)
+
+Click or tap the blank part of a chat composer to focus its existing draft. Drag a handle in Deck’s mixed personal pins
+before another item or to **Move to end**; its separate arrange menu also offers Move up/down. Changes use Tower’s
+existing versioned pin-order API, synchronize through the native store, and preserve newer unpins and concurrent new pins.
+The record toolbar keeps Search, Notifications, Pin, Browser and Avatar in that order; pushed screens retain Back.
+
+The embedded browser supports WebKit downloads and generated blob/data files with native Save/export and cancellation,
+and the Mac’s file-input picker. HTTPS, file-size limits and existing site signing permissions remain in force. See
+[behavior, security boundaries and validation categories](docs/batch-interactions.md). Installation and live-account
+acceptance are recorded separately on the release task; selected-file upload and authenticated cross-app review remain
+explicit manual checks.
+
 ## Comment authors and photos (iPhone/iPad build 49, Mac build 38)
 
 Task and document comments, including document replies, use the same profile names and photos as chat. Actor-only

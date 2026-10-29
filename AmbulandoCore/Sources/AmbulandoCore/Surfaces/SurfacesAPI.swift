@@ -130,8 +130,12 @@ extension TowerAPI {
 
     /// The viewer's pins through the record-sync priority feed (`family=personal_pin`), read until `has_more` is false.
     /// The feed lists each pin's newest head once; Tower makes the family visible only to its own actor.
-    public func personalPins(workspaceId: String, appNpub: String, maxPages: Int = 20) async throws -> (pins: [PinRecord], deleted: [String]) {
-        let path = try Self.base(workspaceId) + "/record-sync/priority"
+    public func personalPins(workspaceId: String, appNpub: String, maxPages: Int = 20) async throws -> (pins: [PinRecord], deleted: [String], ordering: Bool) {
+        let base = try Self.base(workspaceId)
+        // Capability belongs to the main sync envelope; the priority family feed does not advertise it.
+        let capabilities = try object(await client.request(path: base + "/record-sync", query: [URLQueryItem(name: "limit", value: "1")], appNpub: appNpub), "record sync capabilities")
+        let ordering = capabilities["personal_pin_order_version"] as? Int == 1
+        let path = base + "/record-sync/priority"
         var pins: [String: PinRecord] = [:]
         var deleted = Set<String>()
         var cursor: String?
@@ -158,7 +162,7 @@ extension TowerAPI {
                 guard pin.workspaceId == workspaceId, pin.id == id else { throw TowerError.malformed("personal pins") }
                 if pins[id].map({ $0.rowVersion < pin.rowVersion }) ?? true { pins[id] = pin }
             }
-            guard o["has_more"] as? Bool == true else { return (Array(pins.values), Array(deleted)) }
+            guard o["has_more"] as? Bool == true else { return (Array(pins.values), Array(deleted), ordering) }
             guard let next = o["next_cursor"] as? String, !next.isEmpty, next != cursor else { throw TowerError.malformed("personal pins cursor") }
             cursor = next
         }

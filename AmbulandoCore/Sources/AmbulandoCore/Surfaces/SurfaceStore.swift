@@ -291,10 +291,17 @@ extension StoreWriter {
     }
 
     func writePins(connectionId: String, workspaceId: String, _ rows: [PinRecord], complete: Bool) throws -> Int {
-        try replace(table: "pins", columns: ["id", "resource_type", "resource_id", "channel_id", "scope_id", "pinned", "row_version", "updated_at", "raw"],
+        let allIds = rows.map(\.id)
+        // A delayed mutation replay may contain older pins than a later sync/tombstone.
+        let rows = try rows.filter { row in
+            let prior = try db.prepare("SELECT row_version FROM pins WHERE connection_id = ? AND workspace_id = ? AND id = ?")
+            try prior.bind([.text(connectionId), .text(workspaceId), .text(row.id)])
+            return !(try prior.step()) || prior.int(0) <= row.rowVersion
+        }
+        return try replace(table: "pins", columns: ["id", "resource_type", "resource_id", "channel_id", "scope_id", "pinned", "row_version", "updated_at", "raw"],
                     rows: rows.map { [.text($0.id), .text($0.resourceType.rawValue), .text($0.resourceId), $0.channelId.sql, $0.scopeId.sql,
                                       .int($0.pinned ? 1 : 0), .int(Int64($0.rowVersion)), .text($0.updatedAt), .blob($0.raw)] },
-                    ids: rows.map(\.id), workspaceId: workspaceId, connectionId: connectionId, partition: nil, complete: complete)
+                    ids: allIds, workspaceId: workspaceId, connectionId: connectionId, partition: nil, complete: complete)
     }
 }
 

@@ -76,12 +76,25 @@ final class BrowserModel {
     var presented = false {
         didSet {
             if oldValue && !presented {
+                downloadTransfer?.cancel()
                 for tab in tabs { broker?.tabClosed(tab.id) }
                 dialog?.reply(false); dialog = nil
             }
         }
     }
     var showingTabs = false
+    var exportingDownload = false
+    var downloadFile: BrowserDownloadFile?
+    var downloadFilename = "download"
+    var downloadTransfer: BrowserDownloadTransfer?
+
+    func startDownload(_ download: WKDownload, from webView: WKWebView) {
+        guard presented, let tab = tab(for: webView), !tab.closed, downloadTransfer == nil, !exportingDownload else {
+            download.cancel { _ in }; return
+        }
+        downloadTransfer = BrowserDownloadTransfer(download: download, model: self, tab: tab)
+    }
+
     /// An address for another app (mail, phone, wallet...) waiting for the user to confirm the hand-off.
     var pendingExternal: URL?
     var dialog: BrowserDialog?
@@ -266,6 +279,7 @@ final class BrowserModel {
     func close(_ tab: BrowserTab) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         broker?.tabClosed(tab.id)
+        if downloadTransfer?.tab === tab { downloadTransfer?.cancel() }
         tab.invalidate()
         tab.webView.stopLoading()
         tab.webView.navigationDelegate = nil
@@ -396,6 +410,7 @@ final class BrowserModel {
     }
 
     func documentCommitted(_ tab: BrowserTab) {
+        if downloadTransfer?.tab === tab { downloadTransfer?.cancel("Download cancelled because the page changed.") }
         tab.documentId &+= 1
         tab.origin = BrowserURLPolicy.origin(of: tab.webView.url)
         tab.refusal = nil
@@ -467,8 +482,18 @@ final class BrowserWebDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
         guard let url = action.request.url else { return .cancel }
         let mainFrame = action.targetFrame?.isMainFrame ?? true
+        // Local generated files are downloads only, bound to their HTTPS creator. They never become signed pages.
+        if mainFrame, ["blob", "data"].contains(url.scheme?.lowercased() ?? "") {
+            guard let tab = model?.tab(for: webView), let origin = tab.origin,
+                  action.sourceFrame.isMainFrame,
+                  BrowserURLPolicy.origin(scheme: action.sourceFrame.securityOrigin.protocol,
+                    host: action.sourceFrame.securityOrigin.host, port: action.sourceFrame.securityOrigin.port) == origin,
+                  action.shouldPerformDownload || action.navigationType == .linkActivated,
+                  url.scheme == "data" || url.absoluteString.hasPrefix("blob:" + origin + "/") else { return .cancel }
+            return .download
+        }
         switch BrowserURLPolicy.decide(url, mainFrame: mainFrame) {
-        case .load: return .allow
+        case .load: return action.shouldPerformDownload ? .download : .allow
         case .external(let other):
             // Only a navigation the user started may leave for another app.
             if action.navigationType == .linkActivated || action.navigationType == .formSubmitted { model?.pendingExternal = other }
@@ -477,6 +502,48 @@ final class BrowserWebDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
             if mainFrame { model?.tab(for: webView)?.refusal = why }
             return .cancel
         }
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        guard let url = response.response.url,
+              BrowserURLPolicy.decide(url, mainFrame: response.isForMainFrame) == .load else { return .cancel }
+        if let http = response.response as? HTTPURLResponse, http.statusCode >= 400 {
+            model?.tab(for: webView)?.refusal = "Page request failed (HTTP \(http.statusCode))."
+            return .cancel
+        }
+        let disposition = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")?.lowercased() ?? ""
+        return response.isForMainFrame && (!response.canShowMIMEType || disposition.hasPrefix("attachment")) ? .download : .allow
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        model?.startDownload(download, from: webView)
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        model?.startDownload(download, from: webView)
+    }
+
+    #if os(macOS)
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo) async -> [URL]? {
+        guard let model, model.presented, let tab = model.tab(for: webView), !tab.closed else { return nil }
+        let document = tab.documentId
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.resolvesAliases = true
+        let result = await panel.begin()
+        guard result == .OK, !tab.closed, model.presented, tab.documentId == document else { return nil }
+        return panel.urls
+    }
+    #endif
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        if (error as? URLError)?.code != .cancelled { model?.tab(for: webView)?.refusal = error.localizedDescription }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        if (error as? URLError)?.code != .cancelled { model?.tab(for: webView)?.refusal = error.localizedDescription }
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {

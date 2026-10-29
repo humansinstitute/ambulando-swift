@@ -136,6 +136,37 @@ final class SurfacesUITests: XCTestCase {
         XCTAssertTrue(app.buttons["context.bar"].firstMatch.label.contains("design"), "the context is shared")
     }
 
+    func testDragMixedPinsPersistsWithoutOpeningOrUnpinning() {
+        let app = launch()
+        app.section("Deck"); app.deckCard("pinned")
+        let all = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'pin.move.'"))
+        XCTAssertTrue(all.firstMatch.waitForExistence(timeout: 15))
+        let first = all.element(boundBy: 0), last = all.element(boundBy: 1)
+        let firstId = first.identifier, lastId = last.identifier
+        last.press(forDuration: 0.8, thenDragTo: first)
+        let ordered = NSPredicate { _, _ in
+            let source = all.matching(identifier: lastId).firstMatch
+            let anchor = all.matching(identifier: firstId).firstMatch
+            return source.exists && anchor.exists && source.frame.midY < anchor.frame.midY
+        }
+        let orderExpectation = expectation(for: ordered, evaluatedWith: nil)
+        let orderResult = XCTWaiter.wait(for: [orderExpectation], timeout: 10)
+        capture(app, "batch-pin-drag-result")
+        print("PIN_DRAG_EVIDENCE \(app.staticTexts["pin.drag.evidence"].label)")
+        XCTAssertEqual(orderResult, .completed)
+        XCTAssertTrue(app.buttons["deck.pinned.design"].exists)
+        XCTAssertFalse(app.navigationBars["#design"].exists, "drag does not open the channel")
+        XCTAssertEqual(all.count, 2, "drag does not unpin")
+        app.terminate()
+        let again = launch(reset: false)
+        again.section("Deck"); again.deckCard("pinned")
+        let restored = again.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'pin.move.'"))
+        XCTAssertTrue(restored.firstMatch.waitForExistence(timeout: 15))
+        XCTAssertLessThan(restored.matching(identifier: lastId).firstMatch.frame.midY,
+                          restored.matching(identifier: firstId).firstMatch.frame.midY)
+        XCTAssertNotEqual(firstId, lastId)
+    }
+
     func testPinsShowOnDecksPinnedCardAndPinUnpinFromARecord() {
         let app = launch()
         app.section("Deck")
@@ -148,9 +179,14 @@ final class SurfacesUITests: XCTestCase {
         let task = app.buttons["task.Review the native inbox"].firstMatch
         XCTAssertTrue(task.waitForExistence(timeout: 15))
         task.tap()
+        capture(app, "batch-record-toolbar")
+        print("TOOLBAR_DIAGNOSTIC \(app.navigationBars.debugDescription)")
         let pin = app.buttons["pin.toggle"].firstMatch
         XCTAssertTrue(pin.waitForExistence(timeout: 10))
         XCTAssertEqual(pin.label, "Pin")
+        let controls = ["search", "notifications.open", "pin.toggle", "browser.open", "settings"].map { app.buttons[$0].firstMatch }
+        for control in controls { XCTAssertTrue(control.isHittable, "ordered toolbar control is visible") }
+        for index in 1..<controls.count { XCTAssertLessThan(controls[index - 1].frame.midX, controls[index].frame.midX) }
         pin.tap()
         XCTAssertTrue(app.buttons["Unpin"].waitForExistence(timeout: 10), "shows the pin at once")
         back(app)

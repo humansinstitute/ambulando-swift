@@ -19,6 +19,7 @@ public enum WriteKind: String, Sendable, Codable, CaseIterable {
     case fileUpload = "file.upload"
     /// Pin or unpin a thread, task, document or channel for this viewer (`PUT /me/pins/:type/:id`).
     case pinSet = "pin.set"
+    case pinMove = "pin.move"
     /// Read, dismiss or archive one notification (`PATCH …/notifications/items/:id`, compare-and-set).
     case notificationState = "notification.state"
     /// Mark many notifications read/unread/dismissed/archived up to an observed sequence (`POST …/notifications/bulk`).
@@ -97,6 +98,15 @@ extension StoreWriter {
     @discardableResult
     public func enqueueWrite(id: String = UUID().uuidString.lowercased(), connection: ConnectionRecord, workspace: WorkspaceRecord,
                              intent: WriteIntent) async throws -> WriteItem {
+        if intent.kind == .pinMove || intent.kind == .pinSet {
+            let pending = try db.prepare("SELECT kind FROM writes WHERE connection_id = ? AND workspace_id = ? AND kind IN ('pin.set','pin.move')")
+            try pending.bind([.text(connection.id), .text(workspace.id)])
+            while try pending.step() {
+                if intent.kind == .pinMove || pending.text(0) == WriteKind.pinMove.rawValue {
+                    throw TowerError.malformed("Resolve earlier pin changes before moving or changing another pin. Wait for synchronization, or discard a failed change.")
+                }
+            }
+        }
         let stamp = now()
         let payload = try JSONSerialization.data(withJSONObject: intent.payload, options: [.sortedKeys])
         try db.prepare("""

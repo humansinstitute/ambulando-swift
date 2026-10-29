@@ -431,7 +431,9 @@ extension WorkspaceSync {
                 try await store.writer.replaceContextReferences(workspaceId: w, scopeId: scope, componentId: component, references)
             } catch where lost(error) { try await store.writer.removeContextComponent(workspaceId: w, id: component) }
         case .pins:
-            try await store.writer.upsertPins(connectionId: connection.id, workspaceId: w, try await api.personalPins(workspaceId: w, appNpub: app).pins, complete: true)
+            let result = try await api.personalPins(workspaceId: w, appNpub: app)
+            try await store.writer.setState("pin-order-support:\(connection.id):\(w)", result.ordering ? "1" : "0")
+            try await store.writer.upsertPins(connectionId: connection.id, workspaceId: w, result.pins, complete: true)
         case .agents:
             try await store.writer.replaceWorkspaceAgents(workspaceId: w, try await api.workspaceAgents(workspaceId: w, appNpub: app))
         case .agentActivity(let channel):

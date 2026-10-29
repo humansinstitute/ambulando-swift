@@ -1,6 +1,7 @@
 import AmbulandoCore
 import SwiftUI
 import WebKit
+import UniformTypeIdentifiers
 
 /// The full-screen browser. All chrome is one compact bar at the bottom: **Ambulando** (always returns to the app
 /// exactly as it was), back, forward, the site/address field, the tab switcher and an overflow menu for everything else.
@@ -40,6 +41,7 @@ struct BrowserView: View {
         })) { prompt in
             NostrApprovalSheet(prompt: prompt) { browser.answer(prompt, $0) }
         }
+        .modifier(BrowserDownloadExporter(browser: browser))
         .sheet(isPresented: $browser.showingTabs) { BrowserTabsView() }
         .confirmationDialog("Open in another app?", isPresented: Binding(get: { browser.pendingExternal != nil }, set: { if !$0 { browser.pendingExternal = nil } }),
                             titleVisibility: .visible, presenting: browser.pendingExternal) { url in
@@ -79,6 +81,10 @@ struct BrowserView: View {
                 }
                 .accessibilityLabel("\(browser.tabs.count) open \(browser.tabs.count == 1 ? "tab" : "tabs")")
                 .accessibilityIdentifier("browser.tabs")
+                if browser.downloadTransfer != nil {
+                    Button { browser.downloadTransfer?.cancel() } label: { Image(systemName: "xmark.circle").barTarget() }
+                        .accessibilityLabel("Cancel download")
+                }
                 menu
             }
         }
@@ -392,6 +398,20 @@ struct NostrApprovalSheet: View {
         case 27235: "HTTP sign-in (NIP-98)"
         case 30023: "Article"
         default: "Other"
+        }
+    }
+}
+
+private struct BrowserDownloadExporter: ViewModifier {
+    @Bindable var browser: BrowserModel
+    func body(content: Content) -> some View {
+        content.fileExporter(isPresented: $browser.exportingDownload, document: browser.downloadFile,
+                             contentType: UTType.data, defaultFilename: browser.downloadFilename) { result in
+            if case .failure(let error) = result { browser.selected?.refusal = "Could not save download: \(error.localizedDescription)" }
+            browser.downloadFile = nil
+        }
+        .onChange(of: browser.exportingDownload) { _, exporting in
+            if !exporting { browser.downloadFile = nil }
         }
     }
 }

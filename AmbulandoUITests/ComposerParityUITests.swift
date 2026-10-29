@@ -38,6 +38,25 @@ final class ComposerParityUITests: XCTestCase {
         add(shot)
     }
 
+    func testBlankComposerPaddingFocusesAndKeepsDraftAndTools() {
+        let app = launch()
+        let composer = field(app)
+        // Outside the native field, but inside the rounded composer surface.
+        composer.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 1)).withOffset(CGVector(dx: 0, dy: 5)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        composer.typeText("Blank area draft")
+        app.buttons["composer.hideKeyboard"].tap()
+        XCTAssertEqual(value(composer), "Blank area draft")
+        composer.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: -5, dy: 0)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        composer.typeText(" kept")
+        XCTAssertEqual(value(composer), "Blank area draft kept")
+        app.buttons["composer.mention"].tap()
+        XCTAssertTrue(value(composer).contains("@"))
+        XCTAssertTrue(app.buttons["composer.photo"].exists)
+        capture(app, "batch-blank-composer")
+    }
+
     func testPickedAgentShowsAsPillAndBackspaceRemovesTheWholeName() {
         let app = launch()
         let composer = field(app)

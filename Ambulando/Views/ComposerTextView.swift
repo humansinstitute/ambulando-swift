@@ -654,3 +654,18 @@ final class PasteAwareTextView: NSTextView {
     }
 }
 #endif
+
+#if os(macOS)
+/// AppKit handles the empty composer surface behind the native editor. The editor remains above this view,
+/// retaining caret placement, text selection, scrolling and drag/paste behavior.
+struct ComposerBlankFocusTarget: NSViewRepresentable {
+    let focus: () -> Void
+    final class Target: NSView {
+        var focus: (() -> Void)?
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func mouseDown(with event: NSEvent) { focus?() }
+    }
+    func makeNSView(context: Context) -> Target { let view = Target(); view.focus = focus; return view }
+    func updateNSView(_ view: Target, context: Context) { view.focus = focus }
+}
+#endif

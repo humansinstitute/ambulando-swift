@@ -556,10 +556,11 @@ final class SurfaceTests: XCTestCase {
         _ = try await h.writes.submit(intent(.task, r.task, true, expected: 0), connection: h.connection, workspace: h.workspace)
         await h.work.drainWrites()
         pending = try await h.work.pending()
-        XCTAssertTrue(pending.isEmpty, "conflict re-read and resent against the current version")
+        XCTAssertEqual(pending.map(\.state), [.failed], "a stale device cannot resurrect a newer unpin")
+        if let stale = pending.first { try await h.store.writer.discardWrite(id: stale.id) }
         let task = h.tower.pinRows().first { $0["resource_id"] as? String == r.task }
-        XCTAssertEqual(task?["pinned"] as? Bool, true)
-        XCTAssertEqual(task?["row_version"] as? Int, 3)
+        XCTAssertEqual(task?["pinned"] as? Bool, false)
+        XCTAssertEqual(task?["row_version"] as? Int, 2)
 
         // 3. Conflict where Tower already has the requested state: done without another write.
         h.tower.externalPin(type: "document", resource: r.doc, pinned: true)
@@ -575,6 +576,71 @@ final class SurfaceTests: XCTestCase {
         XCTAssertEqual(pending.first?.lastStatus, 403)
         XCTAssertEqual(pending.first?.lastError, "You can no longer pin this.")
         XCTAssertFalse(h.tower.pinRows().contains { $0["resource_id"] as? String == r.forbidden && $0["pinned"] as? Bool == true })
+    }
+
+    func testPinOrderTypedCASReplayConcurrentAdditionAndTombstoneMonotonicity() async throws {
+        let h = try await SurfaceHarness.make()
+        let r = pinnable(h)
+        h.tower.externalPin(type: "thread", resource: r.thread, pinned: true)
+        h.tower.externalPin(type: "task", resource: r.task, pinned: true)
+        h.tower.externalPin(type: "document", resource: r.doc, pinned: true)
+        await h.sync.refreshPins(h.connection, h.workspace); await h.idle()
+        let initial = try await h.store.reader.pinnedItems(connectionId: h.connection.id, workspaceId: h.workspace.id)
+        let target = try XCTUnwrap(initial.last?.pin), anchor = try XCTUnwrap(initial.first?.pin)
+        let intent = WriteIntent(kind: .pinMove, targetId: target.resourceId, payload: [
+            "resource_type": target.resourceType.rawValue, "resource_id": target.resourceId, "expected_row_version": target.rowVersion,
+            "before": ["resource_type": anchor.resourceType.rawValue, "resource_id": anchor.resourceId,
+                       "expected_row_version": anchor.rowVersion] as [String: any Sendable], "mutation_id": UUID().uuidString.lowercased()])
+        // A new selection arriving after the move was prepared is retained by server normalization.
+        h.tower.externalPin(type: "channel", resource: Fixtures.channel1, pinned: true)
+        h.tower.inject(.dropResponseAfterCommit, matching: "/me/pin-order")
+        _ = try await h.writes.submit(intent, connection: h.connection, workspace: h.workspace)
+        await h.idle()
+        // The acknowledgement of the retry must not resurrect a target unpinned since the original commit.
+        h.tower.externalPin(type: target.resourceType.rawValue, resource: target.resourceId, pinned: false)
+        await h.sync.refreshPins(h.connection, h.workspace, force: true); await h.idle()
+        await h.writes.kick(h.connection, force: true); await h.idle()
+        let latest = try await h.store.reader.pinnedItems(connectionId: h.connection.id, workspaceId: h.workspace.id)
+        XCTAssertFalse(latest.contains { $0.pin.resourceId == target.resourceId && $0.pin.resourceType == target.resourceType })
+        XCTAssertTrue(latest.contains { $0.pin.resourceType == .channel && $0.pin.resourceId == Fixtures.channel1 })
+        let pending = try await h.store.reader.writes(connectionId: h.connection.id, workspaceId: h.workspace.id)
+        XCTAssertTrue(pending.isEmpty)
+        // An independently prepared stale move conflicts; it never changes membership or silently rebases.
+        _ = try await h.writes.submit(intent, connection: h.connection, workspace: h.workspace)
+        await h.idle()
+        // Exact mutation replay is accepted, still without resurrecting the target.
+        let after = try await h.store.reader.pinnedItems(connectionId: h.connection.id, workspaceId: h.workspace.id)
+        XCTAssertEqual(after, latest)
+        let stale = WriteIntent(kind: .pinMove, targetId: target.resourceId, payload: [
+            "resource_type": target.resourceType.rawValue, "resource_id": target.resourceId,
+            "expected_row_version": target.rowVersion, "mutation_id": UUID().uuidString.lowercased()])
+        _ = try await h.writes.submit(stale, connection: h.connection, workspace: h.workspace)
+        await h.idle()
+        let failed = try await h.store.reader.writes(connectionId: h.connection.id, workspaceId: h.workspace.id)
+        XCTAssertEqual(failed.first?.lastCode, "pin_order_conflict")
+        XCTAssertEqual(failed.first?.state, .failed)
+    }
+
+    func testPinMoveWaitsForPendingMembershipAndCapabilityIsStored() async throws {
+        let h = try await SurfaceHarness.make()
+        await h.sync.refreshPins(h.connection, h.workspace); await h.idle()
+        let capability = try await h.store.reader.state("pin-order-support:\(h.connection.id):\(h.workspace.id)")
+        XCTAssertEqual(capability, "1", "capability is negotiated on main sync, absent from priority pin envelope")
+        XCTAssertTrue(h.tower.requestLog.contains { $0.hasSuffix("/record-sync") })
+        _ = try await h.store.writer.enqueueWrite(connection: h.connection, workspace: h.workspace,
+            intent: WriteIntent(kind: .pinSet, targetId: Fixtures.channel1, payload: ["pinned": true]))
+        do {
+            _ = try await h.store.writer.enqueueWrite(connection: h.connection, workspace: h.workspace,
+                intent: WriteIntent(kind: .pinMove, targetId: Fixtures.channel1, payload: [:]))
+            XCTFail("pending pin membership must fence the order request")
+        } catch {}
+        let pending = try await h.store.reader.writes(connectionId: h.connection.id, workspaceId: h.workspace.id)
+        try await h.store.writer.markWrite(id: pending[0].id, state: .failed, error: "conflict")
+        do {
+            _ = try await h.store.writer.enqueueWrite(connection: h.connection, workspace: h.workspace,
+                intent: WriteIntent(kind: .pinMove, targetId: Fixtures.channel1, payload: [:]))
+            XCTFail("failed pin membership must be resolved before an order can enter the same blocked group")
+        } catch {}
     }
 
     func testPinsAndToolboxAreBoundToTheirConnection() async throws {

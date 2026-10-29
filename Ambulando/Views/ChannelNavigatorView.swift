@@ -18,23 +18,24 @@ struct ChatStack<Banner: View>: View {
                 ChatContextRoot()
             }
             .background(Amb.background)
-            .toolbarItems(showSettings: $showSettings)
+            .toolbarItems(showSettings: $showSettings, pin: ToolbarPin.chat(nil, channel: model.context.channelId, workspace: model.selectedWorkspace))
             .navigationDestination(for: ChatRoute.self) { route in
+                Group {
                 if let workspace = model.selectedWorkspace, route.workspaceId == workspace.id, let store = model.store, let connection = model.connection {
                     switch route {
                     case .channel(_, let channelId):
                         ChannelView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId),
                                     workspace: workspace, store: store)
-                            .pinToolbar(.channel, id: channelId, workspace: workspace)
                     case .thread(_, let channelId, let threadId):
                         ThreadView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId, threadId: threadId),
                                    workspace: workspace, store: store)
-                            .pinToolbar(.thread, id: threadId, workspace: workspace)
                     }
                 } else {
                     ContentUnavailableView("Not in this workspace", systemImage: "arrow.uturn.backward",
                                            description: Text("This conversation belongs to another workspace."))
                 }
+                }
+                .toolbarItems(showSettings: $showSettings, pin: ToolbarPin.chat(route, channel: nil, workspace: model.selectedWorkspace), showsSidebar: false)
             }
         }
     }
@@ -50,7 +51,7 @@ struct ChatContextRoot: View {
                 if let channelId = model.context.channelId {
                     ChannelView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId),
                                 workspace: workspace, store: store, pushed: false)
-                        .pinToolbar(.channel, id: channelId, workspace: workspace)
+
                         .id("\(workspace.id):\(channelId)")   // a fresh observer per channel: no rows cross over
                 } else {
                     ChannelDirectoryView()

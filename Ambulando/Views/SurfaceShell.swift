@@ -11,16 +11,33 @@ extension EnvironmentValues {
     @Entry var pushRoute = PushRouteAction { _ in }
 }
 
-/// Pin / unpin toolbar button for a record screen (see `PinToggleButton`).
-struct PinToolbarModifier: ViewModifier {
+struct ToolbarPin: Equatable {
     let type: PinRecord.ResourceType
     let id: String
     let workspace: WorkspaceRecord
+}
 
-    func body(content: Content) -> some View {
-        content.toolbar {
-            ToolbarItem(placement: .primaryAction) { PinToggleButton(type: type, id: id, workspace: workspace) }
+extension ToolbarPin {
+    static func work(_ route: WorkRoute?, workspace: WorkspaceRecord?) -> ToolbarPin? {
+        guard let route, let workspace, route.workspaceId == workspace.id else { return nil }
+        switch route {
+        case .task(_, let id): return ToolbarPin(type: .task, id: id, workspace: workspace)
+        case .doc(_, let id): return ToolbarPin(type: .document, id: id, workspace: workspace)
+        case .channel(_, let id): return ToolbarPin(type: .channel, id: id, workspace: workspace)
+        case .thread(_, _, let id), .threadById(_, let id): return ToolbarPin(type: .thread, id: id, workspace: workspace)
+        default: return nil
         }
+    }
+    static func chat(_ route: ChatRoute?, channel: String?, workspace: WorkspaceRecord?) -> ToolbarPin? {
+        guard let workspace else { return nil }
+        if let route {
+            guard route.workspaceId == workspace.id else { return nil }
+            switch route {
+            case .channel(_, let id): return ToolbarPin(type: .channel, id: id, workspace: workspace)
+            case .thread(_, _, let id): return ToolbarPin(type: .thread, id: id, workspace: workspace)
+            }
+        }
+        return channel.map { ToolbarPin(type: .channel, id: $0, workspace: workspace) }
     }
 }
 
@@ -51,12 +68,6 @@ struct PinToggleButton: View {
                 Button("Discard", role: .destructive) { Task { try? await store.writer.discardWrite(id: failure.id) } }
             }
         }
-    }
-}
-
-extension View {
-    func pinToolbar(_ type: PinRecord.ResourceType, id: String, workspace: WorkspaceRecord) -> some View {
-        modifier(PinToolbarModifier(type: type, id: id, workspace: workspace))
     }
 }
 

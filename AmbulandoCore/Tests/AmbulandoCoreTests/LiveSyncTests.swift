@@ -75,6 +75,10 @@ final class FakeEventTower: @unchecked Sendable {
                     .first { url.path.hasSuffix("/" + $0.replacingOccurrences(of: "_", with: "-")) } ?? "scopes"
                 return (200, [key: [], "states": [], "next_cursor": NSNull(), "order": []])
             }
+            // Main sync negotiates capabilities; priority pin reads do not advertise them.
+            if url.path == base + "/record-sync" {
+                return (200, ["protocol_version": 1, "personal_pin_order_version": 1, "changes": [], "has_more": false])
+            }
             // Reseed also lists pins, canvases, the Toolbox and agents; this workspace has none.
             if url.path == base + "/record-sync/priority" {
                 return (200, ["protocol_version": 1, "captured_head": "0", "changes": [], "next_cursor": "done", "has_more": false])

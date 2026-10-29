@@ -354,6 +354,23 @@ public struct WriteSender: Sendable {
         case .pinSet:
             return try await setPin(item, api: api, send: send)
 
+        case .pinMove:
+            var body = item.payloadObject
+            body.removeValue(forKey: "ambiguous")
+            if body["before"] == nil { body["before"] = NSNull() }
+            let r = try await send("POST", base + "/me/pin-order", body)
+            if (200..<300).contains(r.status), let rows = reply(r.body)["pins"] as? [[String: Any]] {
+                var ack = WriteAcknowledgement()
+                ack.pins = try rows.map { try PinRecord(raw: rawJSON($0)) }
+                return .done(ack)
+            }
+            if r.status == 409 {
+                let latest = try await api.personalPins(workspaceId: item.workspaceId, appNpub: item.appNpub)
+                try await store.writer.upsertPins(connectionId: item.connectionId, workspaceId: item.workspaceId, latest.pins, complete: true)
+                return .permanent(status: 409, code: "pin_order_conflict", message: "Pin order changed on another device. The latest order was kept; discard this move and move the item again.")
+            }
+            return Self.classify(status: r.status, body: r.body, attempts: item.attempts + 1, what: "reorder pins")
+
         case .notificationState:
             return try await setNotificationState(item, api: api)
 
@@ -398,14 +415,12 @@ public struct WriteSender: Sendable {
         }
     }
 
-    /// Pin or unpin. Tower checks `expected_row_version` and replays a known `mutation_id`, so resending after a lost
-    /// reply is safe. On a version conflict the pins are re-read: if Tower already has what the user asked for, the write is
-    /// done; otherwise it is resent once against the current version with a fresh mutation id (the user's latest intent wins,
-    /// as it does on the web). A target the viewer may no longer read is refused permanently and shown as failed.
+    /// Pin/unpin uses an immutable mutation and observed version. A conflict may confirm an already matching state;
+    /// otherwise it keeps the newer server selection and requires an explicit fresh action, never resurrecting an unpin.
     func setPin(_ item: WriteItem, api: TowerAPI, send: (String, String, [String: Any]?) async throws -> (status: Int, body: Data)) async throws -> WriteOutcome {
         let p = item.payloadObject
         guard let typeName = p["resource_type"] as? String, let type = PinRecord.ResourceType(rawValue: typeName), let resource = item.targetId,
-              let pinned = p["pinned"] as? Bool, var expected = p["expected_row_version"] as? Int, var mutation = p["mutation_id"] as? String else {
+              let pinned = p["pinned"] as? Bool, let expected = p["expected_row_version"] as? Int, let mutation = p["mutation_id"] as? String else {
             return .permanent(status: nil, code: nil, message: "Missing pin.")
         }
         let path = try TowerAPI.base(item.workspaceId) + "/me/pins/" + type.rawValue + "/" + TowerAPI.uuid(resource)
@@ -424,9 +439,8 @@ public struct WriteSender: Sendable {
             if (current?.pinned ?? false) == pinned {
                 var a = WriteAcknowledgement(); a.pins = current.map { [$0] } ?? []; return .done(a)
             }
-            expected = current?.rowVersion ?? 0
-            mutation = UUID().uuidString.lowercased()
-            try await store.writer.updateWritePayload(id: item.id, merging: ["expected_row_version": expected, "mutation_id": mutation])
+            try await store.writer.upsertPins(connectionId: item.connectionId, workspaceId: item.workspaceId, current.map { [$0] } ?? [], complete: false)
+            return .permanent(status: 409, code: "thread_pin_conflict", message: "This pin changed on another device. Discard this change and pin or unpin again.")
         }
         return .conflict(message: "Your pin changed on another device; tap Retry to apply this change.")
     }

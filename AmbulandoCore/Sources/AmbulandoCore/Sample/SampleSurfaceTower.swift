@@ -264,7 +264,7 @@ public final class SampleSurfaceTower: @unchecked Sendable {
         switch first {
         case "canvases", "workspace-agents", "agent-activities", "personal-wapps", "record-sync": return true
         case "scopes": return p.count >= 4 && p[2] == "context"
-        case "me": return p.count >= 2 && ["pins", "autopilot-agents"].contains(p[1])
+        case "me": return p.count >= 2 && ["pins", "pin-order", "autopilot-agents"].contains(p[1])
         case "files": return p.count == 5 && p[2] == "versions" && p[4] == "object"
         default: return false
         }
@@ -366,6 +366,9 @@ public final class SampleSurfaceTower: @unchecked Sendable {
             let rows = table("wapps").values.sorted { ($0["sort_order"] as! Int) < ($1["sort_order"] as! Int) }
             return (200, ["personal_wapps": rows, "next_cursor": NSNull()])
         // Pins
+        case ("POST", 2, "me") where p[1] == "pin-order": return movePin(object)
+        case ("GET", 1, "record-sync"):
+            return (200, ["protocol_version": 1, "personal_pin_order_version": 1, "changes": [], "has_more": false])
         case ("GET", 2, "record-sync") where p[1] == "priority":
             return pinFeed(query)
         case ("PUT", 4, "me"):
@@ -548,6 +551,43 @@ public final class SampleSurfaceTower: @unchecked Sendable {
         row["updated_at"] = stamp
         put("pins", row["id"] as! String, row)
         return row
+    }
+
+    /// Existing Tower typed target/anchor CAS and immutable receipt, for isolated native interaction checks.
+    private func movePin(_ o: [String: Any]) -> (Int, Any) {
+        guard let mutation = o["mutation_id"] as? String, UUID(uuidString: mutation) != nil,
+              Set(o.keys).isSubset(of: ["resource_type", "resource_id", "expected_row_version", "before", "mutation_id"]),
+              o["before"] != nil else { return error(400, "invalid_pin_order") }
+        let hash = SHA256Hex.of(String(decoding: (try? JSONSerialization.data(withJSONObject: o.filter { $0.key != "mutation_id" }, options: [.sortedKeys])) ?? Data(), as: UTF8.self))
+        if let prior = table("pin_mutations")[mutation] {
+            guard prior["hash"] as? String == hash else { return error(409, "mutation_id_reused") }
+            return (200, ["pins": prior["pins"] ?? []])
+        }
+        var rows = table("pins").values.filter { $0["pinned"] as? Bool == true }.sorted {
+            guard let a = try? PinRecord(raw: JSONSerialization.data(withJSONObject: $0)),
+                  let b = try? PinRecord(raw: JSONSerialization.data(withJSONObject: $1)) else { return false }
+            return PinRecord.displayOrder(a, b)
+        }
+        func matches(_ row: [String: Any], _ ref: [String: Any]) -> Bool {
+            row["resource_type"] as? String == ref["resource_type"] as? String && row["resource_id"] as? String == ref["resource_id"] as? String
+                && row["row_version"] as? Int == ref["expected_row_version"] as? Int
+        }
+        guard let index = rows.firstIndex(where: { matches($0, o) }) else { return error(409, "pin_order_conflict") }
+        let moving = rows.remove(at: index)
+        var destination = rows.count
+        if let before = o["before"] as? [String: Any] {
+            guard let found = rows.firstIndex(where: { matches($0, before) }) else { return error(409, "pin_order_conflict") }
+            destination = found
+        } else if !(o["before"] is NSNull) { return error(400, "invalid_pin_order") }
+        rows.insert(moving, at: destination)
+        for i in rows.indices where rows[i]["order_position"] as? Int != i {
+            rows[i]["order_position"] = i
+            rows[i]["row_version"] = (rows[i]["row_version"] as! Int) + 1
+            rows[i]["updated_at"] = now()
+            put("pins", rows[i]["id"] as! String, rows[i])
+        }
+        put("pin_mutations", mutation, ["hash": hash, "pins": rows])
+        return (200, ["pins": rows])
     }
 
     private func putPin(type: String, resource: String, _ o: [String: Any]) -> (Int, Any) {

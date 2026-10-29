@@ -313,6 +313,8 @@ private struct ShellToolbar: ViewModifier {
     @Binding var showSettings: Bool
     @State private var searching = false
     @State private var notifying = false
+    var pin: ToolbarPin? = nil
+    var showsSidebar = true
     /// A conversation chosen in Search, focused once the sheet has gone (one presentation at a time on iOS).
     @State private var searchedThread: ThreadFocus?
     func body(content: Content) -> some View {
@@ -334,14 +336,17 @@ private struct ShellToolbar: ViewModifier {
             .toolbar {
                 #if os(iOS)
                 // The Mac's sidebar is a window column with its own toolbar toggle.
-                ToolbarItem(placement: .leadingBar) { SidebarButton() }
+                if showsSidebar { ToolbarItem(placement: .leadingBar) { SidebarButton() } }
                 #endif
                 ToolbarItem(placement: .trailingBar) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 8) {
                         SyncIndicator()
                         Button { search() } label: { Image(systemName: "magnifyingglass") }
                             .accessibilityLabel("Search").accessibilityIdentifier("search")
                         NotificationsButton { showNotifications() }
+                        if let pin {
+                            PinToggleButton(type: pin.type, id: pin.id, workspace: pin.workspace)
+                        }
                         BrowserButton()
                         // The profile menu (sol `.avatar-menu` button): the signed-in person's avatar or initials.
                         Button { showSettings = true } label: {
@@ -403,7 +408,9 @@ extension View {
     /// Sample-data label under the navigation bar of a pushed screen (no-op outside sample-data mode).
     func fixtureLabel() -> some View { safeAreaInset(edge: .top, spacing: 0) { FixtureBanner() } }
 
-    func toolbarItems(showSettings: Binding<Bool>) -> some View { modifier(ShellToolbar(showSettings: showSettings)) }
+    func toolbarItems(showSettings: Binding<Bool>, pin: ToolbarPin? = nil, showsSidebar: Bool = true) -> some View {
+        modifier(ShellToolbar(showSettings: showSettings, pin: pin, showsSidebar: showsSidebar))
+    }
 }
 
 /// Shown on every surface when the app runs on local sample data instead of a Tower.

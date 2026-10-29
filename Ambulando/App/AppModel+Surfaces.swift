@@ -13,6 +13,7 @@ struct PinsSnapshot: Sendable, Equatable {
     /// Latest queued pin write per resource (`type:id`), overlaid on the stored state until Tower acknowledges it.
     var pending: [String: WriteItem] = [:]
     var stored: [String: Bool] = [:]
+    var orderWrite: WriteItem?
     var loaded = false
 
     static func key(_ type: PinRecord.ResourceType, _ id: String) -> String { "\(type.rawValue):\(id)" }
@@ -112,22 +113,46 @@ extension AppModel {
             async let items = store.reader.pinnedItems(connectionId: connectionId, workspaceId: workspaceId)
             async let writes = store.reader.writes(connectionId: connectionId, workspaceId: workspaceId)
             var pending: [String: WriteItem] = [:]
-            for write in try await writes where write.kind == .pinSet {
+            let allWrites = try await writes
+            for write in allWrites where write.kind == .pinSet {
                 guard let type = write.string("resource_type").flatMap(PinRecord.ResourceType.init(rawValue:)), let id = write.targetId else { continue }
                 pending[PinsSnapshot.key(type, id)] = write   // rows are in creation order: the latest wins
             }
             let list = try await items
             return PinsSnapshot(items: list, pending: pending,
                                 stored: Dictionary(list.map { (PinsSnapshot.key($0.pin.resourceType, $0.pin.resourceId), true) }, uniquingKeysWith: { a, _ in a }),
-                                loaded: true)
+                                orderWrite: allWrites.last { $0.kind == .pinMove }, loaded: true)
         }
         if let workspace = workspaces.value.first(where: { $0.id == workspaceId }), let sync, canRead {
             Task { await sync.refreshPins(connection, workspace, priority: .background) }
         }
     }
 
+    /// One immutable typed target/anchor CAS through the existing durable queue.
+    func movePin(_ item: PinnedItem, before anchor: PinnedItem?, in workspace: WorkspaceRecord) {
+        guard let store, let connection else { return }
+        let connectionId = connection.id
+        Task {
+            do {
+                guard try await store.reader.state("pin-order-support:\(connectionId):\(workspace.id)") == "1" else {
+                    notice = "Pin ordering needs the updated Tower connection. Refresh and try again."
+                    return
+                }
+                let target = item.pin
+                var payload: [String: any Sendable] = ["resource_type": target.resourceType.rawValue,
+                    "resource_id": target.resourceId, "expected_row_version": target.rowVersion,
+                    "mutation_id": UUID().uuidString.lowercased()]
+                if let anchor {
+                    payload["before"] = ["resource_type": anchor.pin.resourceType.rawValue,
+                        "resource_id": anchor.pin.resourceId, "expected_row_version": anchor.pin.rowVersion] as [String: any Sendable]
+                }
+                submit(WriteIntent(kind: .pinMove, targetId: target.resourceId, payload: payload), in: workspace)
+            } catch { notice = error.localizedDescription }
+        }
+    }
+
     /// Pins or unpins through the durable write queue. The expected row version is the stored pin's (0 if never pinned);
-    /// a stale one is resolved by the queue (re-read, then resent or found already done).
+    /// a stale one is re-read and either found already done or reported without silently rebasing.
     func setPinned(_ pinned: Bool, type: PinRecord.ResourceType, id: String, in workspace: WorkspaceRecord) {
         guard let store, let connection else { return }
         let connectionId = connection.id

@@ -952,7 +952,15 @@ struct Composer: View {
                                  insertion: $insertion)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .frame(maxHeight: .infinity, alignment: .top)
-                    .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .background {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Amb.muted)
+                            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .onTapGesture { focused = true }
+                        #if os(macOS)
+                        ComposerBlankFocusTarget { focused = true }
+                        #endif
+                    }
                 VStack(spacing: 0) {
                     // While typing the on-screen keyboard covers the section bar: this button puts it away. Its place above
                     // Send is kept when it is hidden: a composer that changed height as the keyboard appeared stopped the

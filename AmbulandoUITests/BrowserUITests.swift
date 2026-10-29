@@ -18,6 +18,29 @@ final class BrowserUITests: XCTestCase {
         app.webViews.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", value)).firstMatch
     }
 
+    func testGeneratedFileDownloadOpensSaveAndCancellationReturnsToPage() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-AmbulandoUITestFixture", "-AmbulandoFixtureReset"]
+        app.launch()
+        XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 15))
+        app.buttons["channel.general"].tap()
+        app.buttons["browser.open"].firstMatch.tap()
+        let address = app.textFields["browser.address"]
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        address.tap(); address.typeText("browser.sample.invalid\n")
+        let download = app.webViews.links["Download data file"]
+        XCTAssertTrue(download.waitForExistence(timeout: 15))
+        download.tap()
+        XCTAssertTrue(app.buttons["Save"].firstMatch.waitForExistence(timeout: 15), "actual generated file opens native Save picker")
+        let cancel = app.otherElements["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5), "native iOS 26 picker exposes Cancel as Other")
+        capture(app, "batch-ios-download-save")
+        cancel.tap()
+        XCTAssertTrue(download.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["browser.return"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["browser.refusal"].firstMatch.exists)
+    }
+
     func testBrowserSignsOnlyWithApprovalAndReturnsToTheSameDraft() {
         let app = XCUIApplication()
         app.launchArguments = ["-AmbulandoUITestFixture", "-appearance", "light", "-AmbulandoFixtureReset"]

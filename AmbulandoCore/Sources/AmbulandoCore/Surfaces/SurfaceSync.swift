@@ -203,6 +203,7 @@ extension WorkspaceSync {
             try await sync.identity.requireReader(npub: connection.signerNpub)
             let result = try await sync.api(origin: try TowerOrigin(connection.origin)).personalPins(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
+            try await sync.store.writer.setState("pin-order-support:\(connection.id):\(workspace.id)", result.ordering ? "1" : "0")
             try await sync.store.writer.upsertPins(connectionId: connection.id, workspaceId: workspace.id, result.pins, complete: true)
         }
     }
