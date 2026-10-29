@@ -26,6 +26,15 @@ The saved conversation route and all drafts remain on the device; deliberate thr
 This mitigates a reported launch beachball without claiming its unreproduced root cause is fixed. iPhone and
 iPad restoration is unchanged. See [startup recovery and regression checks](docs/mac-startup-recovery.md).
 
+## Groups management (iPhone/iPad build 46, Mac build 35)
+
+Manage Workspace opens as a larger, resizable Mac sheet, including above Settings. Browse groups beside the selected
+group's direct people and nested groups; iPhone uses list and detail navigation. Inline local typeahead supports people
+and groups, canonical IDs, keyboard/touch selection and repeated additions. Full public npubs have a Person/Agent
+confirmation and use Tower's coordinated atomic enrolment contract, preserving existing roles and kinds. Older servers
+retain the draft when safe enrolment is unavailable. See [workspace management](docs/workspace-management.md#group-browser-and-quick-membership-editing).
+Source, sample UI, installed builds and live Tower activation are verified separately on the release task.
+
 ## Manage Workspace (iPhone/iPad build 43, Mac build 32)
 
 Open **Manage Workspace** from the sidebar workspace menu or Settings. Shared native screens cover workspace

@@ -479,6 +479,16 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         if offline { throw URLError(.notConnectedToInternet) }
         if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureAdmin") {
             administration.seedMembers([member(actorNpub, "You (sample identity)", "human"), member(Self.ana, "Ana", "human"), member(Self.rick, "Rick", "agent")])
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureGroups") {
+                let ana = member(Self.ana, "Ana Lima · Product & Operations", "human")
+                let rick = member(Self.rick, "Rick · Workspace Research Agent", "agent")
+                administration.seedGroups([
+                    ["group_id": "10000000-0000-4000-8000-000000000001", "name": "Product & customer operations", "kind": "custom", "members": [ana], "child_group_ids": ["10000000-0000-4000-8000-000000000002"]],
+                    ["group_id": "10000000-0000-4000-8000-000000000002", "name": "Research & delivery agents", "kind": "custom", "members": [rick]],
+                    ["group_id": "10000000-0000-4000-8000-000000000003", "name": "Workspace", "kind": "system", "members": [ana, rick]],
+                    ["group_id": "10000000-0000-4000-8000-000000000004", "name": "Launch planning · Australia & Europe", "kind": "custom", "members": []]
+                ])
+            }
             if let handled = try administration.handle(request) { return handled }
         }
         // Surface routes first: their ownership is exact (board versions live under `/files/:f/versions/:v/object`).

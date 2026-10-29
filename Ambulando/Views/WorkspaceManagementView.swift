@@ -48,14 +48,20 @@ struct WorkspaceManagementView: View {
                 #endif
             }
         }
+        .modifier(WorkspaceManagementSizing())
         .task { model.loadMembership(force: true) }
         .sheet(isPresented: $showScopes) { ScopeManagementSheet() }
         .accessibilityIdentifier("workspace.management")
     }
 
     @ViewBuilder private func detail(_ section: WorkspaceManagementSection) -> some View {
-        WorkspaceAdministrationPage(section: section, workspace: workspace, connection: connection, showScopes: $showScopes)
-            .id("\(connection.id):\(workspace.id):\(section.rawValue)")
+        if section == .groups {
+            GroupManagementView(workspace: workspace, connection: connection)
+                .id("\(connection.id):\(workspace.id):groups")
+        } else {
+            WorkspaceAdministrationPage(section: section, workspace: workspace, connection: connection, showScopes: $showScopes)
+                .id("\(connection.id):\(workspace.id):\(section.rawValue)")
+        }
     }
 }
 
@@ -111,10 +117,12 @@ private struct WorkspaceAdministrationPage: View {
             if !admin {
                 Section { Text(model.membership == nil ? "Checking your access…" : "Read only. Workspace administrator access is required for these controls. Scope management uses your scope permissions.") }
             }
+            if section == .members || section == .apps {
+                Section { TextField(section == .members ? "Find workspace members" : "Find apps or delegations", text: $search) }
+            }
             sectionContent
         }
         .navigationTitle(section.title)
-        .searchable(text: $search, prompt: "Find members, groups or apps")
         .modifier(ManagementStatusInset(phase: phase))
         .confirmationDialog("Remove access?", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
             Button("Remove access", role: .destructive) { if let command = pending { pending = nil; Task { await run(command) } } }
@@ -395,7 +403,7 @@ private struct ChannelAdministrationPage: View {
     }
 }
 
-private enum AdministrationEditorKind {
+enum AdministrationEditorKind {
     case profile, member, group, groupMember(String), childGroup(String, Bool), grant(String, AdministrationRow?), delegation, publishing(AdministrationRow?), rotation(AdministrationRow), memberProfile(AdministrationRow)
     case scopeGrant(String, ScopeAdministrationAccess, AdministrationRow?)
     var key: String {
@@ -430,7 +438,7 @@ private enum AdministrationEditorKind {
     }
 }
 
-private struct AdministrationEditor: View {
+struct AdministrationEditor: View {
     @Environment(AppModel.self) private var model
     let kind: AdministrationEditorKind
     let workspace: WorkspaceRecord

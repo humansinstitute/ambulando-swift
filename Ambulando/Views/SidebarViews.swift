@@ -373,7 +373,7 @@ private struct WorkspaceFooter: View {
             if let workspace = model.selectedWorkspace, let connection = model.connection {
                 WorkspaceManagementView(workspace: workspace, connection: connection)
                     .id("\(connection.id):\(workspace.id)")
-                    .frame(minWidth: Device.name == "Mac" ? 780 : 0, minHeight: Device.name == "Mac" ? 580 : 0)
+
             }
         }
         .padding(12)

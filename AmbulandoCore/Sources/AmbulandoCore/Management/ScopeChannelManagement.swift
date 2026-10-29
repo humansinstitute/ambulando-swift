@@ -337,6 +337,7 @@ public enum ManagementError: LocalizedError, Equatable, Sendable {
         case (403, "step_up_required"): return .forbidden("Owner approval is required for this operation. No authority was broadened; your draft is retained.")
         case (403, _): return .forbidden(operation.permissionSentence)
         case (404, _): return .notFound(operation == .createChannel ? "This scope is no longer available." : "This item is no longer available. Refresh and try again.")
+        case (409, "actor_kind_conflict"): return .invalid("This public identity belongs to an app or service. Choose a person or agent identity; its existing type was preserved.")
         case (409, "duplicate_channel"): return .duplicate("A channel with this name already exists in this scope.")
         case (409, "duplicate_scope"): return .duplicate("A scope with this name already exists in this workspace.")
         case (409, "scope_order_conflict"): return .conflict("Your scope order changed in another session. Try your move again.")

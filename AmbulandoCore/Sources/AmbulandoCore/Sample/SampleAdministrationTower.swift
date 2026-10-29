@@ -14,6 +14,21 @@ public final class SampleAdministrationTower: @unchecked Sendable {
         if let file, let data = try? Data(contentsOf: file), let object = try? JSONSerialization.jsonObject(with: data) as? [String: [[String: Any]]] { tables = object }
     }
     public func seedMembers(_ members: [[String: Any]]) { lock.withLock { if tables["members"] == nil { tables["members"] = members.map { $0["actor"] as? [String: Any] ?? $0 }; persist() } } }
+    public func seedGroups(_ groups: [[String: Any]]) {
+        lock.withLock {
+            guard tables["groups"] == nil else { return }
+            tables["groups"] = groups.map { input in
+                var group = input
+                group["members"] = (input["members"] as? [[String: Any]] ?? []).map { source in
+                    var actor = source["actor"] as? [String: Any] ?? source
+                    if let known = tables["members"]?.first(where: { $0["npub"] as? String == actor["npub"] as? String }) { actor["actor_id"] = known["actor_id"] }
+                    return actor
+                }
+                return group
+            }
+            persist()
+        }
+    }
     private func persist() {
         guard let file, let data = try? JSONSerialization.data(withJSONObject: tables, options: [.sortedKeys]) else { return }
         try? data.write(to: file, options: .atomic)
@@ -58,15 +73,21 @@ public final class SampleAdministrationTower: @unchecked Sendable {
                 guard let index = tables[family]?.firstIndex(where: { $0["group_id"] as? String == p[1] }) else { return (404, ["code": "group_not_found"]) }
                 var group = tables[family]![index]
                 if p[2] == "members" {
+                    if method == "POST", body["ensure_workspace_member"] as? Bool == true,
+                       let npub = body["member_npub"] as? String,
+                       !(tables["members"] ?? []).contains(where: { $0["npub"] as? String == npub }) {
+                        guard NostrKeys.isValidNpub(npub), ["human", "agent"].contains(body["kind"] as? String ?? "") else { return (400, ["code": "validation_error"]) }
+                        tables["members", default: []].append(["actor_id": UUID().uuidString.lowercased(), "npub": npub, "kind": body["kind"]!, "role": "member"])
+                    }
                     var members = group["members"] as? [[String: Any]] ?? []
                     if method == "DELETE" && p.count == 4 { members.removeAll { $0["actor_id"] as? String == p[3] } }
-                    else if let member = tables["members"]?.first(where: { $0["npub"] as? String == body["member_npub"] as? String }) { members.append(member) }
+                    else if let member = tables["members"]?.first(where: { $0["npub"] as? String == body["member_npub"] as? String }) { if !members.contains(where: { $0["actor_id"] as? String == member["actor_id"] as? String }) { members.append(member) } }
                     else { return (404, ["code": "member_not_found"]) }
                     group["members"] = members
                 } else {
                     var children = group["child_group_ids"] as? [String] ?? []
                     if method == "DELETE" && p.count == 4 { children.removeAll { $0 == p[3] } }
-                    else if let child = body["child_group_id"] as? String { guard child != p[1] else { return (409, ["code": "cycle"]) }; children.append(child) }
+                    else if let child = body["child_group_id"] as? String { guard child != p[1] else { return (409, ["code": "cycle"]) }; if !children.contains(child) { children.append(child) } }
                     group["child_group_ids"] = children
                 }
                 tables[family]![index] = group; persist(); return (200, ["group": group])

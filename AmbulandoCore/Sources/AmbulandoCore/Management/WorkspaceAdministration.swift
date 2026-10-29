@@ -56,6 +56,7 @@ public enum AdministrationCommand: Sendable {
     case deleteWorkspace(confirmation: String)
     case createGroup(name: String)
     case groupMember(group: String, npub: String)
+    case ensureGroupMember(group: String, npub: String, kind: String)
     case removeGroupMember(group: String, actor: String)
     case childGroup(parent: String, child: String, remove: Bool)
     case channelGrant(channel: String, principalType: String, principal: String, access: String, update: Bool)
@@ -106,6 +107,10 @@ public enum AdministrationCommand: Sendable {
             method = "POST"; path = "/groups"; body = ["name": name.trimmingCharacters(in: .whitespacesAndNewlines), "kind": "custom"]
         case let .groupMember(group, member):
             method = "POST"; path = try "/groups/\(uuid(group))/members"; body = ["member_npub": try npub(member)]
+        case let .ensureGroupMember(group, member, kind):
+            guard ["human", "agent"].contains(kind) else { throw ManagementError.invalid("Choose a person or agent.") }
+            method = "POST"; path = try "/groups/\(uuid(group))/members"
+            body = ["member_npub": try npub(member), "ensure_workspace_member": true, "kind": kind]
         case let .removeGroupMember(group, actor):
             method = "DELETE"; path = try "/groups/\(uuid(group))/members/\(uuid(actor))"; body = nil
         case let .childGroup(parent, child, remove):

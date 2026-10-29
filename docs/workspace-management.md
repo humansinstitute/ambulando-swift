@@ -89,3 +89,31 @@ xcodebuild -skipPackagePluginValidation -project Ambulando.xcodeproj -scheme Amb
 Core contract tests cover exact request bodies/NIP-98 hashes, authority loss and server refusal, scope leases/revisions,
 people/group flows, directory pagination/isolation, persisted profile updates and explicit Autopilot origins. Fixture
 admin mode is opt-in with `-AmbulandoFixtureAdmin`; normal sample mode remains a non-admin for existing regressions.
+
+## Group browser and quick membership editing
+
+Manage Workspace sizes its Mac sheet around 1100 × 780 points, bounded by the display's visible area, and permits
+resizing even when opened above Settings. Groups has a separate browser with names, kind and direct-person/nested-group
+counts. A selected group has its own title, direct people and nested groups. iPhone pushes from the group list into
+membership details and from a person into their identity/membership page. Removing a person from a group preserves
+workspace membership; detaching a group does not delete it or invite its transitive members.
+
+The inline People/Groups picker searches the current connection/workspace's persisted directory by name, type,
+canonical actor/group ID or full npub. Search work is cancellable and runs away from the UI actor; keystrokes never
+issue network searches. Saved directory updates refresh suggestions. Up/Down and Return/Tab select; touch/click also
+selects, with input focus retained. Existing members and graph edges are labelled; self/cycle hints are disabled.
+Tower remains authoritative for protected/system groups, current permission, and concurrent graph changes.
+
+For an unknown valid full npub, the user chooses Person/Agent and confirms the public identity and destination once.
+The client uses the additive atomic `POST W/groups/:groupId/members` body
+`{member_npub, ensure_workspace_member: true, kind: "human" | "agent"}`. Tower must preserve an existing role and actor
+kind, create only a member role when absent, and commit workspace enrolment and the group edge together. This contract
+was coordinated with Tower because ordinary `POST W/members` is a role-replacing upsert and cannot safely implement a
+race-free two-step enrolment. Native never falls back to that upsert. An older server's refusal retains the draft and
+explains that safe enrolment may be unavailable. There is no automatic blind retry after an interrupted response;
+an explicit subsequent attempt rechecks the group and uses the same idempotent edge. Successful writes and failed
+readback have separate messages. No client-side role promotion or transitive enrolment is introduced.
+
+Draft search/key, identity type and picker mode persist per connection/workspace/group. In-flight writes retain their
+captured workspace, and further writes stop when the selected workspace changes. Administration remains online-only.
+The local fixture and contract tests are distinct from actual backend activation and authenticated live verification.
