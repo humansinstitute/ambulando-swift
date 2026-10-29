@@ -19,22 +19,37 @@ final class DocumentInlineUITests: XCTestCase {
         XCTAssertTrue(page.waitForExistence(timeout: 15), "document opens directly into the formatted page")
         let paragraph = page.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Every screen reads'")).firstMatch
         XCTAssertTrue(paragraph.waitForExistence(timeout: 15))
-        paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.07, dy: 0.5)).press(forDuration: 1.2)
+        paragraph.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let saveFrame = app.buttons["editor.save"].frame
+        let editorFrame = page.frame
+        paragraph.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)).doubleTap()
         if app.menuItems["Select"].waitForExistence(timeout: 2) { app.menuItems["Select"].tap() }
         else if app.buttons["Select"].exists { app.buttons["Select"].tap() }
         let selectionShot = XCTAttachment(screenshot: app.screenshot()); selectionShot.name = "document-word-selection"; selectionShot.lifetime = .keepAlways; add(selectionShot)
-        let selected = app.buttons["doc.commentSelection"]
+        let selected = app.buttons["Comment on selected text"]
         XCTAssertTrue(selected.waitForExistence(timeout: 10))
         XCTAssertTrue(selected.isEnabled, "highlighted text offers an anchored comment")
+        XCTAssertEqual(app.buttons["editor.save"].frame, saveFrame, "selection adds no toolbar space")
+        XCTAssertEqual(page.frame, editorFrame, "selection adds no editor space")
+        XCTAssertGreaterThanOrEqual(selected.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(selected.frame.height, 44)
+        XCTAssertLessThanOrEqual(selected.frame.maxY, app.keyboards.firstMatch.frame.minY + 1, "action stays above keyboard")
+        XCTAssertGreaterThan(selected.frame.midX, page.frame.midX, "action stays at page right")
         selected.tap()
+        XCTAssertTrue(app.staticTexts["Selected text"].waitForExistence(timeout: 10), "action captures selected anchor before opening composer")
         let field = app.textFields["doccomment.field"].exists ? app.textFields["doccomment.field"] : app.textViews["doccomment.field"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
-        field.tap(); field.typeText("Comment on highlighted passage")
+        field.tap()
+        for character in "Comment on highlighted passage" { field.typeText(String(character)) }
+        XCTAssertEqual(field.value as? String, "Comment on highlighted passage")
         app.buttons["doccomment.send"].tap()
         XCTAssertTrue(app.staticTexts["Comment on highlighted passage"].waitForExistence(timeout: 15))
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "document-anchored-comment"; shot.lifetime = .keepAlways; add(shot)
         app.buttons["Reply"].firstMatch.tap()
-        field.tap(); field.typeText("Reply to highlighted passage")
+        field.tap()
+        for character in "Reply to highlighted passage" { field.typeText(String(character)) }
+        XCTAssertEqual(field.value as? String, "Reply to highlighted passage")
         app.buttons["doccomment.send"].tap()
         XCTAssertTrue(app.staticTexts["Reply to highlighted passage"].waitForExistence(timeout: 15))
         app.terminate()
@@ -46,7 +61,7 @@ final class DocumentInlineUITests: XCTestCase {
         let locate = again.buttons.containing(NSPredicate(format: "label CONTAINS 'Locate text'")).firstMatch
         XCTAssertTrue(locate.waitForExistence(timeout: 5), "saved comment retains a quote and a locatable anchor")
         locate.tap()
-        let reopened = again.buttons["doc.commentSelection"]
+        let reopened = again.buttons["Comment on selected text"]
         XCTAssertTrue(reopened.waitForExistence(timeout: 10))
         XCTAssertTrue(reopened.isEnabled, "reopening the comment highlights its original passage")
     }
@@ -58,12 +73,16 @@ final class DocumentInlineUITests: XCTestCase {
         heading.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.5)).press(forDuration: 1.2)
         if app.menuItems["Select"].waitForExistence(timeout: 2) { app.menuItems["Select"].tap() }
         else if app.buttons["Select"].exists { app.buttons["Select"].tap() }
-        let selected = app.buttons["doc.commentSelection"]
+        let selected = app.buttons["Comment on selected text"]
         XCTAssertTrue(selected.isEnabled)
         selected.tap()
-        let field = app.textFields["doccomment.field"]
+        XCTAssertTrue(app.staticTexts["Selected text"].waitForExistence(timeout: 10), "action captures selected anchor before opening composer")
+        let field = app.textFields["doccomment.field"].exists ? app.textFields["doccomment.field"] : app.textViews["doccomment.field"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
-        field.tap(); field.typeText("Markdown passage comment")
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        for character in "Markdown passage comment" { field.typeText(String(character)) }
+        XCTAssertEqual(field.value as? String, "Markdown passage comment")
         app.buttons["doccomment.send"].tap()
         XCTAssertTrue(app.staticTexts["Markdown passage comment"].waitForExistence(timeout: 15))
         app.terminate()
@@ -74,7 +93,7 @@ final class DocumentInlineUITests: XCTestCase {
         let locate = again.buttons.containing(NSPredicate(format: "label CONTAINS 'Locate text'")).firstMatch
         XCTAssertTrue(locate.waitForExistence(timeout: 5))
         locate.tap()
-        XCTAssertTrue(again.buttons["doc.commentSelection"].isEnabled)
+        XCTAssertTrue(again.buttons["Comment on selected text"].isEnabled)
     }
 
     func testDirtyEditorAutosavesWithinOneMinuteAndRenameReopens() {

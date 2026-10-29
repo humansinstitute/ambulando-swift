@@ -234,6 +234,8 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
             editor?.pageLoaded(ok: object["ok"] as? Bool ?? false, message: object["message"] as? String)
         case "change":
             if let content = object["content"] as? String { editor?.pageChanged(content) }
+        case "comment-selection":
+            editor?.commentRequest = (object["anchor"] as? [String: Any]).flatMap { DocumentAnchor(metadata: $0) }
         case "selection":
             editor?.selection = (object["anchor"] as? [String: Any]).flatMap { DocumentAnchor(metadata: $0) }
         case "state":

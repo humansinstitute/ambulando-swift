@@ -19,6 +19,16 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Floating document comments (iPhone/iPad build 48, Mac build 37)
+
+Select a passage to show a small comment icon at the right of the document beside the visible selection. The icon
+floats over the page, so appearing or clearing it adds no space above the editor and never moves the formatting bar.
+It follows scrolling, window changes and the keyboard-visible viewport. On Mac, status messages sit above Comments
+in a panel that collapses to a thin comment/status rail and expands when starting a selection comment. Touch selects the icon on iPhone/iPad; Mac also
+supports Option–Command–M. Existing anchored comments, saving, offline drafts and document links keep their paths.
+See [document editing and validation](docs/document-editing.md). Signing/package preparation, installation and real-account
+acceptance are separate states recorded on the release task.
+
 ## Mac startup recovery (Mac build 34)
 
 The Mac opens the underlying workspace screen first and offers **Resume saved thread**.

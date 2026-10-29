@@ -89,8 +89,8 @@ final class SelectionTextView: NSTextView {
     var begin: ((NSRange) -> Void)?
     private var savedRange = NSRange(location: 0, length: 0)
     private lazy var addButton: NSButton = {
-        let button = NSButton(title: "+", target: self, action: #selector(addComment))
-        button.bezelStyle = .circular; button.setAccessibilityLabel("Comment on selection")
+        let button = NSButton(image: NSImage(systemSymbolName: "text.bubble", accessibilityDescription: "Comment on selected text")!, target: self, action: #selector(addComment))
+        button.bezelStyle = .circular; button.refusesFirstResponder = true; button.setAccessibilityLabel("Comment on selection")
         button.setAccessibilityIdentifier("doc.selection.comment")
         addSubview(button); return button
     }()
@@ -105,11 +105,28 @@ final class SelectionTextView: NSTextView {
     }
     func updateButton() {
         let range = selectedRange()
-        addButton.isHidden = range.length == 0
-        guard range.length > 0, let layout = layoutManager, let container = textContainer else { return }
+        addButton.isHidden = range.length == 0 || range.location == NSNotFound || NSMaxRange(range) > (string as NSString).length
+        guard !addButton.isHidden, let layout = layoutManager, let container = textContainer else { return }
         savedRange = range
         let rect = layout.boundingRect(forGlyphRange: layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil), in: container)
-        addButton.frame = NSRect(x: min(max(0, rect.maxX + 4), max(0, bounds.width - 28)), y: max(0, rect.minY), width: 26, height: 26)
+        let visible = visibleRect
+        guard rect.intersects(visible), visible.width >= 28, visible.height > 0 else { addButton.isHidden = true; return }
+        addButton.frame = NSRect(x: max(visible.minX, visible.maxX - 28), y: min(max(visible.minY, rect.minY), max(visible.minY, visible.maxY - 28)), width: 28, height: 28)
+    }
+    override func layout() { super.layout(); updateButton() }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: nil)
+        if let clip = enclosingScrollView?.contentView {
+            clip.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(self, selector: #selector(viewportChanged), name: NSView.boundsDidChangeNotification, object: clip)
+        }
+    }
+    @objc private func viewportChanged() { updateButton() }
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        if result { addButton.isHidden = true }
+        return result
     }
     @objc private func addComment() { begin?(savedRange) }
 }

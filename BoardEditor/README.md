@@ -16,6 +16,7 @@ folder builds those two pages; the rest of the app stays native.
 - `web/document-preserve.js`: lossless editing. Unknown nodes become kept atoms, unknown attributes and marks are added
   to the schema for that document, and unchanged nodes and marks are written back as the stored JSON; Markdown
   documents keep the source of unchanged blocks. Tests: `bun test` (`test/document-preserve.test.js`).
+- `web/document-comment-overlay.js`: fixed selection action for the native document editor, bounded to the visible viewport, with synchronous anchor capture and touch/pointer/keyboard activation. Geometry tests: `test/document-comment-overlay.test.js`; real WebKit: `scripts/tests/document-comment-webkit.swift`.
 - `web/document-selection.js`: adapts sol’s selection-anchor helper for the native comment sheet. Rich selections use
   ProseMirror positions; Markdown selections use the saved source line and quote. See `test/document-selection.test.js`.
 - `package.json` + `bun.lock`: exact dependency versions (Tiptap, ProseMirror and marked pinned to sol's lockfile).

@@ -21,6 +21,7 @@ final class DocEditorModel: UploadTokenHost {
     /// The page's latest document (rich: JSON text; Markdown: text). Empty until the first edit.
     private(set) var content = ""
     var formatting = DocumentFormatting()
+    var commentRequest: DocumentAnchor?
     var selection: DocumentAnchor?
     private(set) var status: String?
     private(set) var statusTone: Notice.Tone = .info

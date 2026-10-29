@@ -167,6 +167,7 @@ struct DocumentView: View {
     @State private var wiki: WikiLinkController
     @State private var editor: DocEditorModel?
     @State private var showingComments = false
+    @State private var commentsExpanded = true
     @State private var automaticEditing = true
     @State private var comment = ""
     @State private var anchor: DocumentAnchor?
@@ -182,6 +183,10 @@ struct DocumentView: View {
     private var canEdit: Bool { model.isUnlocked && snapshot.value.doc?.archived == false && (snapshot.value.editable || snapshot.value.draft != nil) }
 
     var body: some View {
+        #if os(iOS)
+        // Observe the captured anchor before presenting the sheet; its first content must use this selection.
+        let commentComposer = composer
+        #endif
         readerLayout
         .fixtureLabel()
         .navigationTitle("Document")
@@ -223,7 +228,7 @@ struct DocumentView: View {
         .sheet(isPresented: $showingComments) {
             NavigationStack {
                 ScrollView { docComments.padding() }
-                    .safeAreaInset(edge: .bottom) { composer }
+                    .safeAreaInset(edge: .bottom) { commentComposer }
                     .navigationTitle("Comments")
                     .inlineTitle()
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingComments = false } } }
@@ -287,27 +292,11 @@ struct DocumentView: View {
         GeometryReader { geometry in
             let commentsWidth = min(340, max(250, geometry.size.width * 0.3))
             // A narrow page column (small window) gets smaller margins and a two-row edit bar.
-            let compact = geometry.size.width - commentsWidth < 720
+            let compact = geometry.size.width - (commentsExpanded ? commentsWidth : 44) < 720
             HStack(alignment: .top, spacing: 0) {
                 Group {
                     if let editor {
-                        VStack(spacing: 0) {
-                            if let selected = editor.selection {
-                                Button {
-                                    let captured = selected
-                                    Task {
-                                        if let saved = await editor.commentAnchor(captured) {
-                                            anchor = saved; replyTo = nil; revealed = saved
-                                        }
-                                    }
-                                } label: { Label("Comment on selected text", systemImage: "text.bubble") }
-                                .keyboardShortcut("m", modifiers: [.command, .option])
-                                .disabled(editor.saving || !model.isUnlocked)
-                                .accessibilityIdentifier("doc.commentSelection")
-                                .padding(.vertical, 5)
-                            }
-                            DocumentEditingPage(editor: editor, compact: compact, onFinish: { automaticEditing = false; self.editor = nil })
-                        }
+                        DocumentEditingPage(editor: editor, compact: compact, onFinish: { automaticEditing = false; self.editor = nil })
                     } else {
                         ScrollViewReader { scroll in
                             ScrollView { paper(compact: compact).padding(.horizontal, compact ? 14 : 28).padding(.vertical, 24).frame(maxWidth: .infinity) }
@@ -325,17 +314,52 @@ struct DocumentView: View {
                 .environment(\.colorScheme, .light)
                 Divider()
                 VStack(spacing: 0) {
-                    ScrollView { docComments.frame(maxWidth: .infinity, alignment: .leading).padding(12) }
-                    Divider()
-                    composer
+                    HStack {
+                        if commentsExpanded { Spacer() }
+                        Button { commentsExpanded.toggle() } label: {
+                            Image(systemName: commentsExpanded ? "sidebar.right" : "text.bubble")
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(commentsExpanded ? "Collapse comments panel" : "Expand comments panel")
+                        .help(commentsExpanded ? "Collapse comments panel" : "Expand comments panel")
+                        .accessibilityIdentifier("doc.commentsPanel.toggle")
+                    }
+                    if commentsExpanded {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 12) {
+                                if let editor {
+                                    DocumentEditorStatus(editor: editor)
+                                        .accessibilityElement(children: .contain)
+                                        .accessibilityIdentifier("doc.statusPanel")
+                                    Divider()
+                                }
+                                docComments
+                            }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                        }
+                        Divider()
+                        composer
+                    } else if let editor {
+                        Button { commentsExpanded = true } label: {
+                            Image(systemName: editor.statusTone == .error || editor.statusTone == .warning ? "exclamationmark.circle.fill" : editor.saving ? "arrow.trianglehead.2.clockwise" : editor.dirty ? "circle.dotted" : "checkmark.circle")
+                                .foregroundStyle(editor.statusTone == .error || editor.statusTone == .warning ? Color.orange : Amb.mutedForeground)
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Document status: \(editor.status ?? editor.leaseState). \(editor.dirty ? "Changes pending sync." : "") Expand comments panel")
+                        .help([editor.leaseState, editor.status, editor.dirty ? "Changes pending sync" : nil].compactMap { $0 }.joined(separator: " · "))
+                        .accessibilityIdentifier("doc.statusPanel.expand")
+                    }
+                    if !commentsExpanded { Spacer(minLength: 0) }
                 }
-                .frame(width: commentsWidth)
+                .frame(width: commentsExpanded ? commentsWidth : 44)
                 .background(Amb.card)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("doc.commentColumn")
             }
         }
         .background(Amb.background)
+        .onChange(of: editor?.commentRequest) { _, selected in beginSelectionComment(selected) }
         #else
         VStack(spacing: 0) {
             if let editor {
@@ -350,17 +374,6 @@ struct DocumentView: View {
                         .accessibilityIdentifier("editor.save")
                 }.padding(.horizontal, 12).padding(.vertical, 6)
                 DocumentFormatBar(editor: editor, compact: true).padding(.horizontal, 12)
-                Button("Comment on selected text") {
-                    if let selected = editor.selection {
-                        Task {
-                            if let saved = await editor.commentAnchor(selected) {
-                                anchor = saved; replyTo = nil; revealed = saved; showingComments = true
-                            }
-                        }
-                    }
-                }.font(.amb(.footnote)).padding(.horizontal, 12)
-                    .disabled(editor.selection == nil || editor.saving || !model.isUnlocked)
-                    .accessibilityIdentifier("doc.commentSelection")
                 DocumentEditSurface(editor: editor)
                     .modifier(DocumentPaper(fill: true, compact: true))
                     .padding(.horizontal, 10).padding(.bottom, 8)
@@ -371,7 +384,22 @@ struct DocumentView: View {
         }
         .background(Amb.paperSurround)
         .environment(\.colorScheme, .light)
+        .onChange(of: editor?.commentRequest) { _, selected in beginSelectionComment(selected) }
         #endif
+    }
+
+    private func beginSelectionComment(_ selected: DocumentAnchor?) {
+        guard let selected, let editor, !editor.saving, model.isUnlocked else { return }
+        editor.commentRequest = nil
+        Task {
+            if let saved = await editor.commentAnchor(selected) {
+                commentsExpanded = true
+                anchor = saved; replyTo = nil; revealed = saved
+                #if os(iOS)
+                showingComments = true
+                #endif
+            }
+        }
     }
 
     private func paper(compact: Bool) -> some View {
@@ -410,6 +438,7 @@ struct DocumentView: View {
             .accessibilityElement(children: .contain).accessibilityIdentifier("doc.body")
             #if os(macOS)
             .environment(\.documentSelection, DocumentSelectionContext(spans: snapshot.value.spans, version: snapshot.value.doc?.rowVersion, selected: revealed, begin: { selected in
+                commentsExpanded = true
                 anchor = selected; revealed = selected; revealRevision += 1; replyTo = nil
             }))
             #endif
@@ -788,24 +817,20 @@ struct DocumentFormatBar: View {
     }
 }
 
-/// Title, lease and save status, pasted uploads, and the editor page, on the white page.
-struct DocumentEditSurface: View {
-    @Environment(AppModel.self) private var model
+/// Same status and recovery controls, placed in the Mac comments panel or compact iOS page.
+struct DocumentEditorStatus: View {
     @Bindable var editor: DocEditorModel
     @State private var confirmDiscard = false
     @State private var confirmTakeover = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            TextField("Title", text: $editor.title, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(Amb.editorial)
-                .foregroundStyle(Amb.paperInk)
-                .accessibilityIdentifier("editor.title").disabled(editor.takingOver || editor.followingRemote || editor.permissionDenied || !model.isUnlocked)
             HStack(spacing: 6) {
                 Circle().fill(editor.leaseState.contains("lease held") ? Color.green : Amb.mutedForeground).frame(width: 7, height: 7)
                 Text(editor.leaseState).accessibilityIdentifier("editor.lease")
+                #if os(iOS)
                 if editor.dirty { Text("· Changes pending sync").accessibilityIdentifier("editor.dirty") }
+                #endif
                 if !editor.recoveries.isEmpty {
                     Button { Task { await editor.openVersions() } } label: { Image(systemName: "clock.arrow.circlepath") }
                         .accessibilityLabel("Saved versions — previous edits available").help("Saved versions")
@@ -813,6 +838,9 @@ struct DocumentEditSurface: View {
                 }
             }
             .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+            #if os(macOS)
+            if editor.dirty { Text("Changes pending sync").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("editor.dirty") }
+            #endif
             if let synced = editor.lastSyncedAt { Text("Last synced \(synced.formatted(date: .omitted, time: .shortened))").font(.amb(.caption)) }
             if editor.canTakeover {
                 Button("Take over editing…") { confirmTakeover = true }
@@ -832,6 +860,27 @@ struct DocumentEditSurface: View {
                     .buttonStyle(.borderless)
                 }
             }
+        }
+        .confirmationDialog("Discard your unsaved edits?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+            Button("Discard edits", role: .destructive) { Task { await editor.discardDraft() } }
+        }
+    }
+}
+
+/// Title, lease and save status, pasted uploads, and the editor page, on the white page.
+struct DocumentEditSurface: View {
+    @Environment(AppModel.self) private var model
+    @Bindable var editor: DocEditorModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Title", text: $editor.title, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(Amb.editorial)
+                .foregroundStyle(Amb.paperInk)
+                .accessibilityIdentifier("editor.title").disabled(editor.takingOver || editor.followingRemote || editor.permissionDenied || !model.isUnlocked)
+            #if os(iOS)
+            DocumentEditorStatus(editor: editor)
+            #endif
             if let uploads = model.uploads {
                 ComposerPastedUploads(uploads: uploads, target: editor.uploadTarget, text: editor.uploadText)
             }
@@ -862,9 +911,7 @@ struct DocumentEditSurface: View {
         .onChange(of: model.isUnlocked) { _, unlocked in editor.page?.setEditable(unlocked && !editor.followingRemote && !editor.permissionDenied) }
         .onChange(of: editor.followingRemote) { _, following in editor.page?.setEditable(model.isUnlocked && !following && !editor.permissionDenied) }
         .onChange(of: editor.pageReady) { _, _ in editor.page?.setStyle(DocumentEditorStyle.sizes()) }
-        .confirmationDialog("Discard your unsaved edits?", isPresented: $confirmDiscard, titleVisibility: .visible) {
-            Button("Discard edits", role: .destructive) { Task { await editor.discardDraft() } }
-        }
+
     }
 }
 

@@ -59,3 +59,8 @@ body { font: var(--doc-body)/1.65 -apple-system, BlinkMacSystemFont, "SF Pro Tex
 .document-mention-picker { position: fixed; top: 12px; left: 12px; right: 12px; box-sizing: border-box; max-height: min(90vh, calc(100vh - 24px)); overflow-y: auto; overscroll-behavior: contain; background: white; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 4px 18px #0002; z-index: 20; }
 .document-mention-picker button { display: block; width: 100%; min-height: 44px; text-align: left; border: 0; padding: 8px 12px; background: white; color: #222; font: inherit; }
 .document-mention-picker button[aria-selected=true] { background: #e5efff; }
+
+.document-comment-action { position: fixed; z-index: 15; width: 44px; height: 44px; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--rule); border-radius: 22px; background: white; color: var(--primary); box-shadow: 0 2px 8px #0002; touch-action: manipulation; cursor: pointer; }
+.document-comment-action[hidden] { display: none; }
+.document-comment-action:hover { background: var(--kept-bg); }
+.document-comment-action:focus-visible { outline: 2px solid var(--primary); outline-offset: -4px; }

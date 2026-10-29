@@ -11,6 +11,7 @@
 //      wiki (a link was opened), wiki-query (`[[` typing);
 //      webkit.messageHandlers.documentFile.postMessage(`<index>\n<name>\n<type>\n<base64>`): one pasted file.
 import { documentMentions } from './document-mentions.js';
+import { commentOverlay } from './document-comment-overlay.js';
 import { captureSelection, revealSelection } from './document-selection.js';
 import { Editor, getSchema } from '@tiptap/core';
 import { createFlightDeckTiptapExtensions } from './sol/docs/editor/prosemirror-flightdeck-schema.js';
@@ -106,8 +107,13 @@ function activeState() {
   };
 }
 
+const commentAction = commentOverlay({ getEditor: () => editor,
+  capture: () => captureSelection(editor, session?.mode === 'markdown' ? output() : null),
+  activate: anchor => post({ type: 'comment-selection', anchor }),
+});
 let lastState = '';
 function emitState() {
+  commentAction.update();
   const state = JSON.stringify(activeState());
   post({ type: 'selection', anchor: captureSelection(editor, session?.mode === 'markdown' ? output() : null) });
   if (state === lastState) return;
