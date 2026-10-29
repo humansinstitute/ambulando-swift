@@ -43,7 +43,7 @@ extension MacThreadRegression {
             try require(find(window, "reaction.\(emoji.rawValue)") != nil, "picker reaction renders: \(emoji.rawValue)")
         }
         print("REACTION_CONTROLS_PASS addRemove=true pickerSeven=true")
-        let body = """
+        let body = RichMessageLayoutFixture.bodyText + "\n\n" + """
         ## A clearer reading rhythm
 
         **With those clarifications, the next steps are straightforward.** This is a synthetic review reply with the same shape as a long conversation: connected prose, numbered recommendations, quotations and a few links. The words remain selectable and the message actions stay available.

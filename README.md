@@ -5,6 +5,7 @@ a WebView: screens draw from an on-device SQLite store, and one sync engine is t
 network work against the existing Tower HTTPS + NIP-98 API. The web client lives in `../sol`.
 
 - Architecture, inventory and budgets: [docs/architecture.md](docs/architecture.md)
+- [Rich message sizing and table regression](docs/rich-message-layout.md)
 - Feature parity with the web app (native / web / deferred / unsupported): [docs/parity-matrix.md](docs/parity-matrix.md)
 - Work packages and commands: [docs/work-packages.md](docs/work-packages.md)
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)

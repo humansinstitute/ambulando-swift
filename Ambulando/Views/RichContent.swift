@@ -97,6 +97,9 @@ struct RichBlocksView: View {
                 RichBlockView(block: block, context: RichContext(style: style, muted: muted, workspace: workspace, path: [index])).id(index)
             }
         }
+        // A horizontal table scroller can otherwise make the stack accept a compressed height,
+        // while intrinsic-height paragraphs draw above its allocation and over the sender row.
+        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: style == .chat ? ChatTypography.readableWidth : .infinity, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .environment(\.openURL, OpenURLAction { url in
@@ -318,6 +321,7 @@ private struct ParagraphView: View {
             .lineSpacing(context.style == .chat ? ChatTypography.lineSpacing : 0)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
+            .richLayoutFrame("paragraph.\(context.path.map(String.init).joined(separator: "."))")
     }
 
     enum Piece { case text([InlineRun]), image(alt: String, source: String) }
@@ -421,9 +425,9 @@ private struct TableBlockView: View {
     var body: some View {
         let widths = widths
         ScrollView(.horizontal) {
-            Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { r, row in
-                    GridRow {
+                    IntrinsicTableRow {
                         ForEach(Array(row.enumerated()), id: \.offset) { c, cell in
                             cellView(cell, row: r, column: c)
                                 /* native selection and the normal rich fallback share table sizing */
@@ -435,6 +439,7 @@ private struct TableBlockView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                                 .padding(.horizontal, 9).padding(.vertical, 7)
                                 .frame(maxHeight: .infinity, alignment: .topLeading)
+                                .richLayoutFrame("table.cell.\(r).\(c)")
                                 .background(r == 0 ? Amb.card : Color.clear)
                                 .overlay(Rectangle().stroke(Amb.border, lineWidth: 0.5))
                         }
@@ -442,8 +447,13 @@ private struct TableBlockView: View {
                 }
             }
             .overlay(Rectangle().stroke(Amb.border, lineWidth: 1))
+            .richLayoutFrame("table.content")
             .padding(1)
         }
+        .fixedSize(horizontal: false, vertical: true)
+        .scrollIndicators(.visible)
+        .accessibilityHint("Scroll horizontally to read all columns.")
+        .richLayoutFrame("table.viewport")
         // Read row by row ("Surface, State. Chat, Markdown.").
         #if os(macOS)
         .accessibilityElement(children: .contain)
@@ -467,6 +477,24 @@ private struct TableBlockView: View {
 
     static func spoken(_ rows: [[[InlineRun]]]) -> String {
         "Table. " + rows.map { row in row.map { cell in cell.map(\.text).joined() }.joined(separator: ", ") }.joined(separator: ". ")
+    }
+}
+
+/// Measure each row with no offered height, then fill only that row's intrinsic tallest cell.
+/// Grid's flexible cells can share the scroller's offered height across unrelated rows.
+private struct IntrinsicTableRow: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        return CGSize(width: sizes.reduce(0) { $0 + $1.width }, height: sizes.map(\.height).max() ?? 0)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            view.place(at: CGPoint(x: x, y: bounds.minY), anchor: .topLeading,
+                       proposal: ProposedViewSize(width: size.width, height: bounds.height))
+            x += size.width
+        }
     }
 }
 

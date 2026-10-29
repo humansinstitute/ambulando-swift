@@ -512,6 +512,7 @@ struct MessageRow: View {
                         .accessibilityIdentifier("message.author")
                     Text(display.time).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 }
+                .richLayoutFrame("metadata")
                 if let bodyOverride {
                     if !bodyOverride.isEmpty { MessageBody(text: bodyOverride, muted: true) }
                 } else if !message.body.isEmpty {
