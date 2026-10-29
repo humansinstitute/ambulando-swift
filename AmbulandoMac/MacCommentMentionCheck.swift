@@ -5,6 +5,9 @@ import AmbulandoCore
 extension MacThreadRegression {
     /// Runs only in the isolated Test app. Local stand-in Tower; no real accounts or agent dispatch.
     static func commentMentionCheck(_ window: NSWindow, model: AppModel) async throws {
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDocumentWorkflowCheck") {
+            try await documentWorkflowCheck(window, model: model); return
+        }
         guard let fixture = model.fixture, let store = model.store, let workspace = model.selectedWorkspace else {
             throw Failure(description: "Missing sample environment")
         }

@@ -289,6 +289,7 @@ Object.defineProperty(window, 'ambulandoDocument', {
       }
       return true;
     },
+    setEditable(value) { editor?.setEditable(value === "true"); return true; },
     mentionSuggestions(json) { return mentions?.deliver(JSON.parse(json)) || false; },
     command(name, json) { return command(name, json ? JSON.parse(json) : {}); },
     insertUploads(json) {

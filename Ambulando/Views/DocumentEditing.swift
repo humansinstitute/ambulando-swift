@@ -31,9 +31,21 @@ final class DocEditorModel: UploadTokenHost {
     private(set) var takingOver = false
     private(set) var canTakeover = false
     private(set) var lastSyncedAt: Date?
+    private(set) var recoveries: [DocumentRecovery] = []
+    private(set) var reconciling = false
+    private(set) var permissionDenied = false
+    var followingRemote: Bool { authorityLost && !dirty }
+    var showingVersions = false
+    var versionPreview: String?
+    var selectedRecovery: DocumentRecovery?
+    private(set) var reviewedHead: DocBodyRecord?
+    private var reviewedTitle = ""
+    @ObservationIgnored private var baselineBytes: Data?
+    @ObservationIgnored private var baselineTitle: String?
+
     @ObservationIgnored private var editorSessionId = UUID().uuidString.lowercased()
     @ObservationIgnored private var observedLeaseId: String?
-    @ObservationIgnored private var authorityLost = false
+    private var authorityLost = false
     @ObservationIgnored private var active = true
     @ObservationIgnored private var autosave: Task<Void, Never>?
     /// Upload placeholders this session put into the page; the page's next change event may not have arrived yet.
@@ -51,6 +63,7 @@ final class DocEditorModel: UploadTokenHost {
     /// Opens, creates and picks wiki links for this document; set by the screen that shows the editor.
     @ObservationIgnored weak var wiki: WikiLinkController?
     @ObservationIgnored private var body: DocumentBody?
+    @ObservationIgnored private var sourceBytes: Data?
     @ObservationIgnored private var original: JSONValue?
     @ObservationIgnored private var payload: String?
     @ObservationIgnored private var base: (rowVersion: Int, sha: String, object: String)?
@@ -82,20 +95,23 @@ final class DocEditorModel: UploadTokenHost {
             return
         }
         let decoded = await Task.detached { DocumentBody(bytes: source.0, contentType: source.1) }.value
-        body = decoded
+        body = decoded; sourceBytes = source.0
         if let draft { base = (draft.baseRowVersion, draft.baseSha256, draft.baseStorageObjectId); dirty = true; status = draft.lastError }
         else if let cached { base = (cached.docRowVersion, cached.sha256, cached.storageObjectId) }
-        if let state = draft?.state, state == .recovery || state == .conflict { statusTone = .warning }
+        if let state = draft?.state, state == .recovery || state == .conflict { statusTone = .warning; authorityLost = true }
         title = draft?.title ?? currentDoc?.title ?? doc.title
+        if draft == nil { baselineBytes = cached?.bytes; baselineTitle = title }
+        else if cached?.docRowVersion == draft?.baseRowVersion { baselineBytes = cached?.bytes; baselineTitle = currentDoc?.title }
+
         switch decoded.editing {
         case .proseMirror:
             original = decoded.editorState
             let state = decoded.editorState ?? .object([("type", .string("doc")), ("content", .array([]))])
-            if draft != nil { content = state.serializedString() }
+            content = state.serializedString()
             payload = Self.payload([("mode", .string("rich")), ("state", state)])
             mode = .rich
         case .markdown, .markdownModel:
-            if draft != nil { content = decoded.markdown }
+            content = decoded.markdown
             payload = Self.payload([("mode", .string("markdown")), ("markdown", .string(decoded.markdown))])
             mode = .markdown
         case .readOnly(let reason):
@@ -133,6 +149,7 @@ final class DocEditorModel: UploadTokenHost {
             #if os(macOS)
             page?.focus()
             #endif
+            page?.setEditable(!followingRemote && !permissionDenied && app?.isUnlocked == true)
             // Uploads for this document (also ones that finished while it was closed) apply once the page has it.
             app?.uploads?.attach(self)
             wiki?.pushTitles()
@@ -297,11 +314,18 @@ final class DocEditorModel: UploadTokenHost {
         renew = Task { [weak self] in
             do {
                 guard let self else { return }
+                await reconcileRemote()
+                guard !authorityLost else { await inspectAuthority(); return }
                 try await saver.acquire(connection, workspace, docId: id, editorSessionId: editorSessionId)
                 leaseState = "You are editing (lease held)."
+                recoveries = (try? await saver.recoveries(connection, workspace, docId: id)) ?? []
             } catch {
                 self?.leaseState = (error as? LocalizedError)?.errorDescription ?? "Could not take the edit lease; your edits stay on this \(Device.name)."
-                if error is LeaseError { self?.authorityLost = true; await self?.inspectAuthority() }
+                if case TowerError.http(let status, _, _) = error, status == 403 {
+                    self?.permissionDenied = true; self?.page?.setEditable(false)
+                    self?.leaseState = "Read only — you do not have permission to edit this document."
+                }
+                if error is LeaseError { self?.authorityLost = true; await self?.inspectAuthority(); await self?.reconcileRemote() }
                 return
             }
             while !Task.isCancelled {
@@ -317,6 +341,7 @@ final class DocEditorModel: UploadTokenHost {
                     authorityLost = true
                     leaseState = "Editing authority ended. Your draft stays on this device."
                     await inspectAuthority()
+                    await reconcileRemote()
                     return
                 } catch { leaseState = "Could not renew while offline; your draft stays on this device." }
             }
@@ -355,7 +380,7 @@ final class DocEditorModel: UploadTokenHost {
     /// iOS may suspend immediately. Local durability comes first; the cloud flush is best effort.
     func setActive(_ value: Bool) {
         active = value
-        if value { startAutosave() }
+        if value { startAutosave(); Task { [weak self] in await self?.reconcileRemote() } }
         else {
             autosave?.cancel(); autosave = nil
             Task { [weak self] in await self?.flush() }
@@ -372,7 +397,7 @@ final class DocEditorModel: UploadTokenHost {
         do {
             let inspected = try await saver.inspect(connection, workspace, docId: doc.id)
             observedLeaseId = inspected.leaseId
-            canTakeover = inspected.supported && inspected.leaseId != nil && inspected.holderNpub == connection.signerNpub
+            canTakeover = inspected.supported && (inspected.leaseId == nil || inspected.holderNpub == connection.signerNpub)
             if inspected.leaseId != nil && inspected.holderNpub == connection.signerNpub && !canTakeover {
                 leaseState = "Another editor is open. This server does not support safe takeover yet."
             }
@@ -381,7 +406,8 @@ final class DocEditorModel: UploadTokenHost {
 
     /// Explicit confirmation keeps divergent local work as an existing Tower recovery before loading the remote head.
     func takeover() async {
-        guard !saving, !takingOver, let expected = observedLeaseId, let saver = app?.saver, canTakeover else { return }
+        guard !saving, !takingOver, !reconciling, let saver = app?.saver, canTakeover else { return }
+        let expected = observedLeaseId
         takingOver = true
         defer { takingOver = false }
         renew?.cancel()
@@ -398,27 +424,176 @@ final class DocEditorModel: UploadTokenHost {
         let recovery = try? await store.reader.docDraft(key: draftKey)
         let newSession = UUID().uuidString.lowercased()
         do {
-            let (remote, _) = try await saver.takeover(connection, workspace, docId: doc.id, editorSessionId: newSession, expectedLeaseId: expected)
+            let _ = try await saver.takeover(connection, workspace, docId: doc.id, editorSessionId: newSession, expectedLeaseId: expected)
             guard revision == editRevision else { throw LeaseError.invalid("draft_changed_during_takeover") }
             if let recovery, !(try await store.writer.deleteDocDraft(ifUnchanged: recovery)) { throw LeaseError.invalid("local_draft_changed") }
             guard revision == editRevision else { throw LeaseError.invalid("draft_changed_during_takeover") }
             editorSessionId = newSession
             authorityLost = false; canTakeover = false; observedLeaseId = nil
-            loading = true; dirty = false; content = ""; title = remote.title; body = nil; original = nil
-            await load()
+            guard await loadLatestPage() else {
+                authorityLost = true
+                await saver.release(connection, workspace, docId: doc.id, editorSessionId: newSession)
+                _ = await checkpoint()
+                throw LeaseError.invalid("latest_page_not_loaded")
+            }
             lastSyncedAt = Date()
             setStatus("Latest cloud version loaded. Earlier local edits are preserved in recovery history.", .success)
+            page?.setEditable(true)
             holdLease()
         } catch {
+            authorityLost = true
+            await saver.release(connection, workspace, docId: doc.id, editorSessionId: newSession)
             _ = await persistDraft(state: .editing)
             setStatus("Takeover did not finish: \(error.localizedDescription). Your recovery draft is retained.", .warning)
             await inspectAuthority()
         }
     }
 
+    /// Called on materialised remote head changes and foreground return. A replaced editor never resumes autosave.
+    func reconcileRemote() async {
+        guard !loading, !saving, !takingOver, !reconciling, active, app?.isUnlocked == true, let saver = app?.saver else { return }
+        reconciling = true
+        defer { reconciling = false }
+        guard await checkpoint() else { return }
+        let revision = editRevision
+        do {
+            let fresh = try await saver.latest(connection, workspace, docId: doc.id)
+            guard revision == editRevision else { return }
+            recoveries = try await saver.recoveries(connection, workspace, docId: doc.id)
+            guard revision == editRevision, fresh.body.docRowVersion != base?.rowVersion || fresh.body.sha256 != base?.sha else { return }
+            authorityLost = true
+            renew?.cancel()
+            let draft = try await store.reader.docDraft(key: draftKey)
+            if let draft {
+                let unchanged = baselineBytes.map { DocumentContentIdentity.equal(draft.body, title: draft.title, $0, otherTitle: baselineTitle ?? "") } ?? false
+                let sameAsLatest = DocumentContentIdentity.equal(draft.body, title: draft.title, fresh.body.bytes, otherTitle: fresh.doc.title)
+                if !unchanged && !sameAsLatest {
+                    if draft.recoveryId == nil {
+                        guard case .recovery(let id, _) = await saver.save(draft, connection: connection, workspace: workspace, editorSessionId: editorSessionId, asRecovery: true), id != nil else {
+                            setStatus("Previous edits are saved on this device. Connect to preserve them before loading the latest version.", .warning); return
+                        }
+                    }
+                    recoveries = try await saver.recoveries(connection, workspace, docId: doc.id)
+                }
+                guard revision == editRevision, let retained = try await store.reader.docDraft(key: draftKey),
+                      retained.body == draft.body, retained.title == draft.title, retained.contentType == draft.contentType, retained.baseRowVersion == draft.baseRowVersion, retained.baseSha256 == draft.baseSha256, retained.baseStorageObjectId == draft.baseStorageObjectId, try await store.writer.deleteDocDraft(ifUnchanged: retained) else { return }
+            }
+            guard revision == editRevision else { return }
+            guard await loadLatestPage() else {
+                _ = await checkpoint()
+                setStatus("Latest version could not be displayed. Previous work remains recoverable.", .warning)
+                return
+            }
+            page?.setEditable(false)
+            leaseState = "Following latest saved version. Take over explicitly to edit here."
+            setStatus(recoveries.isEmpty ? "Latest saved version loaded." : "Latest saved version loaded. Previous edits are available in Saved versions.", .info)
+            await inspectAuthority()
+        } catch { /* Offline: the durable draft and current page stay intact. */ }
+    }
+
+    private func loadLatestPage() async -> Bool {
+        let revision = editRevision
+        do {
+            guard let cached = try await store.reader.docBody(workspaceId: workspace.id, docId: doc.id),
+                  let record = try await store.reader.doc(workspaceId: workspace.id, id: doc.id),
+                  cached.docRowVersion == record.rowVersion,
+                  try await store.reader.docDraft(key: draftKey) == nil else { return false }
+            let decoded = DocumentBody(bytes: cached.bytes, contentType: cached.contentType)
+            let nextContent: String
+            let nextPayload: String
+            let nextMode: Mode
+            switch decoded.editing {
+            case .proseMirror:
+                guard let state = decoded.editorState else { return false }
+                nextContent = state.serializedString(); nextMode = .rich
+                nextPayload = Self.payload([("mode", .string("rich")), ("state", state)])
+            case .markdown, .markdownModel:
+                nextContent = decoded.markdown; nextMode = .markdown
+                nextPayload = Self.payload([("mode", .string("markdown")), ("markdown", .string(decoded.markdown))])
+            case .readOnly: return false
+            }
+            guard revision == editRevision else { return false }
+            loading = true
+            body = decoded; sourceBytes = cached.bytes; original = decoded.editorState; content = nextContent; title = record.title
+            base = (cached.docRowVersion, cached.sha256, cached.storageObjectId)
+            baselineBytes = cached.bytes; baselineTitle = record.title
+            payload = nextPayload; mode = nextMode; dirty = false; selection = nil
+            loading = false
+            page?.load(nextPayload)
+            return true
+        } catch { return false }
+    }
+
+    func openVersions() async {
+        guard let saver = app?.saver, !saving, !takingOver else { return }
+        do {
+            let fresh = try await saver.latest(connection, workspace, docId: doc.id)
+            reviewedHead = fresh.body; reviewedTitle = fresh.doc.title
+            recoveries = try await saver.recoveries(connection, workspace, docId: doc.id)
+            selectedRecovery = nil
+            versionPreview = fresh.doc.title + "\n\n" + DocumentBody(bytes: fresh.body.bytes, contentType: fresh.body.contentType).markdown
+            showingVersions = true
+        } catch { setStatus("Saved versions are unavailable while offline. Your draft is retained.", .warning) }
+    }
+
+    func previewVersion(_ recovery: DocumentRecovery?) async {
+        guard let saver = app?.saver, let head = reviewedHead else { return }
+        selectedRecovery = recovery; versionPreview = nil
+        do {
+            let bytes = head.bytes
+            if let recovery {
+                let previous = try await saver.recoveryBody(connection, workspace, docId: doc.id, recoveryId: recovery.id)
+                guard selectedRecovery?.id == recovery.id else { return }
+                versionPreview = (recovery.title ?? "Previous saved version") + "\n\n" + DocumentBody(bytes: previous.bytes, contentType: previous.contentType).markdown
+            } else {
+                versionPreview = reviewedTitle + "\n\n" + DocumentBody(bytes: bytes, contentType: head.contentType).markdown
+            }
+        } catch { setStatus("Could not load that saved version. No versions were changed.", .warning) }
+    }
+
+    func resolveVersion(promote: Bool) async {
+        guard let saver = app?.saver, let recovery = selectedRecovery, let head = reviewedHead, !saving, !takingOver, !dirty else {
+            setStatus("Preserve current edits before choosing a saved version.", .warning); return
+        }
+        saving = true
+        defer { saving = false }
+        let choiceRevision = editRevision
+        let choiceSession = authorityLost ? UUID().uuidString.lowercased() : editorSessionId
+        do {
+            try await saver.resolveRecovery(connection, workspace, docId: doc.id, recoveryId: recovery.id, promote: promote, head: head, editorSessionId: choiceSession)
+            let _ = try await saver.latest(connection, workspace, docId: doc.id)
+            recoveries = try await saver.recoveries(connection, workspace, docId: doc.id)
+            if promote {
+                guard choiceRevision == editRevision else {
+                    authorityLost = true; renew?.cancel()
+                    await saver.release(connection, workspace, docId: doc.id, editorSessionId: choiceSession)
+                    _ = await checkpoint()
+                    setStatus("Selected version kept. New local edits are retained separately on this device.", .warning)
+                    return
+                }
+                editorSessionId = choiceSession
+                authorityLost = false; canTakeover = false; observedLeaseId = nil
+                guard await loadLatestPage() else {
+                    authorityLost = true
+                    await saver.release(connection, workspace, docId: doc.id, editorSessionId: choiceSession)
+                    _ = await checkpoint()
+                    setStatus("Version kept, but the page could not refresh. Current local text is retained.", .warning)
+                    return
+                }
+                page?.setEditable(true)
+                holdLease()
+            }
+            showingVersions = false
+            setStatus(promote ? "Selected version kept. Other saved versions remain in history." : "Previous version dismissed. Latest saved document is unchanged.", .success)
+        } catch {
+            if choiceSession != editorSessionId { await saver.release(connection, workspace, docId: doc.id, editorSessionId: choiceSession) }
+            setStatus("The choice could not be applied. Another editor may be active or the latest version changed. Take over if needed, then reopen Saved versions. Both versions are retained.", .warning)
+        }
+    }
+
     // MARK: Formatting
 
-    func command(_ name: String, _ args: [String: String] = [:]) { page?.command(name, args) }
+    func command(_ name: String, _ args: [String: String] = [:]) { guard !followingRemote, !permissionDenied, app?.isUnlocked == true else { return }; page?.command(name, args) }
 
     /// Capture before comments take focus; save first so the anchor refers to canonical content.
     func commentAnchor(_ selected: DocumentAnchor) async -> DocumentAnchor? {
@@ -462,17 +637,19 @@ final class DocEditorModel: UploadTokenHost {
         if pageReady, let now = await page?.snapshot(), now != content { pageChanged(now) }
         guard let body, let base, dirty else { return nil }
         let revision = editRevision
-        let mode = mode, content = content, original = original, title = title
+        let mode = mode, content = content, original = original, title = title, sourceBytes = sourceBytes
         let identity = (connection.id, workspace.id, doc.id)
         let encoded: Result<(Data, String), Error> = await Task.detached {
             do {
                 switch mode {
                 case .markdown:
-                    let r = try body.encoded(markdown: content.isEmpty ? body.markdown : content)
+                    if content == body.markdown, let sourceBytes { return .success((sourceBytes, body.contentType)) }
+                    let r = try body.encoded(markdown: content)
                     return .success((r.bytes, r.contentType))
                 case .rich:
-                    guard let state = content.isEmpty ? body.editorState : try JSONValue.parse(Data(content.utf8)) else { throw DocumentEditError.unsupported }
+                    let state = try JSONValue.parse(Data(content.utf8))
                     try DocumentBody.checkEdited(state, original: original)
+                    if state == body.editorState, let sourceBytes { return .success((sourceBytes, body.contentType)) }
                     let r = try body.encoded(editorState: state)
                     return .success((r.bytes, r.contentType))
                 default:
@@ -488,7 +665,7 @@ final class DocEditorModel: UploadTokenHost {
             // Encoding can yield while typing or another save advances the base. The newer checkpoint wins.
             guard revision == editRevision, self.base?.rowVersion == base.rowVersion,
                   self.base?.sha == base.sha, self.base?.object == base.object else { return nil }
-            let draft = DocDraft(connectionId: identity.0, workspaceId: identity.1, docId: identity.2, title: title.isEmpty ? doc.title : title,
+            let draft = DocDraft(connectionId: identity.0, workspaceId: identity.1, docId: identity.2, title: title,
                                  body: bytes.0, contentType: bytes.1, baseRowVersion: base.rowVersion, baseSha256: base.sha,
                                  baseStorageObjectId: base.object, state: draftState)
             do { try await store.writer.saveDocDraft(draft) } catch {
@@ -502,7 +679,7 @@ final class DocEditorModel: UploadTokenHost {
 
     /// Saves through Tower (lease, expected version). True when Tower made it the canonical version.
     func save() async -> Bool {
-        guard !saving, !takingOver, let saver = app?.saver else { return false }
+        guard !saving, !takingOver, !reconciling, !permissionDenied, let saver = app?.saver else { return false }
         guard !authorityLost else {
             setStatus("Saved locally; editing authority ended. Explicitly take over to load the latest cloud version.", .warning)
             await inspectAuthority()
@@ -522,8 +699,9 @@ final class DocEditorModel: UploadTokenHost {
         }
         setStatus("Saving…", .info)
         switch await saver.save(draft, connection: connection, workspace: workspace, editorSessionId: editorSessionId) {
-        case .saved(_, let saved):
+        case .saved(let savedDoc, let saved):
             base = (saved.docRowVersion, saved.sha256, saved.storageObjectId)
+            baselineBytes = saved.bytes; baselineTitle = savedDoc.title
             let timestamp = ISO8601DateFormatter()
             timestamp.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             lastSyncedAt = timestamp.date(from: saved.fetchedAt) ?? ISO8601DateFormatter().date(from: saved.fetchedAt)

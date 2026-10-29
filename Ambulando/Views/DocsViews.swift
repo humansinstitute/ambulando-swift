@@ -156,7 +156,7 @@ struct DocumentSnapshot: Sendable, Equatable {
 }
 
 /// A document as a white page on a faint lavender surround. iPhone/iPad open straight into formatted editing with
-/// comments in a sheet; Mac keeps comments beside the page and enters editing with Edit.
+/// comments in a sheet; Mac opens editable documents with comments beside the page.
 struct DocumentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -179,7 +179,7 @@ struct DocumentView: View {
         _wiki = State(initialValue: WikiLinkController(workspace: workspace, sourceDocId: docId, store: store))
     }
 
-    private var canEdit: Bool { snapshot.value.editable || snapshot.value.draft != nil }
+    private var canEdit: Bool { model.isUnlocked && snapshot.value.doc?.archived == false && (snapshot.value.editable || snapshot.value.draft != nil) }
 
     var body: some View {
         readerLayout
@@ -243,6 +243,8 @@ struct DocumentView: View {
         .onChange(of: snapshot.value.doc?.id) { _, _ in takeEditRequest(); openFormattedPage() }
         .onChange(of: snapshot.value.hasBody) { _, _ in openFormattedPage() }
         .onChange(of: snapshot.value.editable) { _, _ in openFormattedPage() }
+        .onChange(of: snapshot.value.doc?.rowVersion) { _, _ in Task { await editor?.reconcileRemote() } }
+        .onChange(of: model.isUnlocked) { _, unlocked in if unlocked { openFormattedPage(); Task { await editor?.reconcileRemote() } } }
         .onChange(of: model.docEditRequest) { _, _ in takeEditRequest() }
         .onDisappear {
             // Leaving for a linked page keeps the text as a draft; coming back opens the editor on that draft.
@@ -256,9 +258,7 @@ struct DocumentView: View {
     }
 
     private func openFormattedPage() {
-        #if os(iOS)
         if automaticEditing && canEdit { beginEditing() }
-        #endif
     }
 
     /// A canvas document's Edit opens this screen with Edit already on.
@@ -269,7 +269,7 @@ struct DocumentView: View {
     }
 
     private func beginEditing() {
-        guard editor == nil, let doc = snapshot.value.doc, let connection = model.connection else { return }
+        guard canEdit, editor == nil, let doc = snapshot.value.doc, let connection = model.connection else { return }
         let created = DocEditorModel(doc: doc, workspace: workspace, store: store, connection: connection, app: model)
         created.wiki = wiki
         wiki.editor = created
@@ -291,7 +291,23 @@ struct DocumentView: View {
             HStack(alignment: .top, spacing: 0) {
                 Group {
                     if let editor {
-                        DocumentEditingPage(editor: editor, compact: compact, onFinish: { self.editor = nil })
+                        VStack(spacing: 0) {
+                            if let selected = editor.selection {
+                                Button {
+                                    let captured = selected
+                                    Task {
+                                        if let saved = await editor.commentAnchor(captured) {
+                                            anchor = saved; replyTo = nil; revealed = saved
+                                        }
+                                    }
+                                } label: { Label("Comment on selected text", systemImage: "text.bubble") }
+                                .keyboardShortcut("m", modifiers: [.command, .option])
+                                .disabled(editor.saving || !model.isUnlocked)
+                                .accessibilityIdentifier("doc.commentSelection")
+                                .padding(.vertical, 5)
+                            }
+                            DocumentEditingPage(editor: editor, compact: compact, onFinish: { automaticEditing = false; self.editor = nil })
+                        }
                     } else {
                         ScrollViewReader { scroll in
                             ScrollView { paper(compact: compact).padding(.horizontal, compact ? 14 : 28).padding(.vertical, 24).frame(maxWidth: .infinity) }
@@ -785,11 +801,16 @@ struct DocumentEditSurface: View {
                 .textFieldStyle(.plain)
                 .font(Amb.editorial)
                 .foregroundStyle(Amb.paperInk)
-                .accessibilityIdentifier("editor.title").disabled(editor.takingOver)
+                .accessibilityIdentifier("editor.title").disabled(editor.takingOver || editor.followingRemote || editor.permissionDenied || !model.isUnlocked)
             HStack(spacing: 6) {
                 Circle().fill(editor.leaseState.contains("lease held") ? Color.green : Amb.mutedForeground).frame(width: 7, height: 7)
                 Text(editor.leaseState).accessibilityIdentifier("editor.lease")
                 if editor.dirty { Text("· Changes pending sync").accessibilityIdentifier("editor.dirty") }
+                if !editor.recoveries.isEmpty {
+                    Button { Task { await editor.openVersions() } } label: { Image(systemName: "clock.arrow.circlepath") }
+                        .accessibilityLabel("Saved versions — previous edits available").help("Saved versions")
+                        .accessibilityIdentifier("editor.versions")
+                }
             }
             .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
             if let synced = editor.lastSyncedAt { Text("Last synced \(synced.formatted(date: .omitted, time: .shortened))").font(.amb(.caption)) }
@@ -835,8 +856,11 @@ struct DocumentEditSurface: View {
                 WikiQueryPanel(wiki: wiki, query: query).padding(.top, 96)
             }
         }
+        .sheet(isPresented: $editor.showingVersions) { DocumentVersionChoice(editor: editor) }
         .onChange(of: model.syncStatus) { _, _ in editor.deliverImages() }
         .onChange(of: TextScale.shared.factor, initial: true) { _, _ in editor.page?.setStyle(DocumentEditorStyle.sizes()) }
+        .onChange(of: model.isUnlocked) { _, unlocked in editor.page?.setEditable(unlocked && !editor.followingRemote && !editor.permissionDenied) }
+        .onChange(of: editor.followingRemote) { _, following in editor.page?.setEditable(model.isUnlocked && !following && !editor.permissionDenied) }
         .onChange(of: editor.pageReady) { _, _ in editor.page?.setStyle(DocumentEditorStyle.sizes()) }
         .confirmationDialog("Discard your unsaved edits?", isPresented: $confirmDiscard, titleVisibility: .visible) {
             Button("Discard edits", role: .destructive) { Task { await editor.discardDraft() } }
@@ -864,6 +888,40 @@ enum DocumentEditorStyle {
         #else
         func size(_ style: UIFont.TextStyle) -> CGFloat { UIFont.preferredFont(forTextStyle: style).pointSize }
         return ["body": size(.body), "h1": size(.title2), "h2": size(.title3), "h3": size(.headline), "code": size(.footnote)]
+        #endif
+    }
+}
+
+/// Simple saved snapshots, without a diff engine. Selection never changes bytes until explicitly confirmed.
+struct DocumentVersionChoice: View {
+    @Bindable var editor: DocEditorModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Saved versions").font(.headline)
+            Picker("Version", selection: Binding(get: { editor.selectedRecovery?.id ?? "latest" }, set: { id in
+                Task { await editor.previewVersion(editor.recoveries.first { $0.id == id }) }
+            })) {
+                Text("Latest saved version").tag("latest")
+                ForEach(editor.recoveries) { version in Text("Previous saved: " + (version.title ?? version.createdAt)).tag(version.id) }
+            }
+            ScrollView { Text(editor.versionPreview ?? "Loading…").textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                .frame(minHeight: 200)
+            if let status = editor.status { Text(status).font(.caption) }
+            HStack {
+                Button("Close") { editor.showingVersions = false }
+                Spacer()
+                if editor.selectedRecovery != nil {
+                    Button("Dismiss previous version") { Task { await editor.resolveVersion(promote: false) } }
+                    Button("Keep selected version") { Task { await editor.resolveVersion(promote: true) } }
+                } else {
+                    Button("Keep latest") { editor.showingVersions = false }
+                }
+            }.disabled(editor.saving || editor.versionPreview == nil)
+        }.padding(24)
+        #if os(macOS)
+        .frame(minWidth: 420, idealWidth: 640, minHeight: 400)
+        #else
+        .frame(maxWidth: .infinity, minHeight: 300)
         #endif
     }
 }

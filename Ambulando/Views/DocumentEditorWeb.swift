@@ -158,6 +158,8 @@ final class DocumentEditorPage: NSObject, WKScriptMessageHandler, WKNavigationDe
     }
 
 
+    func setEditable(_ value: Bool) { call("setEditable", value ? "true" : "false") }
+
     /// The edited document now, flushed from the page (nil: no page or it failed).
     func snapshot() async -> String? {
         guard ready, let webView else { return nil }

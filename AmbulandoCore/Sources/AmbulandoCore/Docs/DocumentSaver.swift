@@ -132,19 +132,24 @@ public actor DocumentSaver {
 
     /// Explicit user action only. A supporting server revokes prior authority and advances the document version.
     public func takeover(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, docId: String,
-                         editorSessionId: String, expectedLeaseId: String) async throws -> (DocRecord, DocBodyRecord) {
+                         editorSessionId: String, expectedLeaseId: String?) async throws -> (DocRecord, DocBodyRecord) {
         let api = try await api(connection)
         let inspected = try await api.inspectDocumentEdit(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: docId)
-        guard inspected.supported, inspected.leaseId == expectedLeaseId, inspected.holderNpub == connection.signerNpub
+        guard inspected.supported, inspected.leaseId == expectedLeaseId, (expectedLeaseId == nil || inspected.holderNpub == connection.signerNpub)
         else { throw LeaseError.invalid("takeover_not_available") }
         let lease = try await api.acquireLease(workspaceId: workspace.id, appNpub: workspace.appNpub, entityType: "document", entityId: docId,
                                                editorSessionId: editorSessionId, takeoverLeaseId: expectedLeaseId)
         let key = Self.leaseKey(connection.id, workspace.id, docId, editorSessionId)
         leases[key] = lease
-        let fresh = try await api.docBody(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: docId)
-        try await renew(connection, workspace, docId: docId, editorSessionId: editorSessionId)
-        try await store.writer.saveDocBody(fresh.body, doc: fresh.doc, searchText: DocumentBody(bytes: fresh.body.bytes, contentType: fresh.body.contentType).markdown)
-        return (fresh.doc, fresh.body)
+        do {
+            let fresh = try await api.docBody(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: docId)
+            try await renew(connection, workspace, docId: docId, editorSessionId: editorSessionId)
+            try await store.writer.saveDocBody(fresh.body, doc: fresh.doc, searchText: DocumentBody(bytes: fresh.body.bytes, contentType: fresh.body.contentType).markdown)
+            return (fresh.doc, fresh.body)
+        } catch {
+            await release(connection, workspace, docId: docId, editorSessionId: editorSessionId)
+            throw error
+        }
     }
 
     public func save(_ draft: DocDraft, connection: ConnectionRecord, workspace: WorkspaceRecord, editorSessionId: String? = nil, asRecovery: Bool = false) async -> DocSaveResult {

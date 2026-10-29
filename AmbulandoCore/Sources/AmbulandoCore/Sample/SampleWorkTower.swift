@@ -394,6 +394,14 @@ public final class SampleWorkTower: @unchecked Sendable {
                   let b64 = o["bytes"] as? String else { return error(404, "doc_body_not_found") }
             return (200, ["doc": docOut(d), "body": ["object_id": objectId, "content_type": o["content_type"] ?? "", "size_bytes": Data(base64Encoded: b64)?.count ?? 0,
                                                      "sha256_hex": o["sha256_hex"] ?? NSNull(), "encoding": "base64", "base64_data": b64]])
+        case ("GET", 3, "docs") where p[2] == "recoveries":
+            return (200, ["recoveries": table("recoveries").values.filter { $0["doc_id"] as? String == p[1] && $0["resolution_state"] as? String == "open" }, "next_cursor": NSNull()])
+        case ("GET", 5, "docs") where p[2] == "recoveries" && p[4] == "body":
+            guard let r = table("recoveries")[p[3]], r["doc_id"] as? String == p[1],
+                  let id = r["storage_object_id"] as? String, let o = table("objects")[id] else { return error(404, "doc_recovery_not_found") }
+            return (200, ["recovery": r, "body": ["object_id": id, "content_type": o["content_type"] ?? "", "encoding": "base64", "base64_data": o["bytes"] ?? "", "sha256_hex": o["sha256_hex"] ?? ""]])
+        case ("POST", 5, "docs") where p[2] == "recoveries":
+            return resolveRecoveryFixture(p[1], p[3], action: p[4], object)
         case ("PATCH", 2, "docs"): return patchDoc(p[1], object)
         case ("POST", 3, "docs") where p[2] == "move":
             // Tower's move: same record id, new channel and scope, row_version + 1; stale and same-destination are refused.
@@ -640,9 +648,10 @@ public final class SampleWorkTower: @unchecked Sendable {
         }
         let head = table("objects")[row["storage_object_id"] as? String ?? ""] ?? [:]
         let stale = o["row_version"] as? Int != row["row_version"] as? Int || (o["base_body_sha256_hex"] as? String) != (head["sha256_hex"] as? String)
-        if stale {
+        if stale || o["base_available"] as? Bool == false {
             let recovery = UUID().uuidString.lowercased()
-            put("recoveries", recovery, ["id": recovery, "doc_id": id, "storage_object_id": objectId])
+            put("recoveries", recovery, ["id": recovery, "workspace_id": workspaceId, "doc_id": id, "storage_object_id": objectId,
+                "resolution_state": "open", "submitted_patch": ["title": o["title"] ?? row["title"] ?? ""], "provenance": ["created_at": now()]])
             return error(409, "document_recovery_created", ["recovery": ["id": recovery], "canonical_advanced": false])
         }
         let token = o["lease_token"] as? String
@@ -656,5 +665,28 @@ public final class SampleWorkTower: @unchecked Sendable {
         put("docs", id, row)
         return (200, ["doc": docOut(row), "canonical_version": ["row_version": row["row_version"]!, "storage_object_id": objectId,
                                                                 "body_sha256_hex": submitted["sha256_hex"] ?? NSNull()]])
+    }
+}
+
+// Recovery commands mirror the existing Tower contract for deterministic client validation only.
+extension SampleWorkTower {
+    private func resolveRecoveryFixture(_ docId: String, _ recoveryId: String, action: String, _ input: [String: Any]) -> (Int, Any) {
+        guard var recovery = table("recoveries")[recoveryId], recovery["doc_id"] as? String == docId,
+              var doc = table("docs")[docId] else { return error(404, "doc_recovery_not_found") }
+        guard recovery["resolution_state"] as? String == "open" else { return error(409, "doc_recovery_already_resolved") }
+        if action == "discard" {
+            recovery["resolution_state"] = "discarded"; put("recoveries", recoveryId, recovery)
+            return (200, ["recovery": recovery])
+        }
+        guard action == "promote" else { return error(404, "not_found") }
+        let head = table("objects")[doc["storage_object_id"] as? String ?? ""] ?? [:]
+        guard table("leases").values.contains(where: { $0["entity_id"] as? String == docId && $0["token"] as? String == input["lease_token"] as? String }) else { return error(409, "lease_required") }
+        guard input["row_version"] as? Int == doc["row_version"] as? Int,
+              input["base_body_sha256_hex"] as? String == head["sha256_hex"] as? String else { return error(409, "recovery_promotion_conflict") }
+        doc["storage_object_id"] = recovery["storage_object_id"]
+        doc["title"] = (recovery["submitted_patch"] as? [String: Any])?["title"] ?? doc["title"]
+        bump(&doc); put("docs", docId, doc)
+        recovery["resolution_state"] = "promoted"; put("recoveries", recoveryId, recovery)
+        return (200, ["doc": docOut(doc), "recovery": recovery])
     }
 }
