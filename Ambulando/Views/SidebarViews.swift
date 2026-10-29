@@ -342,6 +342,7 @@ private struct ChannelRow: View {
 /// Workspace switcher at the bottom of the sidebar (sol `.sidebar-workspace-footer`).
 private struct WorkspaceFooter: View {
     @Environment(AppModel.self) private var model
+    @State private var showManagement = false
     var body: some View {
         Menu {
             ForEach(model.workspaces.value) { workspace in
@@ -350,6 +351,8 @@ private struct WorkspaceFooter: View {
                 }
             }
             if model.workspaces.value.isEmpty { Text(model.workspaces.loaded ? "No workspaces yet" : "Loading…") }
+            Divider()
+            if model.selectedWorkspace != nil { Button("Manage Workspace", systemImage: "gearshape.2") { showManagement = true } }
         } label: {
             HStack(spacing: 10) {
                 WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 32)
@@ -366,6 +369,13 @@ private struct WorkspaceFooter: View {
         .fullLabelMenu()
         .accessibilityLabel("Switch workspace, current \(model.selectedWorkspace?.label ?? "none")")
         .accessibilityIdentifier("sidebar.workspace")
+        .sheet(isPresented: $showManagement) {
+            if let workspace = model.selectedWorkspace, let connection = model.connection {
+                WorkspaceManagementView(workspace: workspace, connection: connection)
+                    .id("\(connection.id):\(workspace.id)")
+                    .frame(minWidth: Device.name == "Mac" ? 780 : 0, minHeight: Device.name == "Mac" ? 580 : 0)
+            }
+        }
         .padding(12)
         .overlay(alignment: .top) { Rectangle().fill(Amb.border).frame(height: 0.5) }
     }

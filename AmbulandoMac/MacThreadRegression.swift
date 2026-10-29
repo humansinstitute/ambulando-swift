@@ -68,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacWorkspaceAdministrationCheck") {
+                try await workspaceAdministrationCheck(window, model: model)
+                print("PASS: native workspace administration sections and narrow Mac layout"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacCommentMentionCheck") {
                 try await commentMentionCheck(window, model: model)
                 print("PASS: task/doc comment actor picker, caret, send/reply and reopen"); fflush(stdout); exit(0)

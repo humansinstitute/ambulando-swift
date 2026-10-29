@@ -185,8 +185,9 @@ extension AppModel {
         membershipWorkspaceId = workspace.id
         Task {
             let result = try? await manager.membership(connection, workspace)
-            guard selectedWorkspace?.id == workspace.id else { return }
-            if let result { membership = result } else if membership == nil { membershipWorkspaceId = nil }
+            guard selectedWorkspace?.id == workspace.id, self.connection?.id == connection.id else { return }
+            membership = result
+            if result == nil { membershipWorkspaceId = nil }
         }
     }
 

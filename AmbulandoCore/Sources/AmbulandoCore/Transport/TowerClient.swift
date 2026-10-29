@@ -44,9 +44,12 @@ public struct TowerOrigin: Sendable, Hashable, Codable, CustomStringConvertible 
         self.url = url
     }
 
+    /// Only the documented activation endpoints may use the Autopilot API namespace. No arbitrary signed proxy.
+    private static let autopilotAdministrationPaths: Set<String> = ["/api/wapps/activation-catalog", "/api/wapps/install-intents/process"]
+
     /// Absolute URL for an exact API path plus optional query items.
     public func url(path: String, query: [URLQueryItem] = []) throws -> URL {
-        guard path.hasPrefix("/api/v4/") || path == "/.well-known/nstack.json", !path.contains(".."), !path.contains("?"), !path.contains("#") else {
+        guard path.hasPrefix("/api/v4/") || path == "/.well-known/nstack.json" || Self.autopilotAdministrationPaths.contains(path), !path.contains(".."), !path.contains("?"), !path.contains("#") else {
             throw TowerError.unsafePath
         }
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!

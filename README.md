@@ -19,6 +19,22 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Manage Workspace (iPhone/iPad build 43, Mac build 32)
+
+Open **Manage Workspace** from the sidebar workspace menu or Settings. Shared native screens cover workspace
+name/description/avatar, scopes/channels and personal ordering, members/groups, scope roles and channel grants,
+WApp delegation, publishing and managed app activation. Mac uses a section sidebar; iPhone uses pushed forms.
+Connection, retry, diagnostics and device preferences stay in Settings.
+
+Administration is online only. Forms keep local drafts and check current authority before writing. Scope access
+uses Tower's revision and edit lease; a conflicting edit requires refresh and review. Product-template setup keeps
+the created scope and checks existing channels before continuing an interrupted setup. Public avatar uploads and
+requests to a user-configured Autopilot origin require explicit confirmation. Activation keeps Tower's intent before
+processing it, so recovery uses that same intent. Tower's owner-only approvals remain authoritative.
+
+See the [action matrix and limitations](docs/workspace-management.md). Build, fixture, installation and authenticated
+live evidence are distinct and recorded on the implementation task. No full parity or live validation is implied here.
+
 ## Comment mentions (iPhone/iPad build 42, Mac build 31)
 
 Type `@` in a task comment or document comment/reply to choose a person or agent from the current workspace's

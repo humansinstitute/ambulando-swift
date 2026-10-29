@@ -5,9 +5,11 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("autopilotAdministrationOrigin") private var autopilotAdministrationOrigin = ""
     @AppStorage("appearance") private var appearance = AppearancePreference.system.rawValue
     @AppStorage(AppMode.agentsPreference) private var showAgents = false
     @AppStorage(AppMode.contextPreference) private var showContext = false
+    @State private var showWorkspaceManagement = false
     @State private var confirmRemove = false
     @State private var confirmDisconnect = false
     @State private var unsent = 0
@@ -22,6 +24,12 @@ struct SettingsView: View {
                 Group {
                 if let account = model.me.value, let npub = model.identity.npub {
                     Section("Profile") { ProfileHeader(account: account, npub: npub) }
+                }
+                if let workspace = model.selectedWorkspace, model.connection != nil {
+                    Section("Workspace") {
+                        Button("Manage Workspace") { showWorkspaceManagement = true }
+                        Text(workspace.label).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Section("Identity") {
                     LabeledContent("Public key", value: model.identity.npub.map(shortNpub) ?? "None")
@@ -44,6 +52,11 @@ struct SettingsView: View {
                             Task { unsent = await model.unsentCount(); confirmDisconnect = true }
                         }
                     }
+                }
+                Section {
+                    TextField("Autopilot HTTPS origin", text: $autopilotAdministrationOrigin)
+                } header: { Text("Advanced connection") } footer: {
+                    Text("Optional origin for managed app activation. Catalog and activation requests require explicit confirmation before signing to this host. It is a device preference, not a workspace authority grant.")
                 }
                 Section("Sync") {
                     LabeledContent("Running", value: "\(model.syncStatus.running.count)")
@@ -119,6 +132,13 @@ struct SettingsView: View {
                 while !Task.isCancelled {
                     live = await model.liveStatus()
                     try? await Task.sleep(for: .seconds(1))
+                }
+            }
+            .sheet(isPresented: $showWorkspaceManagement) {
+                if let workspace = model.selectedWorkspace, let connection = model.connection {
+                    WorkspaceManagementView(workspace: workspace, connection: connection)
+                        .id("\(connection.id):\(workspace.id)")
+                        .frame(minWidth: Device.name == "Mac" ? 780 : 0, minHeight: Device.name == "Mac" ? 580 : 0)
                 }
             }
             .confirmationDialog("Remove identity?", isPresented: $confirmRemove, titleVisibility: .visible) {

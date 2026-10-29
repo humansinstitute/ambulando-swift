@@ -1,0 +1,47 @@
+{
+  "id": "product",
+  "title": "Product",
+  "description": "Software product scope template.",
+  "variables": [
+    {
+      "name": "title",
+      "label": "Product title",
+      "required": true
+    },
+    {
+      "name": "workingdir",
+      "label": "Working directory",
+      "required": true
+    }
+  ],
+  "scope": {
+    "title": "$title",
+    "description": "Product scope for $title. Code/work directory: $workingdir."
+  },
+  "channels": [
+    {
+      "name": "features",
+      "title": "Features",
+      "description": "Feature discovery, requirements, user stories, and acceptance criteria for $title.",
+      "basePrompt": "This channel is for feature work on the $title project.\n\nWorking directory: $workingdir\n\nUse this channel to discuss new capabilities, product requirements, user stories, acceptance criteria, rollout shape, and tradeoffs. Prefer clarifying the user value and expected behavior before implementation. When we are discussing features we are not trying to build them, we want to iterate on them and develop a doc.\n\n1. Each thread will be a new feature.\n2. We can create a flight deck doc to work on this feature definition.\n3. Post the flight Deck Doc to the channel (in each iteration check for this and work on the existing doc).\n4. Each new message should be treated as an iteration on this chat thread and the flight deck document, this means you should also assess the comments on the Flight Deck Doc before replying."
+    },
+    {
+      "name": "implementation",
+      "title": "Implementation",
+      "description": "Implementation planning, code changes, technical decisions, and delivery work for $title.",
+      "basePrompt": "This channel is for implementation work on $title.\n\nProject title: $title\nWorking directory: $workingdir\n\nUse the working directory as the default code context.\n\n1. Each thread will be a new feature.\n2. Implementation will use the software-implementation-review-loop to ensure that the implementation stays on track.\n3. On submission of the implementation, you may need to write an md doc to send as a design doc or import a Flight Deck doc and write to the filesystem for the pipeline to use.\n4. Ensure that the Flight Deck task board is kept up to date with details and use the Chat Thread for summary details.\n\nImplementation docs you need to create can be added in: $workingdir/docs/imp/<workpackge>.md\n\nBe explicit about files changed, tests run, open risks, and follow-up work. Keep implementation tied back to feature requirements and update Flight Deck tasks."
+    },
+    {
+      "name": "bugs",
+      "title": "Bugs",
+      "description": "Bug reports, reproduction steps, diagnosis, fixes, and verification for $title.",
+      "basePrompt": "This channel is for bug work on the $title project.\n\nWorking directory: $workingdir\n\nThis is the Bugs should be diagnosed first before solving.\n\n1. Diagnose bug and explain in the thread.\n2. Once Operator A confirmed call a software-implementation-review-loop to fix the bug and deliver changes."
+    },
+    {
+      "name": "refactoring",
+      "title": "Refactoring",
+      "description": "Code quality, architecture cleanup, technical debt, and maintainability improvements for $title.",
+      "basePrompt": "This channel is for refactoring and code quality work on the $title project\nWorking directory: $workingdir\n\nUse this channel for technical debt, simplification, architecture improvements, test hardening, and maintainability work. Avoid broad rewrites without a clear reason. Preserve behavior unless the task explicitly changes it. Keep refactors scoped, explain tradeoffs, and note verification steps. When refactoring we should always clarify exactly what we will do before dispatching work.\n\n1. Review the target of the refactor.\n2. List in the actions in the refactor in the thread as a plan.\n3. Operator A will review and approve the refactor.\n4. Once Operator A confirmed call a software-implementation-review-loop to refactor the code as per the plan.\n\nNOTE: When calling the pipeline in step 4 you may need to create a temporary implementation plan in: $workingdir/docs/refactor/<workpackge>.md"
+    }
+  ]
+}

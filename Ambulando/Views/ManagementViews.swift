@@ -7,7 +7,7 @@ import AppKit
 // Scope and channel management opened from the sidebar, as on the web (sol `index.html` New channel, Channel settings,
 // Settings › Scopes). Each change is one confirmed request to Tower through `ScopeChannelManager`; the sheet keeps what
 // was typed until Tower answers, and says why if it refused. Channel and scope access (grants), the scope template
-// wizard and starting permissions stay in the web app and say so.
+// wizard, starting channels and access controls are available in Manage Workspace.
 
 /// Ends text editing so a result shown at the top of the form is not behind the keyboard.
 @MainActor func endEditing() {
@@ -124,8 +124,8 @@ struct NewChannelSheet: View {
                     }
                 } else {
                     Section {
-                        Label("Limited: access isn't set here", systemImage: "person.badge.key").font(.amb(.subheadline).weight(.semibold))
-                        Text("This creates the channel with no extra permissions: you get Manage access, and nobody else is added. To give people or groups access, use Channel settings › Channel access in the web app.")
+                        Label("Channel access", systemImage: "person.badge.key").font(.amb(.subheadline).weight(.semibold))
+                        Text("This creates the channel with no extra permissions: you get Manage access, and nobody else is added. To give people or groups access, use Manage Workspace › Permissions › Channel access.")
                             .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     }
                     .accessibilityElement(children: .combine)
@@ -274,7 +274,7 @@ struct ChannelSettingsSheet: View {
                 }
             }
             Section {
-                Text("Who can read and write this channel is managed in the web app (Channel settings › Channel access).")
+                Text("Manage who can read and write this channel in Manage Workspace › Permissions › Channel access.")
                     .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             } header: { Text("Channel access") }
@@ -415,7 +415,7 @@ struct ScopeManagementSheet: View {
                             .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     }
                 } footer: {
-                    Text("Scope templates, starting channels and who can access a scope are set up in the web app.")
+                    Text("Use Manage Workspace › Scopes & Channels for staged template setup, and Permissions for scope and channel access.")
                 }
             }
             .modifier(ManagementStatusInset(phase: phase))
@@ -469,8 +469,8 @@ struct ScopeEditView: View {
         Form {
             if scope == nil {
                 Section {
-                    Label("Limited: name and description only", systemImage: "person.badge.key").font(.amb(.subheadline).weight(.semibold))
-                    Text("Templates, starting channels and who can access the scope aren't set here. You get Manage access; set up the rest in the web app (Settings › Scopes).")
+                    Label("Scope settings", systemImage: "person.badge.key").font(.amb(.subheadline).weight(.semibold))
+                    Text("This form creates a scope with your Manage access. Manage Workspace offers staged template/channel setup and permission controls.")
                         .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                 }
                 .accessibilityElement(children: .combine)

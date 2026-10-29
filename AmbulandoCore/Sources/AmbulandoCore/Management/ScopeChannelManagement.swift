@@ -28,8 +28,8 @@ public struct ScopeChannelManager: Sendable {
     private func base(_ workspace: WorkspaceRecord) throws -> String { try TowerAPI.base(workspace.id) }
 
     /// Runs one signed request and classifies a refusal for the screen.
-    private func send(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, method: String, path: String,
-                      body: [String: Any]? = nil, operation: ManagementOperation) async throws -> [String: Any] {
+    func send(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, method: String, path: String,
+                      body: [String: Any]? = nil, operation: ManagementOperation, query: [URLQueryItem] = []) async throws -> [String: Any] {
         do {
             try await identity.requireSigner(npub: connection.signerNpub)
         } catch {
@@ -38,7 +38,7 @@ public struct ScopeChannelManager: Sendable {
         let json = try body.map { try JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }
         let result: (status: Int, body: Data)
         do {
-            result = try await client(connection).exchange(method: method, path: path, appNpub: workspace.appNpub, jsonBody: json)
+            result = try await client(connection).exchange(method: method, path: path, appNpub: workspace.appNpub, jsonBody: json, query: query)
         } catch let error as URLError {
             throw ManagementError.offline(error.localizedDescription)
         } catch is CancellationError {
@@ -246,7 +246,7 @@ public struct WorkspaceMembership: Sendable, Equatable {
     }
 
     /// Workspace owners and admins (the web's `canAdminWorkspace`).
-    public var isAdmin: Bool { ["owner", "admin"].contains(role?.lowercased() ?? "") }
+    public var isAdmin: Bool { ["owner", "admin"].contains(role?.lowercased() ?? "") || permissions.contains("workspace.manage") }
 }
 
 /// The web's visibility rules for management controls (sol `canCreateChannelInScope`, `canManageChannel`,
@@ -316,7 +316,7 @@ public enum ManagementError: LocalizedError, Equatable, Sendable {
     public var errorDescription: String? {
         switch self {
         case .locked: "Unlock to make changes."
-        case .offline(let detail): "Couldn't reach Tower, nothing was changed. \(detail)"
+        case .offline(let detail): "Couldn't reach Tower. Your draft is retained. Check the current list before retrying: the response may have been interrupted. \(detail)"
         case .forbidden(let message), .duplicate(let message), .conflict(let message), .notFound(let message), .invalid(let message),
              .unexpected(let message): message
         case .savedButNotRefreshed(let detail): "Saved on Tower, but the list couldn't be refreshed yet (\(detail)). It will update on the next refresh."
@@ -334,6 +334,7 @@ public enum ManagementError: LocalizedError, Equatable, Sendable {
     static func classify(status: Int, object: [String: Any], operation: ManagementOperation) -> ManagementError {
         let code = (object["code"] as? String) ?? (object["error"] as? String) ?? ""
         switch (status, code) {
+        case (403, "step_up_required"): return .forbidden("Owner approval is required for this operation. No authority was broadened; your draft is retained.")
         case (403, _): return .forbidden(operation.permissionSentence)
         case (404, _): return .notFound(operation == .createChannel ? "This scope is no longer available." : "This item is no longer available. Refresh and try again.")
         case (409, "duplicate_channel"): return .duplicate("A channel with this name already exists in this scope.")

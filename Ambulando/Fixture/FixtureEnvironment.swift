@@ -327,6 +327,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     let boards: SampleBoardTower
     /// The Studio workspace's notification inbox (the Lab workspace has none: Tower answers 404, "backend not supported").
     let notifications: SampleNotificationTower
+    let administration: SampleAdministrationTower
     private var posted: [[String: Any]] = []
     /// Edits and deletions of messages, by id (persisted with the posted messages).
     private var revised: [String: [String: Any]] = [:]
@@ -351,6 +352,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
 
     init(file: URL) {
         self.file = file
+        administration = SampleAdministrationTower(workspace: Self.studio, file: file.deletingLastPathComponent().appendingPathComponent("fixture-administration.json"))
         manageFile = file.deletingLastPathComponent().appendingPathComponent("fixture-manage.json")
         if let data = try? Data(contentsOf: manageFile), let saved = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] { managed = saved }
         work = SampleWorkTower(workspaceId: Self.studio, towerOrigin: FixtureEnvironment.origin,
@@ -466,6 +468,10 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         }
         guard request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Nostr ") == true else { return (401, ["code": "unauthorized"]) }
         if offline { throw URLError(.notConnectedToInternet) }
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureAdmin") {
+            administration.seedMembers([member(actorNpub, "You (sample identity)", "human"), member(Self.ana, "Ana", "human"), member(Self.rick, "Rick", "agent")])
+            if let handled = try administration.handle(request) { return handled }
+        }
         // Surface routes first: their ownership is exact (board versions live under `/files/:f/versions/:v/object`).
         if let handled = try notifications.handle(request) {
             if request.httpMethod == "PATCH" || request.httpMethod == "POST" { lock.withLock { emitLocked(workspace: Self.studio, channel: nil, type: "notification_item", id: nil, rowVersion: nil, operation: "state"); persist() } }
