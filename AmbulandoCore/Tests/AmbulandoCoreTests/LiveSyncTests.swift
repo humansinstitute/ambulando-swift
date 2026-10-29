@@ -77,6 +77,7 @@ final class FakeEventTower: @unchecked Sendable {
             }
             // Main sync negotiates capabilities; priority pin reads do not advertise them.
             if url.path == base + "/record-sync" {
+                guard q("protocol_version") == "1" else { return (400, ["error": "unsupported_protocol_version"]) }
                 return (200, ["protocol_version": 1, "personal_pin_order_version": 1, "changes": [], "has_more": false])
             }
             // Reseed also lists pins, canvases, the Toolbox and agents; this workspace has none.

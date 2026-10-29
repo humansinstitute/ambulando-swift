@@ -626,7 +626,10 @@ final class SurfaceTests: XCTestCase {
         await h.sync.refreshPins(h.connection, h.workspace); await h.idle()
         let capability = try await h.store.reader.state("pin-order-support:\(h.connection.id):\(h.workspace.id)")
         XCTAssertEqual(capability, "1", "capability is negotiated on main sync, absent from priority pin envelope")
-        XCTAssertTrue(h.tower.requestLog.contains { $0.hasSuffix("/record-sync") })
+        let capabilityRequest = try XCTUnwrap(h.transport.recorded.first { $0.url?.path.hasSuffix("/record-sync") == true })
+        let query = URLComponents(url: try XCTUnwrap(capabilityRequest.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(query.first { $0.name == "protocol_version" }?.value, "1")
+        XCTAssertEqual(query.first { $0.name == "limit" }?.value, "1")
         _ = try await h.store.writer.enqueueWrite(connection: h.connection, workspace: h.workspace,
             intent: WriteIntent(kind: .pinSet, targetId: Fixtures.channel1, payload: ["pinned": true]))
         do {

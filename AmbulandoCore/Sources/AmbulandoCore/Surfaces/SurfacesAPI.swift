@@ -133,7 +133,7 @@ extension TowerAPI {
     public func personalPins(workspaceId: String, appNpub: String, maxPages: Int = 20) async throws -> (pins: [PinRecord], deleted: [String], ordering: Bool) {
         let base = try Self.base(workspaceId)
         // Capability belongs to the main sync envelope; the priority family feed does not advertise it.
-        let capabilities = try object(await client.request(path: base + "/record-sync", query: [URLQueryItem(name: "limit", value: "1")], appNpub: appNpub), "record sync capabilities")
+        let capabilities = try object(await client.request(path: base + "/record-sync", query: [URLQueryItem(name: "protocol_version", value: "1"), URLQueryItem(name: "limit", value: "1")], appNpub: appNpub), "record sync capabilities")
         let ordering = capabilities["personal_pin_order_version"] as? Int == 1
         let path = base + "/record-sync/priority"
         var pins: [String: PinRecord] = [:]

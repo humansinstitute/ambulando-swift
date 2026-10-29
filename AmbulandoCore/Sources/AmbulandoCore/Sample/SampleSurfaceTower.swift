@@ -368,6 +368,7 @@ public final class SampleSurfaceTower: @unchecked Sendable {
         // Pins
         case ("POST", 2, "me") where p[1] == "pin-order": return movePin(object)
         case ("GET", 1, "record-sync"):
+            guard q(query, "protocol_version") == "1" else { return error(400, "unsupported_protocol_version") }
             return (200, ["protocol_version": 1, "personal_pin_order_version": 1, "changes": [], "has_more": false])
         case ("GET", 2, "record-sync") where p[1] == "priority":
             return pinFeed(query)

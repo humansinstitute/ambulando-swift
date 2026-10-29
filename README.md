@@ -19,7 +19,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
-## Batch interactions (iPhone/iPad build 50, Mac build 39)
+## Batch interactions (iPhone/iPad build 51, Mac build 40)
 
 Click or tap the blank part of a chat composer to focus its existing draft. Drag a handle in Deck’s mixed personal pins
 before another item or to **Move to end**; its separate arrange menu also offers Move up/down. Changes use Tower’s
