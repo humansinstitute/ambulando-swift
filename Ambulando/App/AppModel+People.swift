@@ -125,6 +125,14 @@ struct PersonAvatar: View {
     @State private var loaded: PlatformImage?
     @State private var loadedURL: URL?
 
+    private var exposesFixtureState: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-AmbulandoCommentAvatarCheck")
+        #else
+        false
+        #endif
+    }
+
     var body: some View {
         let image = (loadedURL == person.avatarURL ? loaded : nil) ?? person.avatarURL.flatMap { model.avatars?.cached($0) }
         ZStack {
@@ -137,7 +145,11 @@ struct PersonAvatar: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-        .accessibilityHidden(true)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(exposesFixtureState ? person.name + (image == nil ? " • Initials" : " • Profile photo") : person.name)
+        .accessibilityValue(image == nil ? "Initials" : "Profile photo")
+        .accessibilityIdentifier("avatar." + person.npub)
+        .accessibilityHidden(!exposesFixtureState)
         .task(id: person.avatarURL) {
             guard let url = person.avatarURL, let center = model.avatars, center.cached(url) == nil else { return }
             let image = await center.load(url, scale: scale)

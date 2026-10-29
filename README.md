@@ -19,6 +19,13 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Comment authors and photos (iPhone/iPad build 49, Mac build 38)
+
+Task and document comments, including document replies, use the same profile names and photos as chat. Actor-only
+comment responses resolve the recorded creator through the workspace directory; cached comments and later refreshes
+retain their attribution. Missing identities stay unresolved, and missing or invalid pictures keep initials.
+See [comment identity and validation](docs/comment-mentions.md). The floating controls and collapsible Mac panel remain.
+
 ## Floating document comments (iPhone/iPad build 48, Mac build 37)
 
 Select a passage to show a small comment icon at the right of the document beside the visible selection. The icon

@@ -193,7 +193,7 @@ extension StoreWriter {
             let s = try db.prepare("""
             INSERT INTO comments(workspace_id, id, parent, parent_id, parent_comment_id, body, sender_npub, status, deleted, client_record_id,
                                  row_version, created_at, updated_at, raw) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(workspace_id, id) DO UPDATE SET body=excluded.body, status=excluded.status, deleted=excluded.deleted,
+            ON CONFLICT(workspace_id, id) DO UPDATE SET body=excluded.body, sender_npub=COALESCE(excluded.sender_npub, comments.sender_npub), status=excluded.status, deleted=excluded.deleted,
               parent_comment_id=excluded.parent_comment_id, client_record_id=excluded.client_record_id,
               row_version=excluded.row_version, updated_at=excluded.updated_at, raw=excluded.raw
             \(newerGuard("comments"))

@@ -246,6 +246,17 @@ public final class SampleWorkTower: @unchecked Sendable {
 
     public func reactionRows() -> [[String: Any]] { lock.withLock { Array(table("reactions").values) } }
     public func taskComments(_ task: String) -> [[String: Any]] { lock.withLock { table("task_comments").values.filter { $0["task_id"] as? String == task } } }
+    @discardableResult
+    public func seedDocComment(doc: String, body: String, sender: String) -> String {
+        lock.withLock {
+            let id = UUID().uuidString.lowercased(), stamp = now()
+            put("doc_comments", id, ["id": id, "workspace_id": workspaceId, "doc_id": doc,
+                                    "body": body, "sender_npub": sender, "created_by_actor_npub": sender,
+                                    "row_version": 1, "created_at": stamp, "updated_at": stamp])
+            return id
+        }
+    }
+
     public func docComments(_ doc: String) -> [[String: Any]] { lock.withLock { table("doc_comments").values.filter { $0["doc_id"] as? String == doc } } }
 
     // MARK: Routing

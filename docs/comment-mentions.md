@@ -43,3 +43,23 @@ selection, mid-paragraph caret, persisted body/metadata, tag activation, draft r
 These fixtures use the labelled in-process Tower stand-in and synthetic identities. They do not establish a live Tower
 round trip, live agent execution, physical-device interaction or production Keychain behavior. Exact observed results
 and installed build receipts belong to the implementation task.
+
+## Comment author identity and photos (iPhone/iPad 49, Mac 38)
+
+Comment rows resolve through the same `PeopleDirectory` and `PersonAvatar` as chat. The recorded creator's npub
+selects the profile; when a create or status response carries only `created_by_actor_id`, that ID is matched to a
+member of the comment's workspace. The current account, updater, mention targets and display labels never select
+an author. Missing identity remains Unknown (or the recorded label), and missing or invalid photos keep initials.
+
+The original raw comment record supplies the creator ID for existing cached rows without a schema migration.
+A same-version joined list response can enrich a previously actor-only row; subsequent actor-only responses keep
+an already stored sender. Member, agent and profile updates reload the comment display. Roots and replies share
+the same renderer, including after reopening. Profile opt-out, credential-free image requests and image URL policy
+are inherited unchanged from chat.
+
+`CommentAuthorTests` checks actor-only roots/replies, normalized actor IDs, cached rehydration, equal-version list
+enrichment, later actor-only updates and unresolved/updater-only fallbacks. The isolated native comment checks add
+`-AmbulandoCommentAvatarCheck` to emulate actor-only create acknowledgements and expose the rendered avatar state
+to UI automation in Debug only. iPhone `CommentMentionUITests` and the Mac comment harness check image rendering
+and reopen; invalid image data retains initials. All these identities and image bytes are synthetic, with no live
+Tower write, production account inspection or physical-device check.

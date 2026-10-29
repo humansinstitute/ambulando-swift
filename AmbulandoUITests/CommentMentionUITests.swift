@@ -84,4 +84,55 @@ final class CommentMentionUITests: XCTestCase {
         app.buttons["doccomment.send"].tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Reply @rick retained'")).firstMatch.waitForExistence(timeout: 10))
     }
+    private func avatarApp(reset: Bool, fallback: Bool = false) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-AmbulandoUITestFixture", "-AmbulandoCommentAvatarCheck", "-appearance", "light"]
+            + (reset ? ["-AmbulandoFixtureReset"] : []) + (fallback ? ["-AmbulandoCommentAvatarFallback"] : [])
+        app.launch()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Sample data on this'")).firstMatch.waitForExistence(timeout: 15))
+        app.section("Docs")
+        let doc = app.buttons["doc.Native app plan"]
+        XCTAssertTrue(doc.waitForExistence(timeout: 15)); doc.tap()
+        XCTAssertTrue(app.buttons["doc.comments"].waitForExistence(timeout: 15)); app.buttons["doc.comments"].tap()
+        return app
+    }
+
+    private func assertPhotos(_ app: XCUIApplication, count: Int) {
+        let avatars = app.descendants(matching: .any).matching(identifier: "comment").descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'avatar.' AND label BEGINSWITH 'Sample Explorer •'"))
+        XCTAssertTrue(avatars.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(avatars.count, count)
+        for index in 0..<avatars.count {
+            let loaded = NSPredicate(format: "value == 'Profile photo'")
+            XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: loaded, evaluatedWith: avatars.element(boundBy: index))], timeout: 10), .completed)
+        }
+        let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "comment-profile-photos"; shot.lifetime = .keepAlways; add(shot)
+    }
+
+    func testDocumentCommentPhotosForActorOnlyRootReplyAndReopen() {
+        let app = avatarApp(reset: true)
+        var input = field(app, "doccomment.field")
+        input.tap(); input.typeText("A")
+        app.buttons["doccomment.send"].tap()
+        assertPhotos(app, count: 1)
+        let reply = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'doccomment.reply.'")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 5)); reply.tap()
+        input = field(app, "doccomment.field")
+        input.tap(); input.typeText("B")
+        app.buttons["doccomment.send"].tap()
+        assertPhotos(app, count: 2)
+        app.terminate()
+        let reopened = avatarApp(reset: false)
+        assertPhotos(reopened, count: 2)
+    }
+
+    func testBrokenCommentPictureKeepsInitials() {
+        let app = avatarApp(reset: true, fallback: true)
+        let avatar = app.descendants(matching: .any).matching(identifier: "comment").descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'avatar.' AND label BEGINSWITH 'rick •'")).firstMatch
+        XCTAssertTrue(avatar.waitForExistence(timeout: 10))
+        XCTAssertEqual(avatar.value as? String, "Initials")
+        let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "comment-invalid-picture-fallback"; shot.lifetime = .keepAlways; add(shot)
+    }
+
 }

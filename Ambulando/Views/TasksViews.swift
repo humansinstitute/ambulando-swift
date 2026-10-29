@@ -223,6 +223,7 @@ struct TaskDetailSnapshot: Sendable, Equatable {
     var row: TaskRow?
     var comments: [CommentRecord] = []
     var pendingComments: [WriteItem] = []
+    var people = PeopleDirectory()
     var members: [MemberRecord] = []
     var names: [String: String] = [:]
     var choice = ScopeChoice()
@@ -389,7 +390,7 @@ struct TaskDetailView: View {
                         }
                         .accessibilityIdentifier("comment.pending")
                     }
-                    ForEach(newestFirst) { c in CommentRow(comment: c, names: snapshot.value.names, me: model.identity.npub, workspace: workspace) }
+                    ForEach(newestFirst) { c in CommentRow(comment: c, people: snapshot.value.people, workspace: workspace) }
                     if commentCount == 0 {
                         Text("No comments yet.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     }
@@ -445,16 +446,17 @@ struct TaskDetailView: View {
 
     private func start() {
         let w = workspace.id, id = taskId, store = store, connection = model.connection?.id ?? ""
-        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.tasks, .comments, .writes, .members, .channels].contains($0.table)) || $0.table == .profiles }) {
+        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.tasks, .comments, .writes, .members, .agents, .channels].contains($0.table)) || $0.table == .profiles }) {
             async let task = store.reader.task(workspaceId: w, id: id)
             async let comments = store.reader.comments(workspaceId: w, parent: .task, parentId: id)
             async let writes = store.reader.writes(connectionId: connection, workspaceId: w, targetId: id)
+            async let people = store.reader.people(connectionId: connection, workspaceId: w)
             async let members = store.reader.directoryMembers(workspaceId: w)
             async let choice = scopeChoice(store, w)
             let pending = try await writes
             let directory = try await members
             return TaskDetailSnapshot(row: try await task.map { TaskRow(task: $0, writes: pending.filter { $0.kind != .taskComment }) },
-                                      comments: try await comments, pendingComments: pending.filter { $0.kind == .taskComment },
+                                      comments: try await comments, pendingComments: pending.filter { $0.kind == .taskComment }, people: try await people,
                                       members: directory, names: Dictionary(directory.map { ($0.npub, $0.label) }, uniquingKeysWith: { a, _ in a }),
                                       choice: try await choice)
         }
@@ -463,15 +465,15 @@ struct TaskDetailView: View {
 
 struct CommentRow: View {
     let comment: CommentRecord
-    let names: [String: String]
-    let me: String?
+    let people: PeopleDirectory
     var workspace: WorkspaceRecord? = nil
     var body: some View {
+        let person = comment.author(in: people)
         HStack(alignment: .top, spacing: 10) {
-            Avatar(name: displayName(comment.senderNpub, names, me: me))
+            PersonAvatar(person: person)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(displayName(comment.senderNpub, names, me: me)).font(.amb(.subheadline).weight(.semibold))
+                    Text(person.name).font(.amb(.subheadline).weight(.semibold))
                     Text(ChatTime.label(comment.createdAt)).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                     if comment.status == "resolved" { Label("Resolved", systemImage: "checkmark.circle").font(.amb(.caption)).foregroundStyle(Amb.success) }
                 }

@@ -497,6 +497,15 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             return handled
         }
         if let handled = try boards.handle(request) ?? surfaces.handle(request) ?? labSurfaces.handle(request) ?? work.handle(request) ?? labWork.handle(request) {
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoCommentAvatarCheck"),
+               request.httpMethod == "POST", path.hasSuffix("/comments"),
+               var body = handled.1 as? [String: Any], var comment = body["comment"] as? [String: Any] {
+                comment.removeValue(forKey: "sender_npub")
+                comment.removeValue(forKey: "created_by_actor_npub")
+                comment["created_by_actor_id"] = "f1c70000-0000-4000-8000-0000000000e1"
+                body["comment"] = comment
+                return (handled.0, body)
+            }
             return boards.project(handled, for: request)
         }
         let base = "/api/v4/flightdeck-pg/workspaces"
@@ -856,6 +865,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
 
         let rich = Self.richDocument()
         let plan = w.seedDoc(scope: a, channel: general, title: "Native app plan", body: rich, contentType: DocumentBody.envelopeContentType)
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoCommentAvatarFallback") {
+            w.seedDocComment(doc: plan, body: "Broken image keeps the recorded author", sender: Self.rick)
+        }
         // Debug sample switch: another member holds the plan's edit lease.
         if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDocLeaseHeld") { w.holdLease(doc: plan, by: Self.rick) }
         w.seedDoc(scope: a, channel: design, title: "Theme notes (Markdown)", body: Data("# Theme notes\n\nThe primary colour is **deep purple**.\n\n- Light\n- Dark".utf8),
@@ -1122,7 +1134,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         ["id": id, "workspace_id": w, "scope_id": s, "name": name, "kind": "channel", "position": position, "row_version": 1, "updated_at": "2026-10-01T00:00:00.000Z"]
     }
     private func member(_ npub: String, _ name: String?, _ kind: String) -> [String: Any] {
-        ["actor": ["actor_id": UUID().uuidString.lowercased(), "npub": npub, "kind": kind, "display_name": name.map { $0 as Any } ?? NSNull()]]
+        ["actor": ["actor_id": (ProcessInfo.processInfo.arguments.contains("-AmbulandoCommentAvatarCheck") && npub == actorNpub ? "f1c70000-0000-4000-8000-0000000000e1" : UUID().uuidString.lowercased()), "npub": npub, "kind": kind, "display_name": name.map { $0 as Any } ?? NSNull()]]
     }
     private func thread(for root: [String: Any]) -> [String: Any] {
         let edit = manageMap("threadTitles")[root["thread_id"] as? String ?? ""]

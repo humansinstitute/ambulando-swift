@@ -175,6 +175,8 @@ public struct PeopleDirectory: Sendable, Equatable {
     }
 
     private var resolved: [String: PersonDisplay] = [:]
+    private var actorNpubs: [String: String] = [:]
+    public func npub(actorId: String) -> String? { actorNpubs[actorId.lowercased()] }
     public private(set) var memberNpubs: Set<String> = []
     private var agentNpubs: Set<String> = []
 
@@ -188,6 +190,9 @@ public struct PeopleDirectory: Sendable, Equatable {
         var memberName: [String: String] = [:]
         agentNpubs = Set(agents.keys).union(members.filter { $0.kind == "agent" }.map(\.npub))
         for m in members {
+            if NostrKeys.isValidNpub(m.npub) {
+                actorNpubs[m.actorId.lowercased()] = m.npub
+            }
             memberNpubs.insert(m.npub)
             if let name = PersonNamePolicy.usable(m.displayName) { memberName[m.npub] = name }
         }

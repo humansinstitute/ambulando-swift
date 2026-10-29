@@ -109,6 +109,18 @@ public struct CommentRecord: Sendable, Equatable, Identifiable {
     public let clientRecordId: String?
     public let raw: Data
 
+    /// Kept in the original record so cached actor-only create responses can be resolved after an upgrade.
+    public var creatorActorId: String? { lowerUUID(authorFields["created_by_actor_id"] as? String) }
+    public var senderLabel: String? { authorFields["created_by_actor_label"] as? String }
+    private var authorFields: [String: Any] { (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] ?? [:] }
+
+    public func author(in people: PeopleDirectory) -> PersonDisplay {
+        let fields = authorFields
+        let direct = [fields["created_by_actor_npub"] as? String, fields["sender_npub"] as? String, senderNpub]
+            .compactMap { $0 }.first { NostrKeys.isValidNpub($0) }
+        return people.person(direct ?? creatorActorId.flatMap { people.npub(actorId: $0) }, senderLabel: senderLabel)
+    }
+
     public init(raw: Data, parent: Parent) throws {
         guard let o = try JSONSerialization.jsonObject(with: raw) as? [String: Any], let id = lowerUUID(o["id"] as? String),
               let w = lowerUUID(o["workspace_id"] as? String),

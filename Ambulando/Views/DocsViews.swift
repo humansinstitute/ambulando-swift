@@ -149,6 +149,7 @@ struct DocumentSnapshot: Sendable, Equatable {
     var draft: DocDraft?
     var comments: [CommentRecord] = []
     var pendingComments: [WriteItem] = []
+    var people = PeopleDirectory()
     var names: [String: String] = [:]
     var choice = ScopeChoice()
     /// Current titles of every page saved here (id → title): wiki links show these, and the editor page is given them.
@@ -467,7 +468,7 @@ struct DocumentView: View {
                             }
                         }.buttonStyle(.plain).foregroundStyle(Amb.primary)
                     }
-                CommentRow(comment: c, names: snapshot.value.names, me: model.identity.npub, workspace: workspace)
+                CommentRow(comment: c, people: snapshot.value.people, workspace: workspace)
                     .contextMenu {
                         let resolved = c.status == "resolved"
                         Button(resolved ? "Reopen" : "Resolve") {
@@ -476,7 +477,7 @@ struct DocumentView: View {
                         }
                     }
                     ForEach(snapshot.value.comments.filter { $0.parentCommentId == c.id }) { reply in
-                        CommentRow(comment: reply, names: snapshot.value.names, me: model.identity.npub, workspace: workspace).padding(.leading, 14)
+                        CommentRow(comment: reply, people: snapshot.value.people, workspace: workspace).padding(.leading, 14)
                     }
                     Button("Reply") { replyTo = c; anchor = c.documentAnchor }.font(.amb(.caption))
                         .accessibilityIdentifier("doccomment.reply.\(c.id)")
@@ -529,19 +530,19 @@ struct DocumentView: View {
 
     private func start() {
         let w = workspace.id, id = docId, store = store, connection = model.connection?.id ?? ""
-        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.docs, .docBodies, .docDrafts, .comments, .writes, .members, .channels, .scopes].contains($0.table)) || $0.table == .profiles }) {
+        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.docs, .docBodies, .docDrafts, .comments, .writes, .members, .agents, .channels, .scopes].contains($0.table)) || $0.table == .profiles }) {
             async let doc = store.reader.doc(workspaceId: w, id: id)
             async let cached = store.reader.docBody(workspaceId: w, docId: id)
             async let draft = store.reader.docDraft(key: DocDraft.key(connectionId: connection, workspaceId: w, docId: id))
             async let comments = store.reader.comments(workspaceId: w, parent: .doc, parentId: id)
             async let writes = store.reader.writes(connectionId: connection, workspaceId: w, targetId: id)
-            async let names = directoryNames(store, w)
+            async let people = store.reader.people(connectionId: connection, workspaceId: w)
             async let choice = scopeChoice(store, w)
             async let everyDoc = store.reader.docs(workspaceId: w, limit: 2000)
             let pages = try await everyDoc
             var snapshot = DocumentSnapshot(doc: try await doc, draft: try await draft, comments: try await comments,
                                             pendingComments: try await writes.filter { $0.kind == .docComment },
-                                            names: try await names, choice: try await choice)
+                                            people: try await people, names: try await people.names, choice: try await choice)
             snapshot.titles = Dictionary(pages.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
             // Decoding and layout preparation happen here, off the main actor.
             if let body = try await cached {
