@@ -50,7 +50,7 @@ public struct AdministrationDestination: Codable, Equatable, Sendable {
 }
 
 public enum AdministrationCommand: Sendable {
-    case profile(name: String, description: String, avatarURL: String)
+    case profile(name: String, description: String, avatarURL: String, slug: String? = nil)
     case addMember(npub: String, kind: String)
     case memberProfile(actor: String, name: String)
     case deleteWorkspace(confirmation: String)
@@ -79,14 +79,20 @@ public enum AdministrationCommand: Sendable {
         }
         let method: String, path: String, body: [String: Any]?
         switch self {
-        case let .profile(name, description, avatar):
+        case let .profile(name, description, avatar, slug):
             guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ManagementError.invalid("Workspace name is required.") }
             if avatar.hasPrefix("storage://") {
                 _ = try uuid(String(avatar.dropFirst(10)))
             } else if !avatar.isEmpty {
                 guard let url = URL(string: avatar), url.scheme == "https", url.host != nil, url.user == nil, url.password == nil else { throw ManagementError.invalid("Use an HTTPS avatar URL without credentials.") }
             }
-            method = "PATCH"; path = ""; body = ["name": name.trimmingCharacters(in: .whitespacesAndNewlines), "description": description, "avatar_url": avatar.isEmpty ? NSNull() : avatar as Any]
+            method = "PATCH"; path = ""
+            var fields: [String: Any] = ["name": name.trimmingCharacters(in: .whitespacesAndNewlines), "description": description, "avatar_url": avatar.isEmpty ? NSNull() : avatar as Any]
+            if let slug {
+                guard !slug.isEmpty, slug.allSatisfy({ $0.isLowercase || $0.isNumber || $0 == "-" }) else { throw ManagementError.invalid("Use a lowercase slug containing letters, numbers and hyphens.") }
+                fields["slug"] = slug
+            }
+            body = fields
         case let .addMember(member, kind):
             guard ["human", "agent"].contains(kind) else { throw ManagementError.invalid("Choose a person or agent.") }
             method = "POST"; path = "/members"; body = ["member_npub": try npub(member), "role": "member", "kind": kind]
@@ -354,11 +360,11 @@ extension StoreWriter {
         guard var object = try JSONSerialization.jsonObject(with: raw) as? [String: Any],
               let sent = try JSONSerialization.jsonObject(with: submitted) as? [String: Any], let reply = try JSONSerialization.jsonObject(with: returned) as? [String: Any] else { return }
         let confirmed = reply["workspace"] as? [String: Any] ?? reply
-        for key in ["name", "description", "avatar_url"] { object[key] = confirmed[key] ?? sent[key] }
+        for key in ["name", "description", "avatar_url", "slug"] { if let value = confirmed[key] ?? sent[key] { object[key] = value } }
         if let name = object["name"] as? String { object["label"] = name }
         let record = try WorkspaceRecord(raw: JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))
-        try db.prepare("UPDATE workspaces SET label = ?, raw = ? WHERE connection_id = ? AND workspace_id = ?")
-            .run([.text(record.label), .blob(record.raw), .text(connection), .text(workspace)])
+        try db.prepare("UPDATE workspaces SET label = ?, slug = ?, raw = ? WHERE connection_id = ? AND workspace_id = ?")
+            .run([.text(record.label), record.slug.sql, .blob(record.raw), .text(connection), .text(workspace)])
         await emit([ChangeKey(.workspaces, workspace)])
     }
 }

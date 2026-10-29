@@ -95,6 +95,7 @@ private struct WorkspaceAdministrationPage: View {
     @State private var delegations = LiveQuery<[AdministrationRow]>(initial: [])
     @State private var installations = LiveQuery<[AdministrationRow]>(initial: [])
     @State private var publishing = LiveQuery<[AdministrationRow]>(initial: [])
+    @State private var search = ""
     @State private var phase = ManagementPhase.idle
     @State private var pending: AdministrationCommand?
     private var admin: Bool { model.membership?.isAdmin == true }
@@ -113,6 +114,7 @@ private struct WorkspaceAdministrationPage: View {
             sectionContent
         }
         .navigationTitle(section.title)
+        .searchable(text: $search, prompt: "Find members, groups or apps")
         .modifier(ManagementStatusInset(phase: phase))
         .confirmationDialog("Remove access?", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
             Button("Remove access", role: .destructive) { if let command = pending { pending = nil; Task { await run(command) } } }
@@ -175,7 +177,7 @@ private struct WorkspaceAdministrationPage: View {
     @ViewBuilder private var membersContent: some View {
                 Section { editor("Add workspace member", .member) }
                 Section("Workspace members") {
-                    ForEach(members.value) { row in
+                    ForEach(filtered(members.value)) { row in
                         VStack(alignment: .leading) {
                             Text(row.title); Text(row.detail).font(.caption).foregroundStyle(.secondary)
                             editor("Edit display name", .memberProfile(row))
@@ -188,7 +190,7 @@ private struct WorkspaceAdministrationPage: View {
 
     @ViewBuilder private var groupsContent: some View {
                 Section { editor("New group", .group) }
-                ForEach(groups.value) { group in
+                ForEach(filtered(groups.value)) { group in
                     Section(group.title) {
                         Text(group.detail).font(.caption).foregroundStyle(.secondary)
                         editor("Add member", .groupMember(group.id))
@@ -236,7 +238,7 @@ private struct WorkspaceAdministrationPage: View {
                     editor("Add publishing installation", .publishing(nil))
                 }
                 Section("Publishing installations") {
-                    ForEach(publishing.value) { row in
+                    ForEach(filtered(publishing.value)) { row in
                         VStack(alignment: .leading) {
                             Text(row.title); Text(row.detail).font(.caption)
                             editor("Edit publishing destinations", .publishing(row))
@@ -250,7 +252,7 @@ private struct WorkspaceAdministrationPage: View {
                     if publishing.value.isEmpty { Text("No saved publishing installations").foregroundStyle(.secondary) }
                 }
                 Section("Delegations") {
-                    ForEach(delegations.value) { row in
+                    ForEach(filtered(delegations.value)) { row in
                         VStack(alignment: .leading) {
                             Text(members.value.first(where: { $0.id == row.fields["delegate_actor_id"] })?.title ?? row.title)
                             Text(row.detail).font(.caption)
@@ -263,7 +265,7 @@ private struct WorkspaceAdministrationPage: View {
                     if delegations.value.isEmpty { Text("No saved delegations").foregroundStyle(.secondary) }
                 }
                 Section("Managed installations") {
-                    ForEach(installations.value) { row in
+                    ForEach(filtered(installations.value)) { row in
                         VStack(alignment: .leading) {
                             Text(row.title); Text(row.detail).font(.caption)
                             if admin || AdministrationAuthority.hasInstallationDelegation(actor: model.membership?.actorId ?? "", installation: row.id, delegations: delegations.value, installationData: row) {
@@ -276,6 +278,11 @@ private struct WorkspaceAdministrationPage: View {
                 }
     }
 
+    private func filtered(_ rows: [AdministrationRow]) -> [AdministrationRow] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return rows }
+        return rows.filter { ($0.title + " " + $0.detail + " " + ($0.fields["npub"] ?? "")).localizedCaseInsensitiveContains(query) }
+    }
     private func filterLabel(_ value: String, key: String) -> String {
         if key == "scope_ids" { return model.navigation.value.groups.first { $0.scope.id == value }?.scope.name ?? "Unavailable scope" }
         if key == "channel_ids" { return model.navigation.value.groups.flatMap(\.channels).first { $0.id == value }?.name ?? "Unavailable channel" }
@@ -477,7 +484,9 @@ private struct AdministrationEditor: View {
                     field("HTTPS open origins (one per line)", "origins", axis: .vertical)
                     Text("Saving replaces this publishing grant’s destinations and open origins with the values shown. Feed publishing is limited to the selected destinations.").font(.caption)
                 case .profile:
-                    field("Name", "name"); field("Description", "description", axis: .vertical); field("Avatar HTTPS or storage URL", "avatar")
+                    field("Name", "name"); field("Slug", "slug")
+                    Text("Changing the slug changes workspace links. Confirm the new address before saving.").font(.caption)
+                    field("Description", "description", axis: .vertical); field("Avatar HTTPS or storage URL", "avatar")
                     WorkspaceAvatarUpload(workspace: workspace, connection: connection, avatar: binding("avatar"))
                 case .member:
                     field("Full public key (npub)", "npub")
@@ -546,13 +555,13 @@ private struct AdministrationEditor: View {
         .interactiveDismissDisabled(phase.isWorking)
         .confirmationDialog("Apply this workspace change?", isPresented: $confirm, titleVisibility: .visible) {
             Button("Confirm workspace change") { Task { await save() } }.accessibilityIdentifier("admin.confirm")
-        } message: { Text("This changes \(workspace.label) immediately. It is not a personal device preference.") }
+        } message: { Text("This changes \(workspace.label) immediately. A changed slug changes workspace links. It is not a personal device preference.") }
         .task {
             guard !loaded else { return }
             var initial: [String: String] = ["kind": "human", "type": "actor", "access": "view", "expires": ISO8601DateFormatter().string(from: Date().addingTimeInterval(86400))]
             if case .profile = kind {
                 let object = (try? JSONSerialization.jsonObject(with: workspace.raw)) as? [String: Any] ?? [:]
-                initial["name"] = workspace.label; initial["description"] = object["description"] as? String ?? ""; initial["avatar"] = object["avatar_url"] as? String ?? ""
+                initial["name"] = workspace.label; initial["slug"] = workspace.slug ?? ""; initial["description"] = object["description"] as? String ?? ""; initial["avatar"] = object["avatar_url"] as? String ?? ""
             }
             if case .publishing(let row) = kind {
                 initial["installation"] = row?.id ?? UUID().uuidString.lowercased()
@@ -596,7 +605,7 @@ private struct AdministrationEditor: View {
             guard !channels.isEmpty, channels.count == selectedPublishingChannels.count else { throw ManagementError.invalid("Choose available publishing destinations. A previous destination may no longer be visible; refresh and review before saving.") }
             return .publishing(id: row?.id ?? v["installation"] ?? "", app: v["app"] ?? "", publisher: v["publisher"] ?? "", owner: v["owner"] ?? "", name: v["name"] ?? "", destinations: channels.map { AdministrationDestination(scope: $0.scopeId, channel: $0.id) }, origins: (v["origins"] ?? "").split(separator: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
         case .memberProfile(let row): return .memberProfile(actor: row.id, name: v["name"] ?? "")
-        case .profile: return .profile(name: v["name"] ?? "", description: v["description"] ?? "", avatarURL: v["avatar"] ?? "")
+        case .profile: return .profile(name: v["name"] ?? "", description: v["description"] ?? "", avatarURL: v["avatar"] ?? "", slug: v["slug"].flatMap { $0.isEmpty ? nil : $0 })
         case .member: return .addMember(npub: v["npub"] ?? "", kind: v["kind"] ?? "human")
         case .group: return .createGroup(name: v["name"] ?? "")
         case .groupMember(let id): return .groupMember(group: id, npub: v["npub"] ?? "")

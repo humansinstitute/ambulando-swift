@@ -29,7 +29,7 @@ import XCTest
         let name = app.textFields["admin.field.name"]
         XCTAssertTrue(name.waitForExistence(timeout: 5)); name.tap(); name.typeText("Operations fixture")
         app.buttons["keyboard.done"].firstMatch.tap()
-        app.buttons["admin.save"].tap(); app.buttons["admin.confirm"].tap()
+        app.buttons["admin.save"].tap(); app.buttons["admin.confirm"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Saved on Tower'")).firstMatch.waitForExistence(timeout: 10))
         capture(app, "iphone-group-confirmed")
         app.navigationBars.buttons.element(boundBy: 0).tap()

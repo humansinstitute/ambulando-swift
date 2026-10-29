@@ -14,7 +14,7 @@ No owner impersonation, server authority changes, private-key discovery, cache p
 
 | Action | Authority | Web destination | Native destination | API / offline / evidence |
 | --- | --- | --- | --- | --- |
-| Workspace name, description, avatar URL | workspace.manage / owner/admin | Workspace | Workspace / Edit | PATCH W; confirmed result updates only its persisted workspace, including shell name; profile isolation test |
+| Workspace name, slug, description, avatar URL | workspace.manage / owner/admin | Workspace | Workspace / Edit | PATCH W; confirmed result updates only its persisted workspace, including shell name; profile isolation test |
 | Public avatar file | same, rechecked before upload | Workspace | Workspace / Choose avatar | Global storage prepare/upload/complete; explicit public consent; metadata-stripped PNG; ordinary private attachment contract unchanged |
 | Delete workspace | same; server protected-workspace/owner safeguards | Workspace | Workspace / Delete | DELETE W with confirmation workspace id; typed name and destructive confirmation; never tested against a real workspace |
 | Create/edit/archive scope | scope.create / exact scope.manage and can_manage | Scopes | Scopes & Channels / scope settings | POST/PATCH/DELETE scopes; existing ManagementTests and ManagementUITests |
@@ -59,7 +59,7 @@ processing that same intent. Owner `step_up_required` responses stay refusals; n
 
 The native scope wizard supports Blank/Product and existing scope role/channel access editors, but does not yet
 mirror the web wizard's custom initial-grant rows, every template option or editable template channel previews.
-Workspace slug, web greeting and the web Workrooms feature-flag editor are not exposed. Personal WApp launcher
+The web greeting and Workrooms feature-flag editor are not exposed. Personal WApp launcher
 create/edit/reorder/delete remains a Toolbox parity gap; workspace administration never treats launcher ownership as
 workspace authority. Self-service display-name editing for a non-admin remains separate from these admin controls.
 The narrow delegation editor chooses one explicit app and destination per grant; it does not expose every optional
