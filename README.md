@@ -19,6 +19,21 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Comment mentions (iPhone/iPad build 42, Mac build 31)
+
+Type `@` in a task comment or document comment/reply to choose a person or agent from the current workspace's
+saved directory. Touch/click selects a result; hardware Up/Down and Return/Tab select, and Escape dismisses.
+The canonical Markdown tag remains in the draft, and sending includes the same identity and type as structured
+mentions. Completion preserves text after the caret and inline attachment Markdown. Comment drafts survive
+closing and reopening on both platforms.
+
+Saved actor tags open the matching workspace identity details, including tags in older comments. A label never
+selects an identity by itself, and a missing workspace member is shown as unavailable. Tower still authorizes
+comment writes and the mentioned identity's access to the record; the client adds no routing fallback.
+The existing API supports task comment creation and document comment creation/replies and status changes;
+comment-body editing and task-comment replies remain unavailable. Test transport, installation and live validation
+are reported separately on the implementation task. See [comment mentions](docs/comment-mentions.md).
+
 ## Cloud document checkpoints (iPhone/iPad build 41, Mac build 30)
 
 Changed documents save to NStack every minute while the editor is active and connected. Local drafts survive offline

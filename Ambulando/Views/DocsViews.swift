@@ -434,6 +434,7 @@ struct DocumentView: View {
                         CommentRow(comment: reply, names: snapshot.value.names, me: model.identity.npub, workspace: workspace).padding(.leading, 14)
                     }
                     Button("Reply") { replyTo = c; anchor = c.documentAnchor }.font(.amb(.caption))
+                        .accessibilityIdentifier("doccomment.reply.\(c.id)")
                 }
                 .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: 8))
             }
@@ -460,7 +461,7 @@ struct DocumentView: View {
                 if let anchor { Text("“\(anchor.quote)”").font(.amb(.footnote)).lineLimit(4).foregroundStyle(Amb.primary) }
             }
             HStack(alignment: .bottom, spacing: 8) {
-            ContentTextEntry(text: $comment, placeholder: replyTo == nil ? "Comment on this document" : "Reply", workspace: workspace, field: "doc-comment-\(docId)-\(replyTo?.id ?? "root")")
+            ContentTextEntry(text: $comment, placeholder: replyTo == nil ? "Comment on this document" : "Reply", workspace: workspace, field: "doc-comment-\(docId)-\(replyTo?.id ?? "root")", actorMentions: true)
                 .lineLimit(1...5)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -468,7 +469,7 @@ struct DocumentView: View {
             Button {
                 let text = comment.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { return }
-                var payload: [String: any Sendable] = ["body": text]
+                var payload: [String: any Sendable] = ["body": text, "mentions": CommentMentions.actors(in: text).map(\.requestObject)]
                 if let anchor { payload["metadata"] = anchor.metadata }
                 if let replyTo { payload["parent_comment_id"] = replyTo.id }
                 if model.submit(WriteIntent(kind: .docComment, targetId: docId, payload: payload), in: workspace) { comment = ""; anchor = nil; replyTo = nil }

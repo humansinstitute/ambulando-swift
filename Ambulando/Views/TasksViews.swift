@@ -404,7 +404,7 @@ struct TaskDetailView: View {
 
     private var commentComposer: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            ContentTextEntry(text: $comment, placeholder: "Add a comment", workspace: workspace, field: "task-comment-\(taskId)")
+            ContentTextEntry(text: $comment, placeholder: "Add a comment", workspace: workspace, field: "task-comment-\(taskId)", actorMentions: true)
                 .lineLimit(1...5).focused($commentFocused)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Amb.muted, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -412,7 +412,7 @@ struct TaskDetailView: View {
             Button {
                 let text = comment.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { return }
-                if model.submit(WriteIntent(kind: .taskComment, targetId: taskId, payload: ["body": text]), in: workspace) { comment = "" }
+                if model.submit(WriteIntent(kind: .taskComment, targetId: taskId, payload: ["body": text, "mentions": CommentMentions.actors(in: text).map(\.requestObject)]), in: workspace) { comment = "" }
             } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)) }
                 .disabled(comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send comment").accessibilityIdentifier("comment.send")
@@ -478,7 +478,7 @@ struct CommentRow: View {
                 MessageBody(text: comment.body, workspace: workspace)
             }
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("comment")
     }
 }

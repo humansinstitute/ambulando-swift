@@ -247,7 +247,11 @@ public struct WriteSender: Sendable {
                 metadata.merge(p["metadata"] as? [String: Any] ?? [:]) { current, _ in current }
                 metadata["comment_status"] = "open"
             }
-            var body: [String: Any] = ["body": text, "metadata": metadata]
+            // The canonical body and explicit actor identities travel together. Never route a plain display name.
+            // Derive again from the durable body so retry/relaunch cannot send a removed or mismatched mention.
+            let mentions = CommentMentions.actors(in: text).map(\.requestObject)
+            metadata["mentions"] = mentions
+            var body: [String: Any] = ["body": text, "metadata": metadata, "mentions": mentions]
             if let reply = p["parent_comment_id"] as? String { body["parent_comment_id"] = reply }
             let r = try await send("POST", base + (isTask ? "/tasks/" : "/docs/") + TowerAPI.uuid(parent) + "/comments", body)
             if (200..<300).contains(r.status), let c = record(r.body, "comment", { try CommentRecord(raw: $0, parent: isTask ? .task : .doc) }) {

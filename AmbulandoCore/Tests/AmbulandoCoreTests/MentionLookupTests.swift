@@ -48,6 +48,30 @@ final class MentionLookupTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(Mention.self, from: JSONEncoder().encode(doc)), doc)
     }
 
+    func testCommentCompletionUsesCaretAndKeepsWholeParagraphAndAttachments() throws {
+        let body = "🧭 Before @ric after ![photo](storage://sample)\nsecond line"
+        let caret = ("🧭 Before @ric" as NSString).length
+        let selection = NSRange(location: caret, length: 0)
+        XCTAssertEqual(CommentMentions.query(in: body, selection: selection)?.text, "ric")
+        let next = try XCTUnwrap(CommentMentions.complete(body, selection: selection, with: rick))
+        XCTAssertEqual(next, "🧭 Before \(rick.token)  after ![photo](storage://sample)\nsecond line")
+        let remapped = ComposerText.remap(selection, from: body, to: next)
+        XCTAssertEqual(remapped.location, ("🧭 Before \(rick.token) " as NSString).length)
+        XCTAssertNil(CommentMentions.query(in: next, selection: remapped), "a completed canonical token does not reopen the list")
+        XCTAssertNil(CommentMentions.query(in: "mail@ric", selection: NSRange(location: 8, length: 0)))
+        XCTAssertNil(CommentMentions.query(in: body, selection: NSRange(location: caret, length: 1)))
+    }
+
+    func testCommentRoutingUsesCanonicalActorIdentitiesOnlyAndKeepsTypes() {
+        let person = Mention(type: .person, npub: TestKeys.npub, label: "Pete")
+        let doc = Mention(type: .doc, npub: id(2), label: "Plan")
+        let body = "@Rick \(rick.token) \(rick.token) \(person.token) \(doc.token) @[Spoof](mention:agent:not-an-npub)"
+        XCTAssertEqual(CommentMentions.actors(in: body), [rick, person])
+        XCTAssertEqual(CommentMentions.actors(in: "@Rick @Pete"), [], "display names are never routing authority")
+        XCTAssertEqual(CommentMentions.actors(in: body.replacingOccurrences(of: rick.token, with: "")), [person])
+        XCTAssertEqual(CommentMentions.actors(in: person.token).first?.requestObject["type"], "person")
+    }
+
     // MARK: Query
 
     func testQueryPrefixesAndRankingFollowTheWeb() {

@@ -205,3 +205,38 @@ public enum MentionCodec {
         return String(text[..<at]) + mention.visible + " "
     }
 }
+
+/// Comment fields keep the canonical Markdown in their durable draft. Completion is confined to the query before
+/// the caret, so picking in the middle of a paragraph preserves the suffix, attachments and selection semantics.
+/// Plain `@Name` never supplies an identity: routing entries come only from full canonical actor tokens.
+public enum CommentMentions {
+    public struct Query: Equatable, Sendable {
+        public let text: String
+        public let range: NSRange
+    }
+
+    public static func query(in text: String, selection: NSRange) -> Query? {
+        let ns = text as NSString
+        guard selection.length == 0, selection.location != NSNotFound, selection.location <= ns.length,
+              let prefixRange = Range(NSRange(location: 0, length: selection.location), in: text) else { return nil }
+        let prefix = String(text[prefixRange])
+        guard let query = MentionCodec.activeQuery(in: prefix) else { return nil }
+        return Query(text: query, range: NSRange(location: selection.location - (query as NSString).length - 1,
+                                                length: (query as NSString).length + 1))
+    }
+
+    public static func complete(_ text: String, selection: NSRange, with mention: Mention) -> String? {
+        guard mention.type.isActor, NostrKeys.isValidNpub(mention.npub), let query = query(in: text, selection: selection),
+              let range = Range(query.range, in: text) else { return nil }
+        var next = text
+        next.replaceSubrange(range, with: mention.token + " ")
+        return next
+    }
+
+    public static func actors(in body: String) -> [Mention] {
+        var seen = Set<String>()
+        return MentionRanking.mentions(inBody: body).filter {
+            $0.type.isActor && NostrKeys.isValidNpub($0.npub) && seen.insert($0.npub).inserted
+        }
+    }
+}

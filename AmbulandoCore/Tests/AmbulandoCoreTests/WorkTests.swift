@@ -187,6 +187,50 @@ final class WorkTests: XCTestCase {
         XCTAssertEqual(local.map(\.body), ["Looks good"])
     }
 
+    func testTaskAndDocReplyKeepCanonicalActorsThroughSendReconcileAndReload() async throws {
+        let h = try await WorkHarness.make()
+        let task = h.work.seedTask(scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "Mention check")
+        let doc = h.work.seedDoc(scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "Mention check",
+                                 body: Data("Sample".utf8), contentType: "text/markdown")
+        let actor = Mention(type: .agent, npub: FixtureNpubs.other, label: "Rick")
+        let person = Mention(type: .person, npub: TestKeys.npub, label: "Pete")
+        let body = "Before \(actor.token) and \(person.token)\nAfter ![photo](storage://fixture)"
+        let expected = [actor.requestObject, person.requestObject]
+        h.work.inject(.dropResponseAfterCommit, matching: "/tasks/\(task)/comments")
+        _ = try await h.writes.submit(taskIntent(.taskComment, task, ["body": body, "mentions": [["type": "agent", "npub": "wrong"]]]),
+                                      connection: h.connection, workspace: h.workspace)
+        await h.engine.waitUntilIdle(); await h.drainWrites()
+        let root = try await h.writes.submit(taskIntent(.docComment, doc, ["body": body, "metadata": ["anchor_quote": "Sample"]]),
+                                              connection: h.connection, workspace: h.workspace)
+        await h.settled()
+        let parent = try XCTUnwrap(h.work.docComments(doc).first?["id"] as? String)
+        _ = try await h.writes.submit(taskIntent(.docComment, doc, ["body": body, "parent_comment_id": parent]),
+                                      connection: h.connection, workspace: h.workspace)
+        await h.settled()
+        XCTAssertEqual(h.work.taskComments(task).count, 1, "ambiguous retry reconciles without duplicating")
+        XCTAssertEqual(h.work.docComments(doc).count, 2)
+        for row in h.work.taskComments(task) + h.work.docComments(doc) {
+            XCTAssertEqual(row["body"] as? String, body)
+            XCTAssertEqual((row["metadata"] as? [String: Any])?["mentions"] as? [[String: String]], expected)
+        }
+        XCTAssertTrue(h.work.docComments(doc).contains { $0["parent_comment_id"] as? String == parent })
+        XCTAssertTrue(h.work.docComments(doc).contains { ($0["metadata"] as? [String: Any])?["client_record_id"] as? String == root.id })
+        let requests = h.transport.recorded.filter { $0.httpMethod == "POST" && $0.url?.path.hasSuffix("/comments") == true }
+        for request in requests {
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+            XCTAssertEqual(object["mentions"] as? [[String: String]], expected)
+            XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Nostr ") == true)
+        }
+        // Rehydrate accepted records through the same sync/read path used after reopen.
+        await h.sync.refreshTask(h.connection, h.workspace, taskId: task)
+        await h.sync.refreshDoc(h.connection, h.workspace, docId: doc)
+        await h.engine.waitUntilIdle()
+        let tasks = try await h.store.reader.comments(workspaceId: h.workspace.id, parent: .task, parentId: task)
+        let docs = try await h.store.reader.comments(workspaceId: h.workspace.id, parent: .doc, parentId: doc)
+        XCTAssertEqual(tasks.map(\.body), [body])
+        XCTAssertEqual(docs.map(\.body), [body, body])
+    }
+
     func testPermissionDenialIsPermanentAndBlocksOnlyThatRecord() async throws {
         let h = try await WorkHarness.make()
         let a = h.work.seedTask(scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "A")

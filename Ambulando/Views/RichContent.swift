@@ -89,6 +89,7 @@ struct RichBlocksView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWiki) private var openWiki
     @Environment(\.openURL) private var parentOpenURL
+    @State private var actorReference: ActorMentionReference?
 
     var body: some View {
         VStack(alignment: .leading, spacing: RichContext(style: style, muted: muted, workspace: workspace).blockSpacing) {
@@ -99,7 +100,12 @@ struct RichBlocksView: View {
         .frame(maxWidth: style == .chat ? ChatTypography.readableWidth : .infinity, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .environment(\.openURL, OpenURLAction { url in
-            if let target = RichLinks.mentionTarget(url) { openMention(kind: target.kind, id: target.id); return .handled }
+            if let target = RichLinks.mentionTarget(url) {
+                if ["agent", "person"].contains(target.kind), let workspace {
+                    actorReference = ActorMentionReference(workspace: workspace, npub: target.id)
+                } else { openMention(kind: target.kind, id: target.id) }
+                return .handled
+            }
             if let target = RichLinks.wikiTarget(url) { openWiki(target); return .handled }
             if url.scheme == nil, url.host == nil, url.path == "/canvas.html", let workspace {
                 if model.selectedWorkspaceId == workspace.id, let id = DocumentRecordLink.canvas(url, workspaceId: workspace.id) {
@@ -111,6 +117,59 @@ struct RichBlocksView: View {
             parentOpenURL(url)
             return .handled
         })
+        .sheet(item: $actorReference) { ActorMentionDetails(reference: $0) }
+    }
+}
+
+private struct ActorMentionReference: Identifiable {
+    let workspace: WorkspaceRecord
+    let npub: String
+    var id: String { workspace.id + ":" + npub }
+}
+
+/// Actor tags open the current workspace identity from the local store. Labels in old text never select another
+/// identity, grant access or start an agent. No hidden network/profile lookup is performed by this sheet.
+private struct ActorMentionDetails: View {
+    let reference: ActorMentionReference
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var members = LiveQuery<[MentionCandidate]>(initial: [])
+    private var candidate: MentionCandidate? { members.value.first { $0.member.npub == reference.npub } }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                if let candidate {
+                    HStack(spacing: 12) {
+                        PersonAvatar(person: candidate.person, size: 48)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(candidate.member.label).font(.amb(.title2).weight(.semibold))
+                            Text(candidate.member.mentionType.label).font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground)
+                        }
+                    }
+                    Text(reference.npub).font(.amb(.caption)).textSelection(.enabled)
+                        .accessibilityIdentifier("mention.identity.npub")
+                } else {
+                    Text(members.loaded ? "This identity is unavailable in this workspace." : "Loading identity…")
+                        .foregroundStyle(Amb.mutedForeground)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(20).frame(minWidth: 280, minHeight: 180)
+            .navigationTitle("Mentioned identity").inlineTitle()
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.accessibilityIdentifier("mention.identity.done") } }
+        }
+        .accessibilityIdentifier("mention.identity")
+        .task(id: reference.id) {
+            guard let store = model.store else { return }
+            let workspaceId = reference.workspace.id
+            members.start(store: store, matches: { ($0.table == .members && $0.workspaceId == workspaceId) || $0.table == .profiles }) {
+                async let people = store.reader.people(workspaceId: workspaceId)
+                let rows = try await store.reader.directoryMembers(workspaceId: workspaceId)
+                let directory = try await people
+                return rows.map { MentionCandidate(member: $0, person: directory.person($0.npub)) }
+            }
+        }
     }
 }
 

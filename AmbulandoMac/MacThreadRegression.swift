@@ -68,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacCommentMentionCheck") {
+                try await commentMentionCheck(window, model: model)
+                print("PASS: task/doc comment actor picker, caret, send/reply and reopen"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacOvernightCheck") {
                 try await overnightCheck(window, model: model)
                 print("PASS: lightbox, canvas window and Board items"); fflush(stdout); exit(0)

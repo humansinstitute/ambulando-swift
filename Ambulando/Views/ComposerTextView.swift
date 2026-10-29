@@ -81,6 +81,8 @@ struct ComposerTextView: UIViewRepresentable {
     var limitsInline = false
     /// Text to put in at the caret once (for example a picked photo's upload placeholder), then cleared.
     var insertion: Binding<String?>? = nil
+    /// Optional caret observation for content-field mention completion; chat retains its existing behavior.
+    var selection: Binding<NSRange>? = nil
 
     static let maxLines: CGFloat = 6
 
@@ -179,9 +181,24 @@ struct ComposerTextView: UIViewRepresentable {
             reported = view.text ?? ""
             reporting = true
             parent.text = reported
+            reportSelection(view)
             reporting = false
             (view as? PasteAwareTextView)?.refreshPlaceholder()
             parent.styleMentions(view)
+        }
+
+        func textViewDidChangeSelection(_ view: UITextView) { reportSelection(view) }
+
+        private func reportSelection(_ view: UITextView) {
+            guard let binding = parent.selection else { return }
+            let selected = view.selectedRange
+            // UIKit reports selection before finishing some keyboard/autocorrection edits. Do not cause a SwiftUI
+            // update inside that transaction, or an older text snapshot can move the live caret mid-word.
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self, let view, view.selectedRange == selected, view.text == self.parent.text,
+                      binding.wrappedValue != selected else { return }
+                binding.wrappedValue = selected
+            }
         }
 
         func textView(_ view: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
@@ -338,6 +355,8 @@ struct ComposerTextView: NSViewRepresentable {
     var fixedHeight: CGFloat? = nil
     /// Text to put in at the caret once (for example a picked photo's upload placeholder), then cleared.
     var insertion: Binding<String?>? = nil
+    /// Optional caret observation for content-field mention completion; chat retains its existing behavior.
+    var selection: Binding<NSRange>? = nil
     /// Read while the parent draws, so a text size change (`TextScale`) reaches `updateNSView`.
     private let textScale = TextScale.shared.factor
 
@@ -451,10 +470,26 @@ struct ComposerTextView: NSViewRepresentable {
             reported = view.string
             reporting = true
             parent.text = reported
+            reportSelection(view)
             reporting = false
             parent.styleMentions(view)
             view.needsDisplay = true
             view.enclosingScrollView?.invalidateIntrinsicContentSize()
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let view = notification.object as? NSTextView else { return }
+            reportSelection(view)
+        }
+
+        private func reportSelection(_ view: NSTextView) {
+            guard let binding = parent.selection else { return }
+            let selected = view.selectedRange()
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self, let view, view.selectedRange() == selected, view.string == self.parent.text,
+                      binding.wrappedValue != selected else { return }
+                binding.wrappedValue = selected
+            }
         }
 
         func textDidBeginEditing(_ notification: Notification) { if !parent.focused { parent.focused = true } }
