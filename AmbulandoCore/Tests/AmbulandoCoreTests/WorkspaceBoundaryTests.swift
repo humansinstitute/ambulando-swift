@@ -30,6 +30,23 @@ final class WorkspaceBoundaryTests: XCTestCase {
         XCTAssertTrue(restored.collapsed.contains("first"))
     }
 
+    func testDocumentOpeningPreferenceSurvivesReopenAndIsolatesUsers() async throws {
+        let directory = temporaryDirectory()
+        let store = try LocalStore(directory: directory)
+        try await store.writer.setState("editor.mode", "edit") // incidental old editor state
+        let unset = try await DocumentOpeningMode.load(store: store, userNpub: "alice")
+        XCTAssertEqual(unset, .view)
+        try await DocumentOpeningMode.edit.save(store: store, userNpub: "alice")
+        let reopened = try LocalStore(directory: directory)
+        let alice = try await DocumentOpeningMode.load(store: reopened, userNpub: "alice")
+        let bob = try await DocumentOpeningMode.load(store: reopened, userNpub: "bob")
+        XCTAssertEqual(alice, .edit)
+        XCTAssertEqual(bob, .view)
+        try await DocumentOpeningMode.view.save(store: reopened, userNpub: "alice")
+        let backToView = try await DocumentOpeningMode.load(store: store, userNpub: "alice")
+        XCTAssertEqual(backToView, .view)
+    }
+
     func testEveryContextColourHasAccessibleWhiteTextContrast() {
         func component(_ value: UInt32) -> Double {
             let s = Double(value) / 255

@@ -3,20 +3,55 @@ import XCTest
 @MainActor
 final class DocumentInlineUITests: XCTestCase {
     override func setUp() { continueAfterFailure = false }
-    private func launch(reset: Bool, document: String = "Native app plan") -> XCUIApplication {
+    private func launch(reset: Bool, document: String = "Native app plan", edit: Bool = true) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-AmbulandoUITestFixture"] + (reset ? ["-AmbulandoFixtureReset"] : [])
         app.launch()
         app.section("Docs")
         XCTAssertTrue(app.buttons["doc.\(document)"].waitForExistence(timeout: 15))
         app.buttons["doc.\(document)"].tap()
+        if edit { enterEdit(app) }
         return app
+    }
+
+    private func enterEdit(_ app: XCUIApplication) {
+        if !app.buttons["doc.edit"].exists { app.buttons["More"].firstMatch.tap() }
+        XCTAssertTrue(app.buttons["doc.edit"].waitForExistence(timeout: 10))
+        app.buttons["doc.edit"].tap()
+    }
+
+    func testDefaultViewAndSavedOpeningPreferenceAcrossRestart() {
+        var app = launch(reset: true, edit: false)
+        XCTAssertTrue(app.staticTexts["doc.title"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.webViews["doc.editor"].exists)
+        func choose(_ value: String) {
+            app.buttons["settings"].tap()
+            let picker = app.descendants(matching: .any)["settings.documentOpeningMode"].firstMatch
+            for _ in 0..<12 where !picker.isHittable { app.swipeUp() }
+            XCTAssertTrue(picker.waitForExistence(timeout: 10))
+            picker.tap()
+            app.buttons[value].firstMatch.tap()
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "document-opening-\(value)"; shot.lifetime = .keepAlways; add(shot)
+            app.buttons["Done"].tap()
+        }
+        choose("Edit")
+        app.terminate()
+        app = launch(reset: false, edit: false)
+        XCTAssertTrue(app.webViews["doc.editor"].waitForExistence(timeout: 15))
+        choose("View")
+        app.terminate()
+        app = launch(reset: false, edit: false)
+        XCTAssertTrue(app.staticTexts["doc.title"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.webViews["doc.editor"].exists)
+        enterEdit(app)
+        XCTAssertTrue(app.webViews["doc.editor"].waitForExistence(timeout: 15))
     }
 
     func testInlineFormattedEditingSelectionCommentReplyAndReload() {
         let app = launch(reset: true)
         let page = app.webViews["doc.editor"].firstMatch
-        XCTAssertTrue(page.waitForExistence(timeout: 15), "document opens directly into the formatted page")
+        XCTAssertTrue(page.waitForExistence(timeout: 15), "manual Edit opens the formatted page")
         let paragraph = page.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Every screen reads'")).firstMatch
         XCTAssertTrue(paragraph.waitForExistence(timeout: 15))
         paragraph.tap()

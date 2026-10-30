@@ -106,6 +106,17 @@ struct SettingsView: View {
                 } header: { Text("Sections") } footer: {
                     Text("Agents and Context are optional sections, off unless you turn them on, as in the web app. They appear in the \(Device.name == "Mac" ? "sidebar" : "bar at the bottom").")
                 }
+                Section {
+                    Picker("Default document opening mode", selection: Binding(get: { model.documentOpeningMode },
+                        set: { mode in Task { await model.setDocumentOpeningMode(mode) } })) {
+                        Text("View").tag(DocumentOpeningMode.view)
+                        Text("Edit").tag(DocumentOpeningMode.edit)
+                    }
+                    .accessibilityIdentifier("settings.documentOpeningMode")
+                    .disabled(model.identity.npub == nil)
+                } header: { Text("Documents") } footer: {
+                    Text("Choose how existing documents open. Saved for your user on this device across workspaces. You can still switch View and Edit in a document.")
+                }
                 Section("Appearance") {
                     Picker("Theme", selection: $appearance) {
                         ForEach(AppearancePreference.allCases) { Text($0.label).tag($0.rawValue) }

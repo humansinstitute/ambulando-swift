@@ -307,6 +307,21 @@ final class DocEditorModel: UploadTokenHost {
 
     // MARK: Lease
 
+    func prepareOpening() async -> Bool {
+        guard let saver = app?.saver, app?.isUnlocked == true else { return false }
+        do {
+            _ = try await saver.acquire(connection, workspace, docId: doc.id, editorSessionId: editorSessionId)
+            return true
+        } catch {
+            if case TowerError.http(let status, _, _) = error, status == 403 {
+                permissionDenied = true
+                app?.notice = "Read only — you do not have permission to edit this document."
+                return false
+            }
+            return true
+        }
+    }
+
     func holdLease() {
         guard let saver = app?.saver, app?.isUnlocked == true else { leaseState = "Editing on this \(Device.name). Unlock to save."; return }
         let connection = connection, workspace = workspace, id = doc.id

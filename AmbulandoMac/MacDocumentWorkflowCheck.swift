@@ -39,7 +39,25 @@ extension MacThreadRegression {
         try press(window, "section.docs"); await settle()
         try await waitFor(window, "doc.Native app plan", "sample document")
         try press(window, "doc.Native app plan"); await settle(); await settle()
-        try await waitFor(window, "editor.title", "Mac opens editable by default")
+        try await waitFor(window, "doc.edit", "Mac opens in View by default")
+        try require(find(window, "editor.title") == nil, "unset preference has no editor")
+        let records = try await store.reader.docs(workspaceId: workspace.id)
+        guard let openingDoc = records.first(where: { $0.title == "Native app plan" }) else { throw Failure(description: "Missing document") }
+        let openingDeniedProbe = DocEditorModel(doc: openingDoc, workspace: workspace, store: store, connection: connection, app: model)
+        fixture.tower.work.inject(.status(403, "forbidden"), matching: "/edit-leases/acquire")
+        let mayEdit = await openingDeniedProbe.prepareOpening()
+        try require(!mayEdit && openingDeniedProbe.permissionDenied, "permission denial keeps reader without an editor")
+        openingDeniedProbe.close()
+        let openingOfflineProbe = DocEditorModel(doc: openingDoc, workspace: workspace, store: store, connection: connection, app: model)
+        fixture.tower.work.inject(.offline, matching: "/edit-leases/acquire")
+        let mayDraft = await openingOfflineProbe.prepareOpening()
+        try require(mayDraft && !openingOfflineProbe.permissionDenied, "openingOfflineProbe entry preserves local draft behavior")
+        openingOfflineProbe.close()
+        await model.setDocumentOpeningMode(.edit)
+        try require(model.documentOpeningMode == .edit, "explicit Edit saved for the current user")
+        print("DOCUMENT_OPENING_POLICY_PASS unsetView deniedReadOnly offlineDraft explicitEdit")
+        try press(window, "doc.edit"); await settle()
+        try await waitFor(window, "editor.title", "manual Edit opens editor")
         func web(_ view: NSView) -> WKWebView? {
             if let page = view as? WKWebView { return page }
             return view.subviews.lazy.compactMap { web($0) }.first

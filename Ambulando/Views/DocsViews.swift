@@ -156,8 +156,8 @@ struct DocumentSnapshot: Sendable, Equatable {
     var titles: [String: String] = [:]
 }
 
-/// A document as a white page on a faint lavender surround. iPhone/iPad open straight into formatted editing with
-/// comments in a sheet; Mac opens editable documents with comments beside the page.
+/// A document opens in the user’s preferred mode, with comments in a sheet on iPhone/iPad
+/// and beside the page on Mac. Unset preferences open in View.
 struct DocumentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -170,6 +170,8 @@ struct DocumentView: View {
     @State private var showingComments = false
     @State private var commentsExpanded = true
     @State private var automaticEditing = true
+    @State private var openingEditor: Task<Void, Never>?
+    @State private var openingGeneration = UUID()
     @State private var comment = ""
     @State private var anchor: DocumentAnchor?
     @State private var replyTo: CommentRecord?
@@ -255,6 +257,8 @@ struct DocumentView: View {
         .onDisappear {
             // Leaving for a linked page keeps the text as a draft; coming back opens the editor on that draft.
             wiki.isVisible = false
+            openingGeneration = UUID()
+            openingEditor?.cancel(); openingEditor = nil
             if let leaving = editor {
                 editor = nil; wiki.editor = nil
                 Task { await leaving.flush(); leaving.close() }
@@ -264,25 +268,33 @@ struct DocumentView: View {
     }
 
     private func openFormattedPage() {
-        if automaticEditing && canEdit { beginEditing() }
+        takeEditRequest()
+        if automaticEditing && model.documentOpeningMode == .edit && canEdit { beginEditing() }
     }
 
     /// A canvas document's Edit opens this screen with Edit already on.
     private func takeEditRequest() {
-        guard model.docEditRequest == docId, snapshot.value.doc != nil else { return }
+        guard model.docEditRequest == docId, snapshot.value.doc != nil, canEdit else { return }
         model.docEditRequest = nil
         if canEdit && editor == nil { beginEditing() }
     }
 
     private func beginEditing() {
-        guard canEdit, editor == nil, let doc = snapshot.value.doc, let connection = model.connection else { return }
+        guard canEdit, editor == nil, openingEditor == nil, let doc = snapshot.value.doc, let connection = model.connection else { return }
         let created = DocEditorModel(doc: doc, workspace: workspace, store: store, connection: connection, app: model)
         created.wiki = wiki
-        wiki.editor = created
-        wiki.beforeLeaving = { [weak created] in await created?.checkpoint() ?? true }
-        editor = created
-        Task {
+        let generation = UUID()
+        openingGeneration = generation
+        openingEditor = Task {
+            defer { if openingGeneration == generation { openingEditor = nil } }
             await created.load()
+            // Resolve known permission denial before displaying an editable surface.
+            // Transport failures still permit the existing durable offline draft flow.
+            let allowed = await created.prepareOpening()
+            guard !Task.isCancelled, openingGeneration == generation, allowed, model.isUnlocked else { created.close(); return }
+            wiki.editor = created
+            wiki.beforeLeaving = { [weak created] in await created?.checkpoint() ?? true }
+            editor = created
             created.holdLease()
         }
 

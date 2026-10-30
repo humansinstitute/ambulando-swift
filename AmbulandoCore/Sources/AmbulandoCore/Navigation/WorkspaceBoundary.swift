@@ -70,3 +70,22 @@ public enum WorkspaceColour: String, Codable, Sendable, CaseIterable {
         }
     }
 }
+
+/// Explicit local user preference; editor drafts never supply this value.
+public enum DocumentOpeningMode: String, CaseIterable, Sendable {
+    case view, edit
+
+    public static func key(userNpub: String) -> String {
+        "native.document-opening-mode.v1:" + WorkspaceBoundary.digest([userNpub])
+    }
+
+    public static func load(store: LocalStore, userNpub: String) async throws -> Self {
+        guard !userNpub.isEmpty else { return .view }
+        return Self(rawValue: try await store.reader.state(key(userNpub: userNpub)) ?? "") ?? .view
+    }
+
+    public func save(store: LocalStore, userNpub: String) async throws {
+        guard !userNpub.isEmpty else { return }
+        try await store.writer.setState(Self.key(userNpub: userNpub), rawValue)
+    }
+}

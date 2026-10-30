@@ -251,6 +251,7 @@ final class AppModel {
     @ObservationIgnored private var workspaceProfileSource: ProfileSource?
     @ObservationIgnored private var workspaceEvents: EventStreamTransport?
     @ObservationIgnored private var workspaceCacheRoot: URL?
+    private var documentOpeningModes: [String: DocumentOpeningMode] = [:]
     @ObservationIgnored private var preferences: WorkspacePreferences?
     @ObservationIgnored private var activeBoundaryId: String?
     @ObservationIgnored private var sectionMemories: [String: [AppMode: [WorkRoute]]] = [:]
@@ -1328,6 +1329,19 @@ struct NavigationSnapshot: Sendable, Equatable {
 
 // MARK: Multiple native workspaces
 extension AppModel {
+    var documentOpeningMode: DocumentOpeningMode {
+        guard let user = currentSigner else { return .view }
+        return documentOpeningModes[user] ?? .view
+    }
+
+    func setDocumentOpeningMode(_ mode: DocumentOpeningMode) async {
+        guard let user = currentSigner, let catalogStore else { return }
+        do {
+            try await mode.save(store: catalogStore, userNpub: user)
+            documentOpeningModes[user] = mode
+        } catch { notice = "Could not save document opening mode: \(error.localizedDescription)" }
+    }
+
     private var currentSigner: String? {
         switch identity {
         case .unlocked(let npub), .locked(let npub): return npub
@@ -1350,6 +1364,9 @@ extension AppModel {
     private func bootstrapWorkspaces(catalog: LocalStore, shared: SyncEngine, identity: IdentityService,
                                      transport: HTTPTransport, events: EventStreamTransport, directory: URL) async throws {
         catalogStore = catalog
+        if let user = currentSigner {
+            documentOpeningModes[user] = try await DocumentOpeningMode.load(store: catalog, userNpub: user)
+        }
         sharedEngine = shared
         workspaceTransport = transport; workspaceEvents = events
         workspaceCacheRoot = fixture.map { $0.directory.appendingPathComponent("FileCache", isDirectory: true) }
