@@ -362,6 +362,11 @@ extension WorkspaceSync {
             do {
                 let task = try await api.task(workspaceId: w, appNpub: app, taskId: id)
                 try await store.writer.upsertTasks(workspaceId: w, [task])
+                for related in [task.id, TaskTreeNode(task).parentId].compactMap({ $0 }) {
+                    if try await store.reader.taskRelationshipCache(workspaceId: w, taskId: related) != nil {
+                        await refreshTaskRelationships(connection, workspace, taskId: related, force: true)
+                    }
+                }
                 let comments = try await api.taskComments(workspaceId: w, appNpub: app, taskId: id)
                 try await store.writer.upsertComments(workspaceId: w, comments, complete: (.task, task.id))
             } catch where lost(error) { try await store.writer.applyTombstones(workspaceId: w, [.task(id)]) }

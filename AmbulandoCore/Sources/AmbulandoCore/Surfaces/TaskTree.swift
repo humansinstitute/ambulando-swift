@@ -1,8 +1,8 @@
 import Foundation
 
 // Task Tree naplets (sol `canvas/task-tree-page.js`, `task-tree-runtime.js`, `task-tree-graph.js`). A tree shows real
-// channel tasks from a root task: children (`metadata.parent_task_id`) below, successors (`metadata.predecessor_task_ids`)
-// to the right. Tasks are read through Tower's relationships route and stored like any other task, so a node opens the
+// channel tasks from a root task: children (`metadata.parent_task_id`) indented below/right, dependencies (`metadata.predecessor_task_ids`)
+// drawn separately. Tasks are read through Tower's relationships route and stored like any other task, so a node opens the
 // normal task screen. The naplet's saved layout keeps the view (`layout.task_tree`: root, collapsed branches, upstream
 // context, viewport). Routes (existing):
 //
@@ -60,14 +60,14 @@ public struct TaskTreeView: Sendable, Equatable {
     }
 }
 
-/// A bounded projection of the tree from its root (sol `projectTree`).
+/// A bounded native hierarchy projection from its root, with separate dependency edges.
 public struct TaskTreeGraph: Sendable, Equatable {
     public struct Edge: Sendable, Equatable, Hashable { public let from: String; public let to: String; public let child: Bool }
     public struct Reference: Sendable, Equatable, Hashable { public let taskId: String; public let targetId: String; public let parent: Bool; public let available: Bool }
     public var nodes: [TaskTreeNode] = []
     public var edges: [Edge] = []
     public var references: [Reference] = []
-    /// Grid cell of each node: columns follow dependencies (successors to the right), rows hierarchy (children below).
+    /// Grid cells: children indented right, siblings in one column, complete subtrees in disjoint rows.
     public var positions: [String: (x: Int, y: Int)] = [:]
     public var bounded = false
     public init() {}
@@ -100,30 +100,32 @@ public struct TaskTreeGraph: Sendable, Equatable {
         let visible = Set(nodes.map(\.id))
         var graph = TaskTreeGraph()
         graph.nodes = nodes
-        var occupied = Set<String>()
-        func reserve(_ id: String, _ x: Int, _ y: Int) {
-            var y = y
-            while occupied.contains("\(x):\(y)") { y += 1 }
-            occupied.insert("\(x):\(y)")
-            graph.positions[id] = (x, y)
-        }
-        if visible.contains(root) { reserve(root, 0, 0) }
-        var pending = nodes.filter { graph.positions[$0.id] == nil }
-        while !pending.isEmpty {
-            var deferred: [TaskTreeNode] = []
-            var progressed = false
-            for task in pending {
-                let predecessors = task.predecessors.filter { visible.contains($0) && $0 != task.id }
-                let placed = predecessors.first { graph.positions[$0] != nil }
-                if !predecessors.isEmpty && placed == nil { deferred.append(task); continue }
-                if predecessors.isEmpty, let parent = task.parentId, visible.contains(parent), graph.positions[parent] == nil { deferred.append(task); continue }
-                if let placed, let origin = graph.positions[placed] { reserve(task.id, origin.x + 1, origin.y) }
-                else if let parent = task.parentId, let origin = graph.positions[parent] { reserve(task.id, origin.x, origin.y + 1) }
-                else { reserve(task.id, 0, nodes.firstIndex(of: task) ?? 0) }
-                progressed = true
+        // Hierarchy owns placement. Reserve every descendant row before the next sibling;
+        // dependency edges never turn siblings into an apparent chain.
+        var placing = Set<String>()
+        var nextRow = 0
+        func place(_ id: String, depth: Int) {
+            guard graph.positions[id] == nil, placing.insert(id).inserted else { return }
+            graph.positions[id] = (depth, nextRow)
+            nextRow += 1
+            for edge in outgoing[id] ?? [] where edge.child && visible.contains(edge.to) {
+                place(edge.to, depth: depth + 1)
             }
-            if !progressed, let first = deferred.first { deferred.removeFirst(); reserve(first.id, 0, nodes.firstIndex(of: first) ?? 0) }
-            pending = deferred
+        }
+        if visible.contains(root) {
+            var top = root, ancestors = Set([root])
+            while let parent = byId[top]?.parentId, visible.contains(parent), ancestors.insert(parent).inserted { top = parent }
+            place(top, depth: 0)
+        }
+        // A dependency can discover a child before its parent. Place the highest unplaced
+        // visible ancestor first; hierarchy still wins even in dependency-only components.
+        for task in nodes where graph.positions[task.id] == nil {
+            var top = task.id, ancestors = Set([task.id])
+            while let parent = byId[top]?.parentId, visible.contains(parent), graph.positions[parent] == nil,
+                  ancestors.insert(parent).inserted { top = parent }
+            let parentDepth = byId[top]?.parentId.flatMap { graph.positions[$0]?.x }.map { $0 + 1 }
+            let dependencyDepth = byId[top]?.predecessors.compactMap { graph.positions[$0]?.x }.max().map { $0 + 1 }
+            place(top, depth: parentDepth ?? dependencyDepth ?? 0)
         }
         for task in nodes {
             for link in outgoing[task.id] ?? [] where visible.contains(link.to) { graph.edges.append(link) }
@@ -152,7 +154,7 @@ extension TowerAPI {
             throw TowerError.malformed("task relationships")
         }
         let task = try TaskRecord(raw: rawJSON(row))
-        guard task.id == taskId.lowercased() else { throw TowerError.malformed("task relationships") }
+        guard task.id == taskId.lowercased(), task.workspaceId == workspaceId else { throw TowerError.malformed("task relationships") }
         let tasks = try rows.map { try TaskRecord(raw: rawJSON($0)) }
         guard tasks.allSatisfy({ $0.workspaceId == workspaceId }) else { throw TowerError.malformed("task relationships") }
         var titles: [String: String] = [:]
@@ -189,7 +191,6 @@ public struct TaskTreeService: Sendable {
         var visited = Set<String>()
         var unavailable = false
         var requests = 0
-        var records: [TaskRecord] = []
         while let item = queue.first, found.count < limit, requests < max(100, limit) {
             requests += 1
             let page: (task: TaskRecord, tasks: [TaskRecord], channelTitles: [String: String], unavailable: Bool, next: String?)
@@ -200,7 +201,7 @@ public struct TaskTreeService: Sendable {
                 queue.removeFirst(); visited.insert(item.id); unavailable = true; continue
             }
             let rows = item.contextOnly ? [page.task] : [page.task] + page.tasks
-            records += rows
+            try await sync.store.writer.upsertTasks(workspaceId: workspace.id, rows)
             for r in rows { found[r.id] = TaskTreeNode(r, channelTitle: page.channelTitles[r.channelId]) }
             unavailable = unavailable || page.unavailable
             if let next = page.next, !item.contextOnly { queue[0].cursor = next } else { queue.removeFirst(); visited.insert(item.id) }
@@ -208,7 +209,6 @@ public struct TaskTreeService: Sendable {
                 queue.append((r.id, nil, false))
             }
         }
-        if !records.isEmpty { try await sync.store.writer.upsertTasks(workspaceId: workspace.id, records) }
         return (Array(found.values), unavailable, !queue.isEmpty)
     }
 
@@ -257,5 +257,113 @@ extension CanvasEditor {
         var object = Self.layoutObject(Self.clamped(layout), base: [:])
         object["task_tree"] = TaskTreeView(instanceId: UUID().uuidString.lowercased()).object
         try await addNaplet(connection, workspace, canvasId: canvasId, sourceType: "task_tree", sourceId: channelId, title: "Task Tree", layoutObject: object)
+    }
+}
+
+/// Persisted per-parent relationship progress. A failed refresh never masquerades as an empty list.
+public struct TaskRelationshipCache: Codable, Sendable, Equatable {
+    public var ids: [String] = []
+    public var complete = false
+    public var unavailable = false
+    public var updatedAt: String? = nil
+    public init() {}
+    public static func key(_ workspace: String, _ task: String) -> String { "task-relationships:\(workspace):\(task)" }
+
+
+}
+
+extension StoreReader {
+    public func taskRelationshipCache(workspaceId: String, taskId: String) throws -> TaskRelationshipCache? {
+        guard let value = try state(TaskRelationshipCache.key(workspaceId, taskId)) else { return nil }
+        return try JSONDecoder().decode(TaskRelationshipCache.self, from: Data(value.utf8))
+    }
+
+    /// Includes archived children and newly acknowledged creations/events. Never scans a bounded task-list page.
+    public func directSubtasks(workspaceId: String, taskId: String) throws -> [TaskRecord] {
+        let s = try db.prepare("""
+        SELECT \(Self.taskColumns) FROM tasks WHERE workspace_id = ?
+        AND lower(json_extract(CAST(raw AS TEXT), '$.metadata.parent_task_id')) = ?
+        ORDER BY created_at, id
+        """)
+        try s.bind([.text(workspaceId), .text(taskId.lowercased())])
+        var rows: [TaskRecord] = []
+        while try s.step() { rows.append(Self.task(s, workspaceId: workspaceId)) }
+        if let cache = try taskRelationshipCache(workspaceId: workspaceId, taskId: taskId), cache.complete {
+            let ids = Set(cache.ids)
+            rows = rows.filter { ids.contains($0.id) }
+        }
+        return rows
+    }
+}
+
+extension TaskTreeService {
+    /// Fetch only one parent's relationships, draining every page and caching progress after each.
+    /// Descendants are loaded independently when expanded; successors are not counted as children.
+    public func loadRelationships(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, taskId: String) async throws {
+        try await sync.identity.requireReader(npub: connection.signerNpub)
+        let api = sync.api(origin: try TowerOrigin(connection.origin))
+        var cache = TaskRelationshipCache()
+        var cursor: String? = nil
+        var seen = Set<String>()
+        let key = TaskRelationshipCache.key(workspace.id, taskId)
+        repeat {
+            do {
+                let page = try await api.taskRelationships(workspaceId: workspace.id, appNpub: workspace.appNpub, taskId: taskId, cursor: cursor)
+                try Task.checkCancellation()
+                try await sync.store.writer.upsertTasks(workspaceId: workspace.id, [page.task] + page.tasks)
+                cache.ids += page.tasks.map(\.id).filter { !cache.ids.contains($0) }
+                cache.unavailable = cache.unavailable || page.unavailable
+                cache.complete = page.next == nil
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                cache.updatedAt = formatter.string(from: Date())
+                try await sync.store.writer.setState(key, String(decoding: JSONEncoder().encode(cache), as: UTF8.self))
+                cursor = page.next
+                if let cursor, !seen.insert(cursor).inserted { throw TowerError.malformed("task relationships repeated cursor") }
+                // Load the named parent through its normal authorized read path.
+                if let parent = TaskTreeNode(page.task).parentId, cursor == nil {
+                    do {
+                        let record = try await api.task(workspaceId: workspace.id, appNpub: workspace.appNpub, taskId: parent)
+                        try await sync.store.writer.upsertTasks(workspaceId: workspace.id, [record])
+                    } catch TowerError.http(let status, _, _) where [401, 403, 404].contains(status) {
+                        try await sync.store.writer.applyTombstones(workspaceId: workspace.id, [.task(parent)])
+                        cache.unavailable = true
+                        try await sync.store.writer.setState(key, String(decoding: JSONEncoder().encode(cache), as: UTF8.self))
+                    }
+                }
+            } catch TowerError.http(let status, _, _) where [401, 403, 404].contains(status) {
+                cache.complete = false; cache.unavailable = true
+                try await sync.store.writer.setState(key, String(decoding: JSONEncoder().encode(cache), as: UTF8.self))
+                throw TaskTreeError.unavailable
+            }
+        } while cursor != nil
+    }
+}
+
+extension WorkspaceSync {
+    public func refreshTaskRelationships(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, taskId: String,
+                                         force: Bool = false) async {
+        let service = TaskTreeService(sync: self)
+        await engine.enqueue(TaskRelationshipCache.key(workspace.id, taskId), priority: .user, force: force) {
+            try await service.loadRelationships(connection, workspace, taskId: taskId)
+        }
+    }
+}
+
+
+extension StoreWriter {
+    /// A newly stored authorized task or write acknowledgement is relationship evidence in its own right.
+    /// Update known membership in the same transaction; client/server clock skew must never hide a new child.
+    func noteTaskRelationship(_ task: TaskRecord) throws {
+        guard let parent = TaskTreeNode(task).parentId else { return }
+        let key = TaskRelationshipCache.key(task.workspaceId, parent)
+        let query = try db.prepare("SELECT value FROM app_state WHERE key = ?")
+        try query.bind([.text(key)])
+        guard try query.step(), let value = query.text(0),
+              var cache = try? JSONDecoder().decode(TaskRelationshipCache.self, from: Data(value.utf8)),
+              !cache.ids.contains(task.id) else { return }
+        cache.ids.append(task.id)
+        try db.prepare("UPDATE app_state SET value = ? WHERE key = ?")
+            .run([.text(String(decoding: try JSONEncoder().encode(cache), as: UTF8.self)), .text(key)])
     }
 }

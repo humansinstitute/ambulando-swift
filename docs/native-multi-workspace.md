@@ -5,8 +5,12 @@ Selection is opt-in: an existing installation starts with its remembered workspa
 The workspace chooser groups choices by Tower and can add another Tower using the
 same unlocked identity. Each enabled workspace has its own Home, scopes, channels,
 collapse preference, order and colour. Shared Unread & Active rows retain the source
-workspace and route through the exact account boundary. Colour supplements the name;
-the context bar and chat composer identify the workspace explicitly.
+workspace and route through the exact account boundary. Colour supplements the name.
+The existing iPhone navigation header and Mac window title/toolbar use a faint 12%
+workspace-colour tint over the light or dark surface, including the Mac window controls.
+There is no separate workspace-colour row. The compact composer/modal indicator reads
+“Working in <workspace name>” and keeps its destination colour dot. Changing the selected
+workspace or its saved colour updates the existing header without moving controls.
 
 ## Runtime ownership
 

@@ -268,11 +268,40 @@ struct WorkspaceComposerContext: View {
             let colour = model.workspaceEntries.first { $0.workspace.id == workspace.id && $0.workspace.appNpub == workspace.appNpub && $0.connection.id == (connectionId ?? model.connection?.id) }?.colour ?? .blue
             HStack(spacing: 6) {
                 Circle().fill(colour.nativeColour).frame(width: 7, height: 7).accessibilityHidden(true)
-                Text("Writing in \(workspace.label)").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                Text("Working in \(workspace.label)").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12).padding(.top, 4)
             .accessibilityIdentifier("composer.workspace")
         }
+    }
+}
+
+/// Colour belongs to the existing navigation chrome, without inserting content or changing toolbar items.
+struct WorkspaceHeaderTint: ViewModifier {
+    @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var scheme
+
+    private var background: Color {
+        guard let entry = model.workspaceEntries.first(where: { $0.boundary == model.selectedWorkspaceBoundary }) else { return Amb.card }
+        let rgb = entry.colour.rgb
+        let base: UInt32 = scheme == .dark ? 0x1A2238 : 0xFFFFFF
+        let amount = 0.12
+        func channel(_ shift: UInt32) -> Double {
+            (Double((base >> shift) & 255) * (1 - amount) + Double((rgb >> shift) & 255) * amount) / 255
+        }
+        return Color(red: channel(16), green: channel(8), blue: channel(0))
+    }
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+            .toolbarBackground(background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+        #else
+        content
+            .toolbarBackground(background, for: .windowToolbar)
+            .toolbarBackground(.visible, for: .windowToolbar)
+        #endif
     }
 }

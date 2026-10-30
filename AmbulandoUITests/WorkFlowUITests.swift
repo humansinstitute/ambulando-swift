@@ -91,6 +91,34 @@ final class WorkFlowUITests: XCTestCase {
                       "the unread conversation is still unread")
     }
 
+    func testSubtaskCreationNestedExpansionAndParentNavigation() {
+        let app = launch()
+        tab(app, "Tasks")
+        let root = app.buttons["task.Write release notes for build 3"]
+        XCTAssertTrue(root.waitForExistence(timeout: 15))
+        root.tap()
+        let add = app.buttons["task.subtasks.add"]
+        XCTAssertTrue(add.waitForExistence(timeout: 15))
+        add.tap()
+        input(app, "newtask.title").tap()
+        app.typeText("Detail child")
+        app.buttons["newtask.add"].tap()
+        let child = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'task.subtask.' AND label CONTAINS 'Detail child'")).firstMatch
+        XCTAssertTrue(child.waitForExistence(timeout: 15), "acknowledged child appears without reopening parent")
+        child.tap()
+        XCTAssertTrue(app.buttons["task.parent"].waitForExistence(timeout: 15))
+        app.buttons["task.subtasks.add"].tap()
+        input(app, "newtask.title").tap()
+        app.typeText("Detail grandchild")
+        app.buttons["newtask.add"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Detail grandchild' AND identifier BEGINSWITH 'task.subtask.'")).firstMatch.waitForExistence(timeout: 15))
+        app.buttons["task.parent"].tap()
+        XCTAssertTrue(app.buttons["Expand subtasks of Detail child"].waitForExistence(timeout: 15))
+        app.buttons["Expand subtasks of Detail child"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Detail grandchild' AND identifier BEGINSWITH 'task.subtask.'")).firstMatch.waitForExistence(timeout: 15))
+        capture(app, "task-nested-subtasks")
+    }
+
     func testTaskCreateStateCommentAndEdit() {
         let app = launch()
         tab(app, "Tasks")

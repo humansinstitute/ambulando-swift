@@ -41,16 +41,6 @@ struct ContextBar: View {
         let nav = model.navigation.value
         let context = model.context
         VStack(spacing: 0) {
-            if let workspace = model.selectedWorkspace {
-                let entry = model.workspaceEntries.first { $0.boundary == model.selectedWorkspaceBoundary }
-                Text(workspace.label)
-                    .font(.amb(.caption).weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16).padding(.vertical, 5)
-                    .background((entry?.colour ?? .blue).nativeColour)
-                    .accessibilityIdentifier("context.workspace")
-            }
             HStack(spacing: 8) {
                 Button { model.selectContext(.home) } label: { WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 26) }
                     .buttonStyle(.plain)

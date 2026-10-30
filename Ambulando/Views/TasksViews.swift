@@ -304,6 +304,7 @@ struct TaskDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 if let row = snapshot.value.row {
                     header(row)
+                    TaskSubtasksView(taskId: taskId, workspace: workspace, store: store, ancestors: [taskId])
                     ForEach(row.pending) { WriteStatusLine(item: $0, label: label(for: $0)) }
                     if let description = row.task.description, !description.isEmpty {
                         MessageBody(text: description, workspace: workspace).ambCard()
@@ -494,6 +495,8 @@ struct TaskCreateSheet: View {
     let store: LocalStore
     let choice: ScopeChoice
     let context: WorkContext
+    var parentTaskId: String? = nil
+    var parentChannelId: String? = nil
     @State private var title = ""
     @State private var detail = ""
     @State private var channelId: String?
@@ -502,7 +505,7 @@ struct TaskCreateSheet: View {
     @State private var assignee: String?
     @State private var members: [MemberRecord] = []
 
-    private var channels: [ChannelRecord] { choice.channels(in: context) }
+    private var channels: [ChannelRecord] { choice.channels(in: context).filter { parentChannelId == nil || $0.id == parentChannelId } }
 
     var body: some View {
         NavigationStack {
@@ -512,6 +515,7 @@ struct TaskCreateSheet: View {
                 Picker("Channel", selection: $channelId) {
                     ForEach(channels) { Text("#\($0.name) · \(choice.scopeName($0.scopeId) ?? "")").tag(Optional($0.id)) }
                 }
+                .disabled(parentTaskId != nil)
                 Picker("State", selection: $state) { ForEach(TaskState.board, id: \.self) { Text($0.label).tag($0) } }
                 Picker("Priority", selection: $priority) { ForEach(TaskPriority.editable, id: \.self) { Text($0.label).tag($0) } }
                 Picker("Assignee", selection: $assignee) {
@@ -520,7 +524,7 @@ struct TaskCreateSheet: View {
                 }
                 if !model.isUnlocked { Text("Saved on this \(Device.name) and sent after you unlock.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground) }
             }
-            .navigationTitle("New task")
+            .navigationTitle(parentTaskId == nil ? "New task" : "Add subtask")
             .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -530,7 +534,7 @@ struct TaskCreateSheet: View {
                 }
             }
             .task {
-                channelId = channelId ?? context.channelId ?? channels.first?.id
+                channelId = parentChannelId ?? channelId ?? context.channelId ?? channels.first?.id
                 members = (try? await store.reader.directoryMembers(workspaceId: workspace.id)) ?? []
             }
         }
@@ -543,6 +547,7 @@ struct TaskCreateSheet: View {
         let d = detail.trimmingCharacters(in: .whitespacesAndNewlines)
         if !d.isEmpty { payload["description"] = d }
         if let assignee { payload["assigned_to_npub"] = assignee }
+        if let parentTaskId { payload["metadata"] = ["parent_task_id": parentTaskId] }
         if model.submit(WriteIntent(kind: .taskCreate, targetId: nil, payload: payload), in: workspace) { dismiss() }
     }
 }
@@ -583,5 +588,143 @@ struct TaskEditSheet: View {
                                                "base": ["title": row.task.title, "description": row.task.description ?? "", "priority": row.task.priority],
                                                "patch": patch]
         if model.submit(WriteIntent(kind: .taskPatch, targetId: row.id, payload: payload), in: workspace) { dismiss() }
+    }
+}
+
+private struct SubtaskSnapshot: Sendable, Equatable {
+    var children: [TaskRecord] = []
+    var parentId: String?
+    var parent: TaskRecord?
+    var cache: TaskRelationshipCache?
+    var choice = ScopeChoice()
+    var task: TaskRecord?
+    var pending: [WriteItem] = []
+}
+
+/// Each expanded parent observes the same local store and loads its own paginated relationship list.
+/// Cycles are displayed as links but never recursively expanded.
+struct TaskSubtasksView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.pushRoute) private var pushRoute
+    let taskId: String
+    let workspace: WorkspaceRecord
+    let store: LocalStore
+    let ancestors: Set<String>
+    var showParent = true
+    @State private var snapshot = LiveQuery<SubtaskSnapshot>(initial: SubtaskSnapshot())
+    @State private var expanded: Set<String> = []
+    @State private var adding = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if showParent, let parentId = snapshot.value.parentId {
+                if let parent = snapshot.value.parent {
+                    Button { pushRoute(.task(workspaceId: workspace.id, taskId: parentId)) } label: {
+                        Label("Parent: \(parent.title)", systemImage: "arrow.up.left")
+                    }.accessibilityIdentifier("task.parent")
+                } else {
+                    Text("Parent task unavailable on this device or access is restricted.")
+                        .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+                }
+            }
+            HStack {
+                Text("Subtasks (\(snapshot.value.children.count)\(confirmed ? "" : "+"))").font(.amb(.headline))
+                Spacer()
+                if showParent {
+                    Button("Add subtask") { adding = true }.disabled(snapshot.value.task == nil)
+                        .accessibilityIdentifier("task.subtasks.add")
+                    Button { refresh(force: true) } label: { Image(systemName: "arrow.clockwise") }
+                        .accessibilityLabel("Refresh subtasks")
+                }
+            }
+            if let error = model.syncError(forKey: TaskRelationshipCache.key(workspace.id, taskId)) {
+                SyncNote(text: "Subtasks could not refresh. Showing saved tasks. \(error)", tone: .warning)
+            } else if !model.canRead {
+                SyncNote(text: "Offline or locked. Showing saved subtasks; connect and unlock to refresh.")
+            } else if snapshot.value.cache == nil {
+                SyncNote(text: "Loading subtasks… Saved tasks may be incomplete.")
+            }
+            if snapshot.value.cache?.unavailable == true {
+                SyncNote(text: "Some relationships are unavailable or restricted. The count includes only saved readable subtasks.", tone: .warning)
+            } else if let cache = snapshot.value.cache, !cache.complete {
+                SyncNote(text: "Subtasks partially loaded. Refresh to retry the remaining relationships.", tone: .warning)
+            }
+            if snapshot.value.cache != nil {
+                Text("Saved relationship list.").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+            }
+            ForEach(snapshot.value.pending) { item in
+                VStack(alignment: .leading) {
+                    Text(item.string("title") ?? "New subtask")
+                    WriteStatusLine(item: item, label: "Add subtask")
+                }
+            }
+            if snapshot.value.children.isEmpty && snapshot.value.pending.isEmpty && confirmed { Text("No subtasks.").foregroundStyle(Amb.mutedForeground) }
+            ForEach(snapshot.value.children) { child in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top) {
+                        if !ancestors.contains(child.id) {
+                            Button {
+                                if !expanded.insert(child.id).inserted { expanded.remove(child.id) }
+                            } label: { Image(systemName: expanded.contains(child.id) ? "chevron.down" : "chevron.right") }
+                            .accessibilityLabel("Expand subtasks of \(child.title)")
+                        }
+                        Button { pushRoute(.task(workspaceId: workspace.id, taskId: child.id)) } label: {
+                            VStack(alignment: .leading) {
+                                Text(child.title).multilineTextAlignment(.leading)
+                                Text(TaskState(rawValue: child.state)?.label ?? child.state)
+                                    .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                            }
+                        }.accessibilityIdentifier("task.subtask.\(child.id)")
+                    }
+                    if expanded.contains(child.id), !ancestors.contains(child.id) {
+                        TaskSubtasksView(taskId: child.id, workspace: workspace, store: store,
+                                         ancestors: ancestors.union([child.id]), showParent: false)
+                            .padding(.leading, 20)
+                    }
+                }
+            }
+        }
+        .buttonStyle(.borderless)
+        .sheet(isPresented: $adding) {
+            if let task = snapshot.value.task {
+                TaskCreateSheet(workspace: workspace, store: store, choice: snapshot.value.choice,
+                                context: WorkContext(scopeId: task.scopeId, channelId: task.channelId), parentTaskId: task.id, parentChannelId: task.channelId)
+            }
+        }
+        .task {
+            start()
+            refresh()
+            // Foreground fallback covers relationship events missed while this detail remains open.
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                refresh(force: true)
+            }
+        }
+        .onChange(of: model.identity) { _, _ in refresh(force: true) }
+    }
+
+    private var confirmed: Bool { snapshot.value.cache?.complete == true && snapshot.value.cache?.unavailable == false && model.canRead && model.syncError(forKey: TaskRelationshipCache.key(workspace.id, taskId)) == nil }
+
+    private func refresh(force: Bool = false) {
+        model.withWorkspace(workspace) { sync, c in
+            await sync.refreshTaskRelationships(c, workspace, taskId: taskId, force: force)
+        }
+    }
+
+    private func start() {
+        let w = workspace.id, id = taskId, store = store, connection = model.connection?.id ?? ""
+        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.tasks, .channels, .writes].contains($0.table)) || $0.table == .appState }) {
+            let task = try await store.reader.task(workspaceId: w, id: id)
+            let parentId = task.map { TaskTreeNode($0).parentId } ?? nil
+            let parent: TaskRecord?
+            if let parentId { parent = try await store.reader.task(workspaceId: w, id: parentId) } else { parent = nil }
+            return SubtaskSnapshot(children: try await store.reader.directSubtasks(workspaceId: w, taskId: id),
+                                   parentId: parentId, parent: parent,
+                                   cache: try await store.reader.taskRelationshipCache(workspaceId: w, taskId: id),
+                                   choice: try await scopeChoice(store, w), task: task,
+                                   pending: try await store.reader.writes(connectionId: connection, workspaceId: w).filter {
+                                       $0.kind == .taskCreate && ($0.payloadObject["metadata"] as? [String: Any])?["parent_task_id"] as? String == id
+                                   })
+        }
     }
 }

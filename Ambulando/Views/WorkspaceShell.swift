@@ -363,6 +363,7 @@ private struct ShellToolbar: ViewModifier {
                 }
             }
             .inlineTitle()
+            .modifier(WorkspaceHeaderTint())
     }
 
     /// The Mac's notifications sheet belongs to the window, like Search.

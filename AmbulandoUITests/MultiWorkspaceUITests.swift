@@ -61,9 +61,41 @@ final class MultiWorkspaceUITests: XCTestCase {
         app.buttons["workspace.collapse.Lab (sample)"].tap()
         XCTAssertTrue(labNotes.waitForExistence(timeout: 5))
         labNotes.tap()
-        XCTAssertTrue(app.staticTexts["context.workspace"].waitForExistence(timeout: 10))
-        XCTAssertEqual(app.staticTexts["context.workspace"].firstMatch.label, "Lab (sample)")
+        app.section("chat")
+        XCTAssertTrue(app.staticTexts["Working in Lab (sample)"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["context.workspace"].exists)
         capture(app, "multi-workspace-lab-context")
+    }
+
+    func testHeaderColourChangesAndWorkingContextInLightAndDark() {
+        for appearance in ["light", "dark"] {
+            let app = XCUIApplication()
+            app.launchArguments = ["-AmbulandoUITestFixture", "-AmbulandoFixtureReset", "-appearance", appearance]
+            app.launch()
+            XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 20))
+            app.buttons["channel.general"].tap()
+            XCTAssertTrue(app.staticTexts["Working in Studio (sample)"].waitForExistence(timeout: 10))
+            capture(app, "header-\(appearance)-blue-composer")
+            chooseWorkspaces(app)
+            app.buttons["workspace.colour.Studio (sample)"].tap()
+            app.buttons["Red"].tap()
+            app.buttons["Done"].tap()
+            app.buttons["sidebar.channel.general"].firstMatch.tap()
+            app.section("chat")
+            XCTAssertTrue(app.buttons["search"].waitForExistence(timeout: 10))
+            XCTAssertTrue(app.buttons["settings"].exists)
+            XCTAssertFalse(app.staticTexts["context.workspace"].exists)
+            XCTAssertTrue(app.staticTexts["Working in Studio (sample)"].exists)
+            capture(app, "header-\(appearance)-red-composer")
+            let thread = app.buttons["thread.3"].firstMatch
+            for _ in 0..<5 where !(thread.exists && thread.isHittable) { app.scrollViews.firstMatch.swipeDown() }
+            XCTAssertTrue(thread.exists)
+            thread.tap()
+            let modal = app.descendants(matching: .any)["thread.focus"].firstMatch
+            XCTAssertTrue(modal.staticTexts["Working in Studio (sample)"].waitForExistence(timeout: 10))
+            capture(app, "header-\(appearance)-modal-wording")
+            app.terminate()
+        }
     }
 
     func testPauseFinalWorkspacePersistsEmptySelectionAndReenable() {

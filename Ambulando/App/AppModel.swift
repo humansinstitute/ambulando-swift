@@ -984,7 +984,10 @@ final class AppModel {
     }
 
     func openTask(_ taskId: String, in workspace: WorkspaceRecord, force: Bool = false) {
-        withWorkspace(workspace) { sync, c in await sync.refreshTask(c, workspace, taskId: taskId, force: force) }
+        withWorkspace(workspace) { sync, c in
+            await sync.refreshTask(c, workspace, taskId: taskId, force: force)
+            await sync.refreshTaskRelationships(c, workspace, taskId: taskId, force: force)
+        }
     }
 
     func openDocs(_ workspace: WorkspaceRecord, scopeId: String?, force: Bool = false) {

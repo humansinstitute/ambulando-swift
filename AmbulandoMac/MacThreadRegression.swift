@@ -68,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacHeaderTintCheck") {
+                try await headerTintCheck(window, model: model)
+                print("PASS: existing Mac header tint, colours, light/dark controls and composer wording"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMultiWorkspaceCheck") {
                 try await multiWorkspaceCheck(window, model: model)
                 print("PASS: Mac multi-workspace navigation, independent streams, pause, drafts and durable empty selection"); fflush(stdout); exit(0)
@@ -1076,6 +1080,43 @@ extension MacThreadRegression {
         try require(unchanged?.body == expected && unchanged?.rowVersion == 4, "Cancel never changes sent message")
         try require(try textView(window).string == reply, "unsent reply restored after Cancel")
         try require(fixture.tower.actorNpub == model.identity.npub, "isolated sample author only")
+    }
+}
+#endif
+
+#if DEBUG
+extension MacThreadRegression {
+    static func headerTintCheck(_ window: NSWindow, model: AppModel) async throws {
+        guard let entry = model.workspaceEntries.first(where: { $0.boundary == model.selectedWorkspaceBoundary }) else {
+            throw Failure(description: "Missing fixture workspace")
+        }
+        model.show(.deck)
+        for dark in [false, true] {
+            UserDefaults.standard.set(dark ? "dark" : "light", forKey: "appearance")
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            for colour in [WorkspaceColour.blue, .green, .red] {
+                model.setWorkspaceColour(entry, colour: colour)
+                try await Task.sleep(for: .milliseconds(700))
+                try require(find(window, "search") != nil && find(window, "settings") != nil, "header controls retained")
+                try require(find(window, "context.workspace") == nil, "separate workspace strip removed")
+                // Capture the frame view, which includes the traffic lights and native toolbar.
+                guard let frame = window.contentView?.superview,
+                      let bitmap = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { throw Failure(description: "Missing frame") }
+                frame.cacheDisplay(in: frame.bounds, to: bitmap)
+                guard let png = bitmap.representation(using: .png, properties: [:]) else { throw Failure(description: "Missing PNG") }
+                print("SNAPSHOT_BASE64 header-\(dark ? "dark" : "light")-\(colour.rawValue) \(png.base64EncodedString())")
+            }
+        }
+        model.selectContext(WorkContext(scopeId: FixtureTower.scopeAmbulando, channelId: FixtureTower.generalChannel))
+        model.show(.chat)
+        try await Task.sleep(for: .seconds(2))
+        try require(containsText(window, "Working in \(entry.workspace.label)"), "composer working destination")
+        try snapshot(window, model: model, name: "header-composer-wording")
+        try press(window, "thread.3")
+        try await Task.sleep(for: .seconds(1))
+        try require(find(window, "thread.focus.close") != nil, "focused modal opened")
+        try require(containsText(window, "Working in \(entry.workspace.label)"), "modal working destination")
+        try snapshot(window, model: model, name: "header-modal-wording")
     }
 }
 #endif

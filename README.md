@@ -20,6 +20,10 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Task hierarchy and subtask details (iPhone/iPad build 58, Mac build 49)
+
+Canvas task trees indent children below/right of their parents, keep siblings aligned, and separate nesting from dashed dependencies. Task details show direct subtasks, expandable descendants, parent navigation and Add subtask. Relationship pages are cached with explicit partial, offline and restricted states. See [task hierarchy and validation](docs/task-hierarchy.md). Source delivery, physical installation and authenticated acceptance are reported separately on the release task.
+
 ## Edit messages in the Mac chat composer (Mac build 46)
 
 On Mac, Edit opens the previous message in the chat composer. Type `@`, choose a person or bot, then Save.

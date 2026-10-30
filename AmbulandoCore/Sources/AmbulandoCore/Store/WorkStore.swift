@@ -153,7 +153,9 @@ extension StoreWriter {
             try s.run([.text(r.workspaceId), .text(r.id), r.scopeId.sql, .text(r.channelId), .text(r.title), r.description.sql, .text(r.state),
                        .text(r.priority), r.assignedToNpub.sql, r.createdByNpub.sql, .int(Int64(r.rowVersion)), .int(Int64(r.activityVersion)),
                        .text(r.createdAt), .text(r.updatedAt), .blob(r.raw)])
-            changed += db.changes
+            let wrote = db.changes
+            changed += wrote
+            if wrote > 0 { try noteTaskRelationship(r) }
         }
         return changed
     }

@@ -340,6 +340,7 @@ struct TaskTreeNapletBody: View {
     @State private var view: TaskTreeView?
     @State private var graph = TaskTreeGraph()
     @State private var loading = false
+    @State private var loadRevision = UUID()
     @State private var note: String?
     @State private var entry: Entry?
     @State private var title = ""
@@ -366,6 +367,7 @@ struct TaskTreeNapletBody: View {
             .buttonStyle(.bordered).controlSize(.small).font(.amb(.caption))
             .padding(.horizontal, 10).padding(.vertical, 6)
             .disabled(!interactive || busy)
+            Text("Solid: subtasks · Dashed: dependencies").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
             if let note { Text(note).font(.amb(.caption2)).foregroundStyle(Amb.warning).padding(.horizontal, 10).frame(maxWidth: .infinity, alignment: .leading) }
             Divider()
             if current.rootTaskId == nil {
@@ -388,6 +390,12 @@ struct TaskTreeNapletBody: View {
             reload(view ?? saved)
         }
         .sheet(isPresented: $choosing) { existingSheet }
+        .task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                reload(view ?? TaskTreeView(savedLayout: naplet.savedLayout, napletId: naplet.id))
+            }
+        }
     }
 
     // MARK: Graph
@@ -401,11 +409,26 @@ struct TaskTreeNapletBody: View {
                     guard let a = positions[edge.from], let b = positions[edge.to] else { continue }
                     var path = Path()
                     if edge.child {
-                        path.move(to: CGPoint(x: 20 + Double(a.x) * Self.cell.width + Self.cell.nodeWidth / 2, y: 20 + Double(a.y) * Self.cell.height + Self.cell.nodeHeight))
-                        path.addLine(to: CGPoint(x: 20 + Double(b.x) * Self.cell.width + Self.cell.nodeWidth / 2, y: 20 + Double(b.y) * Self.cell.height))
+                        let x = 20 + Double(a.x) * Self.cell.width + Self.cell.nodeWidth
+                        let y = 20 + Double(a.y) * Self.cell.height + Self.cell.nodeHeight / 2
+                        let endX = 20 + Double(b.x) * Self.cell.width
+                        let endY = 20 + Double(b.y) * Self.cell.height + Self.cell.nodeHeight / 2
+                        path.move(to: CGPoint(x: x, y: y))
+                        path.addLine(to: CGPoint(x: x + 36, y: y))
+                        path.addLine(to: CGPoint(x: x + 36, y: endY))
+                        path.addLine(to: CGPoint(x: endX, y: endY))
                     } else {
-                        path.move(to: CGPoint(x: 20 + Double(a.x) * Self.cell.width + Self.cell.nodeWidth, y: 20 + Double(a.y) * Self.cell.height + Self.cell.nodeHeight / 2))
-                        path.addLine(to: CGPoint(x: 20 + Double(b.x) * Self.cell.width, y: 20 + Double(b.y) * Self.cell.height + Self.cell.nodeHeight / 2))
+                        let x = 20 + Double(a.x) * Self.cell.width + Self.cell.nodeWidth
+                        let y = 20 + Double(a.y) * Self.cell.height + Self.cell.nodeHeight / 2
+                        let endX = 20 + Double(b.x) * Self.cell.width
+                        let endY = 20 + Double(b.y) * Self.cell.height + Self.cell.nodeHeight / 2
+                        let laneY = 20 + Double(a.y) * Self.cell.height + Self.cell.nodeHeight + 28
+                        path.move(to: CGPoint(x: x, y: y))
+                        path.addLine(to: CGPoint(x: x + 44, y: y))
+                        path.addLine(to: CGPoint(x: x + 44, y: laneY))
+                        path.addLine(to: CGPoint(x: max(4, endX - 16), y: laneY))
+                        path.addLine(to: CGPoint(x: max(4, endX - 16), y: endY))
+                        path.addLine(to: CGPoint(x: endX, y: endY))
                     }
                     context.stroke(path, with: .color(.secondary), style: StrokeStyle(lineWidth: 1.5, dash: edge.child ? [] : [5, 4]))
                 }
@@ -519,19 +542,31 @@ struct TaskTreeNapletBody: View {
     // MARK: Loading and view state
 
     private func reload(_ current: TaskTreeView) {
-        guard let root = current.rootTaskId, let sync = model.sync, let connection = model.connection, model.canRead else { graph = TaskTreeGraph(); return }
+        guard let root = current.rootTaskId else { graph = TaskTreeGraph(); return }
+        guard let sync = model.sync, let connection = model.connection, let store = model.store else { return }
         loading = true
-        let w = workspace
+        let w = workspace, revision = UUID()
+        loadRevision = revision
         Task {
+            let cached = (try? await store.reader.tasks(workspaceId: w.id, includeArchived: true, limit: 2000)) ?? []
+            let saved = TaskTreeGraph.project(cached.map { TaskTreeNode($0) }, root: root, collapsed: current.collapsed, upstream: current.upstream)
+            guard loadRevision == revision else { return }
+            graph = saved
+            guard model.canRead else {
+                note = "Offline or locked. Showing saved tasks; the tree may be incomplete."
+                loading = false
+                return
+            }
             do {
                 let result = try await TaskTreeService(sync: sync).load(connection, w, root: root, upstream: current.upstream)
                 // Projection runs here, off the main actor's layout work for the rest of the board.
                 let projected = await Task.detached { TaskTreeGraph.project(result.tasks, root: root, collapsed: current.collapsed, upstream: current.upstream) }.value
+                guard loadRevision == revision else { return }
                 graph = projected
                 note = result.unavailable ? "Some related tasks are not available to you." : (result.partial ? "Tree partially loaded." : nil)
             } catch {
-                graph = TaskTreeGraph()
-                note = (error as? LocalizedError)?.errorDescription ?? "Tasks unavailable. Refresh to retry."
+                guard loadRevision == revision else { return }
+                note = "Showing saved tasks; the tree may be incomplete. " + ((error as? LocalizedError)?.errorDescription ?? "Tasks unavailable. Refresh to retry.")
             }
             loading = false
         }
