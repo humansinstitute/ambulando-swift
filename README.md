@@ -11,6 +11,26 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Workspace colour cues (iPhone/iPad build 61, Mac build 52)
+
+Channel labels use ordinary text colours. When more than one workspace is enabled,
+unread dots use their workspace colour, including the shared Unread & Active list;
+the existing header keeps its faint workspace tint. With one enabled workspace,
+navigation uses ordinary unread dots and header styling, and composers and thread
+modals hide the Working in workspace indicator. Paused or discovered workspaces do
+not activate these cues. Changes apply immediately when workspaces are enabled or
+paused, without relaunching or changing draft and sync behaviour.
+
+## Document opening mode (iPhone/iPad build 61, Mac build 52)
+
+Settings → Documents → Default document opening mode offers View and Edit.
+Unset choices open existing documents in View, including upgraded installations.
+Explicit choices are saved locally for the signed-in user across workspaces;
+manual switching and saved drafts do not change the preference. Explicit Edit
+and new-document actions retain their editing intent, with permission checks,
+autosave and offline drafts preserved. Web and native choices are device-local
+and do not synchronize between devices. Android catch-up remains deferred.
+
 ## Layout
 
 | Path | Contents |
