@@ -11,11 +11,15 @@ public struct WorkspaceSync: Sendable {
     public let live: LiveRegistry
     /// Background `URLSession` transfers for presigned object-store URLs, when the app provides them.
     public let transfers: BackgroundTransfers?
+    public let boundary: WorkspaceBoundary?
+    public let discoveryOnly: Bool
 
     public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport,
-                live: LiveRegistry = LiveRegistry(), transfers: BackgroundTransfers? = nil) {
+                live: LiveRegistry = LiveRegistry(), transfers: BackgroundTransfers? = nil,
+                boundary: WorkspaceBoundary? = nil, discoveryOnly: Bool = false) {
         self.store = store; self.engine = engine; self.identity = identity; self.transport = transport
         self.live = live; self.transfers = transfers
+        self.boundary = boundary; self.discoveryOnly = discoveryOnly
     }
 
     func api(origin: TowerOrigin, signed: Bool = true) -> TowerAPI {
@@ -40,12 +44,17 @@ public struct WorkspaceSync: Sendable {
         await engine.enqueue("discover:\(connection.id)", priority: priority, force: force, retries: SyncBackoff.readRetries) {
             try await sync.identity.requireReader(npub: connection.signerNpub)
             let origin = try TowerOrigin(connection.origin)
-            let workspaces = try await sync.api(origin: origin).workspaces()
+            var workspaces = try await sync.api(origin: origin).workspaces()
+            if let boundary = sync.boundary {
+                workspaces = workspaces.filter { $0.id == boundary.workspaceId && $0.appNpub == boundary.appNpub }
+            }
             try Task.checkCancellation()
             try await sync.store.writer.replaceWorkspaces(connectionId: connection.id, workspaces)
             // Keeps an enabled background credential pinned to exactly the workspaces this identity can see.
             try? await sync.identity.updateBackgroundWorkspaces(origin: origin, workspaceIds: workspaces.map(\.id))
-            for workspace in workspaces { await sync.refreshWorkspace(connection, workspace, priority: .background, force: force) }
+            if !sync.discoveryOnly {
+                for workspace in workspaces { await sync.refreshWorkspace(connection, workspace, priority: .background, force: force) }
+            }
         }
     }
 

@@ -248,6 +248,83 @@ final class ComposerUploadTests: XCTestCase {
         XCTAssertEqual(elsewhere.uploadText, "")
     }
 
+    func testApplicationBoundRestoreKeepsForeignPreparedAndCompletedUploadsPrivateAndRecoverable() async throws {
+        let h = try await WorkHarness.make()
+        let originalApp = Bech32.encode(hrp: "npub", data: Data(repeating: 0x11, count: 32))
+        let objectId = "3f1c2b9e-6a0d-4b8e-9d1f-0c2a7e5b4d11"
+        let target = h.chat.target(), counter = Counter()
+        try FileManager.default.createDirectory(at: h.staging, withIntermediateDirectories: true)
+        for completed in [false, true] {
+            let id = UUID().uuidString.lowercased(), bytes = Data("private old-application attachment".utf8)
+            let file = "paste-\(id).png", token = UploadToken.make(.image, id: id)
+            let record = ComposerUploads.Record(id: id, target: target, appNpub: originalApp, kind: .image,
+                filename: "private-old-application-filename.png", mimeType: "image/png", sizeBytes: bytes.count,
+                sha256: SHA256Hex.of(bytes), staged: file,
+                prepared: PreparedObject(objectId: objectId, uploadURL: "https://objects.example/private-old-object"),
+                objectId: completed ? objectId : nil)
+            let recordURL = h.staging.appendingPathComponent("paste-\(id).json")
+            let fileURL = h.staging.appendingPathComponent(file)
+            let encoded = try JSONEncoder().encode(record)
+            try encoded.write(to: recordURL); try bytes.write(to: fileURL)
+
+            // Connection/workspace/channel/thread IDs are identical; only the application's namespace differs.
+            let current = ComposerUploads(store: h.store, staging: h.staging, appNpub: h.workspace.appNpub) { _ in
+                await counter.enter("wrong-application upload"); return objectId
+            }
+            let host = Host(target, text: token, caret: token.count)
+            current.attach(host)
+            XCTAssertTrue(current.items.isEmpty, "No filename, prepared URL, size or object ID may enter the other application's UI")
+            XCTAssertTrue(current.uploads(for: target).isEmpty)
+            XCTAssertEqual(host.uploadText, token, "A completed foreign object must not replace the token")
+            current.retry(id); current.remove(id)
+            XCTAssertEqual(try Data(contentsOf: recordURL), encoded)
+            XCTAssertEqual(try Data(contentsOf: fileURL), bytes)
+
+            // The original application can still restore its pending upload or apply its completed object.
+            let original = ComposerUploads(store: h.store, staging: h.staging, appNpub: originalApp) { job in
+                XCTAssertEqual(job.appNpub, originalApp)
+                return objectId
+            }
+            let restoredHost = Host(target, text: token, caret: token.count)
+            original.attach(restoredHost)
+            if !completed {
+                let restored = try XCTUnwrap(original.uploads(for: target).first)
+                XCTAssertEqual(restored.filename, record.filename)
+                XCTAssertEqual(restored.prepared, record.prepared)
+                XCTAssertTrue(restored.retryable)
+                original.retry(id)
+                try await eventually { restoredHost.uploadText.contains("storage://") }
+            }
+            XCTAssertTrue(restoredHost.uploadText.contains(objectId))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: recordURL.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+        }
+        let wrongUploads = await counter.total
+        XCTAssertEqual(wrongUploads, 0)
+    }
+
+    func testApplicationBoundPasteRejectsMismatchedAppBeforeStagingAndAcceptsItsOwnApp() async throws {
+        let h = try await WorkHarness.make(), counter = Counter()
+        let objectId = "3f1c2b9e-6a0d-4b8e-9d1f-0c2a7e5b4d11"
+        let uploads = ComposerUploads(store: h.store, staging: h.staging, appNpub: h.workspace.appNpub) { job in
+            await counter.enter(job.appNpub); return objectId
+        }
+        let host = Host(h.chat.target(), text: "", caret: 0)
+        uploads.attach(host)
+        let before = try stagedFiles(h)
+        let rejected = uploads.paste([imageProvider()], target: host.uploadTarget, appNpub: "another-application", context: "message")
+        XCTAssertTrue(rejected.isEmpty); XCTAssertTrue(uploads.items.isEmpty)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(try stagedFiles(h), before)
+        let rejectedCount = await counter.total
+        XCTAssertEqual(rejectedCount, 0)
+
+        host.insert(uploads.paste([imageProvider()], target: host.uploadTarget, appNpub: h.workspace.appNpub, context: "message").joined())
+        try await eventually { host.uploadText.contains("storage://") }
+        let acceptedApps = await counter.order
+        XCTAssertEqual(acceptedApps, [h.workspace.appNpub])
+    }
+
     // MARK: Support
 
     private func center(_ h: WorkHarness) -> ComposerUploads {

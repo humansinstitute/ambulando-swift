@@ -53,9 +53,10 @@ extension AppModel {
     func editCanvas<T: Sendable>(_ body: @escaping @Sendable (CanvasEditor, ConnectionRecord, WorkspaceRecord) async throws -> T) async -> Result<T, CanvasEditError> {
         guard let sync, let connection, let workspace = selectedWorkspace else { return .failure(.unexpected("No workspace is selected.")) }
         guard isUnlocked else { return .failure(.locked) }
+        let epoch = wikiContextEpoch
         do {
             let value = try await body(CanvasEditor(sync: sync), connection, workspace)
-            guard selectedWorkspace?.id == workspace.id else { return .failure(.unexpected("The workspace changed before Tower answered.")) }
+            guard epoch == wikiContextEpoch, selectedWorkspace?.appNpub == workspace.appNpub, self.connection?.id == connection.id, selectedWorkspace?.id == workspace.id else { return .failure(.unexpected("The workspace changed before Tower answered.")) }
             return .success(value)
         } catch let error as CanvasEditError {
             return .failure(error)
@@ -86,18 +87,23 @@ extension AppModel {
     /// Opens a conversation by id in Chat. A thread not stored yet is fetched first (bounded wait); one that cannot be read
     /// is reported instead of opening an empty screen.
     func openThreadById(_ threadId: String) {
-        guard let store, let workspace = selectedWorkspace else { return }
+        guard let store, let sync, let connection, let workspace = selectedWorkspace else { return }
+        let epoch = wikiContextEpoch
         Task {
+            guard epoch == wikiContextEpoch else { return }
             if (try? await store.reader.thread(workspaceId: workspace.id, id: threadId)) == nil {
-                ensureThread(threadId, in: workspace)
+                guard epoch == wikiContextEpoch else { return }
+                await sync.ensureThread(connection, workspace, threadId: threadId)
                 for _ in 0..<50 {
-                    try? await Task.sleep(for: .milliseconds(100))
+                    do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                    guard epoch == wikiContextEpoch else { return }
                     if (try? await store.reader.thread(workspaceId: workspace.id, id: threadId)) != nil { break }
                     if syncError(forKey: WorkspaceSync.threadRecordKey(workspace.id, threadId)) != nil { break }
                 }
             }
-            guard selectedWorkspace?.id == workspace.id else { return }
-            if (try? await store.reader.thread(workspaceId: workspace.id, id: threadId)) != nil { openThreadMention(threadId) }
+            let stored = try? await store.reader.thread(workspaceId: workspace.id, id: threadId)
+            guard epoch == wikiContextEpoch else { return }
+            if stored != nil { openThreadMention(threadId) }
             else { notice = "This conversation is not available on this \(Device.name)." }
         }
     }
@@ -131,10 +137,12 @@ extension AppModel {
     /// One immutable typed target/anchor CAS through the existing durable queue.
     func movePin(_ item: PinnedItem, before anchor: PinnedItem?, in workspace: WorkspaceRecord) {
         guard let store, let connection else { return }
-        let connectionId = connection.id
+        let connectionId = connection.id, epoch = wikiContextEpoch
         Task {
             do {
-                guard try await store.reader.state("pin-order-support:\(connectionId):\(workspace.id)") == "1" else {
+                let supported = try await store.reader.state("pin-order-support:\(connectionId):\(workspace.id)") == "1"
+                guard epoch == wikiContextEpoch else { return }
+                guard supported else {
                     notice = "Pin ordering needs the updated Tower connection. Refresh and try again."
                     return
                 }
@@ -147,7 +155,7 @@ extension AppModel {
                         "resource_id": anchor.pin.resourceId, "expected_row_version": anchor.pin.rowVersion] as [String: any Sendable]
                 }
                 submit(WriteIntent(kind: .pinMove, targetId: target.resourceId, payload: payload), in: workspace)
-            } catch { notice = error.localizedDescription }
+            } catch { if epoch == wikiContextEpoch { notice = error.localizedDescription } }
         }
     }
 
@@ -155,9 +163,10 @@ extension AppModel {
     /// a stale one is re-read and either found already done or reported without silently rebasing.
     func setPinned(_ pinned: Bool, type: PinRecord.ResourceType, id: String, in workspace: WorkspaceRecord) {
         guard let store, let connection else { return }
-        let connectionId = connection.id
+        let connectionId = connection.id, epoch = wikiContextEpoch
         Task {
             let stored = try? await store.reader.pin(connectionId: connectionId, workspaceId: workspace.id, type: type, resourceId: id)
+            guard epoch == wikiContextEpoch else { return }
             submit(WriteIntent(kind: .pinSet, targetId: id, payload: ["resource_type": type.rawValue, "pinned": pinned,
                                                                        "expected_row_version": stored?.rowVersion ?? 0,
                                                                        "mutation_id": UUID().uuidString.lowercased()]), in: workspace)

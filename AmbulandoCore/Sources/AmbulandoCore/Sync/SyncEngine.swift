@@ -62,6 +62,8 @@ public actor SyncEngine {
 
     private struct Job {
         let key: String; var priority: SyncPriority; var work: Work; let sequence: UInt64
+        var epoch: UInt64 = 0
+        var generation: UInt64 = 0
         /// Automatic retries left after a transient failure; reads only (a write is never replayed by the engine).
         var owner: UUID?
         var retries = 0
@@ -72,11 +74,17 @@ public actor SyncEngine {
 
     public let maxConcurrent: Int
     public let reservedForeground: Int
+    private let parent: SyncEngine?
+    private let namespace: String
+    public nonisolated let activity: WorkspaceActivity
+    private var keyEpochs: [String: UInt64] = [:]
+    private var served: [String: UInt64] = [:]
     private let clock = ContinuousClock()
     private let random: @Sendable () -> Double
     private var queue: [Job] = []
     private var running: [String: Task<Void, Never>] = [:]
     private var runningOwner: [String: UUID] = [:]
+    private var runningDropped: [String: @Sendable () -> Void] = [:]
     private var runningPriority: [String: SyncPriority] = [:]
     private var reruns: [String: Job] = [:]
     private var failures: [String: Int] = [:]
@@ -92,35 +100,85 @@ public actor SyncEngine {
     private var observers: [UUID: AsyncStream<SyncSnapshot>.Continuation] = [:]
 
     public init(maxConcurrent: Int = 3, reservedForeground: Int = 1, random: @escaping @Sendable () -> Double = { Double.random(in: 0...1) }) {
+        parent = nil; namespace = ""; activity = WorkspaceActivity()
         self.maxConcurrent = max(1, maxConcurrent)
         self.reservedForeground = min(max(0, reservedForeground), self.maxConcurrent - 1)
         self.random = random
     }
 
+    /// A workspace-local facade over the app's shared bounded pool. Namespace must identify origin, signer,
+    /// application and workspace, rather than a server-generated UUID alone.
+    public init(parent: SyncEngine, namespace: String, connectionNamespace: String? = nil, activity: WorkspaceActivity = WorkspaceActivity()) {
+        self.parent = parent
+        self.namespace = WorkspaceBoundary.digest([connectionNamespace ?? namespace]) + "/" + WorkspaceBoundary.digest([namespace]) + "|"
+        self.activity = activity
+        self.maxConcurrent = parent.maxConcurrent
+        self.reservedForeground = parent.reservedForeground
+        self.random = { Double.random(in: 0...1) }
+    }
+
+    public func pause() async {
+        activity.pause()
+        await cancelAll()
+    }
+
+    public func resume() { activity.resume() }
+
+    private func local(_ snapshot: SyncSnapshot) -> SyncSnapshot {
+        func keys(_ values: Set<String>) -> Set<String> {
+            Set(values.filter { $0.hasPrefix(namespace) }.map { String($0.dropFirst(namespace.count)) })
+        }
+        let errors = Dictionary(uniqueKeysWithValues: snapshot.errors.filter { $0.key.hasPrefix(namespace) }
+            .map { (String($0.key.dropFirst(namespace.count)), $0.value) })
+        return SyncSnapshot(running: keys(snapshot.running), queued: keys(snapshot.queued), scheduled: keys(snapshot.scheduled),
+                            errors: errors, connectionFailures: keys(snapshot.connectionFailures), retrying: keys(snapshot.retrying))
+    }
+
     public var snapshot: SyncSnapshot {
+        get async {
+            if let parent { return local(await parent.snapshot) }
+            return localSnapshot
+        }
+    }
+
+    private var localSnapshot: SyncSnapshot {
         let now = clock.now
         let waiting = Set(queue.map(\.key).filter { readyAt($0).map { $0 > now } ?? false })
         return SyncSnapshot(running: Set(running.keys), queued: Set(queue.map(\.key)).subtracting(waiting), scheduled: waiting, errors: errors,
                             connectionFailures: connectionFailures, retrying: Set(queue.filter { $0.attempt > 0 }.map(\.key)))
     }
 
-    public func statusStream() -> AsyncStream<SyncSnapshot> {
+    public func statusStream() async -> AsyncStream<SyncSnapshot> {
+        if let parent {
+            let source = await parent.statusStream()
+            let (stream, continuation) = AsyncStream<SyncSnapshot>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let task = Task { [weak self] in
+                for await snapshot in source {
+                    guard let self else { break }
+                    continuation.yield(await self.local(snapshot))
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+            return stream
+        }
         let id = UUID()
         let (stream, continuation) = AsyncStream<SyncSnapshot>.makeStream(bufferingPolicy: .bufferingNewest(1))
         observers[id] = continuation
-        continuation.yield(snapshot)
+        continuation.yield(localSnapshot)
         continuation.onTermination = { [weak self] _ in Task { await self?.removeObserver(id) } }
         return stream
     }
 
     private func removeObserver(_ id: UUID) { observers[id] = nil }
-    private func publish() { let s = snapshot; for o in observers.values { o.yield(s) } }
+    private func publish() { let s = localSnapshot; for o in observers.values { o.yield(s) } }
 
     /// Receives retry and recovery events (diagnostics). Not called for jobs without `retries`.
     public func setEventHandler(_ handler: (@Sendable (SyncEvent) -> Void)?) { onEvent = handler }
 
     /// A fresh result for `key` arrived by another path (a live event refetched the same data): its connection failure is obsolete.
-    public func clearConnectionFailure(_ key: String) {
+    public func clearConnectionFailure(_ key: String) async {
+        if let parent { await parent.clearConnectionFailure(namespace + key); return }
         guard connectionFailures.remove(key) != nil else { return }
         errors[key] = nil
         failures[key] = nil
@@ -133,15 +191,27 @@ public actor SyncEngine {
     /// `retries` is the number of automatic, backed-off reruns after a transient connection failure (a timeout, a dropped
     /// or missing network, a 502/503/504). Only for idempotent reads: each rerun calls `work` again, so it signs afresh.
     public func enqueue(_ key: String, priority: SyncPriority = .background, force: Bool = false, delay: Duration? = nil,
-                        retries: Int = 0, _ work: @escaping Work) {
-        enqueue(key, priority: priority, force: force, delay: delay, retries: retries, work: work, dropped: nil)
+                        retries: Int = 0, _ work: @escaping Work) async {
+        await enqueue(key, priority: priority, force: force, delay: delay, retries: retries, work: work, dropped: nil)
     }
 
     private func enqueue(_ key: String, priority: SyncPriority, force: Bool, delay: Duration?, retries: Int = 0, work: @escaping Work,
-                         dropped: (@Sendable () -> Void)?, owner: UUID? = nil) {
-        if owner != nil, Task.isCancelled { dropped?(); return }
+                         dropped: (@Sendable () -> Void)?, owner: UUID? = nil) async {
+        guard !Task.isCancelled, let lease = try? activity.lease() else { dropped?(); return }
+        if let parent {
+            let activity = self.activity
+            await parent.enqueue(namespace + key, priority: priority, force: force, delay: delay, retries: retries, work: {
+                try await activity.withLease(lease) {
+                    try Task.checkCancellation()
+                    try await work()
+                }
+            }, dropped: dropped, owner: owner)
+            return
+        }
         sequence &+= 1
         var job = Job(key: key, priority: priority, work: work, sequence: sequence, dropped: dropped)
+        job.epoch = keyEpochs[key] ?? 0
+        job.generation = generation
         job.owner = owner
         job.retries = max(0, retries)
         if force { notBefore[key] = nil }
@@ -160,6 +230,8 @@ public actor SyncEngine {
             reruns[key] = rerun
         } else if let index = queue.firstIndex(where: { $0.key == key }) {
             queue[index].dropped?()
+            queue[index].epoch = job.epoch
+            queue[index].generation = job.generation
             queue[index].owner = owner
             queue[index].work = work
             queue[index].dropped = dropped
@@ -181,26 +253,38 @@ public actor SyncEngine {
         }
     }
 
-    public func cancel(_ key: String) {
+    public func cancel(_ key: String) async {
+        if let parent { await parent.cancel(namespace + key); return }
+        cancelLocal(key)
+    }
+
+    private func cancelLocal(_ key: String) {
+        keyEpochs[key, default: 0] &+= 1
         for job in queue where job.key == key { job.dropped?() }
         queue.removeAll { $0.key == key }
         reruns.removeValue(forKey: key)?.dropped?()
         delayedUntil[key] = nil
+        notBefore[key] = nil
+        failures[key] = nil
         if connectionFailures.remove(key) != nil { errors[key] = nil }
+        runningDropped[key]?()
         running[key]?.cancel()
         publish()
         resumeIdleWaitersIfIdle()
     }
 
     /// Cancels every job whose key starts with `prefix` (for example all profile refreshes of a connection).
-    public func cancel(prefix: String) {
+    public func cancel(prefix: String) async {
+        if let parent { await parent.cancel(prefix: namespace + prefix); return }
         let keys = Set(queue.map(\.key)).union(reruns.keys).union(delayedUntil.keys).union(running.keys).filter { $0.hasPrefix(prefix) }
-        for key in keys { cancel(key) }
+        for key in keys { cancelLocal(key) }
     }
 
     /// Cancels everything (identity locked, workspace removed, background task expiring).
-    public func cancelAll() {
+    public func cancelAll() async {
+        if let parent { await parent.cancel(prefix: namespace); return }
         generation &+= 1
+        for key in running.keys { keyEpochs[key, default: 0] &+= 1 }
         for job in queue { job.dropped?() }
         for job in reruns.values { job.dropped?() }
         queue.removeAll()
@@ -208,6 +292,7 @@ public actor SyncEngine {
         delayedUntil.removeAll()
         for key in connectionFailures { errors[key] = nil }
         connectionFailures.removeAll()
+        for dropped in runningDropped.values { dropped() }
         for task in running.values { task.cancel() }
         publish()
         resumeIdleWaitersIfIdle()
@@ -215,6 +300,14 @@ public actor SyncEngine {
 
     /// Returns when nothing is queued or running, or when the calling task is cancelled (BG expiration).
     public func waitUntilIdle() async {
+        if let parent {
+            while !Task.isCancelled {
+                let state = local(await parent.snapshot)
+                if state.running.isEmpty && state.queued.isEmpty && state.scheduled.isEmpty { return }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            return
+        }
         if queue.isEmpty && running.isEmpty { return }
         let id = UUID()
         await withTaskCancellationHandler {
@@ -229,7 +322,10 @@ public actor SyncEngine {
 
     private func releaseIdleWaiter(_ id: UUID) { idleWaiters.removeValue(forKey: id)?.resume() }
 
-    public func failureCount(_ key: String) -> Int { failures[key] ?? 0 }
+    public func failureCount(_ key: String) async -> Int {
+        if let parent { return await parent.failureCount(namespace + key) }
+        return failures[key] ?? 0
+    }
 
     /// Runs one job under the engine's slots and priorities and returns its result. The job's own error is returned
     /// to the caller rather than recorded (no backoff for the key). A job removed before it ran (cancel, `cancelAll`)
@@ -238,10 +334,17 @@ public actor SyncEngine {
                                                  _ work: @escaping @Sendable () async throws -> T) async throws -> T {
         let result = OneShot<T>()
         let owner = UUID()
+        let lease = try activity.lease()
+        let activity = self.activity
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             await enqueue(key, priority: priority, force: true, delay: nil, retries: 0, work: {
-                do { result.resume(.success(try await work())) } catch { result.resume(.failure(error)) }
+                do {
+                    let value = try await work()
+                    try activity.check(lease)
+                    try Task.checkCancellation()
+                    result.resume(.success(value))
+                } catch { result.resume(.failure(error)) }
             }, dropped: { result.resume(.failure(CancellationError())) }, owner: owner)
             return try await result.value()
         } onCancel: {
@@ -252,7 +355,8 @@ public actor SyncEngine {
 
     /// A cancelled `perform` owns only its invocation. In particular, preserve a foreground rerun enqueued while a
     /// background read was running, and never let a delayed cancellation cancel a newer invocation of the same key.
-    private func cancelPerform(_ key: String, owner: UUID) {
+    private func cancelPerform(_ key: String, owner: UUID) async {
+        if let parent { await parent.cancelPerform(namespace + key, owner: owner); return }
         for job in queue where job.key == key && job.owner == owner { job.dropped?() }
         queue.removeAll { $0.key == key && $0.owner == owner }
         if reruns[key]?.owner == owner { reruns.removeValue(forKey: key)?.dropped?() }
@@ -267,19 +371,44 @@ public actor SyncEngine {
             let backgroundRunning = runningPriority.values.filter { $0 == .background }.count
             let backgroundAllowed = backgroundRunning < maxConcurrent - reservedForeground
             let eligible = queue.indices.filter {
-                (backgroundAllowed || queue[$0].priority > .background) && (readyAt(queue[$0].key).map { $0 <= now } ?? true)
+                let boundary = connectionScope(queue[$0].key)
+                // Keep one pool slot available to another boundary even when a slow Tower has visible work.
+                // Legacy unscoped users retain their original parallelism.
+                let boundaryAllowed = boundary.isEmpty || running.keys.filter { connectionScope($0) == boundary }.count < max(1, maxConcurrent - 1)
+                let connectionBackground = running.keys.filter { connectionScope($0) == boundary && runningPriority[$0] == .background }.count
+                let boundaryBackgroundAllowed = boundary.isEmpty || queue[$0].priority > .background
+                    || connectionBackground < max(1, maxConcurrent - reservedForeground - 1)
+                return boundaryAllowed && boundaryBackgroundAllowed && (backgroundAllowed || queue[$0].priority > .background)
+                    && (readyAt(queue[$0].key).map { $0 <= now } ?? true)
             }
-            guard let index = eligible.max(by: { a, b in
-                (queue[a].priority, UInt64.max - queue[a].sequence) < (queue[b].priority, UInt64.max - queue[b].sequence)
+            // Round-robin namespaces at equal priority, preferring a boundary with fewer active slots.
+            // One busy Tower cannot monopolise the queue ahead of a newly ready Tower.
+            guard let index = eligible.min(by: { a, b in
+                let left = queue[a], right = queue[b]
+                if left.priority != right.priority { return left.priority > right.priority }
+                let l = scope(left.key), r = scope(right.key)
+                if l != r {
+                    let lc = running.keys.filter { scope($0) == l }.count
+                    let rc = running.keys.filter { scope($0) == r }.count
+                    if lc != rc { return lc < rc }
+                    if served[l, default: 0] != served[r, default: 0] { return served[l, default: 0] < served[r, default: 0] }
+                }
+                return left.sequence < right.sequence
             }) else { break }
             start(queue.remove(at: index))
         }
         scheduleWake(now: now)
     }
 
+    private func scope(_ key: String) -> String { key.firstIndex(of: "|").map { String(key[..<$0]) } ?? "" }
+    private func connectionScope(_ key: String) -> String { scope(key).split(separator: "/").first.map(String.init) ?? "" }
+
     private func start(_ job: Job) {
+        sequence &+= 1
+        served[scope(job.key)] = sequence
         let key = job.key, work = job.work, started = generation
         runningOwner[key] = job.owner
+        runningDropped[key] = job.dropped
         runningPriority[key] = job.priority
         delayedUntil[key] = nil
         running[key] = Task.detached(priority: job.priority > .background ? .userInitiated : .utility) { [weak self] in
@@ -296,9 +425,11 @@ public actor SyncEngine {
         running[key] = nil
         runningPriority[key] = nil
         runningOwner[key] = nil
-        let family = key.split(separator: ":").first.map(String.init) ?? key
+        runningDropped[key] = nil
+        let family = key.split(separator: "|").last?.split(separator: ":").first.map(String.init) ?? key
+        let current = job.epoch == (keyEpochs[key] ?? 0) && job.generation == generation
         var retry: Job?
-        if let error, !(error is CancellationError), !Task.isCancelled, !((error as? URLError)?.code == .cancelled) {
+        if current, let error, !(error is CancellationError), !Task.isCancelled, !((error as? URLError)?.code == .cancelled) {
             let count = (failures[key] ?? 0) + 1
             failures[key] = count
             let wait = SyncBackoff.delay(failures: count, random: random())
@@ -323,7 +454,7 @@ public actor SyncEngine {
                 connectionFailures.remove(key)
                 errors[key] = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
             }
-        } else if error == nil {
+        } else if current, error == nil {
             if job.attempt > 0 || connectionFailures.contains(key) { onEvent?(SyncEvent(family: family, kind: .recovered(afterFailures: failures[key] ?? 0))) }
             failures[key] = nil
             notBefore[key] = nil
@@ -331,7 +462,7 @@ public actor SyncEngine {
             connectionFailures.remove(key)
         }
         if let rerun = reruns.removeValue(forKey: key) {
-            if started == generation { queue.append(rerun) } else { rerun.dropped?() }
+            if rerun.generation == generation, rerun.epoch == (keyEpochs[key] ?? 0) { queue.append(rerun) } else { rerun.dropped?() }
         } else if let retry {
             queue.append(retry)
         }

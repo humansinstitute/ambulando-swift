@@ -1,4 +1,4 @@
-# Ambulando native iPhone architecture
+# Ambulando native iPhone and Mac architecture
 
 Ambulando for iPhone is a native SwiftUI client for the same Tower workspaces
 used by the Ambulando (Flight Deck) web client in `../sol`. It is a separate
@@ -7,6 +7,12 @@ inbox are native screens drawing from a local database. It reuses the existing
 Tower HTTPS + NIP-98 contracts. It adds no backend routes and changes no shared
 schema. Its only other network peers, as in the web client, are sol's public Nostr relays (read-only kind-0 profile
 queries) and the hosts named in those profiles' pictures (§4.8); both can be turned off in Settings.
+
+Native multi-workspace navigation (iPhone build 56 / Mac build 47) supersedes the historical
+single-workspace lifecycle below. See [native-multi-workspace.md](native-multi-workspace.md)
+and [multi-workspace-storage.md](multi-workspace-storage.md) for the current partition,
+shared scheduling, independent stream, pause/resume and migration contracts. The catalog
+keeps connection metadata; content, drafts, cursors and senders use full-boundary partitions.
 
 This document records the source inventory (WP1) and the **target** native
 architecture that later packages build on. Implementation status:

@@ -17,7 +17,7 @@ struct WorkspaceManagementView: View {
 
     var body: some View {
         Group {
-            if model.selectedWorkspace?.id != workspace.id || model.connection?.id != connection.id {
+            if model.selectedWorkspace?.id != workspace.id || model.selectedWorkspace?.appNpub != workspace.appNpub || model.connection?.id != connection.id {
                 ContentUnavailableView("Workspace changed", systemImage: "arrow.triangle.2.circlepath", description: Text("Close management and reopen it for the selected workspace."))
             } else {
                 #if os(macOS)
@@ -154,6 +154,10 @@ private struct WorkspaceAdministrationPage: View {
     @ViewBuilder private var workspaceContent: some View {
                 Section("Workspace identity") {
                     WorkspaceIdentityHeader(workspace: workspace)
+                    if let entry = model.workspaceEntries.first(where: { $0.connection.id == connection.id && $0.workspace.id == workspace.id && $0.workspace.appNpub == workspace.appNpub }) {
+                        WorkspaceColourPicker(entry: entry)
+                        Text("This device’s context colour accompanies the workspace name.").font(.caption).foregroundStyle(.secondary)
+                    }
                     editor("Edit name, description and avatar", .profile)
                     Text(workspace.ownerNpub ?? "Owner unavailable").font(.caption).textSelection(.enabled)
                     NavigationLink("Delete workspace…") { WorkspaceDangerZone(workspace: workspace, connection: connection) }.disabled(!admin)
@@ -591,7 +595,7 @@ struct AdministrationEditor: View {
             }.disabled(!loaded || phase.isWorking)
             Section {
                 Button("Save on Tower") { endEditing(); confirm = true }
-                    .disabled(!loaded || phase.isWorking || savedFingerprint == fingerprint || !canEdit || model.selectedWorkspace?.id != workspace.id || model.connection?.id != connection.id)
+                    .disabled(!loaded || phase.isWorking || savedFingerprint == fingerprint || !canEdit || model.selectedWorkspace?.id != workspace.id || model.selectedWorkspace?.appNpub != workspace.appNpub || model.connection?.id != connection.id)
                     .accessibilityIdentifier("admin.save")
                 Text("Your draft is retained after a failure. If Tower accepted a request but the connection was interrupted, refresh the relevant list before trying again.").font(.caption).foregroundStyle(.secondary)
             }

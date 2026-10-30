@@ -270,13 +270,13 @@ private struct ThreadFocusContainer: View {
             if let focus = model.focusedThread {
                 if card {
                     ModalCard(expanded: expanded) {
-                        ThreadFocusPanel(focus: focus, expanded: $expanded).id(focus.id)
+                        ThreadFocusPanel(focus: focus, expanded: $expanded).id((model.selectedWorkspaceBoundary?.id ?? "unbound") + ":" + focus.id)
                     }
                     #if os(macOS)
                     .background(ThreadFocusBackdrop { model.focusedThread = nil })
                     #endif
                 } else {
-                    ThreadFocusPanel(focus: focus, expanded: .constant(false)).id(focus.id)
+                    ThreadFocusPanel(focus: focus, expanded: .constant(false)).id((model.selectedWorkspaceBoundary?.id ?? "unbound") + ":" + focus.id)
                 }
             }
         }

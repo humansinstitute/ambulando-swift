@@ -68,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMultiWorkspaceCheck") {
+                try await multiWorkspaceCheck(window, model: model)
+                print("PASS: Mac multi-workspace navigation, independent streams, pause, drafts and durable empty selection"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMessageEditCheck") {
                 try await messageEditCheck(window, model: model)
                 print("PASS: Mac in-composer message edits, picker, signed readback, repeat, cancel and reply restoration"); fflush(stdout); exit(0)

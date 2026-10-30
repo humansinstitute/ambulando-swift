@@ -59,7 +59,7 @@ extension AppModel {
     /// changes schedule a (bounded, deduplicated) profile refresh.
     func observePeople(connection: ConnectionRecord, workspaceId: String) {
         guard let store else { return }
-        let signer = connection.signerNpub, connectionId = connection.id
+        let signer = connection.signerNpub, connectionId = connection.id, epoch = wikiContextEpoch
         me.start(store: store, matches: { key in
             key.table == .profiles || ([.members, .agents].contains(key.table) && key.workspaceId == workspaceId)
         }) {
@@ -71,7 +71,8 @@ extension AppModel {
         }
         lastProfilePeople = nil
         profilePeople.onLoad = { [weak self] people in
-            guard let self, people != self.lastProfilePeople else { return }
+            guard let self, self.wikiContextEpoch == epoch, self.connection?.id == connectionId,
+                  self.selectedWorkspaceId == workspaceId, people != self.lastProfilePeople else { return }
             self.lastProfilePeople = people
             self.refreshProfiles()
         }
@@ -101,17 +102,26 @@ extension AppModel {
         // The id, not the observed workspace list: at launch the list may not have loaded when the people are read.
         guard publicProfilesEnabled, let profiles, let connection, let workspaceId = navigationWorkspaceId ?? selectedWorkspaceId,
               fixture != nil || Self.inForeground else { return }
-        Task { await profiles.refresh(connection: connection, workspaceId: workspaceId, force: force) }
+        let epoch = wikiContextEpoch
+        Task {
+            guard epoch == wikiContextEpoch else { return }
+            await profiles.refresh(connection: connection, workspaceId: workspaceId, force: force)
+        }
     }
 
     /// Settings › Nostr profiles. Off stops and cancels relay and picture requests; cached names and pictures stay.
     func setPublicProfiles(_ on: Bool) async {
         guard let store else { return }
         publicProfilesEnabled = on
+        let epoch = wikiContextEpoch
+        let avatars = avatars
+        let scopedEngine = sync?.engine, scopedConnection = connection
         try? await store.writer.setState(ProfileSync.preferenceKey, on ? nil : "off")
+        await persistPublicProfilePreference(on)
         await avatars?.store.setEnabled(on)
+        guard epoch == wikiContextEpoch else { return }
         if on { refreshProfiles() }
-        else if let sync, let connection { await sync.engine.cancel(prefix: ProfileSync.jobPrefix(connection.id)) }
+        else if let scopedEngine, let scopedConnection { await scopedEngine.cancel(prefix: ProfileSync.jobPrefix(scopedConnection.id)) }
     }
 }
 
@@ -152,8 +162,9 @@ struct PersonAvatar: View {
         .accessibilityHidden(!exposesFixtureState)
         .task(id: person.avatarURL) {
             guard let url = person.avatarURL, let center = model.avatars, center.cached(url) == nil else { return }
+            let epoch = model.wikiContextEpoch
             let image = await center.load(url, scale: scale)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, epoch == model.wikiContextEpoch else { return }
             loaded = image
             loadedURL = url
         }
@@ -185,11 +196,12 @@ struct LauncherLogoView: View {
     let workspace: WorkspaceRecord
     var size: CGFloat = 38
     @State private var loaded: PlatformImage?
+    @State private var loadedBoundary: String?
     @State private var attempt = 0
     @State private var requested: Set<String> = []
 
     var body: some View {
-        let image = loaded ?? memoryHit
+        let image = (loadedBoundary == model.selectedWorkspaceBoundary?.id ? loaded : nil) ?? memoryHit
         ZStack {
             if let image {
                 Image(platformImage: image).resizable().scaledToFill()
@@ -202,7 +214,8 @@ struct LauncherLogoView: View {
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
-        .task(id: "\(sources)#\(attempt)") { await load() }
+        .task(id: "\(model.selectedWorkspaceBoundary?.id ?? "none")#\(sources)#\(attempt)") { await load() }
+        .onChange(of: model.selectedWorkspaceBoundary) { _, _ in loaded = nil; loadedBoundary = nil; requested = []; attempt += 1 }
         // A storage logo was asked for: look again when its download finishes (or fails, to try the next source).
         .onChange(of: model.syncStatus) { _, _ in if loaded == nil && !requested.isEmpty { attempt += 1 } }
         .onChange(of: model.isUnlocked) { _, unlocked in if unlocked && loaded == nil { attempt += 1 } }
@@ -219,16 +232,20 @@ struct LauncherLogoView: View {
         return nil
     }
 
-    private func storageKey(_ objectId: String) -> String { "logo:\(workspace.id):\(objectId):\(Int(size * scale))" }
+    private func storageKey(_ objectId: String) -> String { "logo:\(model.selectedWorkspaceBoundary?.id ?? "none"):\(objectId):\(Int(size * scale))" }
 
     private func load() async {
-        if let hit = memoryHit { loaded = hit; return }
+        guard model.selectedWorkspace?.id == workspace.id, model.selectedWorkspace?.appNpub == workspace.appNpub,
+              let boundary = model.selectedWorkspaceBoundary else { return }
+        let epoch = model.wikiContextEpoch
+        if let hit = memoryHit { loaded = hit; loadedBoundary = boundary.id; return }
         for source in sources {
             switch source {
             case .web(let url):
                 guard let center = model.avatars else { continue }
                 if let image = await center.load(url, scale: scale) {
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, epoch == model.wikiContextEpoch, model.selectedWorkspaceBoundary == boundary else { return }
+                    loadedBoundary = boundary.id
                     loaded = image
                     return
                 }
@@ -236,9 +253,10 @@ struct LauncherLogoView: View {
                 if let file = model.fileCache?.attachment(workspaceId: workspace.id, objectId: id) {
                     let pixels = size * scale, scale = scale
                     let decoded = await Task.detached(priority: .utility) { StorageImageCache.downsample(file, maxPixels: pixels, scale: scale) }.value
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, epoch == model.wikiContextEpoch, model.selectedWorkspaceBoundary == boundary else { return }
                     if let decoded {
                         StorageImageCache.shared.store(decoded, key: storageKey(id))
+                        loadedBoundary = boundary.id
                         loaded = decoded
                         return
                     }

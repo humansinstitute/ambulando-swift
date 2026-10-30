@@ -662,8 +662,8 @@ struct StorageImageView: View {
 
     /// Fitted images are keyed by their width in pixels, tiles by their side (a different decode of the same object).
     private var cacheKey: String {
-        if let fill { return "\(workspace?.id ?? "-"):\(objectId):\(Int(fill * displayScale)):fill" }
-        return "\(workspace?.id ?? "-"):\(objectId):\(Int(maxWidth * displayScale))"
+        if let fill { return "\(model.selectedWorkspaceBoundary?.id ?? "unbound"):\(workspace?.id ?? "-"):\(objectId):\(Int(fill * displayScale)):fill" }
+        return "\(model.selectedWorkspaceBoundary?.id ?? "unbound"):\(workspace?.id ?? "-"):\(objectId):\(Int(maxWidth * displayScale))"
     }
     private var errorKey: String? { workspace.map { "attachment:\($0.id):\(objectId)" } }
 

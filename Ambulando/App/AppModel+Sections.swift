@@ -154,8 +154,11 @@ extension AppModel {
             // it has one; otherwise the channel does.
             let parts = record.split(separator: "#", maxSplits: 1).map(String.init)
             let channelId = parts.count == 2 ? parts[0] : nil, messageId = parts.last ?? record
+            guard let store else { return }
+            let epoch = wikiContextEpoch
             Task { @MainActor in
-                let stored = try? await store?.reader.message(workspaceId: workspace, id: messageId)
+                let stored = try? await store.reader.message(workspaceId: workspace, id: messageId)
+                guard epoch == wikiContextEpoch else { return }
                 let channel = stored?.channelId ?? channelId
                 if let channel { openInChat(channelId: channel, threadId: stored?.threadId ?? (stored == nil ? nil : messageId)) }
                 else { focusThread(ThreadFocus(workspaceId: workspace, channelId: nil, threadId: messageId)) }
@@ -183,9 +186,10 @@ extension AppModel {
         guard let manager, let connection, let workspace = selectedWorkspace, canRead, isUnlocked else { return }
         guard force || membershipWorkspaceId != workspace.id else { return }
         membershipWorkspaceId = workspace.id
+        let epoch = wikiContextEpoch
         Task {
             let result = try? await manager.membership(connection, workspace)
-            guard selectedWorkspace?.id == workspace.id, self.connection?.id == connection.id else { return }
+            guard epoch == wikiContextEpoch, selectedWorkspace?.id == workspace.id, selectedWorkspace?.appNpub == workspace.appNpub, self.connection?.id == connection.id else { return }
             membership = result
             if result == nil { membershipWorkspaceId = nil }
         }
@@ -195,9 +199,10 @@ extension AppModel {
     /// a workspace the user has since left is dropped.
     func manage<T: Sendable>(_ body: @escaping @Sendable (ScopeChannelManager, ConnectionRecord, WorkspaceRecord) async throws -> T) async -> Result<T, ManagementError> {
         guard let manager, let connection, let workspace = selectedWorkspace else { return .failure(.unexpected("No workspace is selected.")) }
+        let epoch = wikiContextEpoch
         do {
             let value = try await body(manager, connection, workspace)
-            guard selectedWorkspace?.id == workspace.id else { return .failure(.unexpected("The workspace changed before Tower answered.")) }
+            guard epoch == wikiContextEpoch, selectedWorkspace?.id == workspace.id, selectedWorkspace?.appNpub == workspace.appNpub, self.connection?.id == connection.id else { return .failure(.unexpected("The workspace changed before Tower answered.")) }
             return .success(value)
         } catch let error as ManagementError {
             return .failure(error)

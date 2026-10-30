@@ -57,7 +57,7 @@ struct ChatContextRoot: View {
                     ChannelDirectoryView()
                 }
             }
-            .id(workspace.id)
+            .id(model.selectedWorkspaceBoundary?.id ?? workspace.id)
         } else {
             ContentUnavailableView {
                 Label("No workspace", systemImage: "square.stack.3d.up.slash")

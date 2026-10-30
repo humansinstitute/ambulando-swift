@@ -127,16 +127,19 @@ public final class ComposerUploads {
 
     @ObservationIgnored private let store: LocalStore
     @ObservationIgnored private let staging: URL
+    @ObservationIgnored private let appNpub: String?
     @ObservationIgnored private let upload: Upload
     @ObservationIgnored private var hosts: [String: WeakHost] = [:]
     @ObservationIgnored private var running: (id: String, task: Task<Void, Never>)?
     @ObservationIgnored private var loads: [String: Task<Void, Never>] = [:]
 
-    public init(store: LocalStore, staging: URL, upload: @escaping Upload) {
-        self.store = store; self.staging = staging; self.upload = upload
+    public init(store: LocalStore, staging: URL, appNpub: String? = nil, upload: @escaping Upload) {
+        self.store = store; self.staging = staging; self.appNpub = appNpub; self.upload = upload
     }
 
-    public func uploads(for target: ChatTarget) -> [ComposerUpload] { items.filter { $0.target == target && $0.markdown == nil } }
+    private func accepts(_ appNpub: String) -> Bool { self.appNpub == nil || self.appNpub == appNpub }
+
+    public func uploads(for target: ChatTarget) -> [ComposerUpload] { items.filter { $0.target == target && accepts($0.appNpub) && $0.markdown == nil } }
 
     public func notice(for target: ChatTarget) -> String? { notices[target.draftKey] }
     public func clearNotice(for target: ChatTarget) { notices[target.draftKey] = nil }
@@ -161,6 +164,7 @@ public final class ComposerUploads {
     /// (empty: nothing to upload, paste the text as usual). `context` names images as the web does ("message",
     /// "thread").
     public func paste(_ providers: [NSItemProvider], target: ChatTarget, appNpub: String, context: String) -> [String] {
+        guard accepts(appNpub) else { return [] }
         let found = Self.attachments(in: providers)
         guard !found.isEmpty else { return [] }
         notices[target.draftKey] = found.count > Self.maxItemsPerPaste
@@ -273,14 +277,14 @@ public final class ComposerUploads {
     // MARK: Uploading
 
     public func retry(_ id: String) {
-        guard let index = items.firstIndex(where: { $0.id == id }), case .failed = items[index].phase, items[index].retryable else { return }
+        guard let index = items.firstIndex(where: { $0.id == id }), accepts(items[index].appNpub), case .failed = items[index].phase, items[index].retryable else { return }
         items[index].phase = .waiting
         pump()
     }
 
     /// Cancels the upload, deletes its staged bytes and takes its placeholder out of the target's text.
     public func remove(_ id: String) {
-        guard let item = items.first(where: { $0.id == id }) else { return }
+        guard let item = items.first(where: { $0.id == id }), accepts(item.appNpub) else { return }
         loads.removeValue(forKey: id)?.cancel()
         if running?.id == id { running?.task.cancel(); running = nil }
         items.removeAll { $0.id == id }
@@ -291,7 +295,7 @@ public final class ComposerUploads {
 
     private func pump() {
         guard running == nil, let next = items.first(where: { $0.phase == .waiting }), let sha = next.sha256,
-              let record = readRecord(next.id) else {
+              accepts(next.appNpub), let record = readRecord(next.id), accepts(record.appNpub), record.appNpub == next.appNpub else {
             if running == nil, let stuck = items.firstIndex(where: { $0.phase == .waiting }) {
                 items[stuck].phase = .failed("This pasted item is no longer on this device.")
                 items[stuck].retryable = false
@@ -314,18 +318,18 @@ public final class ComposerUploads {
     }
 
     private func prepared(_ id: String, _ fresh: PreparedObject) {
-        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = items.firstIndex(where: { $0.id == id }), accepts(items[index].appNpub) else { return }
         items[index].prepared = fresh
-        if var record = readRecord(id) { record.prepared = fresh; writeRecord(record) }
+        if var record = readRecord(id), accepts(record.appNpub), record.appNpub == items[index].appNpub { record.prepared = fresh; writeRecord(record) }
     }
 
     private func finished(_ id: String, _ result: Result<String, Error>) {
         if running?.id == id { running = nil }
-        guard let index = items.firstIndex(where: { $0.id == id }) else { return pump() }   // removed
+        guard let index = items.firstIndex(where: { $0.id == id }), accepts(items[index].appNpub) else { return pump() }   // removed
         switch result {
         case .success(let objectId):
             items[index].phase = .done(objectId: objectId)
-            if var record = readRecord(id) {
+            if var record = readRecord(id), accepts(record.appNpub), record.appNpub == items[index].appNpub {
                 try? FileManager.default.removeItem(at: staging.appendingPathComponent(record.staged))
                 record.objectId = objectId
                 writeRecord(record)
@@ -385,12 +389,16 @@ public final class ComposerUploads {
         hosts[target.draftKey] = WeakHost(host: host)
         for (kind, id) in UploadToken.ids(in: host.uploadText) {
             if let item = items.first(where: { $0.id == id }) {
-                guard item.target == target else { continue }
+                guard item.target == target, accepts(item.appNpub) else { continue }
                 if let markdown = item.markdown, host.replaceUploadToken(item.token, with: markdown) { forget(id) }
                 continue
             }
-            guard let record = readRecord(id), record.target == target, record.kind == kind else {
-                items.append(ComposerUpload(id: id, target: target, appNpub: "", kind: kind, filename: kind == .image ? "Image" : "File",
+            let saved = readRecord(id)
+            // Shared staging is a recovery source, not permission to expose another application's filename,
+            // prepared upload or completed object. Keep its bytes and record for the original application.
+            if let saved, !accepts(saved.appNpub) { continue }
+            guard let record = saved, record.target == target, record.kind == kind else {
+                items.append(ComposerUpload(id: id, target: target, appNpub: appNpub ?? "", kind: kind, filename: kind == .image ? "Image" : "File",
                                             mimeType: "", phase: .failed("This pasted item is no longer on this device."), retryable: false))
                 continue
             }
@@ -440,6 +448,7 @@ public final class ComposerUploads {
     }
 
     private func writeRecord(_ record: Record) {
+        guard accepts(record.appNpub) else { return }
         guard let data = try? JSONEncoder().encode(record) else { return }
         try? Self.write(data, to: recordURL(record.id))
     }
@@ -451,7 +460,10 @@ public final class ComposerUploads {
 
     private func discardFiles(_ id: String) {
         guard UUID(uuidString: id) != nil else { return }
-        if let record = readRecord(id) { try? FileManager.default.removeItem(at: staging.appendingPathComponent(record.staged)) }
+        if let record = readRecord(id) {
+            guard accepts(record.appNpub) else { return }
+            try? FileManager.default.removeItem(at: staging.appendingPathComponent(record.staged))
+        }
         try? FileManager.default.removeItem(at: recordURL(id))
     }
 }

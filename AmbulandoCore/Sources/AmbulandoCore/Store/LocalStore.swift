@@ -159,6 +159,8 @@ public actor StoreWriter {
 
     public func schemaVersion() throws -> Int { try db.userVersion }
 
+    public func bindWorkspaceActivity(_ activity: WorkspaceActivity) { db.workspaceActivity = activity }
+
     func now() -> String { ISO8601DateFormatter().string(from: Date()) }
 
     func emit(_ keys: Set<ChangeKey>) async { if !keys.isEmpty { await changes.record(keys) } }

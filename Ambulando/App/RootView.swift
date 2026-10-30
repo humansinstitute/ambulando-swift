@@ -26,9 +26,9 @@ struct RootView: View {
                     // An identity exists but cannot be read yet (started while the device was locked). Never an import.
                     IdentityUnavailableView().onboardingWidth()
                 case .unlocked:
-                    if model.connection != nil { Shell().threadFocusPresenter() } else { ConnectView().onboardingWidth() }
+                    if model.connection != nil { workspaceShell } else { ConnectView().onboardingWidth() }
                 case .none:
-                    if model.connection != nil { Shell().threadFocusPresenter() } else { ImportIdentityView().onboardingWidth() }
+                    if model.connection != nil { workspaceShell } else { ImportIdentityView().onboardingWidth() }
                 }
             }
         }
@@ -43,6 +43,19 @@ struct RootView: View {
         .imageLightboxHost()
         .pushTapOutcomeAlert()
     }
+
+    private var workspaceShell: some View {
+        // Keep the shell (and its selection-sheet presenter) mounted when the last workspace pauses.
+        // Removing a presenter during its checkbox action can tear down UIKit's sheet hierarchy mid-transition.
+        Shell().threadFocusPresenter()
+            .overlay {
+                if !model.workspaceEntries.isEmpty && model.enabledWorkspaceEntries.isEmpty {
+                    WorkspaceSelectionEmptyState()
+                        .accessibilityAddTraits(.isModal)
+                }
+            }
+    }
+
 }
 
 private extension View {

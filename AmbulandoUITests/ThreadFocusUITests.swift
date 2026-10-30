@@ -258,7 +258,13 @@ final class ThreadFocusUITests: XCTestCase {
         showSidebar(relaunched)
         // The iPad sidebar's container identifier replaces the switcher's own; its label is the same on both.
         relaunched.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Switch workspace'")).firstMatch.tap()
-        relaunched.buttons["Lab (sample)"].tap()
+        relaunched.buttons["Choose workspaces…"].tap()
+        let lab = relaunched.descendants(matching: .any)["workspace.enabled.Lab (sample)"].firstMatch
+        XCTAssertTrue(lab.waitForExistence(timeout: 5))
+        lab.tap()
+        relaunched.buttons["Done"].tap()
+        relaunched.buttons["workspace.home.Lab (sample)"].tap()
+        relaunched.section("Chat")
         XCTAssertTrue(relaunched.buttons["channel.notes"].waitForExistence(timeout: 15))
         XCTAssertFalse(focus(relaunched).waitForExistence(timeout: 3), "no thread from the other workspace")
     }

@@ -11,7 +11,9 @@ extension AppModel {
     func pushContext(workspaces listed: [WorkspaceRecord]? = nil) -> PushContext {
         let unlockedSigner: String? = if case .unlocked(let npub) = identity { npub } else { nil }
         guard let connection, let origin = try? TowerOrigin(connection.origin) else { return PushContext(binding: nil, unlockedSigner: unlockedSigner) }
-        let known = listed ?? workspaces.value
+        let known = (listed ?? workspaces.value).filter { workspace in
+            workspaceEntries.contains { $0.enabled && $0.connection.id == connection.id && $0.workspace.id == workspace.id && $0.workspace.appNpub == workspace.appNpub }
+        }
         let map = Dictionary(known.map { ($0.id.lowercased(), $0.appNpub) }, uniquingKeysWith: { first, _ in first })
         return PushContext(binding: PushBinding(origin: origin, signerNpub: connection.signerNpub, workspaces: map), unlockedSigner: unlockedSigner)
     }
@@ -65,7 +67,11 @@ extension AppModel {
     /// Cache refresh only: never selects a workspace or invokes the tap/open/read-state path.
     func refreshFromPush(_ payload: PushPayload) async -> PushRefreshWindow.Result {
         await start(pushOnly: true)
-        guard !Task.isCancelled, let sync, let connection else { return .noData }
+        let candidates = enabledWorkspaceEntries.filter { $0.boundary.origin == payload.origin.description && $0.workspace.id == payload.workspaceId }
+        guard !Task.isCancelled, candidates.count == 1, let entry = candidates.first else { return .noData }
+        await resumeWorkspace(entry)
+        guard entry.enabled, let runtime = entry.runtime, runtime.activity.isEnabled else { return .noData }
+        let sync = runtime.sync, connection = entry.connection
         do {
             let changed = try await sync.refreshAfterPush(payload, connection: connection)
             return changed ? .newData : .noData
@@ -76,16 +82,17 @@ extension AppModel {
 
     /// Replays missed events for every stored workspace without moving the current UI. Keyed jobs coalesce with SSE.
     func catchUpAfterPushDeferral() {
-        guard isActive, let sync, let connection, canRead else { return }
-        Task {
-            let listed = (try? await sync.store.reader.workspaces(connectionId: connection.id)) ?? []
-            guard connection.id == self.connection?.id, canRead else { return }
-            for workspace in listed {
-                await sync.catchUpEvents(connection, workspace, priority: .background, force: true)
-                await sync.refreshNotifications(connection, workspace, priority: .background, force: true)
+        guard isActive, canRead else { return }
+        for entry in enabledWorkspaceEntries {
+            Task {
+                await resumeWorkspace(entry)
+                guard entry.enabled, let runtime = entry.runtime, runtime.activity.isEnabled else { return }
+                await runtime.sync.catchUpEvents(entry.connection, entry.workspace, priority: .background, force: true)
+                await runtime.sync.refreshNotifications(entry.connection, entry.workspace, priority: .background, force: true)
             }
         }
     }
+
     #endif
 
     // MARK: OS callbacks
@@ -151,6 +158,12 @@ extension AppModel {
     /// notification route. An unavailable or failed check opens nothing and says so (see `PushTapOutcome`). An alert with only
     /// record ids opens that record the usual way, where its own load checks access.
     private func resolvePushTap(_ payload: PushPayload?) async {
+        if let payload {
+            let entries = enabledWorkspaceEntries.filter { $0.boundary.origin == payload.origin.description && $0.workspace.id == payload.workspaceId }
+            guard entries.count == 1, let entry = entries.first else { return }
+            await activateWorkspace(entry)
+            guard entry.enabled, selectedWorkspaceBoundary == entry.boundary else { return }
+        }
         let (snapshot, listed) = await pushTapSnapshot()
         let sync = sync, connection = connection
         let resolution = await PushTapResolver.resolve(payload, snapshot: snapshot) { workspaceId, notificationId in

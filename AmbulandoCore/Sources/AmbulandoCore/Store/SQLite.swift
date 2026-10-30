@@ -17,6 +17,31 @@ public enum SQLValue: Sendable, Equatable {
 public final class SQLiteConnection {
     let handle: OpaquePointer
     public let readOnly: Bool
+    var workspaceActivity: WorkspaceActivity?
+    private var closed = false
+
+    private func requireOpen() throws {
+        guard !closed else { throw SQLiteError(code: SQLITE_MISUSE, message: "This workspace store has been retired") }
+    }
+
+    /// Called only by the owning store actor after workspace work and observers have stopped.
+    /// Stale UI references subsequently fail closed instead of writing into a reused partition path.
+    func close() {
+        guard !closed else { return }
+        closed = true
+        sqlite3_close_v2(handle)
+    }
+
+    private func checkMutationLease(_ sql: String) throws {
+        let statement = sql.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard ["INSERT", "UPDATE", "DELETE", "REPLACE"].contains(where: { statement.hasPrefix($0) }) else { return }
+        // Durable request state must record an ambiguous/accepted outcome even after pause. Other network
+        // materialisation carries its original scheduler lease and cannot alter a newly resumed workspace.
+        let words = statement.split(whereSeparator: { $0.isWhitespace || $0 == "(" }).map(String.init)
+        let target = words.first == "UPDATE" ? words.dropFirst().first : (words.first == "DELETE" && words.dropFirst().first == "FROM" ? words.dropFirst(2).first : nil)
+        if target == "OUTBOX" || target == "WRITES" { return }
+        try workspaceActivity?.checkInheritedLease()
+    }
 
     public init(path: String, readOnly: Bool) throws {
         var db: OpaquePointer?
@@ -57,16 +82,20 @@ public final class SQLiteConnection {
         }, nil, nil, nil)
     }
 
-    deinit { sqlite3_close_v2(handle) }
+    deinit { if !closed { sqlite3_close_v2(handle) } }
 
     private func error(_ rc: Int32) -> SQLiteError { SQLiteError(code: rc, message: String(cString: sqlite3_errmsg(handle))) }
 
     public func execute(_ sql: String) throws {
+        try requireOpen()
+        try checkMutationLease(sql)
         let rc = sqlite3_exec(handle, sql, nil, nil, nil)
         guard rc == SQLITE_OK else { throw error(rc) }
     }
 
     public func prepare(_ sql: String) throws -> Statement {
+        try requireOpen()
+        try checkMutationLease(sql)
         var statement: OpaquePointer?
         let rc = sqlite3_prepare_v3(handle, sql, -1, UInt32(SQLITE_PREPARE_PERSISTENT), &statement, nil)
         guard rc == SQLITE_OK, let statement else { throw error(rc) }
@@ -103,6 +132,7 @@ public final class SQLiteConnection {
         deinit { sqlite3_finalize(statement) }
 
         @discardableResult public func bind(_ values: [SQLValue]) throws -> Statement {
+            try connection.requireOpen()
             sqlite3_reset(statement)
             sqlite3_clear_bindings(statement)
             for (offset, value) in values.enumerated() {
@@ -122,6 +152,10 @@ public final class SQLiteConnection {
 
         /// Returns true when a row is available.
         public func step() throws -> Bool {
+            try connection.requireOpen()
+            if sqlite3_stmt_readonly(statement) == 0, let sql = sqlite3_sql(statement) {
+                try connection.checkMutationLease(String(cString: sql))
+            }
             let rc = sqlite3_step(statement)
             if rc == SQLITE_ROW { return true }
             if rc == SQLITE_DONE { return false }

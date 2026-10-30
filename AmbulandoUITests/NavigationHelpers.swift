@@ -10,10 +10,18 @@ extension XCUIApplication {
     }
 
     @MainActor func openSidebar() {
+        // Selection sheets leave their presenting drawer open. Never tap its obscured toolbar button again.
+        let stackedHome = buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "workspace.home.")).firstMatch
+        let collapsedWorkspace = buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "workspace.collapse.")).firstMatch
+        if buttons["sidebar.home"].exists || stackedHome.exists || collapsedWorkspace.exists { return }
         let open = buttons["sidebar.open"].firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 10))
         open.tap()
-        XCTAssertTrue(buttons["sidebar.home"].waitForExistence(timeout: 5), "sidebar opened")
+        let shown = NSPredicate { _, _ in
+            self.buttons["sidebar.home"].exists || stackedHome.exists || collapsedWorkspace.exists
+        }
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: shown, object: self)], timeout: 5) == .completed,
+                      "single or stacked workspace sidebar opened")
     }
 
     /// Sets a sample-data switch in Settings by its identifier: brings that row into view, taps the row's own switch

@@ -137,7 +137,7 @@ struct MacWorkspaceShell: View {
     /// A section's root for the selected workspace; a fresh view (and observer) per workspace, so no rows cross over.
     @ViewBuilder private func workspaceSurface<Content: View>(@ViewBuilder _ content: @escaping (WorkspaceRecord, LocalStore) -> Content) -> some View {
         if let workspace = model.selectedWorkspace, let store = model.store {
-            content(workspace, store).id(workspace.id)
+            content(workspace, store).id(model.selectedWorkspaceBoundary?.id ?? workspace.id)
         } else {
             ContentUnavailableView("No workspace", systemImage: "square.stack.3d.up.slash",
                                    description: Text(model.workspaces.loaded ? "No workspaces for this identity yet." : "Loading saved workspaces…"))

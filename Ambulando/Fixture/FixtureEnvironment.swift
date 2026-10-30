@@ -781,17 +781,18 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     var eventHead: Int { lock.withLock { eventLog.count } }
 
     /// Another member (Ana) posts a conversation or a reply, as if from another device.
-    func postAsMember(channel: String, body: String, threadId: String? = nil, count: Int = 1) {
+    func postAsMember(channel: String, body: String, threadId: String? = nil, count: Int = 1, workspaceId: String? = nil) {
+        let workspace = workspaceId ?? Self.studio
         lock.withLock {
             let source = threadId.flatMap { thread in allMessages().first { $0["thread_id"] as? String == thread && $0["id"] as? String == $0["thread_source_message_id"] as? String }?["id"] as? String }
             for index in 0..<count {
                 let id = UUID().uuidString.lowercased()
                 let now = ISO8601DateFormatter.fixture.string(from: Date())
-                posted.append(["id": id, "workspace_id": Self.studio, "channel_id": channel, "thread_id": threadId ?? UUID().uuidString.lowercased(),
+                posted.append(["id": id, "workspace_id": workspace, "channel_id": channel, "thread_id": threadId ?? UUID().uuidString.lowercased(),
                                "thread_source_message_id": source ?? id, "body": count == 1 ? body : "\(body) \(index + 1)",
                                "client_request_id": NSNull(), "record_state": "active", "row_version": 1,
                                "sender_npub": Self.ana, "created_by_actor_label": "Ana", "created_at": now, "updated_at": now])
-                emitLocked(workspace: Self.studio, channel: channel, type: "message", id: id, rowVersion: 1)
+                emitLocked(workspace: workspace, channel: channel, type: "message", id: id, rowVersion: 1)
             }
             persist()
         }

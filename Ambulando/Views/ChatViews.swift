@@ -969,6 +969,7 @@ struct Composer: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            WorkspaceComposerContext(workspace: workspace, connectionId: target.connectionId)
             if let editing {
                 HStack {
                     Label("Editing message", systemImage: "pencil")

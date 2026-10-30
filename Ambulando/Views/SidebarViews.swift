@@ -40,44 +40,56 @@ struct ContextBar: View {
     var body: some View {
         let nav = model.navigation.value
         let context = model.context
-        HStack(spacing: 8) {
-            Button { model.selectContext(.home) } label: { WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 26) }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Show all in \(model.selectedWorkspace?.label ?? "workspace")")
-                .accessibilityIdentifier("context.home")
-            Button { withAnimation(.snappy) { model.sidebarOpen = true } } label: {
-                HStack(spacing: 6) {
-                    Text(nav.scope(context.scopeId)?.name ?? "All scopes")
-                        .font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
-                    Text("|").font(.amb(.subheadline)).foregroundStyle(Amb.border).accessibilityHidden(true)
-                    Text(nav.channel(context.channelId).map { "#" + nav.label($0) } ?? (context.isHome ? "Everything" : "All channels"))
-                        .font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.down").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
-                }
-                .contentShape(Rectangle())
+        VStack(spacing: 0) {
+            if let workspace = model.selectedWorkspace {
+                let entry = model.workspaceEntries.first { $0.boundary == model.selectedWorkspaceBoundary }
+                Text(workspace.label)
+                    .font(.amb(.caption).weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.vertical, 5)
+                    .background((entry?.colour ?? .blue).nativeColour)
+                    .accessibilityIdentifier("context.workspace")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(contextDescription(nav, context))
-            .accessibilityHint("Opens scopes and channels")
-            .accessibilityIdentifier("context.bar")
-            // sol `.view-lock-button`: keep this section when choosing a scope or channel (otherwise Deck opens).
-            if model.canLockCurrentView {
-                let locked = model.isCurrentViewLocked
-                Button { model.toggleCurrentViewLock() } label: {
-                    Image(systemName: locked ? "lock.fill" : "lock.open").font(.amb(.caption).weight(.semibold))
-                        .foregroundStyle(locked ? Amb.primary : Amb.mutedForeground)
-                        .frame(width: 30, height: 28).contentShape(Rectangle())
+            HStack(spacing: 8) {
+                Button { model.selectContext(.home) } label: { WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 26) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Show all in \(model.selectedWorkspace?.label ?? "workspace")")
+                    .accessibilityIdentifier("context.home")
+                Button { withAnimation(.snappy) { model.sidebarOpen = true } } label: {
+                    HStack(spacing: 6) {
+                        Text(nav.scope(context.scopeId)?.name ?? "All scopes")
+                            .font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+                        Text("|").font(.amb(.subheadline)).foregroundStyle(Amb.border).accessibilityHidden(true)
+                        Text(nav.channel(context.channelId).map { "#" + nav.label($0) } ?? (context.isHome ? "Everything" : "All channels"))
+                            .font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.down").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
+                    }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(locked ? "Unlock \(model.mode.title) view" : "Keep \(model.mode.title) when changing scope or channel")
-                .accessibilityAddTraits(locked ? .isSelected : [])
-                .accessibilityIdentifier("context.lock")
+                .accessibilityLabel(contextDescription(nav, context))
+                .accessibilityHint("Opens scopes and channels")
+                .accessibilityIdentifier("context.bar")
+                // sol `.view-lock-button`: keep this section when choosing a scope or channel (otherwise Deck opens).
+                if model.canLockCurrentView {
+                    let locked = model.isCurrentViewLocked
+                    Button { model.toggleCurrentViewLock() } label: {
+                        Image(systemName: locked ? "lock.fill" : "lock.open").font(.amb(.caption).weight(.semibold))
+                            .foregroundStyle(locked ? Amb.primary : Amb.mutedForeground)
+                            .frame(width: 30, height: 28).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(locked ? "Unlock \(model.mode.title) view" : "Keep \(model.mode.title) when changing scope or channel")
+                    .accessibilityAddTraits(locked ? .isSelected : [])
+                    .accessibilityIdentifier("context.lock")
+                }
             }
+            .padding(.horizontal, 16).padding(.vertical, 7)
+            .background(Amb.background)
+            .overlay(alignment: .bottom) { Rectangle().fill(Amb.border.opacity(0.6)).frame(height: 0.5) }
         }
-        .padding(.horizontal, 16).padding(.vertical, 7)
-        .background(Amb.background)
-        .overlay(alignment: .bottom) { Rectangle().fill(Amb.border.opacity(0.6)).frame(height: 0.5) }
     }
 
     private func contextDescription(_ nav: NavigationSnapshot, _ context: WorkContext) -> String {
@@ -165,105 +177,126 @@ struct SidebarContent: View {
         VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    Button { model.chooseInSidebar(.home) } label: {
-                        HStack(spacing: 8) {
-                            WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 24)
-                            Text("Home").font(.amb(.subheadline).weight(context.isHome ? .bold : .semibold))
-                                .foregroundStyle(context.isHome ? Amb.selectedForeground : Amb.foreground)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 10).padding(.vertical, 7)
-                        .background(context.isHome ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
-                        .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border, lineWidth: 1))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("All workspace activity")
-                    .accessibilityAddTraits(context.isHome ? .isSelected : [])
-                    .accessibilityIdentifier("sidebar.home")
-                    .padding(.bottom, 8)
-
-                    NavigationStatus(state: model.navigationState, compact: true)
-
-                    let unread = SidebarNavigation.unreadChannels(nav.groups, unreadChannelIds: nav.unread)
-                    if !unread.isEmpty {
-                        SidebarHeading(text: "Unread & Active")
-                        // Own identities: the same channel is also listed under its scope below.
-                        ForEach(unread, id: \.unreadRowId) { channel in
-                            ChannelRow(channel: channel, label: nav.label(channel), unread: true,
-                                       active: context.channelId == channel.id, identifierPrefix: "sidebar.unread")
-                        }
-                        .padding(.bottom, 6)
-                    }
-
-                    ForEach(nav.groups) { group in
-                        let collapsed = nav.collapsed.contains(group.id)
-                        HStack(spacing: 2) {
-                            Button { model.toggleScopeCollapsed(group.id) } label: {
-                                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                                    .font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.mutedForeground)
-                                    .frame(width: 28, height: 32)
-                                    .contentShape(Rectangle())
+                    if model.enabledWorkspaceEntries.count > 1 {
+                        StackedWorkspaceNavigation()
+                        if model.selectedWorkspace != nil {
+                            Button { sheet = .manageScopes } label: {
+                                Label("Manage scopes in \(model.selectedWorkspace?.label ?? "workspace")", systemImage: "slider.horizontal.3")
+                                    .font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.primary)
+                                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).padding(.horizontal, 10)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("\(collapsed ? "Expand" : "Collapse") \(group.scope.name) channels")
-                            .accessibilityIdentifier("sidebar.collapse.\(group.scope.name)")
-                            Button { model.chooseInSidebar(WorkContext(scopeId: group.id)) } label: {
-                                Text(group.scope.name)
-                                    .font(.amb(.footnote).weight(.heavy)).foregroundStyle(context.scopeId == group.id && context.channelId == nil ? Amb.primary : Amb.mutedForeground)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-                                    .padding(.horizontal, 4)
-                                    .background(context.scopeId == group.id && context.channelId == nil ? Amb.selectedFill : Color.clear,
-                                                in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Open \(group.scope.name) home")
-                            .accessibilityAddTraits(context.scopeId == group.id && context.channelId == nil ? .isSelected : [])
-                            .accessibilityIdentifier("sidebar.scope.\(group.scope.name)")
-                            // sol `.sidebar-scope-add-channel`: shown where the member may create channels in the scope.
-                            if ManagementPermissions.canCreateChannel(in: group.scope, membership: model.membership) {
-                                Button { sheet = .newChannel(group.scope) } label: {
-                                    Image(systemName: "plus").font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.mutedForeground)
-                                        .frame(width: 30, height: 32).contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Create channel in \(group.scope.name)")
-                                .accessibilityIdentifier("sidebar.addChannel.\(group.scope.name)")
-                            }
+                            .accessibilityIdentifier("sidebar.manageScopes")
                         }
-                        .padding(.top, 6)
-                        if !collapsed {
-                            if group.channels.isEmpty {
-                                Text("No channels visible").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(.leading, 34).padding(.vertical, 4)
-                            }
-                            ForEach(group.channels) { channel in
-                                HStack(spacing: 0) {
-                                    ChannelRow(channel: channel, label: nav.label(channel), unread: nav.unread.contains(channel.id),
-                                               active: context.channelId == channel.id, identifierPrefix: "sidebar.channel")
-                                    // sol `.sidebar-scope-channel-menu`: Channel settings on every channel.
-                                    Button { sheet = .channelSettings(channel) } label: {
-                                        Image(systemName: "ellipsis").font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.mutedForeground)
-                                            .frame(width: 30, height: 36).contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .accessibilityLabel("Channel settings for \(nav.label(channel))")
-                                    .accessibilityIdentifier("sidebar.channelSettings.\(nav.label(channel))")
-                                }
-                            }
-                        }
-                    }
-                    if !nav.groups.isEmpty {
-                        // sol `.sidebar-manage-scopes-footer`.
-                        Button { sheet = .manageScopes } label: {
-                            Label("Manage scopes", systemImage: "slider.horizontal.3").font(.amb(.subheadline).weight(.semibold))
-                                .foregroundStyle(Amb.primary).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                                .padding(.horizontal, 10).contentShape(Rectangle())
+                    } else if let entry = model.enabledWorkspaceEntries.first, entry.collapsed {
+                        Button { model.toggleWorkspaceCollapsed(entry) } label: {
+                            Label(entry.workspace.label, systemImage: "chevron.right").font(.amb(.subheadline).weight(.semibold))
+                                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                         }
                         .buttonStyle(.plain)
-                        .padding(.top, 10)
-                        .accessibilityIdentifier("sidebar.manageScopes")
+                        .accessibilityLabel("Expand \(entry.workspace.label)")
+                        .accessibilityIdentifier("workspace.collapse.\(entry.workspace.label)")
+                    } else {
+                        Button { model.chooseInSidebar(.home) } label: {
+                            HStack(spacing: 8) {
+                                WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 24)
+                                Text("Home").font(.amb(.subheadline).weight(context.isHome ? .bold : .semibold))
+                                    .foregroundStyle(context.isHome ? Amb.selectedForeground : Amb.foreground)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 7)
+                            .background(context.isHome ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
+                            .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border, lineWidth: 1))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("All workspace activity")
+                        .accessibilityAddTraits(context.isHome ? .isSelected : [])
+                        .accessibilityIdentifier("sidebar.home")
+                        .padding(.bottom, 8)
+
+                        NavigationStatus(state: model.navigationState, compact: true)
+
+                        let unread = SidebarNavigation.unreadChannels(nav.groups, unreadChannelIds: nav.unread)
+                        if !unread.isEmpty {
+                            SidebarHeading(text: "Unread & Active")
+                            // Own identities: the same channel is also listed under its scope below.
+                            ForEach(unread, id: \.unreadRowId) { channel in
+                                ChannelRow(channel: channel, label: nav.label(channel), unread: true,
+                                           active: context.channelId == channel.id, identifierPrefix: "sidebar.unread")
+                            }
+                            .padding(.bottom, 6)
+                        }
+
+                        ForEach(nav.groups) { group in
+                            let collapsed = nav.collapsed.contains(group.id)
+                            HStack(spacing: 2) {
+                                Button { model.toggleScopeCollapsed(group.id) } label: {
+                                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                                        .font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                        .frame(width: 28, height: 32)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("\(collapsed ? "Expand" : "Collapse") \(group.scope.name) channels")
+                                .accessibilityIdentifier("sidebar.collapse.\(group.scope.name)")
+                                Button { model.chooseInSidebar(WorkContext(scopeId: group.id)) } label: {
+                                    Text(group.scope.name)
+                                        .font(.amb(.footnote).weight(.heavy)).foregroundStyle(context.scopeId == group.id && context.channelId == nil ? Amb.primary : Amb.mutedForeground)
+                                        .lineLimit(1)
+                                        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                                        .padding(.horizontal, 4)
+                                        .background(context.scopeId == group.id && context.channelId == nil ? Amb.selectedFill : Color.clear,
+                                                    in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Open \(group.scope.name) home")
+                                .accessibilityAddTraits(context.scopeId == group.id && context.channelId == nil ? .isSelected : [])
+                                .accessibilityIdentifier("sidebar.scope.\(group.scope.name)")
+                                // sol `.sidebar-scope-add-channel`: shown where the member may create channels in the scope.
+                                if ManagementPermissions.canCreateChannel(in: group.scope, membership: model.membership) {
+                                    Button { sheet = .newChannel(group.scope) } label: {
+                                        Image(systemName: "plus").font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                            .frame(width: 30, height: 32).contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Create channel in \(group.scope.name)")
+                                    .accessibilityIdentifier("sidebar.addChannel.\(group.scope.name)")
+                                }
+                            }
+                            .padding(.top, 6)
+                            if !collapsed {
+                                if group.channels.isEmpty {
+                                    Text("No channels visible").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(.leading, 34).padding(.vertical, 4)
+                                }
+                                ForEach(group.channels) { channel in
+                                    HStack(spacing: 0) {
+                                        ChannelRow(channel: channel, label: nav.label(channel), unread: nav.unread.contains(channel.id),
+                                                   active: context.channelId == channel.id, identifierPrefix: "sidebar.channel")
+                                        // sol `.sidebar-scope-channel-menu`: Channel settings on every channel.
+                                        Button { sheet = .channelSettings(channel) } label: {
+                                            Image(systemName: "ellipsis").font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.mutedForeground)
+                                                .frame(width: 30, height: 36).contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("Channel settings for \(nav.label(channel))")
+                                        .accessibilityIdentifier("sidebar.channelSettings.\(nav.label(channel))")
+                                    }
+                                }
+                            }
+                        }
+                        if !nav.groups.isEmpty {
+                            // sol `.sidebar-manage-scopes-footer`.
+                            Button { sheet = .manageScopes } label: {
+                                Label("Manage scopes", systemImage: "slider.horizontal.3").font(.amb(.subheadline).weight(.semibold))
+                                    .foregroundStyle(Amb.primary).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                                    .padding(.horizontal, 10).contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 10)
+                            .accessibilityIdentifier("sidebar.manageScopes")
+                        }
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 12)
@@ -343,14 +376,15 @@ private struct ChannelRow: View {
 private struct WorkspaceFooter: View {
     @Environment(AppModel.self) private var model
     @State private var showManagement = false
+    @State private var showSelection = false
     var body: some View {
         Menu {
-            ForEach(model.workspaces.value) { workspace in
-                Button { model.selectWorkspace(workspace.id); model.sidebarOpen = false } label: {
-                    if workspace.id == model.selectedWorkspace?.id { Label(workspace.label, systemImage: "checkmark") } else { Text(workspace.label) }
+            Button("Choose workspaces…", systemImage: "checklist") { showSelection = true }
+            if let entry = model.enabledWorkspaceEntries.first(where: { $0.boundary == model.selectedWorkspaceBoundary }) {
+                Button(entry.collapsed ? "Expand workspace" : "Collapse workspace", systemImage: entry.collapsed ? "chevron.down" : "chevron.up") {
+                    model.toggleWorkspaceCollapsed(entry)
                 }
             }
-            if model.workspaces.value.isEmpty { Text(model.workspaces.loaded ? "No workspaces yet" : "Loading…") }
             Divider()
             if model.selectedWorkspace != nil { Button("Manage Workspace", systemImage: "gearshape.2") { showManagement = true } }
         } label: {
@@ -369,6 +403,7 @@ private struct WorkspaceFooter: View {
         .fullLabelMenu()
         .accessibilityLabel("Switch workspace, current \(model.selectedWorkspace?.label ?? "none")")
         .accessibilityIdentifier("sidebar.workspace")
+        .sheet(isPresented: $showSelection) { WorkspaceSelectionView() }
         .sheet(isPresented: $showManagement) {
             if let workspace = model.selectedWorkspace, let connection = model.connection {
                 WorkspaceManagementView(workspace: workspace, connection: connection)

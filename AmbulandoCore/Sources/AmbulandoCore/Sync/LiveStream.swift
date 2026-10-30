@@ -41,7 +41,12 @@ public actor LiveStream {
         generation &+= 1
         let gen = generation
         current = (connection.id, workspace.id)
-        task = Task.detached(priority: .utility) { [weak self] in await self?.run(connection, workspace, gen) }
+        let activity = sync.engine.activity
+        guard let lease = try? activity.lease() else { current = nil; return }
+        task = Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            try? await activity.withLease(lease) { await self.run(connection, workspace, gen) }
+        }
     }
 
     public func stop() async {

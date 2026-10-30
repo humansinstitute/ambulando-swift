@@ -56,7 +56,13 @@ final class ChatFlowUITests: XCTestCase {
         XCTAssertTrue(relaunched.buttons["sidebar.channel.general"].waitForExistence(timeout: 5))
 
         relaunched.buttons["sidebar.workspace"].tap()
-        relaunched.buttons["Lab (sample)"].tap()
+        relaunched.buttons["Choose workspaces…"].tap()
+        let lab = relaunched.descendants(matching: .any)["workspace.enabled.Lab (sample)"].firstMatch
+        XCTAssertTrue(lab.waitForExistence(timeout: 5))
+        lab.tap()
+        relaunched.buttons["Done"].tap()
+        relaunched.buttons["workspace.home.Lab (sample)"].tap()
+        relaunched.section("Chat")
         XCTAssertTrue(relaunched.buttons["channel.notes"].waitForExistence(timeout: 15))
         XCTAssertFalse(relaunched.buttons["channel.general"].exists, "no rows from the other workspace")
     }

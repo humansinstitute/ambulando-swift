@@ -93,8 +93,8 @@ final class BoardRegistry {
         if let connectionId { try? FileManager.default.removeItem(at: Self.draftsDirectory(connectionId)) }
     }
 
-    static func draftsDirectory(_ connectionId: String) -> URL {
-        AppModel.dataDirectory.appendingPathComponent("board-drafts", isDirectory: true).appendingPathComponent(connectionId, isDirectory: true)
+    static func draftsDirectory(_ connectionId: String, dataDirectory: URL? = nil) -> URL {
+        (dataDirectory ?? AppModel.dataDirectory).appendingPathComponent("board-drafts", isDirectory: true).appendingPathComponent(connectionId, isDirectory: true)
     }
 }
 
@@ -102,15 +102,19 @@ extension AppModel {
     /// The shared session for a board shown on a canvas, bound to the selected workspace and this connection. Nil when
     /// no workspace is open (locked devices still get a read-only session if the identity can read).
     func boardSession(_ reference: BoardReference, title: String, in workspace: WorkspaceRecord, canvasId: String) -> BoardSession? {
-        guard let sync, let connection, workspace.id == selectedWorkspace?.id else { return nil }
-        let key = [connection.id, workspace.id, reference.fileId].joined(separator: ":")
+        guard let sync, let connection, let boundary = selectedWorkspaceBoundary,
+              workspace.id == selectedWorkspace?.id, workspace.appNpub == selectedWorkspace?.appNpub else { return nil }
+        let key = [boundary.id, reference.fileId].joined(separator: ":")
         guard let transport = try? sync.boardTransport(connection, workspace, fileId: reference.fileId, title: title) else { return nil }
         let session = boards.session(key) {
             let file = reference.fileId, signer = connection.signerNpub
-            let drafts = BoardDraftStore(directory: BoardRegistry.draftsDirectory(connection.id).appendingPathComponent(workspace.id, isDirectory: true))
+            let drafts = BoardDraftStore(directory: BoardRegistry.draftsDirectory(connection.id, dataDirectory: fixture?.directory).appendingPathComponent(boundary.id, isDirectory: true))
             let controller = BoardController(fileId: file, title: title, author: signer, transport: transport, drafts: drafts, onState: { _ in })
             let session = BoardSession(key: key, fileId: file, title: title, controller: controller)
-            session.afterSave = { [weak self] canvases in for id in canvases { self?.openCanvas(workspace, canvasId: id, force: true) } }
+            session.afterSave = { [weak self] canvases in
+                guard let self, self.selectedWorkspaceBoundary == boundary else { return }
+                for id in canvases { self.openCanvas(workspace, canvasId: id, force: true) }
+            }
             Task { [weak session] in
                 await controller.setOnState { state in Task { @MainActor in session?.apply(state) } }
             }

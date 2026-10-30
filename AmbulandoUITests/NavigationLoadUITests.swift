@@ -26,11 +26,20 @@ final class NavigationLoadUITests: XCTestCase {
 
     /// Opens the sidebar and checks the shown workspace's scopes and channels are listed (sample data: "Lab (sample)" sorts
     /// first and has Research/#notes; "Studio (sample)" has Ambulando/#general and Operations/#deploys).
-    private func assertSidebarLoaded(_ app: XCUIApplication, scopes: [String], channels: [String], _ note: String) {
+    private func assertSidebarLoaded(_ app: XCUIApplication, scopes: [String], channels: [String], workspace: String? = nil, _ note: String) {
         app.openSidebar()
-        XCTAssertTrue(app.buttons["sidebar.scope.\(scopes[0])"].waitForExistence(timeout: 15), "scopes listed: \(note)")
-        for scope in scopes { XCTAssertTrue(app.buttons["sidebar.scope.\(scope)"].exists, "\(scope): \(note)") }
-        for channel in channels { XCTAssertTrue(app.buttons["sidebar.channel.\(channel)"].exists, "#\(channel): \(note)") }
+        if let workspace {
+            let group = app.descendants(matching: .any)["workspace.group.\(workspace)"].firstMatch
+            XCTAssertTrue(group.waitForExistence(timeout: 15), "workspace group listed: \(note)")
+            for scope in scopes { XCTAssertTrue(group.buttons[scope].exists, "\(scope) in \(workspace): \(note)") }
+            for channel in channels {
+                XCTAssertTrue(app.buttons["workspace.channel.\(workspace).\(channel)"].exists, "#\(channel) in \(workspace): \(note)")
+            }
+        } else {
+            XCTAssertTrue(app.buttons["sidebar.scope.\(scopes[0])"].waitForExistence(timeout: 15), "scopes listed: \(note)")
+            for scope in scopes { XCTAssertTrue(app.buttons["sidebar.scope.\(scope)"].exists, "\(scope): \(note)") }
+            for channel in channels { XCTAssertTrue(app.buttons["sidebar.channel.\(channel)"].exists, "#\(channel): \(note)") }
+        }
         XCTAssertFalse(app.staticTexts["sidebar.state.loading"].exists, "not stuck loading: \(note)")
         XCTAssertFalse(app.staticTexts["sidebar.state.error"].exists, note)
     }
@@ -57,13 +66,18 @@ final class NavigationLoadUITests: XCTestCase {
 
         // Switching workspace loads its navigation, and the choice is remembered.
         app.buttons["sidebar.workspace"].firstMatch.tap()
-        let studio = app.buttons["Studio (sample)"].firstMatch
+        app.buttons["Choose workspaces…"].tap()
+        let studio = app.descendants(matching: .any)["workspace.enabled.Studio (sample)"].firstMatch
         XCTAssertTrue(studio.waitForExistence(timeout: 5))
         studio.tap()
-        assertSidebarLoaded(app, scopes: ["Ambulando", "Operations"], channels: ["general", "design", "deploys"], "after switching")
+        app.buttons["Done"].tap()
+        let studioHome = app.buttons["workspace.home.Studio (sample)"]
+        XCTAssertTrue(studioHome.waitForExistence(timeout: 10))
+        studioHome.tap()
+        assertSidebarLoaded(app, scopes: ["Ambulando", "Operations"], channels: ["general", "design", "deploys"], workspace: "Studio (sample)", "after switching")
         app.terminate()
         app = launch(["-AmbulandoFixtureNoWorkspaceChoice"])
-        assertSidebarLoaded(app, scopes: ["Ambulando", "Operations"], channels: ["general", "design", "deploys"], "switch remembered")
+        assertSidebarLoaded(app, scopes: ["Ambulando", "Operations"], channels: ["general", "design", "deploys"], workspace: "Studio (sample)", "switch remembered")
         XCTAssertTrue(workspaceLabel(app).contains("Studio (sample)"), workspaceLabel(app))
     }
 

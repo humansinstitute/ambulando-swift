@@ -241,6 +241,31 @@ final class AppModel {
     @ObservationIgnored var probesSpent = false
     @ObservationIgnored private var restoringPath = false
 
+    // The catalog owns connection/discovery metadata only. Content is always read from a boundary partition.
+    @ObservationIgnored private var catalogStore: LocalStore?
+    @ObservationIgnored private var catalogSync: WorkspaceSync?
+    @ObservationIgnored private var connectionDiscoveries: [String: WorkspaceSync] = [:]
+    @ObservationIgnored private var storePool: WorkspaceStorePool?
+    @ObservationIgnored private var sharedEngine: SyncEngine?
+    @ObservationIgnored private var workspaceTransport: HTTPTransport?
+    @ObservationIgnored private var workspaceProfileSource: ProfileSource?
+    @ObservationIgnored private var workspaceEvents: EventStreamTransport?
+    @ObservationIgnored private var workspaceCacheRoot: URL?
+    @ObservationIgnored private var preferences: WorkspacePreferences?
+    @ObservationIgnored private var activeBoundaryId: String?
+    @ObservationIgnored private var sectionMemories: [String: [AppMode: [WorkRoute]]] = [:]
+    @ObservationIgnored private var modeMemories: [String: AppMode] = [:]
+    @ObservationIgnored private var catalogGeneration: UInt64 = 0
+    @ObservationIgnored private let catalogListings = LiveQuery<[NativeWorkspaceListing]>(initial: [])
+    private(set) var workspaceEntries: [EnabledWorkspaceEntry] = []
+    var enabledWorkspaceEntries: [EnabledWorkspaceEntry] { workspaceEntries.filter(\.enabled) }
+    var selectedWorkspaceBoundary: WorkspaceBoundary? {
+        workspaceEntries.first { $0.connection.id == connection?.id && $0.workspace.id == selectedWorkspaceId && $0.enabled }?.boundary
+    }
+    private var selectedWorkspaceEntry: EnabledWorkspaceEntry? {
+        workspaceEntries.first { $0.boundary == selectedWorkspaceBoundary }
+    }
+
     let workspaces = LiveQuery<[WorkspaceRecord]>(initial: [])
 
     /// "0.1.0 (28)" as sent to Tower with an alert registration (diagnostic only).
@@ -319,8 +344,7 @@ final class AppModel {
                 let store = try LocalStore(directory: ProductionStorage.storeDirectory(directory))
                 // Nothing is in flight at launch; an interrupted send is queued again (Tower replays by client_request_id),
                 // and an interrupted write is reconciled before it is sent again.
-                try await store.writer.resetInterruptedSends()
-                try await store.writer.resetInterruptedWrites()
+                // Interrupted work is reset only in its migrated boundary partition, never in the legacy source.
                 let identity = IdentityService(vaultURL: ProductionStorage.vaultURL(directory), secrets: secrets,
                                                background: background, session: session)
                 // Trusted-device session: stays unlocked across relaunch until Lock now / remove / disconnect. The
@@ -407,6 +431,7 @@ final class AppModel {
             let profileSource = fixture?.profileSource ?? publicProfiles
             let avatarTransport = fixture?.avatarTransport ?? publicPictures
             self.profiles = ProfileSync(store: store, engine: engine, source: profileSource)
+            self.workspaceProfileSource = profileSource
             let avatarRoot = fixture.map { $0.directory.appendingPathComponent("Avatars", isDirectory: true) }
                 ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(ProductionStorage.avatarCacheDirectoryName, isDirectory: true)
             let avatarStore = AvatarStore(directory: avatarRoot, transport: avatarTransport)
@@ -431,12 +456,24 @@ final class AppModel {
             }
             let selected = try await store.reader.state("selected.connection")
             connection = connections.first { $0.id == selected } ?? connections.first
+            try await bootstrapWorkspaces(catalog: store, shared: engine, identity: identity, transport: transport,
+                                          events: fixture?.events ?? URLSessionEventStreamTransport(), directory: directory)
             if !pushOnlyStartup { try await restoreConnectionView() }
             statusTask = Task { [weak self] in
                 // Sync status changes on every job start/finish; screens get at most 4 updates a second, and only
                 // real changes (Observation would otherwise invalidate every reader on each assignment).
-                for await snapshot in await engine.statusStream() {
+                for await _ in await engine.statusStream() {
                     guard let self else { return }
+                    let boundary = self.selectedWorkspaceBoundary
+                    var snapshot = await self.selectedWorkspaceEntry?.runtime?.engine.snapshot ?? SyncSnapshot()
+                    if let connection = self.connection, let discovery = self.connectionDiscoveries[connection.id] {
+                        let metadata = await discovery.engine.snapshot
+                        snapshot.running.formUnion(metadata.running); snapshot.queued.formUnion(metadata.queued)
+                        snapshot.scheduled.formUnion(metadata.scheduled); snapshot.retrying.formUnion(metadata.retrying)
+                        snapshot.connectionFailures.formUnion(metadata.connectionFailures)
+                        snapshot.errors.merge(metadata.errors, uniquingKeysWith: { a, _ in a })
+                    }
+                    guard boundary == self.selectedWorkspaceBoundary else { continue }
                     if snapshot != self.syncStatus { self.syncStatus = snapshot }
                     if !snapshot.connectionFailures.isEmpty { self.startProbes() }
                     try? await Task.sleep(for: .milliseconds(250))
@@ -463,18 +500,15 @@ final class AppModel {
 
     /// A cold push initializes the sync owner without launching view-driven work. Restore UI only on activation.
     private func restoreConnectionView() async throws {
-        guard let store, let connection else { return }
-        // The stored choice exists only if the switcher was used; otherwise (or if Tower no longer lists it) the
-        // first saved workspace is shown, so the sidebar reads its scopes straight away.
-        selectedWorkspaceId = WorkspaceSelection.effective(
-            persisted: try await store.reader.state("selected.workspace:\(connection.id)"),
-            listed: try await store.reader.workspaces(connectionId: connection.id),
-            listComplete: try await store.reader.state(WorkspaceSelection.listedKey(connection.id)) != nil)
-        await restoreContext()
-        await restoreChatPath()
-        // Observed only after the restore has started the sidebar, so the first list (usually the same one)
-        // is a no-op instead of a second, unawaited restore that could land after the user opened a channel.
-        observeWorkspaces(connection)
+        guard let catalogStore else { return }
+        let savedConnection = try await catalogStore.reader.state("selected.connection")
+        var target: EnabledWorkspaceEntry?
+        if let savedConnection {
+            let savedWorkspace = try await catalogStore.reader.state("selected.workspace:\(savedConnection)")
+            target = enabledWorkspaceEntries.first { $0.connection.id == savedConnection && $0.workspace.id == savedWorkspace }
+        }
+        if let target = target ?? enabledWorkspaceEntries.first { await activateWorkspace(target) }
+        else { clearWorkspaceContent() }
     }
 
     /// Network return is a retry trigger for unsent messages (the outbox also retries on its own backoff).
@@ -494,7 +528,7 @@ final class AppModel {
     }
 
     private func observeWorkspaces(_ connection: ConnectionRecord) {
-        guard let store else { return }
+        guard let store = catalogStore ?? store else { return }
         let id = connection.id
         workspaceListGeneration &+= 1
         let generation = workspaceListGeneration
@@ -510,6 +544,7 @@ final class AppModel {
     private func workspacesDidLoad(_ listed: [WorkspaceRecord], connectionId: String, generation: UInt64) {
         guard let store, connection?.id == connectionId, generation == workspaceListGeneration else { return }
         reconcilePush(workspaces: listed)
+        if catalogStore != nil { return }
         guard listed.isEmpty else {
             applyWorkspaceChange(listed: listed, listComplete: true)
             return
@@ -556,7 +591,8 @@ final class AppModel {
     }
 
     var selectedWorkspace: WorkspaceRecord? {
-        workspaces.value.first { $0.id == selectedWorkspaceId } ?? workspaces.value.first
+        if catalogStore != nil { return selectedWorkspaceEntry?.workspace }
+        return workspaces.value.first { $0.id == selectedWorkspaceId } ?? workspaces.value.first
     }
 
     // MARK: Identity
@@ -592,6 +628,8 @@ final class AppModel {
         pushRefreshWindow.cancel()
         #endif
         guard let sync else { return }
+        await pauseAllWorkspaces()
+        await sharedEngine?.cancelAll()
         await liveStream?.stop()
         await sync.engine.cancelAll()
         await saver?.forgetAll()
@@ -608,6 +646,8 @@ final class AppModel {
         #endif
         guard let sync else { return }
         await unbindPush()   // withdraw alerts while the signer still exists; a revocation that cannot be sent waits or expires with its lease
+        await pauseAllWorkspaces()
+        await sharedEngine?.cancelAll()
         await liveStream?.stop()
         await sync.engine.cancelAll()
         do { identity = try await sync.identity.remove() } catch { notice = error.localizedDescription }
@@ -624,13 +664,12 @@ final class AppModel {
     }
 
     func connect(_ origin: String) async {
-        guard let sync, let store else { return }
+        guard let sync = catalogSync ?? sync, let store = catalogStore ?? store else { return }
         do {
             let record = try await sync.connect(origin: try TowerOrigin(origin))
             try await store.writer.setState("selected.connection", record.id)
             connection = record
-            observeWorkspaces(record)
-            await sync.discover(record, priority: .visible, force: true)
+            if let discovery = connectionDiscovery(record) { await discovery.discover(record, priority: .visible, force: true) }
             notice = nil
         } catch { notice = error.localizedDescription }
     }
@@ -641,48 +680,39 @@ final class AppModel {
     }
 
     func disconnect() async {
-        #if os(iOS)
-        pushRefreshWindow.cancel()
-        #endif
-        guard let sync, let store, let connection else { return }
-        browser.reset()
-        await unbindPush()
-        await liveStream?.stop()
-        await sync.engine.cancelAll()
-        // Disconnecting ends the trusted-device session; the next launch asks for the PIN.
-        do { try await sync.identity.endSession() } catch { notice = error.localizedDescription }
-        boards.removeAll(deletingDraftsOf: connection.id)
+        guard let connection, let catalogStore else { return }
+        let removed = workspaceEntries.filter { $0.connection.id == connection.id }
+        for entry in removed {
+            entry.enabled = false; entry.runtime?.writeActivity.pause(); entry.runtime?.activity.pause()
+        }
         do {
-            for workspace in workspaces.value { fileCache?.purge(workspaceId: workspace.id) }
-            try await store.writer.removeConnection(id: connection.id)
-            try await store.writer.setState("selected.connection", nil)
-            workspaces.stop()
-            workspaceListGeneration &+= 1
-            self.connection = nil
-            selectedWorkspaceId = nil
-            context = .home
-            navigation.stop()
-            navigationWorkspaceId = nil
-            pins.stop()
-            notificationBadge.stop()
-            stopPeople()
-            // Profile rows went with the connection; their pictures go too.
-            await avatars?.clear()
-            resetSectionPaths()
-            membership = nil; membershipWorkspaceId = nil
-            restoringPath = true; chatPath = []; focusedThread = nil; restoredThread = nil; restoringPath = false
+            for entry in removed {
+                await entry.runtime?.pause()
+                entry.query.stop()
+                entry.runtime?.fileCache.purge(workspaceId: entry.workspace.id)
+                try await entry.runtime?.store.writer.removeConnection(id: connection.id)
+                preferences?.enabled.removeAll { $0 == entry.id }
+            }
+            try await storePool?.remove(connection: connection)
+            try await catalogStore.writer.removeConnection(id: connection.id)
+            workspaceEntries.removeAll { $0.connection.id == connection.id }
+            await persistWorkspacePreferences()
+            boards.removeAll(deletingDraftsOf: connection.id)
+            clearWorkspaceContent()
+            if let next = enabledWorkspaceEntries.first { await activateWorkspace(next) }
+            else {
+                self.connection = nil
+                self.sync = catalogSync; self.store = catalogStore
+                try await catalogStore.writer.setState("selected.connection", nil)
+            }
         } catch { notice = error.localizedDescription }
     }
 
     /// The user chose a workspace in the switcher; the choice is remembered for this connection.
     func selectWorkspace(_ id: String) {
-        guard let store, let connection else { return }
-        guard id != selectedWorkspaceId else {
-            // Already shown (perhaps as the default): choosing it makes it the remembered choice.
-            Task { try? await store.writer.setState("selected.workspace:\(connection.id)", id) }
-            return
-        }
-        showWorkspace(id, persist: true)
+        guard let entry = workspaceEntries.first(where: { $0.connection.id == connection?.id && $0.workspace.id == id }) else { return }
+        if !entry.enabled { setWorkspaceEnabled(entry, true) }
+        openWorkspace(entry)
     }
 
     /// Switches every mode to `id`, starting at Home. `persist` is false for a default the user did not choose.
@@ -712,15 +742,26 @@ final class AppModel {
 
     /// Foreground refresh. `force` bypasses failure backoff (explicit pull-to-refresh).
     func refresh(force: Bool) {
-        guard let sync, let connection, canRead else { return }
+        guard canRead, catalogSync != nil else { return }
         Task {
-            await sync.discover(connection, priority: force ? .visible : .background, force: force)
-            if let workspace = selectedWorkspace {
-                await sync.refreshWorkspace(connection, workspace, priority: .visible, force: force)
-                await sync.refreshPins(connection, workspace, priority: .background, force: force)
-                await sync.refreshNotifications(connection, workspace, priority: force ? .visible : .background, force: force)
-                // Pull to refresh also replays missed events (edits/deletions older than the last page).
-                if force { await sync.catchUpEvents(connection, workspace, priority: .visible, force: true) }
+            let connections = (try? await catalogStore?.reader.connections()) ?? []
+            for connection in connections where connection.signerNpub == currentSigner && enabledWorkspaceEntries.contains(where: { $0.connection.id == connection.id }) {
+                // Discovery is metadata-only; it never schedules content for a paused workspace.
+                if let discovery = connectionDiscovery(connection) {
+                    await discovery.engine.resume()
+                    await discovery.discover(connection, priority: force ? .visible : .background, force: force)
+                }
+            }
+            for entry in enabledWorkspaceEntries {
+                Task { @MainActor in
+                await resumeWorkspace(entry, force: force)
+                guard let runtime = entry.runtime else { return }
+                await runtime.sync.refreshWorkspace(entry.connection, entry.workspace, priority: .background, force: force)
+                await runtime.sync.refreshPins(entry.connection, entry.workspace, priority: .background, force: force)
+                await runtime.sync.refreshNotifications(entry.connection, entry.workspace, priority: .background, force: force)
+                await runtime.sync.refreshInbox(entry.connection, entry.workspace, priority: .background, force: force)
+                if force { await runtime.sync.catchUpEvents(entry.connection, entry.workspace, priority: .visible, force: true) }
+                }
             }
         }
     }
@@ -768,17 +809,21 @@ final class AppModel {
     func sceneDidEnterBackground() {
         isActive = false
         probeTask?.cancel(); probeTask = nil
-        Task { await liveStream?.stop() }
+        Task { for entry in workspaceEntries { await entry.runtime?.stream.stop() } }
         scheduleBackgroundRefresh()
         finishPendingWorkInBackground()
     }
 
     func startLive() {
-        guard isActive, let liveStream, let connection, canRead else { return }
+        guard isActive, canRead else { return }
         Task {
-            // At launch the observed workspace list may not have loaded yet; read the selection from the store.
-            guard let workspace = await resolvedWorkspace(), isActive, connection.id == self.connection?.id else { return }
-            await liveStream.start(connection, workspace)
+            for entry in enabledWorkspaceEntries {
+                Task { @MainActor in
+                await resumeWorkspace(entry)
+                guard isActive, entry.enabled, let runtime = entry.runtime, runtime.activity.isEnabled else { return }
+                await runtime.stream.start(entry.connection, entry.workspace)
+                }
+            }
         }
     }
 
@@ -802,13 +847,54 @@ final class AppModel {
 
     /// Runs the shared sync pipeline once for a background window (also used by the sample-data simulation).
     func runBackgroundRefresh(budget: Duration) async -> BackgroundRefreshReport {
-        guard let sync, let connection else {
-            return BackgroundRefreshReport(result: .skippedNoConnection, startedAt: Date(), finishedAt: Date())
+        let started = Date()
+        var report = BackgroundRefreshReport(result: canRead ? .completed : .skippedLocked, startedAt: started, finishedAt: started)
+        guard canRead, let sharedEngine else { return report }
+        // Rotate the starting boundary across OS windows; every enabled account gets a fair turn after expiry.
+        let entries = enabledWorkspaceEntries
+        guard !entries.isEmpty else { report.result = .skippedNoConnection; return report }
+        let indexKey = "native.background-next-boundary"
+        let offset = Int((try? await catalogStore?.reader.state(indexKey)) ?? "0") ?? 0
+        let ordered = Array(entries.dropFirst(offset % entries.count)) + Array(entries.prefix(offset % entries.count))
+        try? await catalogStore?.writer.setState(indexKey, String((offset + 1) % entries.count))
+        let targets = Array(ordered.prefix(WorkspaceSync.backgroundWorkspaceLimit))
+        report.workspaces = targets.count
+        let workers = targets.map { entry in
+            Task { @MainActor in
+                await self.resumeWorkspace(entry)
+                guard !Task.isCancelled, entry.enabled, let runtime = entry.runtime, runtime.activity.isEnabled else { return }
+                await runtime.sync.catchUpEvents(entry.connection, entry.workspace, pages: WorkspaceSync.backgroundPageBudget, priority: .background)
+                await runtime.sync.refreshInbox(entry.connection, entry.workspace, priority: .background)
+                if self.isUnlocked, runtime.validated {
+                    await runtime.outbox.kick(entry.connection)
+                    await runtime.writes.kick(entry.connection)
+                }
+            }
         }
-        var targets = workspaces.value
-        if targets.isEmpty, let stored = try? await store?.reader.workspaces(connectionId: connection.id) { targets = stored }
-        if let selected = selectedWorkspaceId, let index = targets.firstIndex(where: { $0.id == selected }) { targets.insert(targets.remove(at: index), at: 0) }
-        let report = await sync.backgroundRefresh(connection, workspaces: targets, outbox: outbox, writes: writes, budget: budget)
+        let completed = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for worker in workers { await worker.value }
+                await sharedEngine.waitUntilIdle()
+                return !Task.isCancelled
+            }
+            group.addTask { try? await Task.sleep(for: budget); return false }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            if !first {
+                for worker in workers { worker.cancel() }
+                await sharedEngine.cancelAll()
+                for entry in targets { entry.runtime?.starting?.cancel() }
+            }
+            return first && !Task.isCancelled
+        }
+        report.result = completed ? .completed : .expired
+        report.sentPending = isUnlocked && targets.contains { $0.runtime?.validated == true }
+        report.finishedAt = Date()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(report) {
+            try? await catalogStore?.writer.setState(BackgroundRefreshReport.stateKey, String(decoding: data, as: UTF8.self))
+        }
         lastBackgroundReport = report
         return report
     }
@@ -826,7 +912,7 @@ final class AppModel {
         }
         identifier = application.beginBackgroundTask(withName: "ambulando.finish-sends") {
             work.cancel()
-            Task { await sync.engine.cancelAll() }
+            Task { await self.sharedEngine?.cancelAll() }
             if identifier != .invalid { application.endBackgroundTask(identifier); identifier = .invalid }
         }
         #endif
@@ -851,7 +937,7 @@ final class AppModel {
 
     private func setBackgroundPreference(_ on: Bool) async {
         backgroundRefreshEnabled = on
-        try? await store?.writer.setState(Self.backgroundPreferenceKey, on ? "on" : nil)
+        try? await (catalogStore ?? store)?.writer.setState(Self.backgroundPreferenceKey, on ? "on" : nil)
     }
 
     private func provisionBackgroundRead() async {
@@ -871,10 +957,16 @@ final class AppModel {
 
     /// Resumes everything waiting to be sent: chat messages and other writes.
     func kickOutbox(force: Bool = false) {
-        guard let outbox, let writes, let connection, case .unlocked = identity else { return }
+        guard isUnlocked else { return }
         Task {
-            await outbox.kick(connection, force: force)
-            await writes.kick(connection, force: force)
+            for entry in enabledWorkspaceEntries {
+                Task { @MainActor in
+                await resumeWorkspace(entry, force: force)
+                guard entry.enabled, let runtime = entry.runtime, runtime.validated else { return }
+                await runtime.outbox.kick(entry.connection, force: force)
+                await runtime.writes.kick(entry.connection, force: force)
+                }
+            }
         }
     }
 
@@ -883,7 +975,7 @@ final class AppModel {
     var isUnlocked: Bool { if case .unlocked = identity { true } else { false } }
 
     func withWorkspace(_ workspace: WorkspaceRecord, _ body: @escaping @Sendable (WorkspaceSync, ConnectionRecord) async -> Void) {
-        guard let sync, let connection, canRead, workspace.id == selectedWorkspace?.id else { return }
+        guard let sync, let connection, canRead, workspace.id == selectedWorkspace?.id, workspace.appNpub == selectedWorkspace?.appNpub, selectedWorkspaceBoundary != nil else { return }
         Task { await body(sync, connection) }
     }
 
@@ -928,7 +1020,7 @@ final class AppModel {
     /// Queues a write for the selected workspace. Returns false when there is no connection to bind it to.
     @discardableResult
     func submit(_ intent: WriteIntent, in workspace: WorkspaceRecord) -> Bool {
-        guard let writes, let connection, workspace.id == selectedWorkspace?.id else { return false }
+        guard let writes, let connection, workspace.id == selectedWorkspace?.id, workspace.appNpub == selectedWorkspace?.appNpub, selectedWorkspaceBoundary != nil else { return false }
         if let data = try? JSONSerialization.data(withJSONObject: intent.payload),
            UploadToken.contains(in: String(decoding: data, as: UTF8.self)) {
             notice = ComposerUploadError.unresolved.localizedDescription
@@ -944,8 +1036,10 @@ final class AppModel {
     /// Opening a task, document or thread marks it read when Tower reports it unread.
     func markViewed(_ type: ViewStateRecord.ResourceType, _ id: String, in workspace: WorkspaceRecord) {
         guard let store else { return }
+        let boundary = selectedWorkspaceBoundary
         Task {
-            guard let state = try? await store.reader.viewState(workspaceId: workspace.id, type: type, id: id), state.unread || state.needsAttention else { return }
+            guard let state = try? await store.reader.viewState(workspaceId: workspace.id, type: type, id: id),
+                  state.unread || state.needsAttention, boundary == selectedWorkspaceBoundary else { return }
             markRead([state], in: workspace)
         }
     }
@@ -953,7 +1047,7 @@ final class AppModel {
     /// Marks records read: on this iPhone at once, and on Tower through the durable write queue.
     func markRead(_ resources: [ViewStateRecord], in workspace: WorkspaceRecord) {
         let unread = resources.filter { $0.unread || $0.needsAttention }
-        guard !unread.isEmpty, let store, let writes, let connection, workspace.id == selectedWorkspace?.id else { return }
+        guard !unread.isEmpty, let store, let writes, let connection, workspace.id == selectedWorkspace?.id, workspace.appNpub == selectedWorkspace?.appNpub, selectedWorkspaceBoundary != nil else { return }
         Task {
             try? await store.writer.markViewedLocally(workspaceId: workspace.id, unread.map { ($0.resourceType, $0.resourceId, $0.activityVersion) })
             for chunk in stride(from: 0, to: unread.count, by: 500).map({ Array(unread[$0..<min($0 + 500, unread.count)]) }) {
@@ -967,7 +1061,7 @@ final class AppModel {
 
     /// Screen-driven catch-up for the open channel (visible priority, ahead of background work).
     func openChannel(_ channelId: String, in workspace: WorkspaceRecord, force: Bool = false) {
-        guard let sync, let connection, canRead, workspace.id == selectedWorkspace?.id else { return }
+        guard let sync, let connection, canRead, workspace.id == selectedWorkspace?.id, workspace.appNpub == selectedWorkspace?.appNpub, selectedWorkspaceBoundary != nil else { return }
         Task {
             await sync.live.feed(workspace.id).setVisibleChannel(channelId)
             await sync.catchUpChannel(connection, workspace, channelId: channelId, priority: .visible, force: force)
@@ -975,7 +1069,7 @@ final class AppModel {
     }
 
     func openThread(_ threadId: String, channelId: String, in workspace: WorkspaceRecord) {
-        guard let sync, let connection, canRead, workspace.id == selectedWorkspace?.id else { return }
+        guard let sync, let connection, canRead, workspace.id == selectedWorkspace?.id, workspace.appNpub == selectedWorkspace?.appNpub, selectedWorkspaceBoundary != nil else { return }
         Task { await sync.refreshThread(connection, workspace, channelId: channelId, threadId: threadId, priority: .user) }
     }
 
@@ -1079,7 +1173,7 @@ final class AppModel {
 
     /// Sample-data mode only: Tower's workspace list is fetched and stored again, as any later refresh does.
     func fixtureStoreWorkspacesAgain() async {
-        guard fixture != nil, let sync, let connection else { return }
+        guard fixture != nil, let sync = catalogSync ?? sync, let connection else { return }
         await sync.discover(connection, priority: .visible, force: true)
     }
 
@@ -1111,6 +1205,7 @@ final class AppModel {
     /// closing it: the sidebar, Chat, Tasks, Docs and Files then show where it lives.
     func adoptContext(for route: WorkRoute) {
         guard let store, let workspace = selectedWorkspaceId, route.workspaceId == workspace else { return }
+        let boundary = selectedWorkspaceBoundary
         Task {
             let channelId: String?
             switch route {
@@ -1122,7 +1217,7 @@ final class AppModel {
             case .canvas, .board, .contextComponent, .webContent: channelId = nil
             }
             guard let channelId, channelId != context.channelId,
-                  let channel = try? await store.reader.channel(workspaceId: workspace, id: channelId), workspace == selectedWorkspaceId else { return }
+                  let channel = try? await store.reader.channel(workspaceId: workspace, id: channelId), workspace == selectedWorkspaceId, boundary == selectedWorkspaceBoundary else { return }
             setContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id), resetChat: true)
         }
     }
@@ -1130,9 +1225,10 @@ final class AppModel {
     /// A mentioned conversation opens focused over the current screen; the section and context behind it stay as they are.
     func openThreadMention(_ threadId: String) {
         guard let store, let workspace = selectedWorkspaceId else { return }
+        let boundary = selectedWorkspaceBoundary
         Task {
             guard let thread = try? await store.reader.thread(workspaceId: workspace, id: threadId),
-                  (try? await store.reader.channel(workspaceId: workspace, id: thread.channelId)) != nil, workspace == selectedWorkspaceId else { return }
+                  (try? await store.reader.channel(workspaceId: workspace, id: thread.channelId)) != nil, workspace == selectedWorkspaceId, boundary == selectedWorkspaceBoundary else { return }
             focusThread(ThreadFocus(workspaceId: workspace, channelId: thread.channelId, threadId: thread.id))
         }
     }
@@ -1215,6 +1311,7 @@ struct NavigationSnapshot: Sendable, Equatable {
     /// Display labels by channel id (direct messages are named after their participants).
     var labels: [String: String] = [:]
     var loaded = false
+    var accessLost = false
 
     func scope(_ id: String?) -> ScopeRecord? { groups.first { $0.scope.id == id }?.scope }
     func channel(_ id: String?) -> ChannelRecord? { groups.lazy.flatMap(\.channels).first { $0.id == id } }
@@ -1223,5 +1320,347 @@ struct NavigationSnapshot: Sendable, Equatable {
         guard let scopeId = context.scopeId else { return groups.flatMap(\.channels) }
         if let channelId = context.channelId { return groups.flatMap(\.channels).filter { $0.id == channelId } }
         return groups.first { $0.scope.id == scopeId }?.channels ?? []
+    }
+}
+
+// MARK: Multiple native workspaces
+extension AppModel {
+    private var currentSigner: String? {
+        switch identity {
+        case .unlocked(let npub), .locked(let npub): return npub
+        default: return connection?.signerNpub
+        }
+    }
+
+    func persistPublicProfilePreference(_ on: Bool) async {
+        try? await catalogStore?.writer.setState(ProfileSync.preferenceKey, on ? nil : "off")
+        for entry in workspaceEntries {
+            try? await entry.runtime?.store.writer.setState(ProfileSync.preferenceKey, on ? nil : "off")
+            if !on { await entry.runtime?.engine.cancel(prefix: ProfileSync.jobPrefix(entry.connection.id)) }
+        }
+    }
+
+    private var workspacePreferenceKey: String {
+        "native.workspace-preferences.v1:" + WorkspaceBoundary.digest([currentSigner ?? ""])
+    }
+
+    private func bootstrapWorkspaces(catalog: LocalStore, shared: SyncEngine, identity: IdentityService,
+                                     transport: HTTPTransport, events: EventStreamTransport, directory: URL) async throws {
+        catalogStore = catalog
+        sharedEngine = shared
+        workspaceTransport = transport; workspaceEvents = events
+        workspaceCacheRoot = fixture.map { $0.directory.appendingPathComponent("FileCache", isDirectory: true) }
+            ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(ProductionStorage.fileCacheDirectoryName)
+        let pool = WorkspaceStorePool(catalog: catalog, directory: directory.appendingPathComponent("WorkspaceStores", isDirectory: true))
+        storePool = pool
+        catalogSync = WorkspaceSync(store: catalog, engine: shared, identity: identity, transport: transport, discoveryOnly: true)
+        preferences = (try await catalog.reader.state(workspacePreferenceKey)).flatMap { try? JSONDecoder().decode(WorkspacePreferences.self, from: Data($0.utf8)) }
+        let listings = try await readWorkspaceListings(catalog)
+        try await applyWorkspaceListings(listings)
+        catalogListings.onLoad = { [weak self] listings in
+            guard let self else { return }
+            self.catalogGeneration &+= 1
+            let generation = self.catalogGeneration
+            Task {
+                guard generation == self.catalogGeneration else { return }
+                do { try await self.applyWorkspaceListings(listings) }
+                catch { self.notice = "Could not open a workspace safely: \(error.localizedDescription)" }
+            }
+        }
+        catalogListings.start(store: catalog, matches: { [.workspaces, .connections].contains($0.table) }) {
+            var result: [NativeWorkspaceListing] = []
+            for connection in try await catalog.reader.connections() {
+                for workspace in try await catalog.reader.workspaces(connectionId: connection.id) {
+                    result.append(NativeWorkspaceListing(connection: connection, workspace: workspace))
+                }
+            }
+            return result
+        }
+    }
+
+    private func connectionDiscovery(_ connection: ConnectionRecord) -> WorkspaceSync? {
+        if let existing = connectionDiscoveries[connection.id] { return existing }
+        guard let catalogStore, let sharedEngine, let identity = catalogSync?.identity, let workspaceTransport else { return nil }
+        let connectionNamespace = WorkspaceBoundary.digest([connection.origin, connection.signerNpub])
+        let namespace = WorkspaceBoundary.digest([connection.origin, connection.signerNpub, "discovery"])
+        let engine = SyncEngine(parent: sharedEngine, namespace: namespace, connectionNamespace: connectionNamespace)
+        let transport = WorkspaceHTTPTransport(base: workspaceTransport, activity: engine.activity)
+        let discovery = WorkspaceSync(store: catalogStore, engine: engine, identity: identity, transport: transport, discoveryOnly: true)
+        connectionDiscoveries[connection.id] = discovery
+        return discovery
+    }
+
+    private func readWorkspaceListings(_ catalog: LocalStore) async throws -> [NativeWorkspaceListing] {
+        var result: [NativeWorkspaceListing] = []
+        for connection in try await catalog.reader.connections() {
+            for workspace in try await catalog.reader.workspaces(connectionId: connection.id) {
+                result.append(NativeWorkspaceListing(connection: connection, workspace: workspace))
+            }
+        }
+        return result
+    }
+
+    private func applyWorkspaceListings(_ all: [NativeWorkspaceListing]) async throws {
+        let listings = all.filter { $0.connection.signerNpub == currentSigner }
+        var entries: [EnabledWorkspaceEntry] = []
+        for item in listings {
+            let boundary = try WorkspaceBoundary(connection: item.connection, workspace: item.workspace)
+            if let existing = workspaceEntries.first(where: { $0.boundary == boundary }) {
+                existing.workspace = item.workspace
+                entries.append(existing)
+            } else { entries.append(try EnabledWorkspaceEntry(connection: item.connection, workspace: item.workspace)) }
+        }
+        for removed in workspaceEntries where !entries.contains(where: { $0.id == removed.id }) {
+            removed.enabled = false
+            await removed.runtime?.pause()
+            removed.query.stop()
+            // Discovery revoked access: delete only this boundary's cached server content; private unsent work remains.
+            if let runtime = removed.runtime {
+                try await runtime.store.writer.replaceWorkspaces(connectionId: removed.connection.id, [])
+                runtime.fileCache.purge(workspaceId: removed.workspace.id)
+            }
+        }
+        if preferences == nil, !entries.isEmpty {
+            let selectedConnection = try await catalogStore?.reader.state("selected.connection")
+            let selectedWorkspace = try await catalogStore?.reader.state("selected.workspace:\(selectedConnection ?? "")")
+            let first = entries.first { $0.connection.id == selectedConnection && $0.workspace.id == selectedWorkspace } ?? entries.first!
+            preferences = WorkspacePreferences(enabled: [first.id], order: entries.map(\.id))
+        }
+        let prefs = preferences ?? WorkspacePreferences()
+        let ordered = prefs.sorted(entries.map(\.id))
+        workspaceEntries = ordered.compactMap { id in entries.first { $0.id == id } }
+        for entry in workspaceEntries {
+            entry.enabled = prefs.enabled.contains(entry.id)
+            entry.collapsed = prefs.collapsed.contains(entry.id)
+            entry.colour = prefs.colours[entry.id] ?? .blue
+            if entry.enabled { try await ensureRuntime(entry) }
+        }
+        if preferences != nil { await persistWorkspacePreferences() }
+        if selectedWorkspaceBoundary == nil {
+            // Initial discovery must not overwrite the durable choice with the first enabled entry before
+            // restoreConnectionView reads it. This also chooses a safe fallback after access revocation.
+            let edits = contextEdits
+            let savedConnection = try await catalogStore?.reader.state("selected.connection")
+            let savedWorkspace = try await catalogStore?.reader.state("selected.workspace:\(savedConnection ?? "")")
+            guard selectedWorkspaceBoundary == nil, edits == contextEdits else { return }
+            let remembered = enabledWorkspaceEntries.first { $0.connection.id == savedConnection && $0.workspace.id == savedWorkspace }
+            if let next = remembered ?? enabledWorkspaceEntries.first { await activateWorkspace(next) }
+            else { clearWorkspaceContent() }
+        }
+        if isActive { startLive() }
+    }
+
+    private func ensureRuntime(_ entry: EnabledWorkspaceEntry) async throws {
+        guard entry.runtime == nil, let pool = storePool, let sharedEngine, let identity = catalogSync?.identity,
+              let workspaceTransport, let workspaceEvents, let staging, let workspaceCacheRoot else { return }
+        let partition = try await pool.store(connection: entry.connection, workspace: entry.workspace)
+        if entry.runtime != nil { return }
+        try await partition.writer.resetInterruptedSends()
+        try await partition.writer.resetInterruptedWrites()
+        let runtime = NativeWorkspaceRuntime(entry: entry, store: partition, shared: sharedEngine, identity: identity,
+                                             transport: workspaceTransport, events: workspaceEvents, staging: staging, cacheRoot: workspaceCacheRoot,
+                                             afterWikiCreate: { [weak self] connection, item, created, capturedStore, capturedSaver, capturedWorkspace in
+            try await self?.bindCreatedWikiPage(connection, item, created, capturedStore: capturedStore,
+                                               capturedSaver: capturedSaver, capturedWorkspace: capturedWorkspace)
+        })
+        try await partition.writer.setState(ProfileSync.preferenceKey, publicProfilesEnabled ? nil : "off")
+        await partition.writer.bindWorkspaceActivity(runtime.activity)
+        entry.runtime = runtime
+        entry.query.onLoad = { [weak self, weak entry] snapshot in
+            guard snapshot.accessLost, let entry else { return }
+            runtime.writeActivity.pause()
+            runtime.validated = false
+            Task {
+                await runtime.pause()
+                if let catalogSync = self?.catalogSync { await catalogSync.discover(entry.connection, priority: .visible, force: true) }
+            }
+        }
+        entry.observe(partition)
+        Task {
+            let boardRoot = BoardRegistry.draftsDirectory(entry.connection.id, dataDirectory: fixture?.directory)
+            _ = try? await pool.restoreBoardDrafts(store: partition, workspace: entry.workspace,
+                                                 legacyDirectory: boardRoot.appendingPathComponent(entry.workspace.id, isDirectory: true),
+                                                 destinationDirectory: boardRoot.appendingPathComponent(entry.id, isDirectory: true))
+            _ = try? await pool.restoreFileCache(store: partition, workspace: entry.workspace,
+                                               legacy: FileCache(root: workspaceCacheRoot), destination: runtime.fileCache)
+            await partition.writer.touch([ChangeKey(.files, entry.workspace.id)])
+        }
+    }
+
+    private func persistWorkspacePreferences() async {
+        guard let catalogStore, let preferences else { return }
+        do {
+            let encoded = String(decoding: try JSONEncoder().encode(preferences), as: UTF8.self)
+            try await catalogStore.writer.setState(workspacePreferenceKey, encoded)
+        } catch { notice = "Workspace choices could not be saved: \(error.localizedDescription)" }
+    }
+
+    func setWorkspaceEnabled(_ entry: EnabledWorkspaceEntry, _ enabled: Bool) {
+        guard workspaceEntries.contains(where: { $0 === entry }), enabled != entry.enabled else { return }
+        entry.enabled = enabled
+        preferences?.setEnabled(entry.id, enabled)
+        // This synchronous gate prevents even a concurrently resumed request from signing after the click.
+        if !enabled { entry.runtime?.writeActivity.pause(); entry.runtime?.activity.pause() }
+        Task {
+            await persistWorkspacePreferences()
+            if enabled {
+                do { try await ensureRuntime(entry) } catch { notice = error.localizedDescription; return }
+                await resumeWorkspace(entry)
+                if selectedWorkspaceBoundary == nil { await activateWorkspace(entry) }
+                if isActive { startLive() }
+                kickOutbox()
+            } else {
+                await entry.runtime?.pause()
+                if !enabledWorkspaceEntries.contains(where: { $0.connection.id == entry.connection.id }) {
+                    await connectionDiscoveries[entry.connection.id]?.engine.pause()
+                }
+                if connection?.id == entry.connection.id && selectedWorkspaceId == entry.workspace.id {
+                    if let next = enabledWorkspaceEntries.first { await activateWorkspace(next) }
+                    else { clearWorkspaceContent() }
+                }
+            }
+        }
+    }
+
+    func openWorkspace(_ entry: EnabledWorkspaceEntry, context: WorkContext? = nil) {
+        guard entry.enabled else { return }
+        Task {
+            await activateWorkspace(entry)
+            guard entry.enabled, selectedWorkspaceBoundary == entry.boundary else { return }
+            if let context { chooseInSidebar(context) }
+            sidebarOpen = false
+        }
+    }
+
+    func activateWorkspace(_ entry: EnabledWorkspaceEntry) async {
+        guard entry.enabled else { return }
+        do { try await ensureRuntime(entry) } catch { notice = error.localizedDescription; return }
+        guard let runtime = entry.runtime, entry.enabled else { return }
+        if selectedWorkspaceBoundary == entry.boundary, store === runtime.store { return }
+        // Stop UI observers before swapping the selected store; live sync for other entries continues.
+        rememberSectionNavigation()
+        activeBoundaryId = entry.id
+        navigation.stop(); pins.stop(); notificationBadge.stop(); stopPeople()
+        contextEdits &+= 1
+        restoringPath = true; chatPath = []; focusedThread = nil; restoredThread = nil; restoringPath = false
+        resetSectionPaths(); membership = nil; membershipWorkspaceId = nil; context = .home
+        connection = entry.connection; selectedWorkspaceId = entry.workspace.id
+        store = runtime.store; sync = runtime.sync; liveStream = runtime.stream
+        syncStatus = SyncSnapshot()
+        outbox = runtime.outbox; writes = runtime.writes; saver = runtime.saver
+        manager = runtime.manager; uploads = runtime.uploads; fileCache = runtime.fileCache
+        notificationActions = NotificationActions(store: runtime.store, writes: runtime.writes)
+        profiles = ProfileSync(store: runtime.store, engine: runtime.engine, source: workspaceProfileSource ?? UnreachableProfiles())
+        observeWorkspaces(entry.connection)
+        await restoreContext(); await restoreChatPath()
+        if selectedWorkspaceBoundary == entry.boundary, let saved = sectionMemories[entry.id] {
+            deckPath = saved[.deck] ?? []; tasksPath = saved[.tasks] ?? []; docsPath = saved[.docs] ?? []
+            filesPath = saved[.files] ?? []; agentsPath = saved[.agents] ?? []; contextPath = saved[.context] ?? []; toolboxPath = saved[.toolbox] ?? []
+            mode = modeMemories[entry.id] ?? mode
+        }
+        guard entry.enabled, selectedWorkspaceBoundary == entry.boundary else { return }
+        try? await catalogStore?.writer.setState("selected.connection", entry.connection.id)
+        try? await catalogStore?.writer.setState("selected.workspace:\(entry.connection.id)", entry.workspace.id)
+        Task { await resumeWorkspace(entry) }
+    }
+
+    private func rememberSectionNavigation() {
+        guard let id = activeBoundaryId else { return }
+        sectionMemories[id] = [.deck: deckPath, .tasks: tasksPath, .docs: docsPath, .files: filesPath,
+                               .agents: agentsPath, .context: contextPath, .toolbox: toolboxPath]
+        modeMemories[id] = mode
+    }
+
+    private func clearWorkspaceContent() {
+        rememberSectionNavigation(); activeBoundaryId = nil
+        store = nil; sync = catalogSync
+        outbox = nil; writes = nil; saver = nil; manager = nil; uploads = nil; fileCache = nil; liveStream = nil
+        selectedWorkspaceId = nil; navigationWorkspaceId = nil; context = .home
+        navigation.stop(); pins.stop(); notificationBadge.stop(); stopPeople()
+        restoringPath = true; chatPath = []; focusedThread = nil; restoredThread = nil; restoringPath = false
+        resetSectionPaths(); membership = nil; membershipWorkspaceId = nil
+    }
+
+    func resumeWorkspace(_ entry: EnabledWorkspaceEntry, force: Bool = false) async {
+        guard entry.enabled, canRead, let runtime = entry.runtime else { return }
+        if runtime.starting != nil { await runtime.starting?.value; return }
+        if runtime.validated, runtime.activity.isEnabled { return }
+        runtime.activity.resume()
+        await runtime.engine.resume()
+        guard entry.enabled, let lease = try? runtime.activity.lease() else { await runtime.pause(); return }
+        let revision = UUID()
+        runtime.startRevision = revision
+        let task = Task { @MainActor in
+            do {
+                // Revalidate membership/application before any durable sender is resumed. A cached membership is insufficient.
+                let api = TowerAPI(client: TowerClient(origin: try TowerOrigin(entry.connection.origin), transport: runtime.sync.transport,
+                                                      signer: runtime.sync.identity))
+                let accessible = try await runtime.engine.perform("resume-access:\(entry.workspace.id)", priority: .visible) { try await api.workspaces() }
+                try Task.checkCancellation()
+                try runtime.activity.check(lease)
+                guard entry.enabled, runtime.activity.isEnabled else { return }
+                guard accessible.contains(where: { $0.id == entry.workspace.id && $0.appNpub == entry.workspace.appNpub }) else {
+                    await runtime.pause()
+                    try await runtime.store.writer.replaceWorkspaces(connectionId: entry.connection.id, [])
+                    runtime.fileCache.purge(workspaceId: entry.workspace.id)
+                    notice = "Access to \(entry.workspace.label) is no longer available."
+                    return
+                }
+                let catchUp = try await runtime.sync.catchUpEventsAndWait(entry.connection, entry.workspace, priority: .visible)
+                try runtime.activity.check(lease)
+                guard !catchUp.accessLost, entry.enabled, runtime.activity.isEnabled else { return }
+                await runtime.sync.refreshInbox(entry.connection, entry.workspace, priority: .background, force: force)
+                await runtime.sync.refreshWorkspace(entry.connection, entry.workspace, priority: .background, force: force)
+                guard entry.enabled, runtime.activity.isEnabled else { return }
+                runtime.validated = true
+                if isUnlocked {
+                    try await runtime.store.writer.resetInterruptedSends()
+                    try await runtime.store.writer.resetInterruptedWrites()
+                    try Task.checkCancellation()
+                    try runtime.activity.check(lease)
+                    guard entry.enabled else { return }
+                    runtime.writeActivity.resume()
+                }
+            } catch {
+                if !(error is CancellationError) { notice = "\(entry.workspace.label) could not reconnect: \(error.localizedDescription)" }
+            }
+        }
+        runtime.starting = task
+        await task.value
+        if runtime.startRevision == revision { runtime.starting = nil }
+    }
+
+    private func pauseAllWorkspaces() async {
+        for entry in workspaceEntries { entry.runtime?.writeActivity.pause(); entry.runtime?.activity.pause() }
+        for entry in workspaceEntries { await entry.runtime?.pause() }
+        for discovery in connectionDiscoveries.values { await discovery.engine.pause() }
+    }
+
+    func toggleWorkspaceCollapsed(_ entry: EnabledWorkspaceEntry) {
+        entry.collapsed.toggle()
+        if entry.collapsed { preferences?.collapsed.insert(entry.id) } else { preferences?.collapsed.remove(entry.id) }
+        Task { await persistWorkspacePreferences() }
+    }
+
+    func moveWorkspace(_ entry: EnabledWorkspaceEntry, offset: Int) {
+        guard let index = workspaceEntries.firstIndex(where: { $0 === entry }) else { return }
+        let destination = min(max(0, index + offset), workspaceEntries.count - 1)
+        workspaceEntries.swapAt(index, destination)
+        preferences?.order = workspaceEntries.map(\.id)
+        Task { await persistWorkspacePreferences() }
+    }
+
+    func setWorkspaceColour(_ entry: EnabledWorkspaceEntry, colour: WorkspaceColour) {
+        entry.colour = colour; preferences?.colours[entry.id] = colour
+        Task { await persistWorkspacePreferences() }
+    }
+
+    func toggleScopeCollapsed(entry: EnabledWorkspaceEntry, scopeId: String) {
+        guard entry.enabled, let store = entry.runtime?.store else { return }
+        var collapsed = entry.navigation.collapsed
+        if collapsed.contains(scopeId) { collapsed.remove(scopeId) } else { collapsed.insert(scopeId) }
+        let key = WorkspaceSync.collapsedKey(connectionId: entry.connection.id, workspaceId: entry.workspace.id)
+        let encoded = String(decoding: (try? JSONEncoder().encode(collapsed.sorted())) ?? Data("[]".utf8), as: UTF8.self)
+        Task { try? await store.writer.setState(key, encoded) }
     }
 }
