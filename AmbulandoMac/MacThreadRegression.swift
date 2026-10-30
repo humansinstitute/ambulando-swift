@@ -1091,14 +1091,22 @@ extension MacThreadRegression {
             throw Failure(description: "Missing fixture workspace")
         }
         model.show(.deck)
+        if let lab = model.workspaceEntries.first(where: { $0.workspace.label == "Lab (sample)" }) {
+            model.setWorkspaceEnabled(lab, true)
+        }
+        try await Task.sleep(for: .seconds(2))
         for dark in [false, true] {
             UserDefaults.standard.set(dark ? "dark" : "light", forKey: "appearance")
             window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-            for colour in [WorkspaceColour.blue, .green, .red] {
+            for colour in WorkspaceColour.allCases {
                 model.setWorkspaceColour(entry, colour: colour)
                 try await Task.sleep(for: .milliseconds(700))
                 try require(find(window, "search") != nil && find(window, "settings") != nil, "header controls retained")
                 try require(find(window, "context.workspace") == nil, "separate workspace strip removed")
+                guard let row = find(window, "workspace.unread.Studio (sample).general") else {
+                    throw Failure(description: "Missing compact unread workspace row")
+                }
+                try require(frame(of: row).height <= 40, "workspace unread entry stays one compact line")
                 // Capture the frame view, which includes the traffic lights and native toolbar.
                 guard let frame = window.contentView?.superview,
                       let bitmap = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { throw Failure(description: "Missing frame") }

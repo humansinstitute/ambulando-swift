@@ -2,6 +2,21 @@ import AmbulandoCore
 import SwiftUI
 
 extension WorkspaceColour {
+    /// Text/icon palettes meet WCAG AA against the navigation surfaces in each appearance.
+    func navigationColour(in scheme: ColorScheme) -> Color {
+        let value: UInt32
+        if scheme == .dark {
+            switch self {
+            case .blue: value = 0x8CB8FF
+            case .green: value = 0x79D5A5
+            case .purple: value = 0xCAA5F5
+            case .red: value = 0xFF9EA8
+            case .slate: value = 0xB7C8D6
+            }
+        } else { value = rgb }
+        return Color(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
+    }
+
     var nativeColour: Color {
         let value = rgb
         return Color(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
@@ -161,12 +176,7 @@ private struct WorkspaceNavigationGroup: View {
                 .accessibilityLabel("\(entry.collapsed ? "Expand" : "Collapse") \(entry.workspace.label)")
                 .accessibilityIdentifier("workspace.collapse.\(entry.workspace.label)")
                 Circle().fill(entry.colour.nativeColour).frame(width: 9, height: 9).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(entry.workspace.label).font(.amb(.subheadline).weight(.bold)).lineLimit(1)
-                    if Set(model.workspaceEntries.map { $0.connection.origin }).count > 1 {
-                        Text(entry.connection.origin).font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
-                    }
-                }
+                Text(entry.workspace.label).font(.amb(.subheadline).weight(.bold)).lineLimit(1)
                 Spacer(minLength: 0)
                 Menu {
                     Button("Move up", systemImage: "arrow.up") { model.moveWorkspace(entry, offset: -1) }
@@ -224,6 +234,7 @@ private struct WorkspaceNavigationGroup: View {
 
 private struct WorkspaceChannelRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var scheme
     let entry: EnabledWorkspaceEntry
     let channel: ChannelRecord
     var showsWorkspace = false
@@ -235,25 +246,20 @@ private struct WorkspaceChannelRow: View {
             HStack(spacing: 6) {
                 Image(systemName: SidebarNavigation.isDirectMessageChannel(channel) ? "person.2" : "number")
                     .font(.amb(.caption)).frame(width: 14)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.navigation.label(channel)).font(.amb(.subheadline).weight(active ? .bold : .regular)).lineLimit(1)
-                    if showsWorkspace {
-                        Text(entry.workspace.label).font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
-                        if Set(model.workspaceEntries.map { $0.connection.origin }).count > 1 {
-                            Text(entry.connection.origin).font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
-                        }
-                    }
-                }
+                Text(entry.navigation.label(channel))
+                    .font(.amb(.subheadline).weight(active ? .bold : .regular))
+                    .lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 0)
                 if entry.navigation.unread.contains(channel.id) { Circle().fill(Amb.brandOrange).frame(width: 7, height: 7).accessibilityHidden(true) }
             }
-            .foregroundStyle(active ? Amb.selectedForeground : Amb.foreground)
-            .padding(.leading, 28).padding(.trailing, 10).frame(minHeight: showsWorkspace ? 44 : 36)
+            .foregroundStyle(entry.colour.navigationColour(in: scheme))
+            .padding(.leading, 28).padding(.trailing, 10).frame(minHeight: 36)
             .background(active ? Amb.selectedFill : .clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(entry.navigation.label(channel)), \(entry.workspace.label)\(Set(model.workspaceEntries.map { $0.connection.origin }).count > 1 ? ", " + entry.connection.origin : "")\(entry.navigation.unread.contains(channel.id) ? ", unread" : "")")
+        .help("\(entry.navigation.label(channel)) in \(entry.workspace.label)")
         .accessibilityIdentifier("workspace.\(showsWorkspace ? "unread" : "channel").\(entry.workspace.label).\(entry.navigation.label(channel))")
     }
 }

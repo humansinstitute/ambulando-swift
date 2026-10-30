@@ -75,6 +75,12 @@ final class MultiWorkspaceUITests: XCTestCase {
             XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 20))
             app.buttons["channel.general"].tap()
             XCTAssertTrue(app.staticTexts["Working in Studio (sample)"].waitForExistence(timeout: 10))
+            for id in ["sidebar.open", "search", "notifications.open", "pin.toggle", "browser.open", "settings"] {
+                let control = app.buttons[id].firstMatch
+                XCTAssertTrue(control.exists && control.isHittable, id)
+                XCTAssertGreaterThanOrEqual(control.frame.width, 44, id)
+                XCTAssertGreaterThanOrEqual(control.frame.height, 44, id)
+            }
             capture(app, "header-\(appearance)-blue-composer")
             chooseWorkspaces(app)
             app.buttons["workspace.colour.Studio (sample)"].tap()
@@ -94,6 +100,35 @@ final class MultiWorkspaceUITests: XCTestCase {
             let modal = app.descendants(matching: .any)["thread.focus"].firstMatch
             XCTAssertTrue(modal.staticTexts["Working in Studio (sample)"].waitForExistence(timeout: 10))
             capture(app, "header-\(appearance)-modal-wording")
+            app.terminate()
+        }
+    }
+
+    func testCompactWorkspaceRowsInBothAppearances() {
+        for appearance in ["light", "dark"] {
+            let app = XCUIApplication()
+            app.launchArguments = ["-AmbulandoUITestFixture", "-AmbulandoFixtureReset", "-appearance", appearance]
+            app.launch()
+            XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 20))
+            chooseWorkspaces(app)
+            checkbox(app, "Lab (sample)").tap()
+            app.buttons["Done"].tap()
+            for colour in ["Blue", "Green", "Purple", "Red", "Slate"] {
+                let row = app.buttons["workspace.unread.Studio (sample).general"]
+                XCTAssertTrue(row.waitForExistence(timeout: 10))
+                XCTAssertLessThanOrEqual(row.frame.height, 40, "one compact line")
+                XCTAssertTrue(row.label.contains("Studio (sample)"))
+                XCTAssertTrue(row.label.contains("unread"))
+                capture(app, "rows-\(appearance)-\(colour.lowercased())")
+                if colour != "Slate" {
+                    app.buttons["sidebar.workspace"].firstMatch.tap()
+                    app.buttons["Choose workspaces…"].tap()
+                    app.buttons["workspace.colour.Studio (sample)"].tap()
+                    let next = ["Blue": "Green", "Green": "Purple", "Purple": "Red", "Red": "Slate"][colour]!
+                    app.buttons[next].tap()
+                    app.buttons["Done"].tap()
+                }
+            }
             app.terminate()
         }
     }

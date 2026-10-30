@@ -317,6 +317,13 @@ private struct ShellToolbar: ViewModifier {
     var showsSidebar = true
     /// A conversation chosen in Search, focused once the sheet has gone (one presentation at a time on iOS).
     @State private var searchedThread: ThreadFocus?
+    private var toolbarSpacing: CGFloat {
+        #if os(iOS)
+        0
+        #else
+        8
+        #endif
+    }
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: $searching, onDismiss: {
@@ -336,10 +343,13 @@ private struct ShellToolbar: ViewModifier {
             .toolbar {
                 #if os(iOS)
                 // The Mac's sidebar is a window column with its own toolbar toggle.
-                if showsSidebar { ToolbarItem(placement: .leadingBar) { SidebarButton() } }
+                if showsSidebar {
+                    ToolbarItem(placement: .leadingBar) { SidebarButton().buttonStyle(HeaderToolbarButtonStyle()) }
+                        .restrainedMobileBackground()
+                }
                 #endif
                 ToolbarItem(placement: .trailingBar) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: toolbarSpacing) {
                         SyncIndicator()
                         Button { search() } label: { Image(systemName: "magnifyingglass") }
                             .accessibilityLabel("Search").accessibilityIdentifier("search")
@@ -360,7 +370,11 @@ private struct ShellToolbar: ViewModifier {
                         .accessibilityValue(model.me.value?.person.name ?? "")
                         .accessibilityIdentifier("settings")
                     }
+                    #if os(iOS)
+                    .buttonStyle(HeaderToolbarButtonStyle())
+                    #endif
                 }
+                .restrainedMobileBackground()
             }
             .inlineTitle()
             .modifier(WorkspaceHeaderTint())
@@ -486,3 +500,28 @@ struct IdentityBanner: View {
         }
     }
 }
+
+/// Keep native toolbar layout and overflow; suppress only the iOS 26 shared glass backplates.
+private extension ToolbarContent {
+    @ToolbarContentBuilder
+    func restrainedMobileBackground() -> some ToolbarContent {
+        #if os(iOS)
+        if #available(iOS 26.0, *) { self.sharedBackgroundVisibility(.hidden) }
+        else { self }
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(iOS)
+/// Transparent, evenly sized touch targets on the existing faintly tinted navigation bar.
+private struct HeaderToolbarButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+            .opacity(configuration.isPressed ? 0.55 : 1)
+    }
+}
+#endif

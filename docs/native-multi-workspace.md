@@ -5,12 +5,20 @@ Selection is opt-in: an existing installation starts with its remembered workspa
 The workspace chooser groups choices by Tower and can add another Tower using the
 same unlocked identity. Each enabled workspace has its own Home, scopes, channels,
 collapse preference, order and colour. Shared Unread & Active rows retain the source
-workspace and route through the exact account boundary. Colour supplements the name.
+workspace in their accessibility labels/help and route through the exact account boundary.
+Channel titles and icons use the saved workspace colour with a brighter dark-appearance
+palette; all entries stay on one line, truncating long channel names. Navigation group
+headings show workspace names without connection URLs. Tower details remain in workspace
+management. Colour supplements the accessible source name and never determines routing.
 The existing iPhone navigation header and Mac window title/toolbar use a faint 12%
 workspace-colour tint over the light or dark surface, including the Mac window controls.
 There is no separate workspace-colour row. The compact composer/modal indicator reads
 “Working in <workspace name>” and keeps its destination colour dot. Changing the selected
 workspace or its saved colour updates the existing header without moving controls.
+On iOS 26 the native toolbar items hide their shared glass backgrounds through
+`sharedBackgroundVisibility(.hidden)`. Menu and action controls use transparent 44pt
+minimum targets with even spacing; badges, avatar and existing actions remain intact.
+Mac toolbar spacing and native window chrome remain unchanged.
 
 ## Runtime ownership
 
