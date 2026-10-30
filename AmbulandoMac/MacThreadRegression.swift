@@ -68,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMessageEditCheck") {
+                try await messageEditCheck(window, model: model)
+                print("PASS: Mac in-composer message edits, picker, signed readback, repeat, cancel and reply restoration"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacPinCheck") {
                 try await pinCardCheck(window, model: model)
                 print("PASS: focused pin check completed"); fflush(stdout); exit(0)
@@ -671,12 +675,9 @@ enum MacThreadRegression {
         }
         defer { NotificationCenter.default.removeObserver(observer) }
         try require(find(window, id) != nil, id + " menu must expose its accessibility label/identifier")
-        guard let button = nativeActionsButton(window.contentView!, id: id) else {
-            throw Failure(description: id + " must expose its native accessible NSButton")
-        }
-        // NSPushButton's AX press result can be false after a synchronous menu tracking action; use its actual
-        // AppKit click path and assert the menu item effect, rather than interpreting that return as menu failure.
-        button.performClick(nil)
+        // Hit-test the visible accessibility frame. Direct recursive NSView lookup can select a hidden
+        // channel's menu behind the focused thread and bypasses the window's normal event routing.
+        try click(window, id)
         await settle()
         try require(selected.load() == true, "native menu must open and perform " + title)
         print("MENU_PASS " + title)
@@ -954,6 +955,123 @@ enum MacThreadRegression {
         guard depth < 50 else { return }
         print("REGRESSION \(String(repeating: " ", count: depth))\(value(object, "AXRole") ?? "?") id=\(value(object, "AXIdentifier") ?? "") label=\(value(object, "AXDescription") ?? "") value=\(String(describing: value(object, "AXValue")).prefix(100))")
         for child in children(object) { dump(child, depth: depth + 1) }
+    }
+}
+extension MacThreadRegression {
+    static func messageEditCheck(_ window: NSWindow, model: AppModel) async throws {
+        guard Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test",
+              let fixture = model.fixture, let store = model.store, let connection = model.connection else {
+            throw Failure(description: "Missing isolated Mac Test environment")
+        }
+        model.selectWorkspace(FixtureTower.studio)
+        model.selectContext(WorkContext(scopeId: FixtureTower.scopeAmbulando, channelId: FixtureTower.generalChannel))
+        model.mode = .chat
+        await settle(); await settle()
+        guard let workspace = model.selectedWorkspace else { throw Failure(description: "Missing workspace") }
+        let original = "Mac edit acceptance **untagged**"
+        try type(window, original); await settle()
+        try press(window, "composer.send")
+        var sent: MessageRecord?
+        for _ in 0..<30 {
+            await settle()
+            sent = try await store.reader.channelFeed(workspaceId: workspace.id, channelId: FixtureTower.generalChannel, limit: 150)
+                .first { $0.message.body == original }?.message
+            if sent != nil { break }
+        }
+        guard let sent, let thread = sent.threadId else { throw Failure(description: "Missing untagged accepted message") }
+        let keptAttachments: [[String: Any]] = [["object_id": "fixture-kept-object", "filename": "kept.txt", "mime_type": "text/plain",
+                                               "size_bytes": 4, "sha256": String(repeating: "a", count: 64)]]
+        fixture.tower.seedMessageAttachments(id: sent.id, attachments: keptAttachments)
+        model.focusThread(ThreadFocus(workspaceId: workspace.id, channelId: sent.channelId, threadId: thread))
+        await settle(); await settle()
+        let actor = Mention(type: .agent, npub: FixtureTower.rick, label: "rick")
+        try type(window, "Unsent reply @ric"); await settle()
+        try press(window, "mention.rick"); await settle()
+        let reply = try textView(window).string
+        let replyTarget = ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: sent.channelId, threadId: thread)
+        let staged = PendingAttachment(filename: "reply.txt", mimeType: "text/plain", sizeBytes: 1,
+                                       sha256: String(repeating: "0", count: 64), staged: "reply-fixture.txt")
+        // A stored reply attachment is adopted through the normal restore path when reopening the view.
+        try press(window, "thread.focus.close"); await settle(); await settle()
+        try await store.writer.saveDraft(replyTarget, Draft(text: reply, mentions: [actor], attachments: [staged]))
+        model.focusThread(ThreadFocus(workspaceId: workspace.id, channelId: sent.channelId, threadId: thread))
+        await settle(); await settle()
+        try require(try textView(window).string == reply, "ordinary tagged reply is restored before editing")
+
+        var expected = original
+        var lastSignature: String?
+        for cycle in 0..<3 {
+            try await menuAction(window, title: "Edit")
+            await settle(); await settle()
+            try require(window.attachedSheet == nil, "Mac Edit stays in the chat composer, with no sheet")
+            let field = try textView(window)
+            try require(field.string == expected, "reopened editor has latest exact canonical body")
+            try require(window.firstResponder === field, "edit composer acquires native keyboard focus")
+            field.setSelectedRange(NSRange(location: (field.string as NSString).length, length: 0))
+            try postKey(window, key: " ", code: 49, modifiers: [])
+            await settle()
+            try require(field.string == expected + " ", "reopened edit accepts an actual AppKit key event")
+            if cycle == 0 {
+                // Type @ through the actual native text responder, then click the existing picker row.
+                try postKey(window, key: "@", code: 19, modifiers: [.shift]); await settle()
+                try type(window, "ric"); await settle()
+                try require(find(window, "mention.rick") != nil, "typed @ opens the bot picker")
+                try click(window, "mention.rick"); await settle()
+                expected += " " + actor.token + " "
+                try require(field.string == expected, "picked bot inserts canonical exact-npub token")
+                try type(window, "please review"); expected += "please review"
+            } else {
+                try type(window, "revision \(cycle)"); expected += " revision \(cycle)"
+            }
+            await settle()
+            try require(field.string == expected, "typing after picker and repeated Edit preserves every character")
+            try press(window, "editmessage.save")
+            var accepted: MessageRecord?
+            for _ in 0..<30 {
+                await settle()
+                accepted = try await store.reader.message(workspaceId: workspace.id, id: sent.id)
+                if accepted?.rowVersion == cycle + 2 { break }
+            }
+            guard let accepted else { throw Failure(description: "No revision readback") }
+            try require(accepted.body == expected && accepted.rowVersion == cycle + 2, "saved revision body and version read back")
+            try require(accepted.threadId == thread && accepted.channelId == sent.channelId, "revision keeps conversation context")
+            let raw = try JSONSerialization.jsonObject(with: accepted.raw) as? [String: Any]
+            try require(raw?["mentions"] as? [[String: String]] == [actor.requestObject], "readback has exact structured bot identity")
+            let metadata = raw?["metadata"] as? [String: Any]
+            try require(NSDictionary(dictionary: ["attachments": raw?["attachments"] ?? []]) == NSDictionary(dictionary: ["attachments": keptAttachments]),
+                        "sent message attachment metadata remains unchanged")
+            try require(NSDictionary(dictionary: ["attachments": metadata?["attachments"] ?? []]) == NSDictionary(dictionary: ["attachments": keptAttachments]),
+                        "sent message metadata attachment projection remains unchanged")
+            let signature = metadata?["agent_instruction_signature"] as? [String: Any]
+            let data = try JSONSerialization.data(withJSONObject: signature?["nostr_event"] ?? [:])
+            let event = try JSONDecoder().decode(NostrEvent.self, from: data)
+            try require(SignatureVerifier.verify(event), "fresh revision signature cryptographically verifies")
+            try require(event.content == expected && event.kind == 33358, "signed content equals exact saved canonical body")
+            for tag in [["message_id", sent.id], ["revision", String(cycle + 2)], ["thread_id", thread],
+                        ["workspace_id", workspace.id], ["channel_id", sent.channelId]] {
+                try require(event.tags.contains(tag), "revision signature binds \(tag[0])")
+            }
+            try require(event.id != lastSignature, "each revision has a fresh signature")
+            lastSignature = event.id
+            try require(try textView(window).string == reply, "ordinary reply text returns after Save")
+            let draft = try await store.reader.draft(replyTarget)
+            try require(draft?.text == reply && draft?.mentions == [actor] && draft?.attachments == [staged],
+                        "reply text, structured mention and staged attachment remain intact")
+            print("MAC_EDIT_SIGNED_READBACK cycle=\(cycle) version=\(accepted.rowVersion)"); fflush(stdout)
+        }
+        try await menuAction(window, title: "Edit"); await settle(); await settle()
+        try type(window, "cancel this change"); await settle()
+        try press(window, "editmessage.cancel"); await settle()
+        try await menuAction(window, title: "Edit"); await settle(); await settle()
+        try require(try textView(window).string == expected, "Cancel and immediate reopen restore saved body only")
+        try require(window.firstResponder === (try textView(window)), "Cancel/reopen can type in native responder")
+        try type(window, "typing still works"); await settle()
+        try require(try textView(window).string.contains("typing still works"), "Cancel/reopen accepts typing")
+        try press(window, "editmessage.cancel"); await settle()
+        let unchanged = try await store.reader.message(workspaceId: workspace.id, id: sent.id)
+        try require(unchanged?.body == expected && unchanged?.rowVersion == 4, "Cancel never changes sent message")
+        try require(try textView(window).string == reply, "unsent reply restored after Cancel")
+        try require(fixture.tower.actorNpub == model.identity.npub, "isolated sample author only")
     }
 }
 #endif

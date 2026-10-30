@@ -79,6 +79,7 @@ struct ChatNapletBody: View {
     let store: LocalStore
     let interactive: Bool
     @State private var snapshot = LiveQuery<ChatNapletSnapshot>(initial: ChatNapletSnapshot())
+    @State private var messageEdit: ChatMessageEdit?
 
     var body: some View {
         let value = snapshot.value
@@ -99,7 +100,7 @@ struct ChatNapletBody: View {
                 Divider()
                 if interactive {
                     Composer(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: thread.channelId, threadId: thread.id),
-                             workspace: workspace, store: store, placeholder: "Reply to thread…")
+                             workspace: workspace, store: store, placeholder: "Reply to thread…", editing: $messageEdit)
                 } else {
                     Text("Select to reply").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(8).frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -107,6 +108,10 @@ struct ChatNapletBody: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("naplet.chat")
+        .environment(\.editChatMessage, { message, body in
+            if messageEdit == nil { messageEdit = ChatMessageEdit(message: message, body: body) }
+            else { model.notice = "Save or cancel the current edit first." }
+        })
         .task {
             let w = workspace.id, id = threadId, store = store, connection = model.connection?.id ?? ""
             snapshot.start(store: store, matches: { key in

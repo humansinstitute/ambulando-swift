@@ -24,6 +24,7 @@ struct MessageCell: View, Equatable {
     var lastReplyAt: String? = nil
     /// Tower's thread title, shown above the root when it says something the root's first words do not.
     var threadTitle: String? = nil
+    @Environment(\.editChatMessage) private var editChatMessage
     @State private var editing = false
     @State private var confirmDelete = false
     @State private var gettingItDone = false
@@ -125,7 +126,13 @@ struct MessageCell: View, Equatable {
         Button { Pasteboard.copy(Self.reference(for: message)) } label: { Label("FD Ref", systemImage: "link") }
             .accessibilityIdentifier("message.ref")
         if mine && !message.deleted {
-            Button { editing = true } label: { Label("Edit", systemImage: "pencil") }.accessibilityIdentifier("message.edit")
+            Button {
+                #if os(macOS)
+                editChatMessage?(message, pendingEdit?.string("body") ?? message.body)
+                #else
+                editing = true
+                #endif
+            } label: { Label("Edit", systemImage: "pencil") }.accessibilityIdentifier("message.edit")
             Button(role: .destructive) { confirmDelete = true } label: { Label("Delete message", systemImage: "trash") }.accessibilityIdentifier("message.delete")
         }
     }
@@ -198,7 +205,7 @@ struct MessageCell: View, Equatable {
         }
         items.append(NativeMessageAction("FD Ref", "link") { Pasteboard.copy(Self.reference(for: message)) })
         if mine && !message.deleted {
-            items.append(NativeMessageAction("Edit", "pencil") { editing = true })
+            items.append(NativeMessageAction("Edit", "pencil") { editChatMessage?(message, pendingEdit?.string("body") ?? message.body) })
             items.append(NativeMessageAction("Delete message", "trash") { confirmDelete = true })
         }
         return items

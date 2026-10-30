@@ -199,6 +199,11 @@ extension FakeChatTower {
                   (row["thread_id"] as? String).map({ event.tags.contains(["thread_id", $0]) }) ?? true
             else { return (400, ["code": "validation_error"]) }
             row["body"] = body; row["row_version"] = version + 1; row["updated_at"] = "2026-10-24T09:59:00.000Z"
+            row["mentions"] = object["mentions"] ?? []
+            var metadata = row["metadata"] as? [String: Any] ?? [:]
+            metadata["mentions"] = object["mentions"] ?? []
+            metadata["agent_instruction_signature"] = ["nostr_event": eventObject, "message_id": id, "revision": version + 1]
+            row["metadata"] = metadata
             messages[index] = row
             revisions.append(event)
             return (200, ["message": row, "revision": version + 1])

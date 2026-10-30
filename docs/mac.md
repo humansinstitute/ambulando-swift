@@ -16,7 +16,7 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (29) |
+| Version | 0.1.0 (46) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
@@ -155,7 +155,7 @@ each time, so after each rebuild macOS asks once for the login password to let A
   own bar (edit text and size, arrange, duplicate, delete).
 - Images open in a lightbox over the window (build 22): pinch, the zoom buttons or a double-click enlarge them; Esc, a
   click outside or ✕ closes it; **Open in Preview** hands a copy named with the image's type to Preview.
-- Chat composer: Return sends, Shift-Return or Option-Return starts a new line. Paste or drop images and files into it,
+- Chat composer: Return sends (or saves the active message edit), Shift-Return or Option-Return starts a new line. Edit a sent message in place, choose a person or bot with `@`, then Save or Cancel; the unsent reply stays separate. See [message editing](message-editing.md). Paste or drop images and files into the reply composer,
   or use the paperclip (**Attach files**) or Photos button.
 - Files: Download (checksum verified), Preview (Quick Look), Share, **Save As…** and **Open in Default App**.
 - Settings, Search, document editing, unlock and management open as sheets over the window.

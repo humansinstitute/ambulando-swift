@@ -797,6 +797,19 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         }
     }
 
+    /// Seed prior attachment metadata for the isolated native editing regression, never a production transport.
+    func seedMessageAttachments(id: String, attachments: [[String: Any]]) {
+        lock.withLock {
+            guard var row = allMessages().first(where: { $0["id"] as? String == id }) else { return }
+            row["attachments"] = attachments
+            var metadata = row["metadata"] as? [String: Any] ?? [:]
+            metadata["attachments"] = attachments
+            row["metadata"] = metadata
+            revised[id] = row
+            persist()
+        }
+    }
+
     /// Author-only edit (row_version and a kind 33358 revision signature with `message_id` and `revision`), and delete.
     private func revise(_ request: URLRequest, id: String, query: [URLQueryItem]) throws -> (Int, Any) {
         let object = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:]
@@ -818,6 +831,12 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
                       tags.contains(["revision", String(version + 1)]) else {
                     return (400, ["code": "validation_error", "details": ["fields": [["message": "message_signature does not match the revision"]]]])
                 }
+                // Keep revision authority in sample readback too, so native UI checks can verify the exact signed bytes.
+                row["mentions"] = object["mentions"] ?? []
+                var metadata = row["metadata"] as? [String: Any] ?? [:]
+                metadata["mentions"] = object["mentions"] ?? []
+                metadata["agent_instruction_signature"] = object["message_signature"]
+                row["metadata"] = metadata
                 row["body"] = body; row["row_version"] = version + 1
                 row["updated_at"] = ISO8601DateFormatter.fixture.string(from: Date())
             }

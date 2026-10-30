@@ -402,6 +402,8 @@ struct ComposerTextView: NSViewRepresentable {
                 if context.coordinator.parent.focused != focused { context.coordinator.parent.focused = focused }
             }
         }
+        // SwiftUI disabled state must reach AppKit too (for example, while a revision is being queued).
+        view.isEditable = context.environment.isEnabled
         view.placeholder = placeholder
         let font = TextScale.shared.nsFont(.body)
         if view.font != font {

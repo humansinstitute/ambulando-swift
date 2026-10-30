@@ -240,3 +240,19 @@ public enum CommentMentions {
         }
     }
 }
+
+/// Sent-message editing preserves canonical Markdown instead of flattening tags into ambiguous labels.
+/// The versioned private content namespace keeps an edit separate from unsent channel/thread messages.
+public struct MessageRevisionDraft: Sendable, Equatable {
+    public let body: String
+    public let mentions: [Mention]
+
+    public init(body: String) {
+        self.body = OutboxRequest.normalizedBody(body)
+        self.mentions = CommentMentions.actors(in: self.body)
+    }
+
+    public static func field(messageId: String, rowVersion: Int) -> String {
+        "edit-message-\(messageId)-v\(rowVersion)"
+    }
+}

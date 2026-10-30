@@ -20,6 +20,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 | `AmbulandoMac/` | Mac app target `studio.otherstuff.ambulando.mac`, macOS 15+, universal: window, sidebar, menus (compiles the shared `Ambulando/` views too) |
 | `scripts/` | `mac-install.sh` (build, sign, install, package the Mac app), `build-board-editor.sh` (embedded board editor, needs bun), `source-bundle.sh`; `tests/mac-install-test.sh` (installer tests with stub tools) |
 
+## Edit messages in the Mac chat composer (Mac build 46)
+
+On Mac, Edit opens the previous message in the chat composer. Type `@`, choose a person or bot, then Save.
+The revision keeps canonical mention identities, formatting, existing attachments and conversation context, with a
+fresh signature over the exact saved body. Repeated edits and Cancel restore the ordinary unsent reply, including
+its mentions and attachments. Interrupted revisions have their own versioned draft. New uploads are unavailable
+while editing. See [message editing](docs/message-editing.md) for behavior and isolated macOS acceptance.
+Signed builds, installation and real-account acceptance are separate delivery states.
+
 ## Foreground channel reconciliation (iPhone/iPad build 55, Mac build 44)
 
 An open app now checks the selected workspace's readable scopes and channels every minute, alongside event catch-up,

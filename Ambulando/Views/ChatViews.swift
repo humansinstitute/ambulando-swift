@@ -2,6 +2,22 @@ import AmbulandoCore
 import PhotosUI
 import SwiftUI
 
+/// Scoped to the visible conversation so a focused thread never edits the background channel's composer.
+struct ChatMessageEdit: Identifiable {
+    let id = UUID()
+    let message: MessageRecord
+    let body: String
+}
+private struct ChatMessageEditActionKey: EnvironmentKey {
+    static let defaultValue: (@MainActor (MessageRecord, String) -> Void)? = nil
+}
+extension EnvironmentValues {
+    var editChatMessage: (@MainActor (MessageRecord, String) -> Void)? {
+        get { self[ChatMessageEditActionKey.self] }
+        set { self[ChatMessageEditActionKey.self] = newValue }
+    }
+}
+
 // MARK: Snapshots (plain values read off the main actor)
 
 struct ChannelSnapshot: Sendable, Equatable {
@@ -196,6 +212,7 @@ struct ChannelView: View {
     @State private var snapshot = LiveQuery<ChannelSnapshot>(initial: ChannelSnapshot())
     @State private var limit = 150
     @State private var atNewest = true
+    @State private var messageEdit: ChatMessageEdit?
 
     // One Messages view: every conversation is a card here, and one with replies opens its real thread (the web's
     // separate Threads list showed the same conversations again).
@@ -263,8 +280,12 @@ struct ChannelView: View {
             // A stacked composer (not an inset) so keyboard avoidance shrinks the list itself and the newest
             // message stays visible above the composer.
             Composer(target: target, workspace: workspace, store: store,
-                     placeholder: "Message \(title.trimmingCharacters(in: .whitespaces).isEmpty ? "#channel" : title)")
+                     placeholder: "Message \(title.trimmingCharacters(in: .whitespaces).isEmpty ? "#channel" : title)", editing: $messageEdit)
         }
+        .environment(\.editChatMessage, { message, body in
+            if messageEdit == nil { messageEdit = ChatMessageEdit(message: message, body: body) }
+            else { model.notice = "Save or cancel the current edit first." }
+        })
         .task(id: limit) { start() }
         .onChange(of: snapshot.value.posts.map(\.id)) { _, ids in model.refreshReactions(workspace, scope: target.channelId, messageIds: ids) }
     }
@@ -300,6 +321,7 @@ struct ThreadView: View {
     let store: LocalStore
     @State private var snapshot = LiveQuery<ThreadSnapshot>(initial: ThreadSnapshot())
     @State private var atNewest = true
+    @State private var messageEdit: ChatMessageEdit?
     @State private var visibleRows = VisibleRows()
     @State private var windowAnchor: String?
     @State private var pageIdentity = 0
@@ -375,10 +397,14 @@ struct ThreadView: View {
         .id(snapshot.value.pageIdentity)
         .scrollDismissesKeyboard(.interactively)
         .refreshable { if let thread = target.threadId { model.openThread(thread, channelId: target.channelId, in: workspace) } }
-            Composer(target: target, workspace: workspace, store: store, placeholder: "Reply", onEnqueued: { _ in
+            Composer(target: target, workspace: workspace, store: store, placeholder: "Reply", editing: $messageEdit, onEnqueued: { _ in
                 if windowAnchor != nil { windowAnchor = nil; pageIdentity += 1 }
             })
         }
+        .environment(\.editChatMessage, { message, body in
+            if messageEdit == nil { messageEdit = ChatMessageEdit(message: message, body: body) }
+            else { model.notice = "Save or cancel the current edit first." }
+        })
         .tabletReadingWidth()
         .background(Amb.background)
         .fixtureLabel()
@@ -698,7 +724,22 @@ final class ComposerModel {
     /// text back. Only drafts written after the send (an Edit restore of a rejected message) are adopted.
     @ObservationIgnored private var sentAt: Date?
 
-    init(target: ChatTarget, store: LocalStore) { self.target = target; self.store = store }
+    @ObservationIgnored let canonicalRevision: Bool
+    @ObservationIgnored private var finished = false
+    init(target: ChatTarget, store: LocalStore, revisionBody: String? = nil) {
+        self.target = target; self.store = store
+        canonicalRevision = revisionBody != nil
+        text = revisionBody ?? ""
+    }
+
+    /// Finish all prior draft writes before clearing a revision. No delayed debounce may resurrect Cancel.
+    func discardRevision() async throws {
+        debounce?.cancel(); debounce = nil
+        finished = true
+        await tail?.value
+        do { try await store.writer.saveDraft(target, Draft(text: "", mentions: [])) }
+        catch { finished = false; throw error }
+    }
 
     func restore() async {
         guard let draft = try? await store.reader.draft(target), !edited else { return }
@@ -729,7 +770,7 @@ final class ComposerModel {
         get { text }
         set {
             // Backspace inside a picked name removes the whole name, as a pill is removed.
-            let typed = MentionCodec.wholeMentionDeletion(old: text, new: newValue, mentions: mentions) ?? newValue
+            let typed = canonicalRevision ? newValue : (MentionCodec.wholeMentionDeletion(old: text, new: newValue, mentions: mentions) ?? newValue)
             if typed != text { text = typed }
         }
     }
@@ -755,6 +796,7 @@ final class ComposerModel {
     }
 
     private func scheduleSave() {
+        guard !finished else { return }
         debounce?.cancel()
         debounce = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(350))
@@ -764,9 +806,10 @@ final class ComposerModel {
     }
 
     func saveNow() {
+        guard !finished else { return }
         debounce?.cancel()
         debounce = nil
-        let draft = Draft(text: text, mentions: mentions.filter { text.contains($0.visible) }, attachments: attachments), target = target, store = store
+        let draft = Draft(text: text, mentions: canonicalRevision ? CommentMentions.actors(in: text) : mentions.filter { text.contains($0.visible) }, attachments: attachments), target = target, store = store
         chain { [weak self] in
             do { try await store.writer.saveDraft(target, draft); await MainActor.run { self?.persistenceFailure = nil } }
             catch { await MainActor.run { self?.persistenceFailure = "This draft could not be saved on this device. Keep it open and retry before closing." } }
@@ -840,8 +883,19 @@ struct Composer: View {
     let workspace: WorkspaceRecord
     let store: LocalStore
     let placeholder: String
+    @Binding var editing: ChatMessageEdit?
     var onEnqueued: (@MainActor @Sendable (String) -> Void)? = nil
-    @State private var composer: ComposerModel?
+    @State private var replyComposer: ComposerModel?
+    @State private var revisionComposer: ComposerModel?
+    @State private var savingRevision = false
+    @State private var selection = NSRange(location: 0, length: 0)
+    private var composer: ComposerModel? { editing == nil ? replyComposer : revisionComposer }
+
+    init(target: ChatTarget, workspace: WorkspaceRecord, store: LocalStore, placeholder: String,
+         editing: Binding<ChatMessageEdit?> = .constant(nil), onEnqueued: (@MainActor @Sendable (String) -> Void)? = nil) {
+        self.target = target; self.workspace = workspace; self.store = store; self.placeholder = placeholder
+        _editing = editing; self.onEnqueued = onEnqueued
+    }
     @State private var members = LiveQuery<[MentionCandidate]>(initial: [])
     @State private var storedDraft = LiveQuery<Draft?>(initial: nil)
     @State private var photos: [PhotosPickerItem] = []
@@ -866,20 +920,22 @@ struct Composer: View {
     private var suggestions: [MentionSuggestion] {
         guard let composer, composer.visibleText != dismissedAt, let typed = activeQuery else { return [] }
         let query = MentionQuery(typed)
-        let records = recordSuggestions.query == query ? recordSuggestions.rows : []
-        return MentionRanking.merge(actors: members.value.map { (Mention(member: $0.member), $0.member.npub) }, records: records, query: query,
+        let records = editing == nil && recordSuggestions.query == query ? recordSuggestions.rows : []
+        let actors = editing == nil ? members.value : members.value.filter { NostrKeys.isValidNpub($0.member.npub) }
+        return MentionRanking.merge(actors: actors.map { (Mention(member: $0.member), $0.member.npub) }, records: records, query: query,
                                     recent: recentTags)
     }
 
     /// The `@` being typed, none once a name from the list has been picked (the list closes and stays closed as typing goes on).
     private var activeQuery: String? {
         guard let composer else { return nil }
+        if editing != nil { return focused ? CommentMentions.query(in: composer.text, selection: selection)?.text : nil }
         return MentionCodec.activeQuery(in: composer.visibleText, excluding: composer.mentions)
     }
 
     /// Records matching the active `@` query, read off the main actor as it changes.
     private func lookUpRecords(_ typed: String?) async {
-        guard let typed, let store = model.store else { return }
+        guard editing == nil, let typed, let store = model.store else { return }
         let query = MentionQuery(typed), workspaceId = target.workspaceId
         if typed.isEmpty, let me = model.identity.npub, let rows = try? await store.reader.recentMentions(workspaceId: workspaceId, senderNpub: me) {
             recentTags = rows
@@ -905,7 +961,7 @@ struct Composer: View {
         switch key {
         case .up: highlighted = (index - 1 + list.count) % list.count
         case .down: highlighted = (index + 1) % list.count
-        case .enter, .tab: composer.pick(list[index].mention); highlighted = 0
+        case .enter, .tab: pick(list[index].mention); highlighted = 0
         case .escape: dismissedAt = composer.visibleText
         }
         return true
@@ -913,11 +969,22 @@ struct Composer: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !suggestions.isEmpty, let composer {
-                MentionPicker(suggestions: suggestions, people: members.value, highlighted: min(highlighted, suggestions.count - 1)) { composer.pick($0.mention) }
+            if let editing {
+                HStack {
+                    Label("Editing message", systemImage: "pencil")
+                    Spacer()
+                    Button("Cancel") { finishRevision(save: false) }.accessibilityIdentifier("editmessage.cancel")
+                    Button("Save") { finishRevision(save: true) }.disabled(!canSend).accessibilityIdentifier("editmessage.save")
+                }.font(.amb(.subheadline)).padding(.horizontal, 14).padding(.vertical, 8)
+                Text("Existing attachments are kept. Edits are signed with your identity.")
+                    .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 14)
+                    .accessibilityIdentifier("editmessage.notice.\(editing.message.id)")
+            }
+            if !suggestions.isEmpty {
+                MentionPicker(suggestions: suggestions, people: members.value, highlighted: min(highlighted, suggestions.count - 1)) { pick($0.mention) }
             }
             Divider().overlay(Amb.border)
-            if let composer {
+            if let composer, editing == nil {
                 @Bindable var composer = composer
                 ComposerAttachmentStrip(mentions: composer.presentMentions, people: members.value, removeMention: { composer.removeMention($0) },
                                         attachments: $composer.attachments, staging: model.staging, text: composer.text,
@@ -950,7 +1017,8 @@ struct Composer: View {
                                  focused: $focused, placeholder: placeholder, plainKeyboard: model.fixture?.plainKeyboard == true,
                                  onPasteItems: pasteItems, onSubmit: send, onPickerKey: mentionKey, pickerOpen: !suggestions.isEmpty,
                                  mentionTokens: composer?.presentMentions.map(\.visible) ?? [], onPasteText: pasteText, limitsInline: true,
-                                 insertion: $insertion)
+                                 insertion: editing == nil ? $insertion : nil, selection: editing == nil ? nil : $selection)
+                    .id(editing?.id) // A revision has its own undo history; Undo cannot pull in an unsent reply.
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .background {
@@ -979,21 +1047,22 @@ struct Composer: View {
                         Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).foregroundStyle(canSend ? Amb.primary : Amb.border)
                     }
                     .disabled(!canSend)
-                    .accessibilityLabel("Send")
-                    .accessibilityIdentifier("composer.send")
+                    .accessibilityLabel(editing == nil ? "Send" : "Save edit")
+                    .accessibilityIdentifier(editing == nil ? "composer.send" : "editmessage.submit")
                         .iconButton()
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 10).padding(.vertical, 8)
         }
+        .disabled(savingRevision)
         .background(Amb.card)
         // Reserve the compose controls and suggestion viewport before the history takes remaining space.
         .layoutPriority(1)
         .task(id: target) {
-            if let previous = composer { model.uploads?.detach(previous); previous.saveNow() }
+            if let previous = replyComposer { model.uploads?.detach(previous); previous.saveNow() }
             let composerModel = ComposerModel(target: target, store: store)
-            composer = composerModel
+            replyComposer = composerModel
             await composerModel.restore()
             // After the draft is back: finished uploads land in it and interrupted ones can be retried.
             model.uploads?.attach(composerModel)
@@ -1009,7 +1078,24 @@ struct Composer: View {
                 try await store.reader.draft(target)
             }
         }
-        .onChange(of: storedDraft.value) { _, draft in composer?.adopt(draft) }
+        .task(id: editing?.id) {
+            guard let editing else { revisionComposer = nil; return }
+            if let pending = insertion { replyComposer?.text += pending; insertion = nil }
+            replyComposer?.saveNow()
+            let message = editing.message
+            let draftTarget = ChatTarget(connectionId: target.connectionId, workspaceId: target.workspaceId,
+                                         channelId: "content-" + MessageRevisionDraft.field(messageId: message.id, rowVersion: message.rowVersion))
+            let revision = ComposerModel(target: draftTarget, store: store, revisionBody: editing.body)
+            revisionComposer = revision
+            await revision.restore()
+            guard !Task.isCancelled else { return }
+            dismissedAt = nil; highlighted = 0; focused = true
+        }
+        .onChange(of: target) { _, _ in
+            revisionComposer?.saveNow()
+            editing = nil
+        }
+        .onChange(of: storedDraft.value) { _, draft in replyComposer?.adopt(draft) }
         .textAttachmentModal(item: $openAttachment) { subject in
             TextAttachmentModal(subject: subject, workspace: workspace) { next in
                 guard let composer else { throw TextAttachmentError.missing }; try await composer.commitAttachment(next)
@@ -1020,6 +1106,12 @@ struct Composer: View {
         .onChange(of: photos) { _, items in
             guard !items.isEmpty else { return }
             photos = []
+            if editing != nil, let replyComposer, let uploads = model.uploads {
+                let tokens = uploads.paste(items.map(PendingAttachment.provider), target: target, appNpub: workspace.appNpub,
+                                           context: target.threadId == nil ? "message" : "thread")
+                if !tokens.isEmpty { replyComposer.text += "\n" + tokens.joined(separator: "\n") + "\n" }
+                return
+            }
             // Picked photos go in at the caret as their Markdown (as the web inserts them), so they can be moved
             // in the text; the upload strips location and camera metadata as for a paste.
             let tokens = pasteItems(items.map(PendingAttachment.provider))
@@ -1037,7 +1129,8 @@ struct Composer: View {
             }
         }
         .onDisappear {
-            if let composer { model.uploads?.detach(composer); composer.saveNow() }
+            if let replyComposer { model.uploads?.detach(replyComposer); replyComposer.saveNow() }
+            revisionComposer?.saveNow()
         }
         .onChange(of: scenePhase) { _, phase in if phase != .active { composer?.saveNow() } }
         .onChange(of: model.chatPath) { _, _ in composer?.saveNow() }
@@ -1052,6 +1145,7 @@ struct Composer: View {
 
     /// Photos, files (Mac) and mention, one above the other.
     @ViewBuilder private var composerTools: some View {
+        if editing == nil {
         PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
             Image(systemName: "photo").font(.body.weight(.semibold)).frame(width: 34, height: 32)
         }
@@ -1073,6 +1167,7 @@ struct Composer: View {
             composer.text += tokens.joined()
         }
         #endif
+        }
         Button {
             guard let composer else { return }
             if !(composer.visibleText.last.map { $0.isWhitespace } ?? true) { composer.visibleText += " " }
@@ -1095,14 +1190,14 @@ struct Composer: View {
     /// An explicit Paste of images or files: uploads start for this composer's own target and their placeholders go
     /// in at the caret. Nothing to upload (or no workspace connection) leaves it an ordinary text paste.
     private func pasteItems(_ providers: [NSItemProvider]) -> [String] {
-        guard let uploads = model.uploads, model.connection?.id == target.connectionId, workspace.id == target.workspaceId else { return [] }
+        guard editing == nil, let uploads = model.uploads, model.connection?.id == target.connectionId, workspace.id == target.workspaceId else { return [] }
         return uploads.paste(providers, target: target, appNpub: workspace.appNpub, context: target.threadId == nil ? "message" : "thread")
     }
 
     /// A paste of text: over 2,500 characters, or enough to push the field past 10,000, becomes a `.txt` attachment with
     /// the complete bytes. The field's text and selection stay as they were. Anything shorter is an ordinary paste.
     private func pasteText(_ string: String, selection: NSRange) -> TextPasteResult? {
-        guard let composer, let staging = model.staging, model.connection?.id == target.connectionId, workspace.id == target.workspaceId else { return nil }
+        guard editing == nil, let composer, let staging = model.staging, model.connection?.id == target.connectionId, workspace.id == target.workspaceId else { return nil }
         let current = composer.visibleText as NSString
         let remaining = selection.location != NSNotFound && NSMaxRange(selection) <= current.length
             ? current.replacingCharacters(in: selection, with: "") : current as String
@@ -1127,7 +1222,46 @@ struct Composer: View {
         }
     }
 
+    private func pick(_ mention: Mention) {
+        guard let composer else { return }
+        if editing != nil {
+            guard let next = CommentMentions.complete(composer.text, selection: selection, with: mention) else { return }
+            composer.text = next
+        } else { composer.pick(mention) }
+        focused = true
+    }
+
+    private func finishRevision(save: Bool) {
+        guard !savingRevision, let editing, let revisionComposer else { return }
+        let message = editing.message
+        let revision = MessageRevisionDraft(body: revisionComposer.text)
+        guard !save || (!revision.body.isEmpty && !UploadToken.contains(in: revision.body)) else { return }
+        savingRevision = true
+        Task {
+            defer { savingRevision = false }
+            do {
+                if save, revision.body != editing.body {
+                    guard let writes = model.writes, let connection = model.connection,
+                          connection.id == target.connectionId, model.selectedWorkspace?.id == workspace.id,
+                          message.senderNpub == model.identity.npub, !message.deleted else {
+                        model.notice = "Unlock the message author's identity in this workspace to save the edit."
+                        return
+                    }
+                    try await writes.submit(WriteIntent(kind: .messageEdit, targetId: message.id, payload: [
+                        "channel_id": message.channelId, "thread_id": message.threadId ?? "", "body": revision.body,
+                        "row_version": message.rowVersion, "mentions": revision.mentions.map(\.requestObject)]),
+                        connection: connection, workspace: workspace)
+                }
+                try await revisionComposer.discardRevision()
+                self.editing = nil
+                self.revisionComposer = nil
+                focused = true
+            } catch { model.notice = error.localizedDescription }
+        }
+    }
+
     private func send() {
+        if editing != nil { finishRevision(save: true); return }
         guard canSend, let composer, let outbox = model.outbox, let connection = model.connection,
               connection.id == target.connectionId, workspace.id == target.workspaceId else { return }
         composer.send(with: outbox, connection: connection, workspace: workspace, onEnqueued: onEnqueued)
