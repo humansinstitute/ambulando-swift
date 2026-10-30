@@ -1125,6 +1125,39 @@ extension MacThreadRegression {
         try require(find(window, "thread.focus.close") != nil, "focused modal opened")
         try require(containsText(window, "Working in \(entry.workspace.label)"), "modal working destination")
         try snapshot(window, model: model, name: "header-modal-wording")
+        try press(window, "thread.focus.close")
+        guard let lab = model.workspaceEntries.first(where: { $0.workspace.label == "Lab (sample)" }) else {
+            throw Failure(description: "Missing discovered second workspace")
+        }
+        for dark in [false, true] {
+            UserDefaults.standard.set(dark ? "dark" : "light", forKey: "appearance")
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            model.setWorkspaceEnabled(lab, false)
+            try await Task.sleep(for: .seconds(1))
+            try require(model.workspaceEntries.count > 1 && model.enabledWorkspaceEntries.count == 1, "gate uses enabled count")
+            try require(!containsText(window, "Working in \(entry.workspace.label)"), "single workspace hides composer context immediately")
+            try require(find(window, "workspace.unread.Studio (sample).general") == nil, "ordinary single workspace rows restored")
+            try snapshot(window, model: model, name: "single-\(dark ? "dark" : "light")-header-sidebar-composer")
+            try press(window, "thread.3")
+            try await Task.sleep(for: .seconds(1))
+            try require(find(window, "thread.focus.close") != nil, "single workspace modal opened")
+            try require(!containsText(window, "Working in \(entry.workspace.label)"), "single workspace modal hides context")
+            try snapshot(window, model: model, name: "single-\(dark ? "dark" : "light")-modal")
+            let field = try textView(window)
+            field.setSelectedRange(NSRange(location: 0, length: field.string.utf16.count))
+            try type(window, "Retained through workspace count changes")
+            model.setWorkspaceEnabled(lab, true)
+            try await Task.sleep(for: .seconds(1))
+            try require(containsText(window, "Working in \(entry.workspace.label)"), "open modal reacts to second enabled workspace")
+            try require(try textView(window).string == "Retained through workspace count changes", "open modal preserves draft when enabling")
+            try snapshot(window, model: model, name: "multi-\(dark ? "dark" : "light")-modal")
+            model.setWorkspaceEnabled(lab, false)
+            try await Task.sleep(for: .seconds(1))
+            try require(!containsText(window, "Working in \(entry.workspace.label)"), "open modal reacts to pause without relaunch")
+            try require(try textView(window).string == "Retained through workspace count changes", "open modal preserves draft when pausing")
+            try press(window, "thread.focus.close")
+        }
+
     }
 }
 #endif

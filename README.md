@@ -16,10 +16,11 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 Channel labels use ordinary text colours. When more than one workspace is enabled,
 unread dots use their workspace colour, including the shared Unread & Active list;
 the existing header keeps its faint workspace tint. With one enabled workspace,
-navigation uses ordinary unread dots and header styling, and composers and thread
+navigation uses ordinary unread dots, and composers and thread
 modals hide the Working in workspace indicator. Paused or discovered workspaces do
 not activate these cues. Changes apply immediately when workspaces are enabled or
-paused, without relaunching or changing draft and sync behaviour.
+paused, without relaunching or changing draft and sync behaviour. The faint header
+tint remains in both single- and multi-workspace mode.
 
 ## Document opening mode (iPhone/iPad build 61, Mac build 52)
 

@@ -2,7 +2,7 @@ import AmbulandoCore
 import SwiftUI
 
 extension WorkspaceColour {
-    /// Text/icon palettes meet WCAG AA against the navigation surfaces in each appearance.
+    /// Unread dot palettes remain visible against navigation surfaces in each appearance.
     func navigationColour(in scheme: ColorScheme) -> Color {
         let value: UInt32
         if scheme == .dark {
@@ -250,9 +250,9 @@ private struct WorkspaceChannelRow: View {
                     .font(.amb(.subheadline).weight(active ? .bold : .regular))
                     .lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 0)
-                if entry.navigation.unread.contains(channel.id) { Circle().fill(Amb.brandOrange).frame(width: 7, height: 7).accessibilityHidden(true) }
+                if entry.navigation.unread.contains(channel.id) { Circle().fill(model.enabledWorkspaceEntries.count > 1 ? entry.colour.navigationColour(in: scheme) : Amb.brandOrange).frame(width: 7, height: 7).accessibilityHidden(true) }
             }
-            .foregroundStyle(entry.colour.navigationColour(in: scheme))
+            .foregroundStyle(Amb.foreground)
             .padding(.leading, 28).padding(.trailing, 10).frame(minHeight: 36)
             .background(active ? Amb.selectedFill : .clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
             .contentShape(Rectangle())
@@ -270,7 +270,7 @@ struct WorkspaceComposerContext: View {
     var workspace: WorkspaceRecord? = nil
     var connectionId: String? = nil
     var body: some View {
-        if let workspace = workspace ?? model.selectedWorkspace {
+        if model.enabledWorkspaceEntries.count > 1, let workspace = workspace ?? model.selectedWorkspace {
             let colour = model.workspaceEntries.first { $0.workspace.id == workspace.id && $0.workspace.appNpub == workspace.appNpub && $0.connection.id == (connectionId ?? model.connection?.id) }?.colour ?? .blue
             HStack(spacing: 6) {
                 Circle().fill(colour.nativeColour).frame(width: 7, height: 7).accessibilityHidden(true)

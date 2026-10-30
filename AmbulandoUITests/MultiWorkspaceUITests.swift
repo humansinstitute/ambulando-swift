@@ -74,7 +74,8 @@ final class MultiWorkspaceUITests: XCTestCase {
             app.launch()
             XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 20))
             app.buttons["channel.general"].tap()
-            XCTAssertTrue(app.staticTexts["Working in Studio (sample)"].waitForExistence(timeout: 10))
+            XCTAssertFalse(app.staticTexts["Working in Studio (sample)"].exists)
+            capture(app, "single-\(appearance)-header-composer")
             for id in ["sidebar.open", "search", "notifications.open", "pin.toggle", "browser.open", "settings"] {
                 let control = app.buttons[id].firstMatch
                 XCTAssertTrue(control.exists && control.isHittable, id)
@@ -83,10 +84,11 @@ final class MultiWorkspaceUITests: XCTestCase {
             }
             capture(app, "header-\(appearance)-blue-composer")
             chooseWorkspaces(app)
+            checkbox(app, "Lab (sample)").tap()
             app.buttons["workspace.colour.Studio (sample)"].tap()
             app.buttons["Red"].tap()
             app.buttons["Done"].tap()
-            app.buttons["sidebar.channel.general"].firstMatch.tap()
+            app.buttons["workspace.channel.Studio (sample).general"].firstMatch.tap()
             app.section("chat")
             XCTAssertTrue(app.buttons["search"].waitForExistence(timeout: 10))
             XCTAssertTrue(app.buttons["settings"].exists)
@@ -100,6 +102,22 @@ final class MultiWorkspaceUITests: XCTestCase {
             let modal = app.descendants(matching: .any)["thread.focus"].firstMatch
             XCTAssertTrue(modal.staticTexts["Working in Studio (sample)"].waitForExistence(timeout: 10))
             capture(app, "header-\(appearance)-modal-wording")
+            app.buttons["thread.focus.close"].firstMatch.tap()
+            chooseWorkspaces(app)
+            checkbox(app, "Lab (sample)").tap()
+            app.buttons["Done"].tap()
+            capture(app, "single-\(appearance)-sidebar-after-pause")
+            XCTAssertFalse(app.buttons["workspace.home.Lab (sample)"].exists)
+            app.buttons["sidebar.channel.general"].firstMatch.tap()
+            app.section("chat")
+            XCTAssertFalse(app.staticTexts["Working in Studio (sample)"].exists)
+            capture(app, "single-\(appearance)-header-after-pause")
+            let reopened = app.buttons["thread.3"].firstMatch
+            for _ in 0..<5 where !(reopened.exists && reopened.isHittable) { app.scrollViews.firstMatch.swipeDown() }
+            reopened.tap()
+            XCTAssertTrue(app.buttons["thread.focus.close"].waitForExistence(timeout: 10))
+            XCTAssertFalse(app.staticTexts["Working in Studio (sample)"].exists)
+            capture(app, "single-\(appearance)-modal-after-pause")
             app.terminate()
         }
     }
