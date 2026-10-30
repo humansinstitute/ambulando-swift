@@ -1603,43 +1603,63 @@ extension AppModel {
 
     func resumeWorkspace(_ entry: EnabledWorkspaceEntry, force: Bool = false) async {
         guard entry.enabled, canRead, let runtime = entry.runtime else { return }
-        if runtime.starting != nil { await runtime.starting?.value; return }
-        if runtime.validated, runtime.activity.isEnabled { return }
+        while let starting = runtime.starting {
+            let revision = runtime.startRevision
+            await starting.value
+            if runtime.startRevision == revision { runtime.starting = nil }
+        }
+        guard entry.enabled, canRead, entry.runtime === runtime else { return }
+        // Reads can be validated while locked using the read-only credential. Unlocking must
+        // reopen the separately fenced write services even when those reads are already healthy.
+        if runtime.validated, runtime.activity.isEnabled, (!isUnlocked || runtime.writeActivity.isEnabled) { return }
+        let needsValidation = !runtime.validated || !runtime.activity.isEnabled
         runtime.activity.resume()
-        await runtime.engine.resume()
         guard entry.enabled, let lease = try? runtime.activity.lease() else { await runtime.pause(); return }
         let revision = UUID()
         runtime.startRevision = revision
         let task = Task { @MainActor in
             do {
-                // Revalidate membership/application before any durable sender is resumed. A cached membership is insufficient.
-                let api = TowerAPI(client: TowerClient(origin: try TowerOrigin(entry.connection.origin), transport: runtime.sync.transport,
-                                                      signer: runtime.sync.identity))
-                let accessible = try await runtime.engine.perform("resume-access:\(entry.workspace.id)", priority: .visible) { try await api.workspaces() }
+                // The engine shares runtime.activity; it was resumed synchronously above.
+                // Recheck its captured generation before any queued startup can touch the network.
                 try Task.checkCancellation()
                 try runtime.activity.check(lease)
-                guard entry.enabled, runtime.activity.isEnabled else { return }
-                guard accessible.contains(where: { $0.id == entry.workspace.id && $0.appNpub == entry.workspace.appNpub }) else {
-                    await runtime.pause()
-                    try await runtime.store.writer.replaceWorkspaces(connectionId: entry.connection.id, [])
-                    runtime.fileCache.purge(workspaceId: entry.workspace.id)
-                    notice = "Access to \(entry.workspace.label) is no longer available."
-                    return
+                guard entry.enabled, entry.runtime === runtime else { return }
+                if needsValidation {
+                    // Revalidate membership/application before any durable sender is resumed. A cached membership is insufficient.
+                    let api = TowerAPI(client: TowerClient(origin: try TowerOrigin(entry.connection.origin), transport: runtime.sync.transport,
+                                                          signer: runtime.sync.identity))
+                    let accessible = try await runtime.engine.perform("resume-access:\(entry.workspace.id)", priority: .visible) { try await api.workspaces() }
+                    try Task.checkCancellation()
+                    try runtime.activity.check(lease)
+                    guard entry.enabled, runtime.activity.isEnabled else { return }
+                    guard accessible.contains(where: { $0.id == entry.workspace.id && $0.appNpub == entry.workspace.appNpub }) else {
+                        await runtime.pause()
+                        try await runtime.store.writer.replaceWorkspaces(connectionId: entry.connection.id, [])
+                        runtime.fileCache.purge(workspaceId: entry.workspace.id)
+                        notice = "Access to \(entry.workspace.label) is no longer available."
+                        return
+                    }
+                    let catchUp = try await runtime.sync.catchUpEventsAndWait(entry.connection, entry.workspace, priority: .visible)
+                    try runtime.activity.check(lease)
+                    guard !catchUp.accessLost, entry.enabled, runtime.activity.isEnabled else { return }
+                    await runtime.sync.refreshInbox(entry.connection, entry.workspace, priority: .background, force: force)
+                    await runtime.sync.refreshWorkspace(entry.connection, entry.workspace, priority: .background, force: force)
+                    guard entry.enabled, runtime.activity.isEnabled else { return }
+                    runtime.validated = true
                 }
-                let catchUp = try await runtime.sync.catchUpEventsAndWait(entry.connection, entry.workspace, priority: .visible)
-                try runtime.activity.check(lease)
-                guard !catchUp.accessLost, entry.enabled, runtime.activity.isEnabled else { return }
-                await runtime.sync.refreshInbox(entry.connection, entry.workspace, priority: .background, force: force)
-                await runtime.sync.refreshWorkspace(entry.connection, entry.workspace, priority: .background, force: force)
-                guard entry.enabled, runtime.activity.isEnabled else { return }
-                runtime.validated = true
-                if isUnlocked {
+                if isUnlocked, !runtime.writeActivity.isEnabled {
+                    try await runtime.sync.identity.requireSigner(npub: entry.connection.signerNpub)
                     try await runtime.store.writer.resetInterruptedSends()
                     try await runtime.store.writer.resetInterruptedWrites()
                     try Task.checkCancellation()
                     try runtime.activity.check(lease)
-                    guard entry.enabled else { return }
+                    guard entry.enabled, entry.runtime === runtime, runtime.validated,
+                          isUnlocked, identity.npub == entry.connection.signerNpub else { return }
                     runtime.writeActivity.resume()
+                    // An earlier send may have reached the closed write gate before validation/unlock
+                    // finished. Resume the durable queues now, without waiting for another network event.
+                    await runtime.outbox.kick(entry.connection, force: true)
+                    await runtime.writes.kick(entry.connection, force: true)
                 }
             } catch {
                 if !(error is CancellationError) { notice = "\(entry.workspace.label) could not reconnect: \(error.localizedDescription)" }

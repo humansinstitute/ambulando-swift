@@ -134,6 +134,80 @@ extension MacThreadRegression {
         print("MULTI_WORKSPACE_REPORT \(output)")
     }
 
+    /// Reproduces the read-validated / write-paused state produced by a locked background
+    /// resume, using only the separate Test app's synthetic identity and Tower.
+    static func writeResumeCheck(_ window: NSWindow, model: AppModel) async throws {
+        guard Bundle.main.bundleIdentifier?.hasSuffix(".test") == true, model.fixture != nil,
+              let output = ProcessInfo.processInfo.environment["AMBULANDO_MAC_WRITE_RESUME_REPORT"],
+              output.hasPrefix(FileManager.default.currentDirectoryPath + "/tmp/docs/handoffs/") else {
+            throw Failure(description: "Write-resume check requires the isolated Test app and ignored report path")
+        }
+        try await multiWait("enabled fixture workspace") { model.enabledWorkspaceEntries.first?.runtime?.validated == true }
+        guard let entry = model.enabledWorkspaceEntries.first, let runtime = entry.runtime,
+              let channel = entry.navigation.groups.flatMap(\.channels).first else {
+            throw Failure(description: "Missing validated fixture workspace")
+        }
+        try require(model.isUnlocked, "synthetic identity is unlocked")
+        let target = ChatTarget(connectionId: entry.connection.id, workspaceId: entry.workspace.id, channelId: channel.id)
+        let marker = "Write-resume fixture " + UUID().uuidString
+        var checks: [String] = []
+        // Recreate a read-only background validation: reads stay active, the write gate is closed.
+        runtime.writeActivity.pause()
+        let first = try await runtime.outbox.send(text: marker + " first", mentions: [], target: target,
+                                                  connection: entry.connection, workspace: entry.workspace)
+        let second = try await runtime.outbox.send(text: marker + " second", mentions: [], target: target,
+                                                   connection: entry.connection, workspace: entry.workspace)
+        await runtime.engine.waitUntilIdle()
+        try require(first != nil && second != nil, "messages are durably queued")
+        let pending = try await runtime.store.reader.outbox(connectionId: entry.connection.id, signerNpub: entry.connection.signerNpub)
+        try require(pending.contains { $0.id == first?.id } && pending.contains { $0.id == second?.id }, "closed write gate keeps both messages")
+        try require(runtime.validated && runtime.activity.isEnabled && !runtime.writeActivity.isEnabled, "read sync remains validated while sends wait")
+        checks.append("both messages remain durable when write gate is closed but reads are validated")
+        await model.resumeWorkspace(entry)
+        try await multiWait("queued sends resume without another network event") {
+            let pending = try? await runtime.store.reader.outbox(connectionId: entry.connection.id, signerNpub: entry.connection.signerNpub)
+            return pending?.contains { $0.id == first?.id || $0.id == second?.id } == false
+        }
+        let sent = try await runtime.store.reader.latestMessages(workspaceId: entry.workspace.id, channelId: channel.id, limit: 100)
+        try require(sent.filter { $0.body == marker + " first" }.count == 1 && sent.filter { $0.body == marker + " second" }.count == 1,
+                    "resumed requests are acknowledged exactly once")
+        checks.append("resume opens write gate and automatically acknowledges both messages once")
+        let lease = try runtime.writeActivity.lease()
+        await model.resumeWorkspace(entry)
+        try runtime.writeActivity.check(lease)
+        checks.append("already writable resume preserves the active write generation")
+        // Unlock can arrive while a read-only startup is still finishing. A waiter must
+        // reevaluate the write gate after startup, rather than returning unconditionally.
+        runtime.writeActivity.pause()
+        runtime.starting = Task { @MainActor in try? await Task.sleep(for: .milliseconds(100)) }
+        let third = try await runtime.store.writer.enqueueSend(target: target, origin: entry.connection.origin,
+                    signerNpub: entry.connection.signerNpub, appNpub: entry.workspace.appNpub,
+                    body: marker + " after-start", mentions: [])
+        await model.resumeWorkspace(entry)
+        try await multiWait("write resume after awaiting read startup") {
+            (try? await runtime.store.reader.outboxItem(id: third.id)) == nil
+        }
+        try require(runtime.writeActivity.isEnabled, "write gate reopened after startup waiter")
+        checks.append("unlock waiting for startup rechecks gate and drains pending send")
+        await model.lock()
+        await model.resumeWorkspace(entry)
+        try require(!model.isUnlocked && !runtime.writeActivity.isEnabled, "locked identity never reopens writes")
+        let locked = try await runtime.store.writer.enqueueSend(target: target, origin: entry.connection.origin,
+                    signerNpub: entry.connection.signerNpub, appNpub: entry.workspace.appNpub,
+                    body: marker + " locked", mentions: [])
+        await runtime.outbox.kick(entry.connection, force: true)
+        try require(try await runtime.store.reader.outboxItem(id: locked.id) != nil, "locked send remains durable")
+        await model.unlock(pin: FixtureEnvironment.pin)
+        try await multiWait("explicit unlock resumes locked queue") {
+            (try? await runtime.store.reader.outboxItem(id: locked.id)) == nil
+        }
+        checks.append("lock keeps write authority closed and explicit unlock drains its retained message")
+        let report: [String: Any] = ["result": "passed", "checks": checks,
+            "scope": "Shared native AppModel with isolated Mac Test fixtures; no user account or live server",
+            "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"]
+        try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: output), options: .atomic)
+    }
+
     private static func multiWait(_ description: String, condition: @MainActor () async -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(25)
         while ContinuousClock.now < deadline {

@@ -11,6 +11,17 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Queued messages resume after unlock (iPhone/iPad build 62, Mac build 53)
+
+An enabled workspace can keep reading with its background credential while message
+sending remains locked. Unlocking now reopens its separately guarded write queue,
+even when workspace reads were already validated or startup was still finishing.
+Messages queued during that transition resume automatically with their original
+request IDs; repeated resume calls leave active sends alone. Paused workspaces and
+locked or mismatched identities remain unable to write. Existing drafts, pending
+messages and account data are preserved. Installation and real-account acceptance
+are separate from local fixture validation.
+
 ## Workspace colour cues (iPhone/iPad build 61, Mac build 52)
 
 Channel labels use ordinary text colours. When more than one workspace is enabled,

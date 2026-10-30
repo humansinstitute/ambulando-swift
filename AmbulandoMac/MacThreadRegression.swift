@@ -72,6 +72,10 @@ enum MacThreadRegression {
                 try await headerTintCheck(window, model: model)
                 print("PASS: existing Mac header tint, colours, light/dark controls and composer wording"); fflush(stdout); exit(0)
             }
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacWriteResumeCheck") {
+                try await writeResumeCheck(window, model: model)
+                print("PASS: read-validated workspace resumes durable sends after unlock and in-flight startup"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMultiWorkspaceCheck") {
                 try await multiWorkspaceCheck(window, model: model)
                 print("PASS: Mac multi-workspace navigation, independent streams, pause, drafts and durable empty selection"); fflush(stdout); exit(0)
