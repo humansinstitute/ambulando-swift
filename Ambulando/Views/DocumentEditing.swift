@@ -413,8 +413,8 @@ final class DocEditorModel: UploadTokenHost {
         do {
             let inspected = try await saver.inspect(connection, workspace, docId: doc.id)
             observedLeaseId = inspected.leaseId
-            canTakeover = inspected.supported && (inspected.leaseId == nil || inspected.holderNpub == connection.signerNpub)
-            if inspected.leaseId != nil && inspected.holderNpub == connection.signerNpub && !canTakeover {
+            canTakeover = inspected.supported
+            if inspected.leaseId != nil && !canTakeover {
                 leaseState = "Another editor is open. This server does not support safe takeover yet."
             }
         } catch { canTakeover = false }

@@ -135,7 +135,8 @@ public actor DocumentSaver {
                          editorSessionId: String, expectedLeaseId: String?) async throws -> (DocRecord, DocBodyRecord) {
         let api = try await api(connection)
         let inspected = try await api.inspectDocumentEdit(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: docId)
-        guard inspected.supported, inspected.leaseId == expectedLeaseId, (expectedLeaseId == nil || inspected.holderNpub == connection.signerNpub)
+        // Tower authorizes the requesting actor; another holder is the reason for explicit takeover.
+        guard inspected.supported, inspected.leaseId == expectedLeaseId
         else { throw LeaseError.invalid("takeover_not_available") }
         let lease = try await api.acquireLease(workspaceId: workspace.id, appNpub: workspace.appNpub, entityType: "document", entityId: docId,
                                                editorSessionId: editorSessionId, takeoverLeaseId: expectedLeaseId)

@@ -1,6 +1,6 @@
 # Editing and recovering documents
 
-Mac, iPhone and iPad open supported documents in edit mode when unlocked. Archived documents and unsupported stored formats remain in the reader. Tower enforces edit permissions and leases; a denied lease makes the editor read only. Selecting text exposes a floating comment icon at the right of the editor, beside the last visible selected line. The 44-point action stays within the keyboard-visible viewport and follows scrolling and resizing; showing or clearing it adds no layout space. It works by touch on iPhone/iPad and by pointer or Option–Command–M on Mac. Escape dismisses it; a cleared, invalid or offscreen selection hides it. Mac reading mode also offers a native selection comment icon. It captures the selection before native focus changes and saves only when the person requests a comment, then binds the anchor to the saved version. Actor tagging and comment submission use the existing composer and durable write queue.
+Mac, iPhone and iPad open existing documents in View by default; Settings can explicitly choose Edit. View does not acquire an editing lease. Archived documents and unsupported stored formats remain in the reader. Tower enforces edit permissions and leases; a denied lease makes the editor read only. Selecting text exposes a floating comment icon at the right of the editor, beside the last visible selected line. The 44-point action stays within the keyboard-visible viewport and follows scrolling and resizing; showing or clearing it adds no layout space. It works by touch on iPhone/iPad and by pointer or Option–Command–M on Mac. Escape dismisses it; a cleared, invalid or offscreen selection hides it. Mac reading mode also offers a native selection comment icon. It captures the selection before native focus changes and saves only when the person requests a comment, then binds the anchor to the saved version. Actor tagging and comment submission use the existing composer and durable write queue.
 
 On Mac, editing authority, pending-save and last-sync messages, saved versions, takeover and recovery actions live
 above Comments in the right panel. The panel collapses to a thin comment rail; its status icon exposes the current
@@ -9,7 +9,41 @@ Collapsing the panel deliberately widens the page; selecting or clearing text do
 iPhone/iPad retain their compact status and comments sheet. The iOS sheet observes the captured anchor before its
 first presentation, so the composer immediately shows the selected quote.
 
-Active native editors checkpoint changed documents every minute. Local SQLite drafts remain durable while offline. The existing `document_edit_session_v1` contract controls explicit takeover: preserve local divergent work as a typed Tower recovery, acquire against the observed lease, and load the latest canonical body and title. If the other lease has expired, the same explicit action starts a fresh session using the existing acquire contract. A superseded editor never regains authority through autosave.
+Active native editors checkpoint changed documents every minute. Local SQLite drafts remain durable while offline. An authorized person can explicitly take over from another person or device; Tower checks write access rather than client-side holder identity. The existing `document_edit_session_v1` contract controls explicit takeover: preserve local divergent work as a typed Tower recovery, acquire against the observed lease, and load the latest canonical body and title. If the other lease has expired, the same explicit action starts a fresh session using the existing acquire contract. A superseded editor never regains authority through autosave.
+
+When another editor holds authority, use **Take over editing…** and confirm preservation
+of the current local draft before loading the latest cloud version. This is an explicit
+action; merely opening View does not reserve authority. A protocol-unaware server,
+permission denial, changed observed lease or failed recovery must be reported rather
+than treated as a reason to wait indefinitely or silently force a save.
+
+For agents, the supported route is the signed typed Tower API, within the authorized
+workspace and document. There is no takeover subcommand in the current Flight Deck CLI.
+Inspect `GET /api/v4/flightdeck-pg/workspaces/:workspaceId/edit-leases?entity_type=document&entity_id=:docId`.
+Require `document_edit_protocol: "document_edit_session_v1"`. Preserve divergent local
+work through the existing recovery-body save (`base_available: false`) and require
+its recovery acknowledgement before proceeding. Then explicitly POST
+`/api/v4/flightdeck-pg/workspaces/:workspaceId/edit-leases/acquire` with:
+
+```json
+{
+  "entity_type": "document",
+  "entity_id": "<document UUID>",
+  "ttl_seconds": 120,
+  "document_edit_protocol": "document_edit_session_v1",
+  "editor_session_id": "<fresh UUID>",
+  "takeover": true,
+  "expected_lease_id": "<last inspected active lease UUID>"
+}
+```
+
+Require the protocol/session acknowledgement; independently fetch and verify the latest
+body, title and version before editing. Save through the existing canonical document
+body pipeline using that base and the new lease token. If the lease has expired,
+inspect again and acquire a fresh session normally. On an authority rejection, retain
+the draft and request a new explicit decision; never automatically steal authority
+back. On 403 or unavailable protocol, report the exact permission/activation blocker.
+Do not modify live documents or select a target from a mere checkout complaint.
 
 On a materialised head change or foreground return, the editor checks the latest saved head. Unchanged local work follows that head. Meaningful differences are exact title differences or semantic document differences: text (including whitespace and deletions), marks, attributes, node order and unknown content fields count; JSON object-key order and generated Markdown/block fields of a rich document do not. No character-count threshold or automatic merging is used. Divergent snapshots must be retained by Tower before their matching local draft is retired. An offline failure leaves the page and local draft intact.
 

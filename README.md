@@ -11,6 +11,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Checkout override across people (iPhone/iPad build 63, Mac build 54)
+
+Explicit document takeover now allows a lease held by another person as well as another device.
+Tower still checks write access, the observed lease and the supported edit-session protocol.
+Divergent local drafts are preserved before takeover, and the latest saved document is loaded
+before editing resumes. Minute autosave and displaced-editor protection are unchanged.
+Source/build validation does not establish installation or authenticated multi-person acceptance.
+
 ## Queued messages resume after unlock (iPhone/iPad build 62, Mac build 53)
 
 An enabled workspace can keep reading with its background credential while message

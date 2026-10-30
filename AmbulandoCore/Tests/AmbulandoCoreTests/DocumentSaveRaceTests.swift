@@ -182,7 +182,45 @@ extension WorkTests {
         XCTAssertEqual(transport.recorded.first?.httpMethod, "GET")
     }
 
-    func testTakeoverLoadsVerifiedLatestRemoteContentAndTitle() async throws {
+    func testTakeoverRejectsChangedObservedLeaseBeforeMutation() async throws {
+        let h = try await WorkHarness.make()
+        let (id, _) = seedDoc(h)
+        let transport = StubTransport { _ in
+            (200, ["document_edit_protocol": TowerAPI.documentEditProtocol,
+                   "lease": ["id": UUID().uuidString.lowercased(), "holder_actor_npub": "npub1other-editor"]])
+        }
+        let saver = DocumentSaver(store: h.store, identity: h.chat.identity, transport: transport)
+        do {
+            _ = try await saver.takeover(h.connection, h.workspace, docId: id,
+                                         editorSessionId: UUID().uuidString.lowercased(), expectedLeaseId: UUID().uuidString.lowercased())
+            XCTFail("changed observed lease accepted")
+        } catch is LeaseError { }
+        XCTAssertEqual(transport.recorded.count, 1)
+        XCTAssertEqual(transport.recorded.first?.httpMethod, "GET")
+    }
+
+    func testTakeoverRetainsServerAuthorizationDenialWithoutLoadingBody() async throws {
+        let h = try await WorkHarness.make()
+        let (id, _) = seedDoc(h)
+        let expected = UUID().uuidString.lowercased()
+        let transport = StubTransport { request in
+            if request.httpMethod == "GET" {
+                return (200, ["document_edit_protocol": TowerAPI.documentEditProtocol,
+                              "lease": ["id": expected, "holder_actor_npub": "npub1other-editor"]])
+            }
+            return (403, ["error": "forbidden", "code": "forbidden"])
+        }
+        let saver = DocumentSaver(store: h.store, identity: h.chat.identity, transport: transport)
+        do {
+            _ = try await saver.takeover(h.connection, h.workspace, docId: id,
+                                         editorSessionId: UUID().uuidString.lowercased(), expectedLeaseId: expected)
+            XCTFail("server authorization denial ignored")
+        } catch { }
+        XCTAssertEqual(transport.recorded.count, 2)
+        XCTAssertTrue(transport.recorded.last?.url?.path.hasSuffix("/acquire") == true)
+    }
+
+    func testTakeoverFromAnotherActorLoadsVerifiedLatestRemoteContentAndTitle() async throws {
         let h = try await WorkHarness.make()
         let (id, _) = seedDoc(h)
         await h.sync.refreshDoc(h.connection, h.workspace, docId: id); await h.engine.waitUntilIdle()
@@ -193,7 +231,7 @@ extension WorkTests {
         let transport = StubTransport { request in
             if request.url?.path.hasSuffix("/edit-leases") == true {
                 return (200, ["document_edit_protocol": TowerAPI.documentEditProtocol,
-                              "lease": ["id": expected, "holder_actor_npub": h.connection.signerNpub]])
+                              "lease": ["id": expected, "holder_actor_npub": "npub1other-authorized-editor"]])
             }
             let (status, raw) = try original.handlerResult(request)
             if request.url?.path.hasSuffix("/acquire") == true, var row = raw as? [String: Any] {

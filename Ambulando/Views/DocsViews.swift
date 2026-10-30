@@ -858,7 +858,7 @@ struct DocumentEditorStatus: View {
             if editor.canTakeover {
                 Button("Take over editing…") { confirmTakeover = true }
                     .disabled(editor.saving || editor.takingOver).accessibilityIdentifier("editor.takeover")
-                    .confirmationDialog("Take over from your other device?", isPresented: $confirmTakeover, titleVisibility: .visible) {
+                    .confirmationDialog("Take over from the current editor?", isPresented: $confirmTakeover, titleVisibility: .visible) {
                         Button("Preserve my draft and load latest cloud version") { Task { await editor.takeover() } }
                     } message: { Text("This device will load the latest cloud version and stop the previous editor from saving over it. Any divergent local edits are kept as recovery history.") }
             }
