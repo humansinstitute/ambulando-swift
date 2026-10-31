@@ -611,7 +611,9 @@ private struct ChannelNotificationSettingsSection: View {
     @State private var busy = false
     @State private var error: String?
     @State private var unsupported = false
-    private var contextKey: String { (model.connection?.id ?? "") + ":" + (model.selectedWorkspace?.id ?? "") + ":" + channel.workspaceId + ":" + channel.id }
+    private var contextKey: String {
+        [model.connection?.id ?? "", model.connection?.signerNpub ?? "", model.selectedWorkspace?.id ?? "", channel.workspaceId, channel.id].joined(separator: ":")
+    }
 
     var body: some View {
         Section {
@@ -662,6 +664,7 @@ private struct ChannelNotificationSettingsSection: View {
         busy = true; error = nil
         Task { @MainActor in
             defer { if key == contextKey { busy = false } }
+            guard key == contextKey else { return }
             do {
                 let updated = try await model.setChannelNotifications(channel, mentionsOnly: mentionsOnly, known: known)
                 guard key == contextKey else { return }
