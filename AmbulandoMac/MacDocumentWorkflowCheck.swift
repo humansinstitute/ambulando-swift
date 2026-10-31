@@ -158,7 +158,9 @@ extension MacThreadRegression {
         let newer = DocumentBody.newDocument(text: "Latest synthetic remote")
         fixture.tower.work.externalDocSave(doc.id, body: newer.bytes, contentType: newer.contentType)
         await local.reconcileRemote()
-        try require(local.content.contains("Latest synthetic remote") && !local.dirty && local.followingRemote, "unchanged returning device follows latest without authority")
+        try require(local.remoteVersion != nil, "returning device offers latest for explicit review")
+        await local.acceptLatest()
+        try require(local.content.contains("Latest synthetic remote") && !local.dirty, "explicit accept loads latest without publishing")
         local.close()
         let latestDoc = try await store.reader.doc(workspaceId: workspace.id, id: doc.id)!
         let divergent = DocEditorModel(doc: latestDoc, workspace: workspace, store: store, connection: connection, app: model)
@@ -174,23 +176,11 @@ extension MacThreadRegression {
         let newest = DocumentBody.newDocument(text: "Newest canonical bytes")
         fixture.tower.work.externalDocSave(doc.id, body: newest.bytes, contentType: newest.contentType)
         await divergent.reconcileRemote()
-        try require(divergent.content.contains("Newest canonical bytes") && divergent.followingRemote && !divergent.recoveries.isEmpty, "divergent returning editor follows latest with recovery indicator")
-        await divergent.openVersions()
-        guard let recovery = divergent.recoveries.first else { throw Failure(description: "Missing previous version") }
-        await divergent.previewVersion(recovery)
-        try require(divergent.versionPreview?.contains("Previous meaningful local work 🙂") == true, "chooser previews previous saved content and title")
-        await divergent.resolveVersion(promote: true)
-        try require(!divergent.followingRemote && !divergent.dirty && divergent.title == "Previous local title", "chosen previous version keeps explicit editing authority")
-        let continued = DocumentBody.newDocument(text: "Continued after choosing previous")
-        divergent.pageChanged(DocumentBody(bytes: continued.bytes, contentType: continued.contentType).editorState!.serializedString())
-        let continuedSaved = await divergent.save()
-        try require(continuedSaved && fixture.tower.work.docBody(doc.id).map { DocumentBody(bytes: $0, contentType: continued.contentType).markdown } == "Continued after choosing previous", "chosen version continues editing and saving")
-        divergent.pageChanged(DocumentBody(bytes: previous.bytes, contentType: previous.contentType).editorState!.serializedString())
-        fixture.tower.work.externalDocSave(doc.id, body: newest.bytes, contentType: newest.contentType)
-        await divergent.reconcileRemote(); await divergent.openVersions()
-        await divergent.previewVersion(divergent.recoveries.first)
-        await divergent.resolveVersion(promote: false)
-        try require(fixture.tower.work.docBody(doc.id) == newest.bytes, "dismiss preserves exact canonical bytes")
+        try require(divergent.content.contains("Previous meaningful local work") && divergent.remoteVersion != nil, "returning editor preserves local work and offers review")
+        await divergent.beginMerge()
+        try require(!divergent.mergeConflicts.isEmpty, "overlapping rich content requires explicit resolution")
+        await divergent.acceptLatest()
+        try require(divergent.content.contains("Newest canonical bytes") && !divergent.journal.retained.isEmpty, "explicit accept retains previous local work")
         divergent.close()
         guard let saver = model.saver, let scope = doc.scopeId else { throw Failure(description: "Missing document saver") }
         let markdownId = fixture.tower.work.seedDoc(scope: scope, channel: doc.channelId, title: "Empty Markdown preservation", body: Data("Delete me".utf8), contentType: "text/markdown")
@@ -208,6 +198,137 @@ extension MacThreadRegression {
         try require(denied.permissionDenied, "permission-denied document remains read only")
         denied.close()
         print("DOCUMENT_WORKFLOW_PASS defaultEdit selectionIcon exactAnchor reload offlineDraft noDivergenceFollow divergenceRecovery preview dismissCanonical")
+    }
+}
+#endif
+
+#if DEBUG
+extension MacThreadRegression {
+    /// Tests the actual shared native editor model with the isolated Tower fixture and real SQLite persistence.
+    /// It launches the built Test executable directly; it never installs or contacts a real workspace.
+    static func documentReconciliationCheck(_ window: NSWindow, model: AppModel) async throws {
+        guard let fixture = model.fixture, let store = model.store, let workspace = model.selectedWorkspace,
+              let connection = model.connection, let saver = model.saver,
+              let seed = try await store.reader.docs(workspaceId: workspace.id).first, let scope = seed.scopeId else {
+            throw Failure(description: "Missing isolated document fixture")
+        }
+        func make(_ name: String) async throws -> (String, DocEditorModel) {
+            let bytes = Data("Alpha\nBeta\nGamma".utf8)
+            let id = fixture.tower.work.seedDoc(scope: scope, channel: seed.channelId, title: name, body: bytes, contentType: "text/markdown")
+            for _ in 0..<5 { fixture.tower.work.externalDocSave(id, body: bytes, contentType: "text/markdown") }
+            let initial = try await saver.latest(connection, workspace, docId: id)
+            try require(initial.body.docRowVersion == 6, "fixture starts at v6")
+            let editor = DocEditorModel(doc: initial.doc, workspace: workspace, store: store, connection: connection, app: model)
+            await editor.load()
+            editor.pageChanged("Local Alpha\nBeta\nGamma")
+            let kept = await editor.checkpoint()
+            try require(kept, "initial local checkpoint")
+            fixture.tower.work.externalDocSave(id, body: Data("Alpha\nBeta\nRemote Gamma".utf8), contentType: "text/markdown")
+            fixture.tower.work.externalDocSave(id, body: Data("Alpha\nRemote Beta\nRemote Gamma".utf8), contentType: "text/markdown")
+            await editor.reconcileRemote()
+            try require(editor.remoteVersion?.rowVersion == 8 && editor.localBaseVersion == 6, "v6 local versus v8 reviewed")
+            try require(editor.content == "Local Alpha\nBeta\nGamma" && editor.dirty, "remote never replaces local working page")
+            return (id, editor)
+        }
+        let (acceptId, accepting) = try await make("Accept reconciliation fixture")
+        await accepting.beginMerge()
+        accepting.mergeText += "\nKeep this earlier merge preview"
+        await accepting.persistReview()
+        await accepting.acceptLatest()
+        try require(!accepting.dirty && accepting.localBaseVersion == 8 && accepting.content == "Alpha\nRemote Beta\nRemote Gamma", "accept loads v8")
+        try require(fixture.tower.work.doc(acceptId)?["row_version"] as? Int == 8, "accept creates no version")
+        try require(accepting.journal.retained.contains { String(decoding: $0.bytes, as: UTF8.self) == "Local Alpha\nBeta\nGamma" }, "accept retains original draft")
+        try require(!accepting.mergeReady && accepting.journal.previousPreviews.contains { $0.text.contains("Keep this earlier merge preview") }, "accept archives unfinished merge without blocking fresh editing")
+        accepting.pageChanged(accepting.content + "\nEdit after acceptance")
+        let postAcceptanceSaved = await accepting.save()
+        try require(postAcceptanceSaved && fixture.tower.work.doc(acceptId)?["row_version"] as? Int == 9, "accepted page can edit and save normally")
+        accepting.close()
+        print("DOCUMENT_REVIEW_ACCEPT_PASS v6Draft v8Latest noVersion retainedOriginal")
+
+        let (mergeId, merging) = try await make("Merge reconciliation fixture")
+        await merging.beginMerge()
+        try require(merging.mergeConflicts.isEmpty && merging.mergeText == "Local Alpha\nRemote Beta\nRemote Gamma", "independent edits combined")
+        merging.mergeText += "\nEditable preview"
+        await merging.persistReview()
+        merging.showingReview = false
+        try require(merging.content == "Local Alpha\nBeta\nGamma", "cancelling review preserves original editor")
+        let originalDoc = try await store.reader.doc(workspaceId: workspace.id, id: mergeId)!
+        merging.close(); await settle()
+        let resumed = DocEditorModel(doc: originalDoc, workspace: workspace, store: store, connection: connection, app: model)
+        await resumed.load(); await resumed.reconcileRemote()
+        try require(resumed.content == "Local Alpha\nBeta\nGamma" && resumed.mergeText.hasSuffix("Editable preview"), "reopen restores original and edited preview")
+        merging.pageChanged("Retired editor must not overwrite the new editor")
+        let retiredCheckpoint = await merging.checkpoint()
+        let retiredReview = await merging.persistReview()
+        try require(!retiredCheckpoint && !retiredReview, "retired editor cannot write after reopen")
+        let restoredDraft = try await store.reader.docDraft(key: resumed.draftKey)
+        try require(String(decoding: restoredDraft!.body, as: UTF8.self) == "Local Alpha\nBeta\nGamma", "retired callbacks preserve new editor draft")
+        let savedWhileReviewing = await resumed.save()
+        try require(!savedWhileReviewing && fixture.tower.work.doc(mergeId)?["row_version"] as? Int == 8, "unresolved review cannot publish")
+        await resumed.useMergePreview()
+        try require(resumed.dirty && resumed.localBaseVersion == 8 && resumed.content.contains("Editable preview"), "preview becomes editable local draft on v8")
+        await resumed.flush()
+        try require(fixture.tower.work.doc(mergeId)?["row_version"] as? Int == 8, "merged draft waits for explicit Save through background flush")
+        let mergedSaved = await resumed.save()
+        try require(mergedSaved && fixture.tower.work.doc(mergeId)?["row_version"] as? Int == 9, "ordinary guarded save creates v9")
+        try require(fixture.tower.work.docBody(mergeId) == Data("Local Alpha\nRemote Beta\nRemote Gamma\nEditable preview".utf8), "published both sets and preview edits")
+        resumed.close()
+        print("DOCUMENT_REVIEW_MERGE_PASS independentEdits previewEdit cancel reopen guardedV9")
+
+        let (raceId, racing) = try await make("Race reconciliation fixture")
+        await racing.beginMerge()
+        racing.mergeText += "\nRetain resolution work"
+        await racing.persistReview()
+        fixture.tower.work.externalDocSave(raceId, body: Data("Alpha\nRemote Beta\nRemote Gamma\nNew remote line".utf8), contentType: "text/markdown")
+        await racing.useMergePreview()
+        try require(racing.previewIsStale && racing.content == "Local Alpha\nBeta\nGamma" && racing.mergeText.contains("Retain resolution work"), "remote during review retains original and preview")
+        // Both inserted at the end: explicit resolution is required.
+        await racing.reconcilePreview()
+        try require(!racing.mergeConflicts.isEmpty, "overlapping insertion requires explicit resolution")
+        for conflict in racing.mergeConflicts { await racing.resolveMerge(conflict.id, choice: .local) }
+        try require(racing.mergeConflicts.isEmpty, "explicit overlap choices permit preview")
+        racing.setActive(false)
+        await racing.persistReview(); await settle()
+        let journal = try await store.reader.documentReview(key: racing.draftKey)
+        try require(journal.retained.contains { String(decoding: $0.bytes, as: UTF8.self).contains("Retain resolution work") }, "race original preview retained durably")
+        try require(fixture.tower.work.doc(raceId)?["row_version"] as? Int == 9, "review/background do not publish unresolved work")
+        racing.close()
+        print("DOCUMENT_REVIEW_RACE_PASS latestRefresh originalAndPreview retained overlapChoice background")
+
+        // Rich merge exercises the same editor encoding path with stable identities.
+        let rich = DocumentBody.newDocument(text: "One\n\nTwo")
+        let richId = fixture.tower.work.seedDoc(scope: scope, channel: seed.channelId, title: "Rich reconciliation", body: rich.bytes, contentType: rich.contentType)
+        let initial = try await saver.latest(connection, workspace, docId: richId)
+        let richEditor = DocEditorModel(doc: initial.doc, workspace: workspace, store: store, connection: connection, app: model)
+        await richEditor.load()
+        let initialBody = DocumentBody(bytes: rich.bytes, contentType: rich.contentType)
+        let state = try DocumentEditor.setText(initialBody.editorState!, path: [0], text: "Local One")
+        richEditor.pageChanged(state.serializedString())
+        let remoteState = try DocumentEditor.setText(initialBody.editorState!, path: [1], text: "Remote Two")
+        let remote = try initialBody.encoded(editorState: remoteState)
+        fixture.tower.work.externalDocSave(richId, body: remote.bytes, contentType: remote.contentType)
+        await richEditor.reconcileRemote(); await richEditor.beginMerge(); await richEditor.useMergePreview()
+        try require(richEditor.draftText.contains("Local One") && richEditor.draftText.contains("Remote Two"), "rich merged draft retains both paragraphs")
+        fixture.offline = true
+        let failed = await richEditor.save()
+        try require(!failed && richEditor.dirty, "offline save retains rich merged draft")
+        fixture.offline = false
+        let retry = await richEditor.save()
+        try require(retry, "retry saves rich merged draft")
+        let version = fixture.tower.work.doc(richId)?["row_version"] as? Int
+        let unchanged = await richEditor.save()
+        try require(unchanged && fixture.tower.work.doc(richId)?["row_version"] as? Int == version, "repeated save no duplicate version")
+        let uncertainState = try DocumentEditor.setText(try JSONValue.parse(Data(richEditor.content.utf8)), path: [0], text: "Published but response uncertain")
+        richEditor.pageChanged(uncertainState.serializedString())
+        let uncertainCheckpoint = await richEditor.checkpoint()
+        try require(uncertainCheckpoint, "uncertain-response snapshot retained")
+        let uncertainDraft = try await store.reader.docDraft(key: richEditor.draftKey)!
+        fixture.tower.work.externalDocSave(richId, body: uncertainDraft.body, contentType: uncertainDraft.contentType)
+        let uncertainVersion = fixture.tower.work.doc(richId)?["row_version"] as? Int
+        let acknowledged = await richEditor.save()
+        try require(acknowledged && fixture.tower.work.doc(richId)?["row_version"] as? Int == uncertainVersion, "model acknowledges identical canonical bytes without another version")
+        richEditor.close()
+        print("DOCUMENT_REVIEW_RICH_PASS stableIdentity richEditing offlinePreservation retry noDuplicate")
     }
 }
 #endif

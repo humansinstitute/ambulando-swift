@@ -128,3 +128,13 @@ from the pending safe-start/Clear drafts feature and older parity gaps.
 Mac keeps its existing Deck-header create control by the original contract. Account/storage identifiers, database
 schema, local cache, signing, outbox and sync contracts are unchanged. Core account-retention and Deck-activity
 checks pass. These sample checks are not real-account verification or a claimed fix for the unreproduced Mac hang.
+
+## Preserved document drafts and merge review (iPhone/iPad 64, Mac 55)
+
+Native retains the common saved base, leaves the working page intact on newer saves, and offers a version-labelled
+diff, confirmed acceptance with local copy/restore, and three-way merge with explicit overlap choices. The resolved
+result opens in the standard editor and waits for explicit Save. Original and preview work remain durable through
+review cancellation, remote races, backgrounding and offline failure. Concurrent editing is gated by Tower's
+advertised protocol and strict session acknowledgements; older servers retain exclusive-lease and takeover limits.
+See [behavior and validation](document-reconciliation.md). Build/fixture evidence does not establish installed-device
+or live-account acceptance. Android remains deferred.

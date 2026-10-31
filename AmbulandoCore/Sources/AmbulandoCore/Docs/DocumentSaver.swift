@@ -3,8 +3,8 @@ import Foundation
 public enum DocSaveResult: Sendable, Equatable {
     /// Tower made this the canonical body; the draft is gone and `doc` is the new base.
     case saved(DocRecord, DocBodyRecord)
-    /// The document moved on since the edit began. Tower kept the submission as a recovery version
-    /// (`document_recovery_created`) and the draft stays on this device.
+    /// The document moved on since the edit began. The draft stays on this device for explicit review.
+    /// A non-nil ID also identifies Tower's recovery when a save raced after preflight.
     case recovery(id: String?, message: String)
     /// Someone else holds the edit lease.
     case leaseHeld(String)
@@ -29,6 +29,7 @@ public actor DocumentSaver {
     private var acquiring: [String: Task<EditLease, Error>] = [:]
     private var lostSessions: Set<String> = []
     private var sessionIds: [String: String] = [:]
+    private var selectedProtocols: [String: String] = [:]
     private var authorityGeneration: UInt64 = 0
 
     public init(store: LocalStore, identity: IdentityService, transport: HTTPTransport) {
@@ -60,8 +61,21 @@ public actor DocumentSaver {
         }
         let sessionId = editorSessionId ?? sessionIds[key] ?? UUID().uuidString.lowercased()
         sessionIds[key] = sessionId
-        let pending = Task { try await api(connection).acquireLease(workspaceId: workspace.id, appNpub: workspace.appNpub,
-                                                                   entityType: "document", entityId: docId, editorSessionId: sessionId) }
+        let pending = Task {
+            let api = try await api(connection)
+            let inspection: DocumentEditInspection?
+            do { inspection = try await api.inspectDocumentEdit(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: docId) }
+            catch TowerError.http(let status, _, _) where status == 404 { inspection = nil } // Older servers lack inspection.
+            guard generation == authorityGeneration, !Task.isCancelled, !lostSessions.contains(key) else { throw LeaseError.invalid("editor_closed") }
+            if selectedProtocols[key] == TowerAPI.concurrentDocumentEditProtocol, inspection?.concurrentSupported != true {
+                throw LeaseError.invalid("concurrent_protocol_unavailable")
+            }
+            let protocolName = inspection?.concurrentSupported == true ? TowerAPI.concurrentDocumentEditProtocol : TowerAPI.documentEditProtocol
+            selectedProtocols[key] = protocolName
+            // An advertised concurrent mode is never silently downgraded on acquire failure.
+            return try await api.acquireLease(workspaceId: workspace.id, appNpub: workspace.appNpub,
+                entityType: "document", entityId: docId, editorSessionId: sessionId, documentProtocol: protocolName)
+        }
         acquiring[key] = pending
         defer { acquiring[key] = nil }
         let lease = try await pending.value
@@ -98,6 +112,7 @@ public actor DocumentSaver {
         for pending in acquiring.values { pending.cancel() }
         // Default background operations get a fresh identity after unlock; open editors keep their original identity.
         sessionIds = sessionIds.filter { !$0.key.hasSuffix(":default") }
+        selectedProtocols = selectedProtocols.filter { !$0.key.hasSuffix(":default") }
         leases.removeAll()
     }
 
@@ -169,15 +184,22 @@ public actor DocumentSaver {
                 guard try await store.writer.insertDocDraftIfAbsent(submitted)
                 else { return .notSaved("Your draft changed before this save. Save again to sync the latest edits.") }
             }
-            if !asRecovery, SHA256Hex.of(draft.body) == draft.baseSha256,
-               let cached = try await store.reader.docBody(workspaceId: workspace.id, docId: draft.docId),
-               let doc = try await store.reader.doc(workspaceId: workspace.id, id: draft.docId),
-               cached.docRowVersion == draft.baseRowVersion, cached.sha256 == draft.baseSha256,
-               cached.storageObjectId == draft.baseStorageObjectId, doc.rowVersion == draft.baseRowVersion, doc.title == draft.title {
-                try await store.writer.finishDocDraftSave(submitted, saved: cached)
-                return .saved(doc, cached)
-            }
             let api = try await api(connection)
+            if !asRecovery {
+                // Verify current authority/content before upload as well as Tower's atomic CAS at commit.
+                // An uncertain successful response can be acknowledged without submitting a duplicate version.
+                let fresh = try await latest(connection, workspace, docId: draft.docId)
+                if fresh.doc.title == draft.title, fresh.body.sha256 == SHA256Hex.of(draft.body) {
+                    try await store.writer.finishDocDraftSave(submitted, saved: fresh.body)
+                    return .saved(fresh.doc, fresh.body)
+                }
+                guard fresh.body.docRowVersion == draft.baseRowVersion, fresh.body.sha256 == draft.baseSha256,
+                      fresh.body.storageObjectId == draft.baseStorageObjectId else {
+                    let message = "Newer version available — Review changes. Your local draft is unchanged."
+                    try await store.writer.replaceDocDraft(ifUnchanged: submitted, with: draft.with(state: .conflict, error: message))
+                    return .recovery(id: nil, message: message)
+                }
+            }
             let lease: EditLease?
             do { lease = asRecovery ? nil : try await acquire(connection, workspace, docId: draft.docId, editorSessionId: editorSessionId) }
             catch LeaseError.held(let by, let until) {

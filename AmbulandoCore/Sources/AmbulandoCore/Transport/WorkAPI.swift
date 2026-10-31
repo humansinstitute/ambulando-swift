@@ -210,10 +210,10 @@ public enum LeaseError: LocalizedError, Equatable, Sendable {
 extension TowerAPI {
     public static let leaseSeconds = 120
 
-    public func acquireLease(workspaceId: String, appNpub: String, entityType: String, entityId: String, editorSessionId: String? = nil, takeoverLeaseId: String? = nil) async throws -> EditLease {
+    public func acquireLease(workspaceId: String, appNpub: String, entityType: String, entityId: String, editorSessionId: String? = nil, takeoverLeaseId: String? = nil, documentProtocol: String = TowerAPI.documentEditProtocol) async throws -> EditLease {
         var fields: [String: Any] = ["entity_type": entityType, "entity_id": try Self.uuid(entityId), "ttl_seconds": Self.leaseSeconds]
         if entityType == "document", let editorSessionId {
-            fields["document_edit_protocol"] = Self.documentEditProtocol
+            fields["document_edit_protocol"] = documentProtocol
             fields["editor_session_id"] = try Self.uuid(editorSessionId)
         }
         if let takeoverLeaseId { fields["takeover"] = true; fields["expected_lease_id"] = try Self.uuid(takeoverLeaseId) }
@@ -229,6 +229,11 @@ extension TowerAPI {
               lease["entity_id"] as? String == entityId.lowercased() || (lease["entity_id"] as? String)?.lowercased() == entityId.lowercased()
         else { throw TowerError.malformed("edit lease") }
         let marker = o?["document_edit_protocol"] as? String
+        if documentProtocol == Self.concurrentDocumentEditProtocol {
+            guard marker == documentProtocol, lease["editor_session_id"] as? String == editorSessionId else {
+                throw LeaseError.invalid("concurrent_protocol_not_acknowledged")
+            }
+        }
         if takeoverLeaseId != nil, marker != Self.documentEditProtocol { throw LeaseError.invalid("takeover_not_supported") }
         return EditLease(id: id, token: token, expiresAt: (lease["expires_at"] as? String) ?? "", documentEditProtocol: marker,
                          editorSessionId: lease["editor_session_id"] as? String)
@@ -242,6 +247,12 @@ extension TowerAPI {
         if reply.status == 409 { throw LeaseError.invalid(o?["code"] as? String ?? "expired") }
         guard (200..<300).contains(reply.status), let next = o?["lease"] as? [String: Any] else {
             throw TowerError.http(status: reply.status, code: o?["code"] as? String, stage: "edit lease")
+        }
+        if lease.documentEditProtocol == Self.concurrentDocumentEditProtocol {
+            guard o?["document_edit_protocol"] as? String == lease.documentEditProtocol,
+                  next["editor_session_id"] as? String == lease.editorSessionId else {
+                throw LeaseError.invalid("concurrent_protocol_not_acknowledged")
+            }
         }
         return EditLease(id: lease.id, token: (next["lease_token"] as? String) ?? lease.token, expiresAt: (next["expires_at"] as? String) ?? lease.expiresAt, documentEditProtocol: lease.documentEditProtocol, editorSessionId: lease.editorSessionId)
     }

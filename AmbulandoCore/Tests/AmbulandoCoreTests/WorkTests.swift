@@ -344,11 +344,11 @@ final class WorkTests: XCTestCase {
         h.work.externalDocSave(doc, body: DocumentBody.newDocument(text: "Theirs").bytes, contentType: DocumentBody.envelopeContentType)
         let result = await h.saver.save(edited, connection: h.connection, workspace: h.workspace)
         guard case .recovery = result else { return XCTFail("expected recovery: \(result)") }
-        XCTAssertEqual(h.work.recoveryCount, 1)
+        XCTAssertEqual(h.work.recoveryCount, 0, "preflight requests review without uploading a stale body")
         XCTAssertEqual(DocumentBody(bytes: h.work.docBody(doc)!, contentType: nil).markdown, "Theirs", "the head was not overwritten")
         let awaited20 = try await h.store.reader.docDraft(key: edited.key)
         let kept = try XCTUnwrap(awaited20)
-        XCTAssertEqual(kept.state, .recovery)
+        XCTAssertEqual(kept.state, .conflict)
         XCTAssertEqual(kept.body, edited.body, "the unsaved edit is preserved on the device")
     }
 

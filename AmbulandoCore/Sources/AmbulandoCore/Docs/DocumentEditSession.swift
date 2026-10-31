@@ -5,9 +5,14 @@ public struct DocumentEditInspection: Sendable, Equatable {
     public let supported: Bool
     public let leaseId: String?
     public let holderNpub: String?
+    public let concurrentSupported: Bool
+    public init(supported: Bool, leaseId: String?, holderNpub: String?, concurrentSupported: Bool = false) {
+        self.supported = supported; self.leaseId = leaseId; self.holderNpub = holderNpub; self.concurrentSupported = concurrentSupported
+    }
 }
 
 extension TowerAPI {
+    public static let concurrentDocumentEditProtocol = "document_concurrent_edit_v1"
     public static let documentEditProtocol = "document_edit_session_v1"
 
     public func inspectDocumentEdit(workspaceId: String, appNpub: String, docId: String) async throws -> DocumentEditInspection {
@@ -15,6 +20,7 @@ extension TowerAPI {
         let row = try object(reply, "document edit authority")
         let lease = row["lease"] as? [String: Any]
         return DocumentEditInspection(supported: row["document_edit_protocol"] as? String == Self.documentEditProtocol,
-                                      leaseId: lease?["id"] as? String, holderNpub: lease?["holder_actor_npub"] as? String)
+                                      leaseId: lease?["id"] as? String, holderNpub: lease?["holder_actor_npub"] as? String,
+                                      concurrentSupported: (row["document_edit_protocols"] as? [String])?.contains(Self.concurrentDocumentEditProtocol) == true)
     }
 }

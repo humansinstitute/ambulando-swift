@@ -5,6 +5,9 @@ import AmbulandoCore
 extension MacThreadRegression {
     /// Runs only in the isolated Test app. Local stand-in Tower; no real accounts or agent dispatch.
     static func commentMentionCheck(_ window: NSWindow, model: AppModel) async throws {
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoDocumentReconciliationCheck") {
+            try await documentReconciliationCheck(window, model: model); return
+        }
         if ProcessInfo.processInfo.arguments.contains("-AmbulandoCommentAvatarCheck") {
             try await commentAvatarCheck(window, model: model); return
         }

@@ -70,11 +70,11 @@ extension WorkTests {
         let first = try await draft(h, doc: id) { try DocumentEditor.setText($0, path: [0], text: "First") }
         let later = try await draft(h, doc: id) { try DocumentEditor.setText($0, path: [0], text: "Fresh") }
         try await h.store.writer.saveDocDraft(first)
-        h.work.inject(.offline, matching: "/docs/\(id)")
         let gate = PausedDocumentTransport(h.transport)
         let saver = DocumentSaver(store: h.store, identity: h.chat.identity, transport: gate)
         let saving = Task { await saver.save(first, connection: h.connection, workspace: h.workspace) }
         try await gate.waitUntilPaused()
+        h.work.inject(.offline, matching: "/docs/\(id)")
         try await h.store.writer.saveDocDraft(later)
         await gate.resume()
         guard case .notSaved = await saving.value else { return XCTFail("offline save should fail") }
@@ -273,4 +273,51 @@ extension WorkTests {
         XCTAssertFalse(next.token.isEmpty, "background wiki binding can acquire after unlock instead of retaining a permanent default tombstone")
     }
 
+}
+
+extension WorkTests {
+    func testRemoteCommitAfterPreflightStillUsesServerCASAndRetainsDraft() async throws {
+        let h = try await WorkHarness.make()
+        let (id, _) = seedDoc(h)
+        await h.sync.refreshDoc(h.connection, h.workspace, docId: id); await h.engine.waitUntilIdle()
+        let edit = try await draft(h, doc: id) { try DocumentEditor.setText($0, path: [0], text: "Original local work") }
+        try await h.store.writer.saveDocDraft(edit)
+        let gate = PausedDocumentTransport(h.transport)
+        let saver = DocumentSaver(store: h.store, identity: h.chat.identity, transport: gate)
+        let attempt = Task { await saver.save(edit, connection: h.connection, workspace: h.workspace) }
+        try await gate.waitUntilPaused()
+        let remote = DocumentBody.newDocument(text: "Saved after native preflight")
+        h.work.externalDocSave(id, body: remote.bytes, contentType: remote.contentType)
+        await gate.resume()
+        guard case .recovery(let id, _) = await attempt.value else { return XCTFail("server CAS must reject raced save") }
+        XCTAssertNotNil(id)
+        XCTAssertEqual(h.work.recoveryCount, 1)
+        XCTAssertEqual(h.work.docBody(edit.docId), remote.bytes)
+        let retained = try await h.store.reader.docDraft(key: edit.key)
+        XCTAssertEqual(retained?.body, edit.body)
+        XCTAssertEqual(retained?.baseRowVersion, edit.baseRowVersion)
+    }
+    func testLostSuccessfulResponseRetriesWithoutSecondCanonicalMutation() async throws {
+        let h = try await WorkHarness.make()
+        let (id, _) = seedDoc(h)
+        await h.sync.refreshDoc(h.connection, h.workspace, docId: id); await h.engine.waitUntilIdle()
+        let edit = try await draft(h, doc: id) { try DocumentEditor.setText($0, path: [0], text: "Published with lost response") }
+        try await h.store.writer.saveDocDraft(edit)
+        let transport = StubTransport { request in
+            let reply = try h.transport.handlerResult(request)
+            if request.httpMethod == "PATCH", request.url?.path.hasSuffix("/docs/" + id) == true {
+                throw URLError(.networkConnectionLost)
+            }
+            return reply
+        }
+        let saver = DocumentSaver(store: h.store, identity: h.chat.identity, transport: transport)
+        guard case .notSaved = await saver.save(edit, connection: h.connection, workspace: h.workspace) else { return XCTFail("response was lost") }
+        let version = h.work.doc(id)?["row_version"] as? Int
+        XCTAssertEqual(h.work.docBody(id), edit.body)
+        let retained = try await h.store.reader.docDraft(key: edit.key)
+        XCTAssertNotNil(retained)
+        guard case .saved = await saver.save(edit, connection: h.connection, workspace: h.workspace) else { return XCTFail("must acknowledge canonical bytes") }
+        XCTAssertEqual(h.work.doc(id)?["row_version"] as? Int, version)
+        XCTAssertEqual(transport.recorded.filter { $0.httpMethod == "PATCH" }.count, 1)
+    }
 }

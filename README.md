@@ -11,6 +11,16 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Preserved document drafts and merge review (iPhone/iPad build 64, Mac build 55)
+
+A newer shared save leaves the local document open and offers **Review changes** with version labels and a diff.
+Accept latest confirms replacement and keeps the previous draft recoverable without publishing a version.
+Merge uses the retained common saved base, combines independent edits, asks for overlap choices and opens the result
+in the normal editor before an explicit guarded Save. Original and merge work survive cancellation, reconnect and
+newer saves during review. Concurrent editing uses Tower's advertised `document_concurrent_edit_v1` capability;
+older servers retain exclusive authority and explicit takeover limitations. See [behavior, compatibility and checks](docs/document-reconciliation.md).
+Source/build validation does not establish backend activation, installation or authenticated multi-editor acceptance.
+
 ## Checkout override across people (iPhone/iPad build 63, Mac build 54)
 
 Explicit document takeover now allows a lease held by another person as well as another device.

@@ -704,18 +704,19 @@ struct DocumentCancelButton: View {
 
     var body: some View {
         Button("Cancel") {
-            if editor.dirty { asking = true } else { editor.close(); onFinish() }
+            if editor.dirty { asking = true }
+            else { Task { if await editor.persistReview() { editor.close(); onFinish() } } }
         }
         .keyboardShortcut(.cancelAction)
         .font(.amb(.body))
         .accessibilityIdentifier("editor.close")
         .confirmationDialog("You have unsaved edits", isPresented: $asking, titleVisibility: .visible) {
             Button("Keep draft on this \(Device.name)") {
-                Task { _ = await editor.persistDraft(state: .editing); editor.close(); onFinish() }
+                Task { if await editor.checkpoint(), await editor.persistReview() { editor.close(); onFinish() } }
             }
             .accessibilityIdentifier("editor.keepDraft")
             Button("Discard edits", role: .destructive) {
-                Task { await editor.discardDraft(); editor.close(); onFinish() }
+                Task { if await editor.persistReview() { await editor.discardDraft(); editor.close(); onFinish() } }
             }
             .accessibilityIdentifier("editor.discard")
         } message: {
@@ -855,7 +856,18 @@ struct DocumentEditorStatus: View {
             if editor.dirty { Text("Changes pending sync").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("editor.dirty") }
             #endif
             if let synced = editor.lastSyncedAt { Text("Last synced \(synced.formatted(date: .omitted, time: .shortened))").font(.amb(.caption)) }
-            if editor.canTakeover {
+            if editor.hasReviewWork {
+                Button(editor.remoteVersion == nil ? "Review changes / Preserved drafts" : "Newer version available — Review changes") {
+                    Task { await editor.openReview() }
+                }
+                .accessibilityIdentifier("editor.reviewChanges")
+                .disabled(editor.saving || editor.takingOver)
+            }
+            if editor.concurrentEditing && editor.needsEditingResume {
+                Button("Resume editing") { Task { await editor.takeOverForMerge() } }
+                    .disabled(editor.saving || editor.takingOver)
+            }
+            if editor.canTakeover && !editor.concurrentEditing {
                 Button("Take over editing…") { confirmTakeover = true }
                     .disabled(editor.saving || editor.takingOver).accessibilityIdentifier("editor.takeover")
                     .confirmationDialog("Take over from the current editor?", isPresented: $confirmTakeover, titleVisibility: .visible) {
@@ -919,7 +931,11 @@ struct DocumentEditSurface: View {
             }
         }
         .sheet(isPresented: $editor.showingVersions) { DocumentVersionChoice(editor: editor) }
+        .sheet(isPresented: $editor.showingReview, onDismiss: { Task { await editor.persistReview() } }) { DocumentRemoteReview(editor: editor) }
         .onChange(of: model.syncStatus) { _, _ in editor.deliverImages() }
+        .onChange(of: model.connectionStatus) { _, state in
+            if state == .connected { Task { await editor.reconcileRemote() } }
+        }
         .onChange(of: TextScale.shared.factor, initial: true) { _, _ in editor.page?.setStyle(DocumentEditorStyle.sizes()) }
         .onChange(of: model.isUnlocked) { _, unlocked in editor.page?.setEditable(unlocked && !editor.followingRemote && !editor.permissionDenied) }
         .onChange(of: editor.followingRemote) { _, following in editor.page?.setEditable(model.isUnlocked && !following && !editor.permissionDenied) }
@@ -983,5 +999,147 @@ struct DocumentVersionChoice: View {
         #else
         .frame(maxWidth: .infinity, minHeight: 300)
         #endif
+    }
+}
+
+
+/// Shared iPhone/Mac reconciliation. Review never mutates the shared document.
+struct DocumentRemoteReview: View {
+    @Bindable var editor: DocEditorModel
+    @State private var confirmAccept = false
+    @State private var confirmAuthority = false
+    @State private var lines: [DocumentReviewDiff.Line] = []
+    @State private var selectedDraft: PreservedDocumentSnapshot?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Review changes").font(.headline)
+                Spacer()
+                Button("Keep editing") { Task { if await editor.persistReview() { editor.showingReview = false } } }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(versionLabel)
+                        .font(.caption).accessibilityIdentifier("editor.reviewVersions")
+                    comparison
+                    mergePreview
+                    preservedWork
+                    if let status = editor.status { Text(status).font(.caption).accessibilityIdentifier("editor.reviewStatus") }
+                }
+            }
+            Button("Refresh latest") { Task { await editor.reconcileRemote() } }.disabled(editor.reconciling)
+        }
+        .interactiveDismissDisabled(editor.mergeReady)
+        .padding(20)
+        .frame(minWidth: 280, idealWidth: 760, maxWidth: .infinity, minHeight: 400, idealHeight: 700)
+        .task(id: editor.remoteVersion?.id) {
+            let local = editor.localReviewText, remote = editor.remoteReviewText
+            lines = await Task.detached { DocumentReviewDiff.lines(local: local, latest: remote) }.value
+        }
+        .confirmationDialog("Replace your working copy with the reviewed latest version?", isPresented: $confirmAccept, titleVisibility: .visible) {
+            Button("Preserve local draft and accept latest", role: .destructive) { Task { await editor.acceptLatest() } }
+        } message: { Text("Unsaved work will be replaced on the page and retained in Preserved drafts on this device. No shared version is created. Any merge preview is kept separately.") }
+        .confirmationDialog("Acquire editing authority?", isPresented: $confirmAuthority, titleVisibility: .visible) {
+            Button("Preserve drafts and acquire authority") { Task { await editor.takeOverForMerge() } }
+        } message: { Text("Tower currently allows one active editor. This explicit action may end another editor’s authority and create an authority-barrier version. Your draft and preview stay intact and must be reconciled before Save.") }
+    }
+    private var versionLabel: String {
+        let local = editor.localBaseVersion?.description ?? "unknown"
+        let latest = editor.remoteVersion?.rowVersion.description ?? local
+        return "Local working copy based on v\(local) · Latest shared v\(latest)"
+    }
+    @ViewBuilder private var comparison: some View {
+        if editor.remoteVersion != nil {
+            Text("− Local only    + Latest only").font(.caption)
+            if !lines.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(lines) { line in
+                        Text(line.prefix + " " + line.text)
+                            .foregroundStyle(line.prefix == "−" ? Color.red : line.prefix == "+" ? Color.green : Color.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }.font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            }
+            DisclosureGroup("Full local working copy") {
+                Text(editor.localReviewText).textSelection(.enabled)
+                Button("Copy local text") { Pasteboard.copy(editor.draftText) }
+            }
+            DisclosureGroup("Full latest shared version") { Text(editor.remoteReviewText).textSelection(.enabled) }
+            HStack {
+                Button("Accept latest…") { confirmAccept = true }.disabled(editor.permissionDenied).accessibilityIdentifier("editor.acceptLatest")
+                Button("Merge my changes") { Task { await editor.beginMerge() } }
+                    .disabled(!editor.canMerge || editor.permissionDenied).accessibilityIdentifier("editor.mergeChanges")
+            }
+            if !editor.canMerge {
+                Text("Common saved base unavailable. Manual review only: copy your work, Accept latest, then edit or paste your resolved text before Save. Automatic merge is disabled.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+    @ViewBuilder private var mergePreview: some View {
+        if editor.mergeReady {
+            Divider()
+            Text("Merge preview against v\(editor.journal.mergeLatest?.rowVersion.description ?? "unknown")").font(.headline)
+            ForEach(editor.mergeConflicts) { conflict in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(conflict.label).font(.caption.bold())
+                    Text("Local: " + conflict.local).textSelection(.enabled)
+                    Text("Latest: " + conflict.latest).textSelection(.enabled)
+                    HStack {
+                        Button("Use local") { Task { await editor.resolveMerge(conflict.id, choice: .local) } }
+                        Button("Use latest") { Task { await editor.resolveMerge(conflict.id, choice: .latest) } }
+                    }
+                }.padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            }
+            TextField("Merged title", text: $editor.mergeTitle).textFieldStyle(.roundedBorder)
+                .disabled(!editor.mergeConflicts.isEmpty)
+            if editor.previewIsRich {
+                Text("The merged result keeps rich formatting. Edit merged result opens it in the normal document editor before you choose Save.").font(.caption)
+                Text(editor.readableMergePreview).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                TextEditor(text: $editor.mergeText).frame(minHeight: 220).disabled(!editor.mergeConflicts.isEmpty)
+                    .accessibilityIdentifier("editor.mergePreview")
+            }
+            if editor.previewIsStale {
+                Text("Latest changed again. Your original draft and this preview are retained. Resolve outstanding overlaps, then reconcile again.").font(.caption)
+                Button("Reconcile preview with latest") { Task { await editor.reconcilePreview() } }
+                    .disabled(!editor.mergeConflicts.isEmpty)
+            }
+            if !editor.concurrentEditing {
+                Button("Acquire editing authority for merge…") { confirmAuthority = true }
+            } else if editor.needsEditingResume {
+                Button("Resume editing") { Task { await editor.takeOverForMerge() } }
+            }
+            Button("Edit merged result") { Task { await editor.useMergePreview() } }
+                .disabled(!editor.mergeConflicts.isEmpty || editor.previewIsStale)
+                .accessibilityIdentifier("editor.useMergePreview")
+            Text("This prepares a local draft. Save checks your access and the latest shared version before publishing.").font(.caption)
+        }
+    }
+    @ViewBuilder private var preservedWork: some View {
+        if !editor.journal.previousPreviews.isEmpty {
+            DisclosureGroup("Earlier merge previews (on this device)") {
+                ForEach(editor.journal.previousPreviews) { preview in
+                    DisclosureGroup("\(preview.title) · reviewed v\(preview.head.rowVersion)") {
+                        Text(editor.readablePreviousPreview(preview)).textSelection(.enabled)
+                        Button("Copy earlier preview") { Pasteboard.copy(preview.text) }
+                    }
+                }
+            }
+        }
+        if !editor.journal.retained.isEmpty {
+            Divider()
+            DisclosureGroup("Preserved drafts (on this device)") {
+                ForEach(editor.journal.retained.reversed()) { draft in
+                    Button("\(draft.title) · based on v\(draft.rowVersion)") { selectedDraft = draft }
+                }
+                if let selectedDraft {
+                    Text(selectedDraft.title + "\n\n" + selectedDraft.document.markdown).textSelection(.enabled)
+                    Button("Copy preserved text") { Pasteboard.copy(selectedDraft.title + "\n\n" + selectedDraft.document.markdown) }
+                    Button("Restore as local draft") { Task { await editor.restorePreserved(selectedDraft) } }
+                }
+            }
+        }
     }
 }
