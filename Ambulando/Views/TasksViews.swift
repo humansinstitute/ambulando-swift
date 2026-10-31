@@ -106,17 +106,17 @@ struct TasksView: View {
                                 .accessibilityIdentifier("task.\(row.title)")
                                 .swipeActions(edge: .trailing) {
                                     if row.taskState != .done {
-                                        Button { setState(row, .done) } label: { Label("Done", systemImage: "checkmark") }.tint(Amb.success)
+                                        Button { setState(row, .done) } label: { Label("Done", systemImage: "checkmark") }.tint(Amb.taskStatus("done"))
                                     }
                                 }
                                 .swipeActions(edge: .leading) {
                                     if row.taskState != .inProgress {
-                                        Button { setState(row, .inProgress) } label: { Label("Start", systemImage: "play") }.tint(Amb.info)
+                                        Button { setState(row, .inProgress) } label: { Label("Start", systemImage: "play") }.tint(Amb.taskStatus("in_progress"))
                                     }
                                 }
                         }
                     } header: {
-                        Text("\(state.label) · \(rows.count)").textCase(nil)
+                        HStack { TaskStatusBadge(state: state.rawValue); Text("\(rows.count)") }.textCase(nil)
                     }
                 }
             }
@@ -135,7 +135,7 @@ struct TasksView: View {
             LazyHStack(alignment: .top, spacing: 12) {
                 ForEach(columns, id: \.0) { state, rows in
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("\(state.label) · \(rows.count)").font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.itemHeading)
+                        HStack { TaskStatusBadge(state: state.rawValue); Text("\(rows.count)").foregroundStyle(Amb.itemHeading) }
                         ScrollView {
                             LazyVStack(spacing: 8) {
                                 ForEach(rows) { row in
@@ -195,6 +195,7 @@ struct TaskRowView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(row.title).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(3)
             HStack(spacing: 8) {
+                TaskStatusBadge(state: row.state)
                 PriorityBadge(priority: row.priority)
                 if let channel = snapshot.choice.channelName(row.task.channelId) { Text("#\(channel)").lineLimit(1) }
                 if let assignee = row.assignee { Label(displayName(assignee, snapshot.names, me: me), systemImage: "person").lineLimit(1) }
@@ -334,7 +335,7 @@ struct TaskDetailView: View {
                     ForEach(TaskState.board + [.backlog, .archive], id: \.self) { state in
                         Button(state.label) { submit(.taskState, ["state": state.rawValue]) }
                     }
-                } label: { chip(row.taskState?.label ?? row.state, systemImage: "circle.dashed") }
+                } label: { TaskStatusBadge(state: row.state).frame(minHeight: 44) }
                     .accessibilityIdentifier("task.state")
                 Menu {
                     ForEach(TaskPriority.editable, id: \.self) { p in
@@ -671,7 +672,7 @@ struct TaskSubtasksView: View {
                         Button { pushRoute(.task(workspaceId: workspace.id, taskId: child.id)) } label: {
                             VStack(alignment: .leading) {
                                 Text(child.title).multilineTextAlignment(.leading)
-                                Text(TaskState(rawValue: child.state)?.label ?? child.state)
+                                TaskStatusBadge(state: child.state)
                                     .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                             }
                         }.accessibilityIdentifier("task.subtask.\(child.id)")

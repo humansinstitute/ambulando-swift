@@ -1,4 +1,5 @@
 import SwiftUI
+import AmbulandoCore
 
 /// Ambulando "perspective passage" tokens, copied from sol/src/ambulando-tokens.css (light / dark).
 enum Amb {
@@ -143,4 +144,26 @@ enum AppearancePreference: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
     var colorScheme: ColorScheme? { switch self { case .system: nil; case .light: .light; case .dark: .dark } }
+}
+
+
+extension Amb {
+    static func taskStatus(_ state: String) -> Color {
+        Color(PlatformColor(hex: (TaskState(rawValue: state) ?? .new).statusRGB))
+    }
+}
+
+/// A readable label in both themes; the dot and tint share the web status palette.
+struct TaskStatusBadge: View {
+    let state: String
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle().fill(Amb.taskStatus(state)).frame(width: 8, height: 8).accessibilityHidden(true)
+            Text(TaskState(rawValue: state)?.label ?? state)
+        }
+        .font(.amb(.caption)).foregroundStyle(Amb.foreground)
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .background(Amb.taskStatus(state).opacity(0.14), in: RoundedRectangle(cornerRadius: 6))
+        .accessibilityElement(children: .combine)
+    }
 }

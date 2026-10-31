@@ -21,10 +21,10 @@ public struct TaskTreeNode: Sendable, Equatable, Identifiable {
     public let predecessors: [String]
     public let createdAt: String
 
-    public init(_ task: TaskRecord, channelTitle: String? = nil) {
+    public init(_ task: TaskRecord, channelTitle: String? = nil, stateOverride: String? = nil) {
         let o = ((try? JSONSerialization.jsonObject(with: task.raw)) as? [String: Any]) ?? [:]
         let metadata = (o["metadata"] as? [String: Any]) ?? o
-        id = task.id; title = task.title; state = task.state; channelId = task.channelId
+        id = task.id; title = task.title; state = stateOverride ?? task.state; channelId = task.channelId
         self.channelTitle = channelTitle ?? (o["channel_title"] as? String)
         parentId = lowerUUID(metadata["parent_task_id"] as? String)
         var seen = Set<String>()
@@ -51,7 +51,13 @@ public struct TaskTreeView: Sendable, Equatable {
         rootTaskId = lowerUUID(tree["root_task_id"] as? String)
         collapsed = ((tree["collapsed"] as? [Any]) ?? []).compactMap { lowerUUID($0 as? String) }
         upstream = ((tree["upstream"] as? [Any]) ?? []).compactMap { lowerUUID($0 as? String) }
-        if let viewport = tree["viewport"] as? [String: Any], let s = (viewport["scale"] as? NSNumber)?.doubleValue, s.isFinite { scale = min(2, max(0.25, s)) }
+        if let viewport = tree["viewport"] as? [String: Any], let s = (viewport["scale"] as? NSNumber)?.doubleValue, s.isFinite { scale = Self.boundedScale(s) }
+    }
+
+    public static func boundedScale(_ scale: Double) -> Double { scale.isFinite ? min(2, max(0.2, scale)) : 1 }
+
+    public static func fitScale(width: Double, height: Double, availableWidth: Double, availableHeight: Double) -> Double {
+        boundedScale(max(0.85, min(1, availableWidth / max(1, width), availableHeight / max(1, height))))
     }
 
     public var object: [String: Any] {

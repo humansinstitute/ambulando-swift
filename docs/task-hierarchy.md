@@ -9,3 +9,19 @@ Each expanded parent drains Tower's existing authorized `/tasks/:id/relationship
 Unloaded, cached, partial, failed, locked/offline and restricted states are distinguished. An uncertain count carries `+`; restricted results never claim to enumerate inaccessible tasks. Refresh, reopen, identity unlock, task events and a minute foreground fallback reconcile relationships. Each nested expansion loads its own direct list; cycles stop recursive expansion. Canvas refresh failures retain saved tasks with an explicit incomplete-cache warning. Tree projection and loading budgets can truncate large canvases; task details paginate the direct list independently.
 
 Validation uses generic fixtures: six siblings, deep/nested subtrees, mixed dependencies, a dependency discovering a child before its parent, collapse, deterministic large-tree bounds, paginated detail loading, archived children, dependency exclusion, complete membership replacement, failed pages/restricted responses, clock-skew-independent live membership and queued creation metadata. The simulator detail workflow covers creation, immediate list updates, parent navigation and nested expansion; the existing canvas interaction check covers choosing a root and adding/opening a child. Test fixtures do not establish authenticated acceptance on a physical device. Release-specific build, push and installation evidence belongs on the task or in ignored handoffs.
+
+## Task status and tree zoom (iPhone/iPad 65, Mac 56)
+
+Task lists, boards, details, subtasks and tree nodes share the web status palette.
+Review is green, Done and archived aliases are blue; other states retain the
+web hues. Theme foreground labels and coloured dots/tints keep states readable
+without relying on colour alone. Local task and pending-write changes refresh
+tree status cues through the store.
+
+Tree-local zoom in/out, percentage, Reset and Fit tree controls sit above the
+scrollable graph. Pinch/trackpad magnification scales only the graph; its scroll
+footprint scales with it. Reset and fit return to the origin; fit retains a
+readable minimum with scrolling for large trees. Selecting a tree gives its
+content the existing naplet gesture ownership; layout editing and the outer
+canvas remain separate. Android parity is deferred. Source/build and simulator
+checks do not establish installation or authenticated device acceptance.

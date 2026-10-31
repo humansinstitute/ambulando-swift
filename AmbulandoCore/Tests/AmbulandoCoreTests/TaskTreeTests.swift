@@ -196,3 +196,21 @@ extension TaskRelationshipLoadingTests {
         XCTAssertTrue(cache?.ids.contains(child["id"] as! String) == true)
     }
 }
+
+@Suite struct TaskTreeStatusViewportTests {
+    @Test func canonicalPaletteAndArchiveAliases() {
+        #expect(TaskState.review.statusRGB == 0x34D399)
+        #expect(TaskState.done.statusRGB == 0x60A5FA)
+        #expect(TaskState.archive.statusRGB == TaskState.done.statusRGB)
+        #expect(TaskState.archived.statusRGB == TaskState.done.statusRGB)
+        #expect(TaskState.backlog.statusRGB == TaskState.new.statusRGB)
+        #expect(Set(TaskState.board.map(\.statusRGB)).count == TaskState.board.count)
+    }
+    @Test func zoomBoundsAndReadableFit() {
+        #expect(TaskTreeView.boundedScale(0.001) == 0.2)
+        #expect(TaskTreeView.boundedScale(100) == 2)
+        #expect(TaskTreeView.boundedScale(.nan) == 1)
+        #expect(TaskTreeView.fitScale(width: 2000, height: 3000, availableWidth: 400, availableHeight: 300) == 0.85)
+        #expect(TaskTreeView.fitScale(width: 300, height: 200, availableWidth: 600, availableHeight: 400) == 1)
+    }
+}

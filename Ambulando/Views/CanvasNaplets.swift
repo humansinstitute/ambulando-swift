@@ -348,6 +348,9 @@ struct TaskTreeNapletBody: View {
     @State private var busy = false
     @State private var choosing = false
     @State private var choices: [TaskRecord] = []
+    @State private var pinchScale: Double?
+    @State private var scrollReset = UUID()
+    @State private var zoomSave: Task<Void, Never>?
 
     static let cell = (width: 300.0, height: 150.0, nodeWidth: 240.0, nodeHeight: 104.0)
 
@@ -378,7 +381,29 @@ struct TaskTreeNapletBody: View {
                 }
                 .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView([.horizontal, .vertical]) { graphView(current) }
+                GeometryReader { proxy in
+                    VStack(spacing: 4) {
+                        HStack(spacing: 8) {
+                            Button { setScale(current.scale / 1.25, current) } label: { Image(systemName: "minus.magnifyingglass") }.accessibilityLabel("Zoom tree out")
+                            Text("\(Int(current.scale * 100))% ").font(.amb(.caption).monospacedDigit()).accessibilityLabel("Tree zoom \(Int(current.scale * 100)) percent")
+                            Button { setScale(current.scale * 1.25, current) } label: { Image(systemName: "plus.magnifyingglass") }.accessibilityLabel("Zoom tree in")
+                            Button("Reset") { scrollReset = UUID(); setScale(1, current) }.accessibilityLabel("Reset tree zoom")
+                            Button("Fit tree") {
+                                let size = graphSize
+                                scrollReset = UUID()
+                                setScale(TaskTreeView.fitScale(width: size.width, height: size.height, availableWidth: proxy.size.width, availableHeight: max(1, proxy.size.height - 48)), current)
+                            }
+                        }
+                        .buttonStyle(.bordered).controlSize(.small).frame(minHeight: 44).disabled(!interactive)
+                        ScrollView([.horizontal, .vertical]) { graphView(current) }.id(scrollReset)
+                            .simultaneousGesture(MagnifyGesture().onChanged { value in
+                                guard interactive else { return }
+                                if pinchScale == nil { pinchScale = current.scale }
+                                setScale((pinchScale ?? current.scale) * value.magnification, current)
+                            }.onEnded { _ in pinchScale = nil })
+                    }
+                    .clipped()
+                }
             }
             if let entry { entryBar(entry) }
         }
@@ -390,6 +415,23 @@ struct TaskTreeNapletBody: View {
             reload(view ?? saved)
         }
         .sheet(isPresented: $choosing) { existingSheet }
+        .onDisappear { zoomSave?.cancel(); zoomSave = nil }
+        .task {
+            guard let store = model.store else { return }
+            let stream = await store.changes.stream()
+            for await batch in stream {
+                guard !Task.isCancelled else { return }
+                guard batch.contains(where: { ($0.workspaceId == nil || $0.workspaceId == workspace.id) && [.tasks, .writes, .access].contains($0.table) }) else { continue }
+                let current = view ?? TaskTreeView(savedLayout: naplet.savedLayout, napletId: naplet.id)
+                guard let root = current.rootTaskId else { continue }
+                let tasks = (try? await store.reader.tasks(workspaceId: workspace.id, includeArchived: true, limit: 2000)) ?? []
+                let writes = (try? await store.reader.writes(connectionId: model.connection?.id ?? "", workspaceId: workspace.id)) ?? []
+                let nodes = tasks.map { TaskTreeNode($0, stateOverride: TaskRow(task: $0, writes: writes).state) }
+                let projected = await Task.detached { TaskTreeGraph.project(nodes, root: root, collapsed: current.collapsed, upstream: current.upstream) }.value
+                guard (view ?? current).rootTaskId == root else { continue }
+                graph = projected
+            }
+        }
         .task {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
@@ -399,6 +441,23 @@ struct TaskTreeNapletBody: View {
     }
 
     // MARK: Graph
+
+    private var graphSize: CGSize {
+        CGSize(width: max(560, 40 + Double((graph.positions.values.map(\.x).max() ?? 0) + 1) * Self.cell.width),
+               height: max(300, 40 + Double((graph.positions.values.map(\.y).max() ?? 0) + 1) * Self.cell.height))
+    }
+
+    private func setScale(_ scale: Double, _ current: TaskTreeView) {
+        var next = view ?? current
+        next.scale = TaskTreeView.boundedScale(scale)
+        view = next
+        zoomSave?.cancel()
+        zoomSave = Task {
+            do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+            zoomSave = nil
+            await save(next)
+        }
+    }
 
     private func graphView(_ current: TaskTreeView) -> some View {
         let positions = graph.positions
@@ -439,6 +498,7 @@ struct TaskTreeNapletBody: View {
         }
         .frame(width: max(560, 40 + columns * Self.cell.width), height: max(300, 40 + rows * Self.cell.height), alignment: .topLeading)
         .scaleEffect(current.scale, anchor: .topLeading)
+        .frame(width: graphSize.width * current.scale, height: graphSize.height * current.scale, alignment: .topLeading)
     }
 
     private func nodeView(_ node: TaskTreeNode, _ current: TaskTreeView) -> some View {
@@ -447,13 +507,13 @@ struct TaskTreeNapletBody: View {
             Button { pushRoute(.task(workspaceId: workspace.id, taskId: node.id)) } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(node.title).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(2).multilineTextAlignment(.leading)
-                    Text(TaskState(rawValue: node.state)?.label ?? node.state).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                    TaskStatusBadge(state: node.state)
                     if node.channelId != channelId { Text(node.channelTitle.map { "#\($0)" } ?? "Other channel").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground) }
                 }
                 .padding(10)
                 .frame(width: Self.cell.nodeWidth, height: Self.cell.nodeHeight, alignment: .topLeading)
                 .background(Amb.card, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Amb.border))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Amb.taskStatus(node.state), lineWidth: 2))
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("tree.node.\(node.title)")
@@ -549,7 +609,9 @@ struct TaskTreeNapletBody: View {
         loadRevision = revision
         Task {
             let cached = (try? await store.reader.tasks(workspaceId: w.id, includeArchived: true, limit: 2000)) ?? []
-            let saved = TaskTreeGraph.project(cached.map { TaskTreeNode($0) }, root: root, collapsed: current.collapsed, upstream: current.upstream)
+            let pending = (try? await store.reader.writes(connectionId: connection.id, workspaceId: w.id)) ?? []
+            let savedNodes = cached.map { TaskTreeNode($0, stateOverride: TaskRow(task: $0, writes: pending).state) }
+            let saved = await Task.detached { TaskTreeGraph.project(savedNodes, root: root, collapsed: current.collapsed, upstream: current.upstream) }.value
             guard loadRevision == revision else { return }
             graph = saved
             guard model.canRead else {
@@ -560,7 +622,13 @@ struct TaskTreeNapletBody: View {
             do {
                 let result = try await TaskTreeService(sync: sync).load(connection, w, root: root, upstream: current.upstream)
                 // Projection runs here, off the main actor's layout work for the rest of the board.
-                let projected = await Task.detached { TaskTreeGraph.project(result.tasks, root: root, collapsed: current.collapsed, upstream: current.upstream) }.value
+                let records = (try? await store.reader.tasks(workspaceId: w.id, includeArchived: true, limit: 2000)) ?? []
+                let byId = Dictionary(uniqueKeysWithValues: records.map { ($0.id, $0) })
+                let pending = (try? await store.reader.writes(connectionId: connection.id, workspaceId: w.id)) ?? []
+                let nodes = result.tasks.map { node in
+                    byId[node.id].map { TaskTreeNode($0, channelTitle: node.channelTitle, stateOverride: TaskRow(task: $0, writes: pending).state) } ?? node
+                }
+                let projected = await Task.detached { TaskTreeGraph.project(nodes, root: root, collapsed: current.collapsed, upstream: current.upstream) }.value
                 guard loadRevision == revision else { return }
                 graph = projected
                 note = result.unavailable ? "Some related tasks are not available to you." : (result.partial ? "Tree partially loaded." : nil)
@@ -580,6 +648,7 @@ struct TaskTreeNapletBody: View {
 
     /// Managers save the view on the canvas (everyone sees it); others keep it on this device, as on the web.
     private func save(_ next: TaskTreeView) async {
+        zoomSave?.cancel(); zoomSave = nil
         view = next
         guard canManage else { return }
         let result = await model.editCanvas { editor, c, w in try await editor.saveTaskTreeView(c, w, canvasId: canvasId, naplet: naplet, view: next) }

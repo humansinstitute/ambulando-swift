@@ -35,6 +35,18 @@ public enum TaskState: String, Sendable, CaseIterable, Codable {
         }
     }
 
+    /// Canonical sol TASK_STATUS_COLORS. Labels use theme foreground; hue is a non-text cue.
+    public var statusRGB: UInt32 {
+        switch self {
+        case .new, .backlog: 0x9CA3AF
+        case .ready: 0xF87171
+        case .inProgress: 0xFB923C
+        case .blocked: 0xC026D3
+        case .review: 0x34D399
+        case .done, .archive, .archived: 0x60A5FA
+        }
+    }
+
     /// Board columns, in the web board's order. Archived tasks are not shown on the board.
     public static let board: [TaskState] = [.new, .ready, .inProgress, .review, .blocked, .done]
     public var isTerminal: Bool { [.done, .archive, .archived].contains(self) }

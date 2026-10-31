@@ -1137,7 +1137,7 @@ struct NapletCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(tasks.prefix(12)) { task in
                     HStack(spacing: 6) {
-                        Image(systemName: TaskState(rawValue: task.state)?.isTerminal == true ? "checkmark.circle.fill" : "circle").foregroundStyle(Amb.mutedForeground)
+                        TaskStatusBadge(state: task.state)
                         Text(task.title).font(.system(size: 13)).lineLimit(1)
                     }
                 }

@@ -72,6 +72,12 @@ final class CanvasNapletsUITests: XCTestCase {
         XCTAssertTrue(app.buttons["naplet.focus.done"].waitForExistence(timeout: 10))
         let root = app.buttons["tree.node.Ship build 7 to TestFlight-free phone"].firstMatch
         XCTAssertTrue(root.waitForExistence(timeout: 15))
+        let initialWidth = root.frame.width
+        app.buttons["Zoom tree out"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Tree zoom 80 percent"].waitForExistence(timeout: 5))
+        XCTAssertEqual(root.frame.width, initialWidth * 0.8, accuracy: 3, "tree scales inside its window")
+        app.buttons["Reset tree zoom"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Tree zoom 100 percent"].waitForExistence(timeout: 5))
         app.buttons["tree.child.Ship build 7 to TestFlight-free phone"].firstMatch.tap()
         let entry = app.textFields["tree.entry"].firstMatch
         XCTAssertTrue(entry.waitForExistence(timeout: 10))
