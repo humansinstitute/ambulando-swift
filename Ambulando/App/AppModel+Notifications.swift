@@ -103,3 +103,15 @@ extension AppModel {
         do { return .success(try await sync.setNotificationInboxRule(connection, workspace, category: category, on: on, known: known)) } catch { return .failure(error) }
     }
 }
+
+extension AppModel {
+    func loadChannelNotificationPreferences() async throws -> ChannelNotificationPreferences {
+        guard let sync, let connection, let workspace = selectedWorkspace else { throw TowerError.unsafePath }
+        return try await sync.loadChannelNotificationPreferences(connection, workspace)
+    }
+
+    func setChannelNotifications(_ channel: ChannelRecord, mentionsOnly: Bool, known: ChannelNotificationPreferences) async throws -> ChannelNotificationPreferences {
+        guard let sync, let connection, let workspace = selectedWorkspace, workspace.id == channel.workspaceId else { throw TowerError.unsafePath }
+        return try await sync.setChannelNotificationPreference(connection, workspace, channel: channel, mentionsOnly: mentionsOnly, known: known)
+    }
+}

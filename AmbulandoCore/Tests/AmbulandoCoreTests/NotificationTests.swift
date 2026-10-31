@@ -18,6 +18,8 @@ final class FakeNotificationTower: @unchecked Sendable {
     var rulesRevision = 1
     /// Categories this app's view hides (an `off` rule): omitted from items, counts and changes.
     var hiddenCategories: Set<String> = []
+    private var channelPreferences: [String: [String: Any]] = [:]
+    private(set) var channelPreferenceBodies: [[String: Any]] = []
     private var rules: [String: [String: Any]] = [:]      // exact key -> rule with row_version
     private(set) var ruleBodies: [[String: Any]] = []
     var conflictNextRulesPut = false
@@ -111,6 +113,13 @@ final class FakeNotificationTower: @unchecked Sendable {
     var recordedRequests: [String] { lock.withLock { requests } }
     var recordedPatches: [[String: Any]] { lock.withLock { patchBodies } }
 
+    private func channelVisible(_ item: [String: Any]) -> Bool {
+        let target = (item["action"] as? [String: Any])?["target"] as? [String: Any] ?? [:]
+        let channel = target["channel_id"] as? String ?? ""
+        let category = item["category"] as? String ?? ""
+        let source = (item["source"] as? [String: Any])?["app_id"] as? String
+        return source != "flightdeck.core" || category != "chat_thread" || channelPreferences[channel]?["mode"] as? String != "mentions_only"
+    }
     private func isRemoved(_ item: [String: Any]) -> Bool { false }
 
     func handler() -> StubTransport.Handler {
@@ -124,9 +133,24 @@ final class FakeNotificationTower: @unchecked Sendable {
                 requests.append("\(request.httpMethod ?? "GET") \(url.path.dropFirst(base.count))?\(url.query ?? "")")
                 if let status { return (status, ["error": status == 410 ? "reset_required" : "x"]) }
                 let tail = String(url.path.dropFirst(base.count))
+                if tail == "/channel-preferences", request.httpMethod == "GET" {
+                    return (200, ["channel_preferences": Array(channelPreferences.values), "rules_revision": rulesRevision])
+                }
+                if tail.hasPrefix("/channel-preferences/"), request.httpMethod == "PUT" {
+                    let id = String(tail.dropFirst("/channel-preferences/".count))
+                    let body = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:]
+                    channelPreferenceBodies.append(body)
+                    let current = channelPreferences[id]?["row_version"] as? Int ?? 0
+                    guard body["expected_row_version"] as? Int == current else {
+                        return (409, ["code": "channel_preference_conflict", "channel_preferences": Array(channelPreferences.values), "rules_revision": rulesRevision])
+                    }
+                    channelPreferences[id] = ["channel_id": id, "mode": body["mode"] ?? "all", "row_version": current + 1]
+                    rulesRevision += 1
+                    return (200, ["channel_preferences": Array(channelPreferences.values), "rules_revision": rulesRevision])
+                }
                 if tail == "/items", request.httpMethod == "GET" {
                     let live = items.values.filter { item in
-                        if hiddenCategories.contains((item["category"] as? String) ?? "") { return false }
+                        if !channelVisible(item) || hiddenCategories.contains((item["category"] as? String) ?? "") { return false }
                         let s = item["state"] as! [String: Any]
                         switch q("view") ?? "inbox" {
                         case "archived": return s["archived"] as? Bool == true && s["dismissed"] as? Bool != true
@@ -157,13 +181,13 @@ final class FakeNotificationTower: @unchecked Sendable {
                         return (410, ["code": "reset_required", "reason": "rules_changed", "rules_revision": rulesRevision])
                     }
                     let limit = min(Int(q("limit") ?? "200") ?? 200, changeLimit)
-                    let pending = log.filter { $0.seq > after && (hiddenCategories.isEmpty || !hiddenCategories.contains(($0.change["category"] as? String) ?? "")) }
+                    let pending = log.filter { $0.seq > after && channelVisible($0.change) && (hiddenCategories.isEmpty || !hiddenCategories.contains(($0.change["category"] as? String) ?? "")) }
                     let page = Array(pending.prefix(limit))
                     return (200, ["changes": page.map(\.change), "through_seq": pending.count > page.count ? (page.last?.seq ?? after) : seq, "head_seq": seq, "has_more": pending.count > page.count, "rules_revision": rulesRevision])
                 }
                 if tail == "/counts" {
                     let unread = items.values.filter { item in
-                        if hiddenCategories.contains((item["category"] as? String) ?? "") { return false }
+                        if !channelVisible(item) || hiddenCategories.contains((item["category"] as? String) ?? "") { return false }
                         let s = item["state"] as! [String: Any]
                         return s["read"] as? Bool != true && s["dismissed"] as? Bool != true && s["archived"] as? Bool != true
                     }.count
@@ -1165,5 +1189,67 @@ final class NotificationTapTests: XCTestCase {
         let id = h.tower.put()
         do { _ = try await lookup(h, id); XCTFail("signed while locked") } catch {}
         XCTAssertFalse(h.tower.requests.contains { $0.contains("/items/\(id)") })
+    }
+}
+
+
+final class ChannelNotificationPreferenceTests: XCTestCase {
+    func testSavedFixtureChoiceSurvivesRestartWithItsCASVersion() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("notifications.json")
+        let tower = SampleNotificationTower(workspaceId: Fixtures.workspaceId, file: file)
+        let path = "https://tower.example/api/v4/flightdeck-pg/workspaces/\(Fixtures.workspaceId)/notifications/channel-preferences"
+        var request = URLRequest(url: URL(string: path + "/" + Fixtures.channel1)!)
+        request.httpMethod = "PUT"
+        request.httpBody = try rawJSON(["mode": "mentions_only", "expected_row_version": 0])
+        XCTAssertEqual(try tower.handle(request)?.0, 200)
+        let restarted = SampleNotificationTower(workspaceId: Fixtures.workspaceId, file: file)
+        request = URLRequest(url: URL(string: path)!)
+        let reply = try XCTUnwrap(try restarted.handle(request)?.1 as? [String: Any])
+        let loaded = try ChannelNotificationPreferences(json: reply, workspaceId: Fixtures.workspaceId)
+        XCTAssertEqual(loaded.entry(Fixtures.channel1)?.mentionsOnly, true)
+        XCTAssertEqual(loaded.entry(Fixtures.channel1)?.rowVersion, 1)
+        XCTAssertEqual(loaded.rulesRevision, 2)
+    }
+
+    func testMuteRelistsOldOrdinaryEntriesButPreservesMentionsAndOtherChannelsAndUnmute() async throws {
+        let h = try await NotificationHarness.make()
+        let channel = ChannelRecord(workspaceId: h.workspace.id, id: Fixtures.channel1, scopeId: Fixtures.scopeA, name: "research", updatedAt: "")
+        h.tower.put(title: "ordinary", category: "chat_thread")
+        h.tower.put(title: "direct mention", category: "mention")
+        h.tower.put(title: "other channel", category: "chat_thread", target: ["kind": "thread", "channel_id": FakeNotificationTower.uuid(), "thread_id": FakeNotificationTower.uuid()])
+        try await h.run()
+        let before = try await h.unread(); XCTAssertEqual(before, 3)
+        let known = try await h.sync.loadChannelNotificationPreferences(h.connection, h.workspace)
+        XCTAssertNil(known.entry(channel.id))
+        let muted = try await h.sync.setChannelNotificationPreference(h.connection, h.workspace, channel: channel, mentionsOnly: true, known: known)
+        XCTAssertEqual(muted.entry(channel.id)?.mentionsOnly, true)
+        let mutedCount = try await h.eventually { try await h.unread() == 2 }; XCTAssertTrue(mutedCount)
+        let visible = try await h.items().map(\.title)
+        XCTAssertEqual(Set(visible), ["direct mention", "other channel"])
+        let reloaded = try await h.sync.loadChannelNotificationPreferences(h.connection, h.workspace)
+        XCTAssertEqual(reloaded, muted, "new device/open reads the saved Tower choice")
+        do {
+            _ = try await h.sync.setChannelNotificationPreference(h.connection, h.workspace, channel: channel, mentionsOnly: false, known: known)
+            XCTFail("stale choice must not overwrite another device")
+        } catch ChannelNotificationPreferenceError.changedElsewhere(let current) { XCTAssertEqual(current, muted) }
+        _ = try await h.sync.setChannelNotificationPreference(h.connection, h.workspace, channel: channel, mentionsOnly: false, known: reloaded)
+        let restoredCount = try await h.eventually { try await h.unread() == 3 }; XCTAssertTrue(restoredCount)
+        XCTAssertTrue(h.tower.recordedPatches.isEmpty, "muting never marks a notification or content read")
+        await h.chat.engine.waitUntilIdle()
+    }
+
+    func testRejectsOtherWorkspaceAndDMBeforeWrite() async throws {
+        let h = try await NotificationHarness.make()
+        for channel in [ChannelRecord(workspaceId: FakeNotificationTower.uuid(), id: Fixtures.channel1, scopeId: Fixtures.scopeA, name: "other", updatedAt: ""),
+                        ChannelRecord(workspaceId: h.workspace.id, id: Fixtures.channel1, scopeId: Fixtures.scopeA, name: "DM", kind: "dm", updatedAt: "")] {
+            do {
+                _ = try await h.sync.setChannelNotificationPreference(h.connection, h.workspace, channel: channel, mentionsOnly: true, known: .init())
+                XCTFail("cross-boundary and DM writes refused")
+            } catch TowerError.unsafePath {}
+        }
+        XCTAssertTrue(h.tower.channelPreferenceBodies.isEmpty)
     }
 }

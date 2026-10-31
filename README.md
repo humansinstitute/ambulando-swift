@@ -11,6 +11,16 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Quiet channels except mentions (iPhone/iPad build 68, Mac build 59)
+
+Open a channel’s sidebar **••• → Channel settings → Your notifications → Mute except mentions**.
+This personal choice is available to readers and channel managers alike and is saved by Tower across devices.
+A supporting Tower suppresses ordinary channel/thread push alerts and bell entries, including existing ordinary
+unread notifications. Direct person mentions remain eligible under their existing notification settings; DMs,
+task assignments and other apps retain their independent settings. Messages and unread channel activity are unchanged.
+Turn the switch off to restore ordinary notifications. A simultaneous choice on another device reloads for review;
+an older Tower explains that the control is unavailable. See [channel notifications](docs/channel-notifications.md).
+
 ## Preserved document drafts and merge review (iPhone/iPad build 64, Mac build 55)
 
 A newer shared save leaves the local document open and offers **Review changes** with version labels and a diff.

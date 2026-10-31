@@ -104,3 +104,68 @@ extension TowerAPI {
         }
     }
 }
+
+/// A personal channel choice shared by every Ambulando device. Missing rows mean normal notifications.
+public struct ChannelNotificationPreferences: Sendable, Equatable {
+    public struct Entry: Sendable, Equatable {
+        public let channelId: String
+        public let mentionsOnly: Bool
+        public let rowVersion: Int
+    }
+    public var entries: [Entry]
+    public let rulesRevision: Int?
+    public init(entries: [Entry] = [], rulesRevision: Int? = nil) { self.entries = entries; self.rulesRevision = rulesRevision }
+    public func entry(_ channelId: String) -> Entry? { entries.first { $0.channelId == channelId.lowercased() } }
+
+    init(json: [String: Any], workspaceId: String) throws {
+        if let identity = json["identity"] as? [String: Any], let returned = identity["workspace_id"] as? String,
+           returned.lowercased() != workspaceId.lowercased() { throw TowerError.malformed("channel notification workspace") }
+        guard let rows = json["channel_preferences"] as? [[String: Any]] else { throw TowerError.malformed("channel notification preferences") }
+        entries = try rows.map { row in
+            guard let id = lowerUUID(row["channel_id"] as? String), let mode = row["mode"] as? String,
+                  ["all", "mentions_only"].contains(mode), let version = flexibleInt(row["row_version"]), version > 0 else {
+                throw TowerError.malformed("channel notification preference")
+            }
+            return Entry(channelId: id, mentionsOnly: mode == "mentions_only", rowVersion: version)
+        }
+        rulesRevision = flexibleInt(json["rules_revision"])
+    }
+}
+
+public enum ChannelNotificationPreferenceError: LocalizedError, Sendable {
+    case unsupported
+    case changedElsewhere(ChannelNotificationPreferences)
+    public var errorDescription: String? {
+        switch self {
+        case .unsupported: "This Tower does not support channel notification choices yet."
+        case .changedElsewhere: "This choice changed on another device. The current choice is shown; review it and try again."
+        }
+    }
+}
+
+extension TowerAPI {
+    public func channelNotificationPreferences(workspaceId: String, appNpub: String) async throws -> ChannelNotificationPreferences {
+        try await channelNotificationRequest(workspaceId: workspaceId, appNpub: appNpub)
+    }
+
+    public func setChannelNotificationPreference(workspaceId: String, appNpub: String, channelId: String, mentionsOnly: Bool,
+                                                  expectedRowVersion: Int) async throws -> ChannelNotificationPreferences {
+        guard lowerUUID(channelId) != nil, expectedRowVersion >= 0 else { throw TowerError.unsafePath }
+        let body = try rawJSON(["mode": mentionsOnly ? "mentions_only" : "all", "expected_row_version": expectedRowVersion])
+        return try await channelNotificationRequest(workspaceId: workspaceId, appNpub: appNpub, channelId: channelId, body: body)
+    }
+
+    private func channelNotificationRequest(workspaceId: String, appNpub: String, channelId: String? = nil, body: Data? = nil) async throws -> ChannelNotificationPreferences {
+        let path = try Self.notificationsPath(workspaceId) + "/channel-preferences" + (channelId.map { "/" + $0.lowercased() } ?? "")
+        let (status, data) = try await client.exchange(method: body == nil ? "GET" : "PUT", path: path, appNpub: appNpub, jsonBody: body)
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        let code = json["code"] as? String ?? json["error"] as? String
+        switch status {
+        case 200..<300: return try ChannelNotificationPreferences(json: json, workspaceId: workspaceId)
+        case 404, 501: throw ChannelNotificationPreferenceError.unsupported
+        case 409 where code == "channel_preference_conflict":
+            throw ChannelNotificationPreferenceError.changedElsewhere(try ChannelNotificationPreferences(json: json, workspaceId: workspaceId))
+        default: throw TowerError.http(status: status, code: code, stage: "channel notification preference")
+        }
+    }
+}

@@ -290,6 +290,9 @@ struct ChannelSettingsSheet: View {
                 let participants = SidebarNavigation.participants(channel)
                 if !participants.isEmpty { LabeledContent("Participants", value: "\(participants.count)") }
             }
+            if !SidebarNavigation.isDirectMessageChannel(channel) {
+                ChannelNotificationSettingsSection(channel: channel)
+            }
             if canManage {
                 #if os(macOS)
                 macManageSections(channel, nav, siblings: siblings, index: index)
@@ -593,6 +596,81 @@ struct ScopeEditView: View {
             switch await model.manage({ m, c, w in try await m.archiveScope(c, w, scopeId: scope.id) }) {
             case .success: dismiss()
             case .failure(let error): phase = .failed(error)
+            }
+        }
+    }
+}
+
+
+/// A personal preference, available to readers as well as channel managers. Tower owns the saved choice.
+private struct ChannelNotificationSettingsSection: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
+    let channel: ChannelRecord
+    @State private var preferences: ChannelNotificationPreferences?
+    @State private var busy = false
+    @State private var error: String?
+    @State private var unsupported = false
+    private var contextKey: String { (model.connection?.id ?? "") + ":" + (model.selectedWorkspace?.id ?? "") + ":" + channel.workspaceId + ":" + channel.id }
+
+    var body: some View {
+        Section {
+            if preferences != nil {
+                Toggle("Mute except mentions", isOn: Binding(
+                    get: { preferences?.entry(channel.id)?.mentionsOnly ?? false },
+                    set: { save($0) }
+                ))
+                .disabled(busy || !model.isUnlocked || unsupported)
+                .accessibilityIdentifier("channelSettings.mentionsOnly")
+            } else if busy {
+                ProgressView("Loading notification choice…")
+            }
+            if let error {
+                Text(error).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+                    .accessibilityIdentifier("channelSettings.notificationError")
+                if !unsupported { Button("Retry notification choice") { Task { await load() } }.disabled(busy) }
+            }
+            if !model.isUnlocked {
+                Text("Unlock to change your notification choice.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+            }
+        } header: { Text("Your notifications") } footer: {
+            Text("Quiet this channel’s push alerts and notification bell entries, except direct mentions of you. Saved across your devices. Messages and unread channel activity stay unchanged.")
+        }
+        .task(id: contextKey) { preferences = nil; busy = false; unsupported = false; await load() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active && !busy { Task { await load() } } }
+    }
+
+    @MainActor private func load() async {
+        guard !busy, model.selectedWorkspace?.id == channel.workspaceId else { return }
+        let key = contextKey
+        busy = true; error = nil
+        defer { if key == contextKey { busy = false } }
+        do {
+            let result = try await model.loadChannelNotificationPreferences()
+            guard key == contextKey else { return }
+            preferences = result; unsupported = false
+        } catch {
+            guard key == contextKey else { return }
+            self.error = error.localizedDescription
+            if case ChannelNotificationPreferenceError.unsupported = error { unsupported = true }
+        }
+    }
+
+    private func save(_ mentionsOnly: Bool) {
+        guard !busy, let known = preferences else { return }
+        let key = contextKey
+        busy = true; error = nil
+        Task { @MainActor in
+            defer { if key == contextKey { busy = false } }
+            do {
+                let updated = try await model.setChannelNotifications(channel, mentionsOnly: mentionsOnly, known: known)
+                guard key == contextKey else { return }
+                preferences = updated
+            } catch {
+                guard key == contextKey else { return }
+                self.error = error.localizedDescription
+                if case ChannelNotificationPreferenceError.changedElsewhere(let current) = error { preferences = current }
+                if case ChannelNotificationPreferenceError.unsupported = error { unsupported = true }
             }
         }
     }

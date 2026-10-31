@@ -13,6 +13,7 @@ public final class SampleNotificationTower: @unchecked Sendable {
     private var seq = 0
     private var clock = 0
     private var offered = false
+    private var channelPreferences: [String: [String: Any]] = [:]
 
     public init(workspaceId: String, file: URL? = nil) {
         self.workspaceId = workspaceId.lowercased()
@@ -23,6 +24,8 @@ public final class SampleNotificationTower: @unchecked Sendable {
             seq = (saved["seq"] as? Int) ?? 0
             clock = (saved["clock"] as? Int) ?? 0
             offered = (saved["seeded"] as? Bool) ?? false
+            channelPreferences = (saved["channel_preferences"] as? [String: [String: Any]]) ?? [:]
+            rulesRevision = (saved["rules_revision"] as? Int) ?? 1
         }
     }
 
@@ -31,7 +34,7 @@ public final class SampleNotificationTower: @unchecked Sendable {
 
     private func persist() {
         guard let file else { return }
-        let state: [String: Any] = ["items": items, "changes": changes, "seq": seq, "clock": clock, "seeded": offered]
+        let state: [String: Any] = ["items": items, "changes": changes, "seq": seq, "clock": clock, "seeded": offered, "channel_preferences": channelPreferences, "rules_revision": rulesRevision]
         if let data = try? JSONSerialization.data(withJSONObject: state) { try? data.write(to: file, options: .atomic) }
     }
 
@@ -145,6 +148,8 @@ public final class SampleNotificationTower: @unchecked Sendable {
             let viewer = q("client_app_id") ?? "*"
             func visible(_ item: [String: Any]) -> Bool {
                 let app = (item["source"] as? [String: Any])?["app_id"] as? String ?? "", category = item["category"] as? String ?? ""
+                let channel = (item["subject"] as? [String: Any])?["channel_id"] as? String ?? ""
+                if app == "flightdeck.core", category == "chat_thread", channelPreferences[channel]?["mode"] as? String == "mentions_only" { return false }
                 let matching = rules.values.filter { $0["source_app_id"] as? String == app && $0["category"] as? String == category && $0["channel"] as? String == "inbox"
                     && $0["mode"] as? String != "default" }
                 if let own = matching.first(where: { $0["client_app_id"] as? String == viewer }) { return own["mode"] as? String != "off" }
@@ -152,6 +157,18 @@ public final class SampleNotificationTower: @unchecked Sendable {
                 return true
             }
             switch (method, tail) {
+            case ("GET", "/channel-preferences"):
+                return (200, ["channel_preferences": Array(channelPreferences.values), "rules_revision": rulesRevision])
+            case ("PUT", _) where tail.hasPrefix("/channel-preferences/"):
+                let id = String(tail.dropFirst("/channel-preferences/".count))
+                let current = channelPreferences[id]?["row_version"] as? Int ?? 0
+                guard body["expected_row_version"] as? Int == current else {
+                    return (409, ["code": "channel_preference_conflict", "channel_preferences": Array(channelPreferences.values), "rules_revision": rulesRevision])
+                }
+                guard let mode = body["mode"] as? String, ["all", "mentions_only"].contains(mode) else { return (400, ["code": "invalid_mode"]) }
+                channelPreferences[id] = ["channel_id": id, "mode": mode, "row_version": current + 1]
+                rulesRevision += 1
+                return (200, ["channel_preferences": Array(channelPreferences.values), "rules_revision": rulesRevision])
             case ("GET", "/items"):
                 let wanted = q("view") ?? "inbox"
                 let live = items.values.filter { item in

@@ -41,6 +41,26 @@ final class ManagementUITests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
     }
 
+    func testPersonalChannelMuteSavesWithoutManageAccessAndReloads() {
+        let app = launch()
+        app.openSidebar()
+        app.buttons["sidebar.channelSettings.deploys"].tap()
+        let toggle = app.switches["channelSettings.mentionsOnly"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10), "personal choice is available without Manage access")
+        XCTAssertEqual(toggle.value as? String, "0")
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        let on = NSPredicate(format: "value == '1'")
+        expectation(for: on, evaluatedWith: toggle); waitForExpectations(timeout: 15)
+        capture(app, "channel-notifications-mentions-only")
+        app.buttons["Close"].firstMatch.tap()
+        app.buttons["sidebar.channelSettings.deploys"].tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        expectation(for: on, evaluatedWith: toggle); waitForExpectations(timeout: 15)
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        let off = NSPredicate(format: "value == '0'")
+        expectation(for: off, evaluatedWith: toggle); waitForExpectations(timeout: 15)
+    }
+
     func testCreateWithExplicitRecipientAndOpenChannelAccessFromSettings() {
         let app = launch(["-AmbulandoFixtureAdmin"])
         app.openSidebar()

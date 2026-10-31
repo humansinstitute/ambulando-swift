@@ -298,3 +298,23 @@ public enum NotificationPreferenceError: LocalizedError, Sendable {
         }
     }
 }
+
+extension WorkspaceSync {
+    public func loadChannelNotificationPreferences(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord) async throws -> ChannelNotificationPreferences {
+        try await identity.requireReader(npub: connection.signerNpub)
+        return try await api(origin: try TowerOrigin(connection.origin)).channelNotificationPreferences(workspaceId: workspace.id, appNpub: workspace.appNpub)
+    }
+
+    public func setChannelNotificationPreference(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, channel: ChannelRecord,
+                                                 mentionsOnly: Bool, known: ChannelNotificationPreferences) async throws -> ChannelNotificationPreferences {
+        guard channel.workspaceId == workspace.id, !SidebarNavigation.isDirectMessageChannel(channel) else { throw TowerError.unsafePath }
+        try await identity.requireSigner(npub: connection.signerNpub)
+        let updated = try await api(origin: try TowerOrigin(connection.origin)).setChannelNotificationPreference(
+            workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channel.id, mentionsOnly: mentionsOnly,
+            expectedRowVersion: known.entry(channel.id)?.rowVersion ?? 0)
+        // Re-list the server-filtered inbox, including old ordinary unread items. No message/read-state mutation occurs.
+        try await store.writer.resetNotificationCursor(connectionId: connection.id, workspaceId: workspace.id)
+        await refreshNotifications(connection, workspace, priority: .visible, force: true)
+        return updated
+    }
+}
