@@ -635,3 +635,23 @@ appearances; there are no appearance-specific or alternate iOS icons. Xcode gene
 The separate Mac icon sizes (`AppIcon-mac-*.png`) retain the earlier white-backed artwork inside the standard
 macOS rounded tile. Do not regenerate them from the iOS master: `scripts/mac-icon.swift` is a separate Mac
 artwork workflow and must receive the intended Mac source explicitly.
+
+
+## HTTPS agent setup
+
+Agents → Connect agents uses authorized typed Autopilot connections stored in the
+selected workspace. Choose an installation when several exist; for a first
+connection enter its root HTTPS address in the sheet. The client verifies the
+registered workspace/app and fresh owner health/agent reads before Add selected
+agents saves public connection/agent records through existing typed commands.
+Stored installation identities are pinned; retries reuse Tower's deduplication.
+No Tower environment change or public Autopilot advertisement is required.
+Optional descriptor hints are used only without a stored or explicit target.
+
+AP subscription onboarding and workspace-key registration do not automatically
+create the reverse typed Autopilot connection. An address is needed once when
+that record is absent. Legacy launcher URLs are not proof of installation
+identity, and setup does not create apps or change delegation. Owner/delegation,
+resource and instructor permissions still apply. Selected FIPS remains
+fail-closed; native FIPS is still unsupported. iPhone and Mac share this sheet;
+Android is deferred. Local fixtures/builds do not establish live acceptance.

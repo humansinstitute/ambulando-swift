@@ -20,6 +20,7 @@ final class NStackAgentSetupTests: XCTestCase {
             XCTAssertTrue(SignatureVerifier.verify(auth))
             XCTAssertEqual(auth.tags.first, ["u", request.url!.absoluteString])
             if path.hasSuffix("/app-registration") { return (200, ["identity": ["workspace_id": Fixtures.workspaceId, "workspace_owner_npub": TestKeys.npub, "app_npub": Fixtures.appNpub], "registration": ["installed": true, "enabled": true, "app_npub": Fixtures.appNpub]]) }
+            if path.hasSuffix("/autopilot-connections") { return (200, ["identity": ["workspace_id": Fixtures.workspaceId, "workspace_owner_npub": TestKeys.npub, "app_npub": Fixtures.appNpub], "autopilot_connections": [["id": "stored", "workspace_id": Fixtures.workspaceId, "installation_id": installation, "https_endpoint": "https://agents.example", "metadata": ["installation_npub": TestKeys.npub]]]]) }
             XCTAssertEqual(request.url?.host, "agents.example")
             if path.hasSuffix("/health") { return (200, ["ok": true, "api_version": 1, "installation_id": installation, "installation_npub": TestKeys.npub]) }
             return (200, ["installation_id": installation, "agents": [["agent_id": "fixture", "bot_npub": TestKeys.npub, "name": "Fixture Agent", "description": "Local fixture", "can_instruct": true, "paths": [:]]]])
@@ -33,6 +34,7 @@ final class NStackAgentSetupTests: XCTestCase {
         let wrongConnection = ConnectionRecord(origin: try TowerOrigin("https://other.example"), signerNpub: TestKeys.npub, towerNpub: nil)
         do { try await sync.installNStackAgents(setup, selected: ["fixture"], connection: wrongConnection, workspace: workspace); XCTFail("cross-Tower install") } catch { }
         XCTAssertEqual(transport.recorded.count, 4)
+        XCTAssertFalse(transport.recorded.contains { $0.url!.path == "/.well-known/nstack.json" })
         XCTAssertTrue(transport.recorded.allSatisfy { $0.httpMethod == "GET" })
         XCTAssertThrowsError(try TowerOrigin("http://anything.fips:1234"))
     }
@@ -54,15 +56,56 @@ final class NStackAgentSetupTests: XCTestCase {
                     }
                     return (200, descriptor)
                 }
+                if request.url!.path.hasSuffix("/autopilot-connections") {
+                    return (200, ["identity": ["workspace_id": Fixtures.workspaceId, "workspace_owner_npub": TestKeys.npub, "app_npub": Fixtures.appNpub], "autopilot_connections": []])
+                }
                 XCTAssertTrue(request.url!.path.hasSuffix("/app-registration"))
                 return (200, ["identity": ["workspace_id": mode == "wrong-workspace" ? UUID().uuidString : Fixtures.workspaceId,
-                    "workspace_owner_npub": mode == "wrong-owner" ? Fixtures.appNpub : TestKeys.npub,
-                    "app_npub": mode == "wrong-app" ? TestKeys.npub : Fixtures.appNpub],
+                    "workspace_owner_npub": mode == "wrong-owner" ? "different-owner" : TestKeys.npub,
+                    "app_npub": mode == "wrong-app" ? "different-app" : Fixtures.appNpub],
                     "registration": ["installed": mode != "missing", "enabled": true, "app_npub": Fixtures.appNpub]])
             }
             let sync = WorkspaceSync(store: store, engine: SyncEngine(), identity: identity, transport: transport)
             do { _ = try await sync.discoverNStackAgents(connection, workspace); XCTFail(mode) } catch { }
-            XCTAssertEqual(transport.recorded.count, 2, mode)
+            XCTAssertEqual(transport.recorded.count, mode == "ambiguous-service" ? 3 : 1, mode)
+        }
+    }
+
+    func testStoredAndFirstAddressDiscoveryWithoutAdvertisementAndRefusals() async throws {
+        let identity = try await makeIdentity()
+        let store = try LocalStore(directory: temporaryDirectory())
+        let connection = ConnectionRecord(origin: try TowerOrigin("https://tower.example"), signerNpub: TestKeys.npub, towerNpub: nil)
+        let workspace = WorkspaceRecord(id: Fixtures.workspaceId, appNpub: Fixtures.appNpub, label: "Studio", slug: nil,
+            towerBaseURL: "https://tower.example", role: "owner", ownerNpub: TestKeys.npub, raw: Data())
+        let installation = "autopilot_" + SHA256Hex.of(TestKeys.pubkeyHex).prefix(32)
+        for mode in ["first-address", "stored", "ambiguous", "denied", "unavailable", "identity-mismatch", "cross-workspace", "no-address"] {
+            let transport = StubTransport { request in
+                let path = request.url!.path
+                if path.hasSuffix("/app-registration") { return (200, ["identity": ["workspace_id": workspace.id, "workspace_owner_npub": TestKeys.npub, "app_npub": workspace.appNpub], "registration": ["installed": true, "enabled": true, "app_npub": workspace.appNpub]]) }
+                if path.hasSuffix("/autopilot-connections") {
+                    if mode == "denied" { return (403, [:]) }
+                    let row: [String: Any] = ["id": "stored", "workspace_id": mode == "cross-workspace" ? UUID().uuidString : workspace.id,
+                        "installation_id": mode == "identity-mismatch" ? "autopilot_wrong" : installation, "https_endpoint": "https://agents.example", "metadata": ["installation_npub": TestKeys.npub]]
+                    return (200, ["identity": ["workspace_id": workspace.id, "workspace_owner_npub": TestKeys.npub, "app_npub": workspace.appNpub], "autopilot_connections": ["first-address", "no-address"].contains(mode) ? [] : mode == "ambiguous" ? [row, row] : [row]])
+                }
+                if path == "/.well-known/nstack.json" {
+                    XCTAssertEqual(mode, "no-address")
+                    return (200, Fixtures.descriptor(origin: "https://tower.example"))
+                }
+                XCTAssertEqual(request.url!.host, "agents.example")
+                if mode == "unavailable" { return (503, [:]) }
+                if path.hasSuffix("/health") { return (200, ["ok": true, "api_version": 1, "installation_id": installation, "installation_npub": TestKeys.npub]) }
+                return (200, ["installation_id": installation, "agents": []])
+            }
+            let sync = WorkspaceSync(store: store, engine: SyncEngine(), identity: identity, transport: transport)
+            do {
+                let setup = try await sync.discoverNStackAgents(connection, workspace, address: mode == "first-address" ? "https://agents.example" : "")
+                XCTAssertTrue(["first-address", "stored"].contains(mode), mode)
+                XCTAssertEqual(setup.installationId, installation)
+            } catch { XCTAssertFalse(["first-address", "stored"].contains(mode), "\(mode): \(error)") }
+            XCTAssertTrue(transport.recorded.allSatisfy { $0.httpMethod == "GET" })
+            if mode != "no-address" { XCTAssertFalse(transport.recorded.contains { $0.url!.path == "/.well-known/nstack.json" }, mode) }
+            if ["ambiguous", "denied", "cross-workspace"].contains(mode) { XCTAssertFalse(transport.recorded.contains { $0.url!.host == "agents.example" }, mode) }
         }
     }
 

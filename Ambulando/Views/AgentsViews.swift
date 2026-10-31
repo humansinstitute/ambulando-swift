@@ -140,6 +140,9 @@ struct NStackAgentSetupView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let workspace: WorkspaceRecord
+    @State private var connections: [NStackAutopilotConnection] = []
+    @State private var connectionId = ""
+    @State private var address = ""
     @State private var setup: NStackAgentSetup?
     @State private var selected: Set<String> = []
     @State private var working = false
@@ -152,17 +155,38 @@ struct NStackAgentSetupView: View {
         }
         return error.localizedDescription
     }
+    private func connectionLabel(_ record: NStackAutopilotConnection) -> String {
+        [record.display_name ?? "Autopilot", record.installation_id, record.https_endpoint ?? "No HTTPS address"].joined(separator: " · ")
+    }
+    private var connectionSection: some View {
+        Section("Autopilot connection") {
+            Picker("Installation", selection: $connectionId) {
+                Text("Use workspace connection").tag("")
+                ForEach(connections) { record in
+                    Text(connectionLabel(record)).tag(record.id)
+                }
+                Text("Enter an HTTPS address").tag("__manual__")
+            }.disabled(working)
+            TextField("Autopilot HTTPS address", text: $address)
+                .disabled(working)
+                .onChange(of: address) { _, _ in connectionId = "__manual__"; setup = nil; selected = [] }
+            Text("The address and installation identity are verified before you select agents.").font(.amb(.footnote))
+        }
+    }
     var body: some View {
         NavigationStack {
             Form {
                 Section("Selected workspace") {
                     Text(workspace.label)
                     Text("Registered app identity: " + workspace.appNpub).font(.amb(.caption)).textSelection(.enabled)
-                    Text("Discovery uses the Autopilot HTTPS service advertised by this nStack. No FIPS package is needed.").font(.amb(.footnote))
+                    Text("Use a stored workspace Autopilot connection or enter its HTTPS address for first-time setup. No Tower configuration change is needed.").font(.amb(.footnote))
                 }
+                connectionSection
                 if let error { Section { Notice(tone: .error, text: error) } }
                 if let setup {
                     Section("Available agents") {
+                        Text("Verified Autopilot: " + setup.endpoint.description).font(.amb(.caption))
+                        Text(setup.installationId).font(.amb(.caption)).textSelection(.enabled)
                         if setup.agents.isEmpty { Text("No agents are available to this identity. Ask the Autopilot owner to enable an agent and grant you access.") }
                         ForEach(setup.agents) { agent in
                             Toggle(isOn: Binding(get: { selected.contains(agent.id) }, set: { if $0 { selected.insert(agent.id) } else { selected.remove(agent.id) } })) {
@@ -181,9 +205,9 @@ struct NStackAgentSetupView: View {
                     }.disabled(working || selected.isEmpty)
                 }
                 Button(setup == nil ? "Discover available agents" : "Retry discovery") {
-                    working = true; error = nil
+                    working = true; error = nil; setup = nil; selected = []
                     Task {
-                        do { setup = try await model.discoverNStackAgents(workspace); selected = [] }
+                        do { connections = try await model.nstackAgentConnections(workspace); setup = try await model.discoverNStackAgents(workspace, connectionId: connectionId, address: address) }
                         catch { self.error = setupError(error) }
                         working = false
                     }
@@ -191,6 +215,13 @@ struct NStackAgentSetupView: View {
                 if working { ProgressView() }
             }
             .navigationTitle("Connect agents")
+            .task {
+                working = true
+                do { connections = try await model.nstackAgentConnections(workspace) }
+                catch { self.error = setupError(error) }
+                working = false
+            }
+            .onChange(of: connectionId) { _, _ in setup = nil; selected = [] }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(working) } }
         }
     }

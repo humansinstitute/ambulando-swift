@@ -65,10 +65,16 @@ extension AppModel {
         }
     }
 
-    func discoverNStackAgents(_ workspace: WorkspaceRecord) async throws -> NStackAgentSetup {
+    func nstackAgentConnections(_ workspace: WorkspaceRecord) async throws -> [NStackAutopilotConnection] {
         guard let sync, let connection, isUnlocked, workspace.id == selectedWorkspace?.id,
               workspace.appNpub == selectedWorkspace?.appNpub else { throw IdentityError.locked }
-        return try await sync.discoverNStackAgents(connection, workspace)
+        return try await sync.nstackAgentConnections(connection, workspace)
+    }
+
+    func discoverNStackAgents(_ workspace: WorkspaceRecord, connectionId: String = "", address: String = "") async throws -> NStackAgentSetup {
+        guard let sync, let connection, isUnlocked, workspace.id == selectedWorkspace?.id,
+              workspace.appNpub == selectedWorkspace?.appNpub else { throw IdentityError.locked }
+        return try await sync.discoverNStackAgents(connection, workspace, connectionId: connectionId, address: address)
     }
 
     func installNStackAgents(_ setup: NStackAgentSetup, selected: Set<String>, workspace: WorkspaceRecord) async throws {
