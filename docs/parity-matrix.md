@@ -138,3 +138,23 @@ review cancellation, remote races, backgrounding and offline failure. Concurrent
 advertised protocol and strict session acknowledgements; older servers retain exclusive-lease and takeover limits.
 See [behavior and validation](document-reconciliation.md). Build/fixture evidence does not establish installed-device
 or live-account acceptance. Android remains deferred.
+
+## nStack agent setup (iPhone/iPad 66, Mac 57)
+
+Agents → Add agents reads the selected nStack's explicit Autopilot HTTPS service,
+checks the exact typed workspace/app registration, verifies installation identity,
+and lets the user choose agents. Add selected agents over HTTPS explicitly selects
+HTTPS while preserving existing verified FIPS details. Existing Tower connection
+and agent commands deduplicate retries; normal workspace sync persists the cards
+for reconnect. No instructions or messages are sent to agents. Native still has no
+FIPS implementation and no Nostr Browser provider injection; manual nStack HTTPS
+setup is the native entrypoint. The authorized locator's app identity is shown for
+confirmation: registration has no stable product identifier proving an arbitrary
+namespace is Ambulando, so this is user-confirmed app selection, not name matching.
+
+Activation needs Tower's typed app-registration route and explicit
+`NSTACK_AUTOPILOT_PUBLIC_ORIGIN`, updated Autopilot independent owner HTTPS reads,
+and a rebuilt installed native client. Source/core fixture evidence and simulator
+builds do not establish a real Kato connection, device installation, or a live
+Autopilot restart. Preserve the exact Tower/workspace/app/signer binding on setup;
+refuse mismatched registrations or a connection switch before installing.

@@ -65,6 +65,18 @@ extension AppModel {
         }
     }
 
+    func discoverNStackAgents(_ workspace: WorkspaceRecord) async throws -> NStackAgentSetup {
+        guard let sync, let connection, isUnlocked, workspace.id == selectedWorkspace?.id,
+              workspace.appNpub == selectedWorkspace?.appNpub else { throw IdentityError.locked }
+        return try await sync.discoverNStackAgents(connection, workspace)
+    }
+
+    func installNStackAgents(_ setup: NStackAgentSetup, selected: Set<String>, workspace: WorkspaceRecord) async throws {
+        guard let sync, let connection, isUnlocked, workspace.id == selectedWorkspace?.id,
+              workspace.appNpub == selectedWorkspace?.appNpub else { throw IdentityError.locked }
+        try await sync.installNStackAgents(setup, selected: selected, connection: connection, workspace: workspace)
+    }
+
     /// Agents and the activity of the context's channels (bounded by `WorkspaceSync.agentActivityChannelLimit`).
     func openAgents(_ workspace: WorkspaceRecord, channelIds: [String], force: Bool = false) {
         withWorkspace(workspace) { sync, c in await sync.refreshAgents(c, workspace, channelIds: channelIds, force: force) }

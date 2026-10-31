@@ -2,9 +2,8 @@ import AmbulandoCore
 import SwiftUI
 
 // Agents (sol Agents section): the workspace's installed agents and what they are doing in the current context, read
-// from Tower's materialised records (`/workspace-agents`, `/agent-activities`). This app has no direct Autopilot
-// connection (HTTPS-only, no FIPS), so Autopilot-only views — session control and the pipeline viewer — are listed as
-// unavailable rather than imitated.
+// from Tower's materialised records (`/workspace-agents`, `/agent-activities`). Setup discovers agents over
+// explicitly advertised HTTPS; session control and pipeline viewer screens remain unavailable here.
 
 struct AgentsSnapshot: Sendable, Equatable {
     var agents: [WorkspaceAgentRecord] = []
@@ -19,6 +18,7 @@ struct AgentsView: View {
     let store: LocalStore
     @State private var snapshot = LiveQuery<AgentsSnapshot>(initial: AgentsSnapshot())
 
+    @State private var showingSetup = false
     private var channelIds: [String] { model.navigation.value.channels(in: model.context).map(\.id) }
 
     var body: some View {
@@ -52,7 +52,7 @@ struct AgentsView: View {
             activitySection("Not responding", stale, value, note: "These agents stopped reporting before finishing.")
             activitySection("Recently finished", Array(recent.prefix(30)), value)
             Section("Not available on \(Device.name)") {
-                Label("Pipeline runs and Autopilot sessions need a direct Autopilot connection, which this HTTPS-only app does not make.", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
+                Label("Pipeline runs and session control are not implemented in this native app. Agent setup uses advertised HTTPS.", systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                     .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     .accessibilityIdentifier("agents.pipelines.unavailable")
             }
@@ -60,6 +60,8 @@ struct AgentsView: View {
         .groupedList()
         .scrollContentBackground(.hidden)
         .navigationTitle("Agents")
+        .toolbar { ToolbarItem(placement: .primaryAction) { Button("Add agents") { showingSetup = true }.disabled(!model.isUnlocked) } }
+        .sheet(isPresented: $showingSetup) { NStackAgentSetupView(workspace: workspace) }
         .refreshable { model.openAgents(workspace, channelIds: channelIds, force: true) }
         .task(id: model.context) { start(); model.openAgents(workspace, channelIds: channelIds) }
     }
@@ -128,6 +130,68 @@ struct AgentsView: View {
             return AgentsSnapshot(agents: agentList, activity: try await activity,
                                   channelNames: Dictionary(try await channels.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a }),
                                   names: labels)
+        }
+    }
+}
+
+
+/// Shared iPhone/Mac setup; the selected workspace supplies the authoritative app identity.
+struct NStackAgentSetupView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let workspace: WorkspaceRecord
+    @State private var setup: NStackAgentSetup?
+    @State private var selected: Set<String> = []
+    @State private var working = false
+    @State private var error: String?
+    private func setupError(_ error: Error) -> String {
+        if case TowerError.http(let status, _, _) = error {
+            if status == 401 || status == 403 { return "Your identity cannot access this workspace or Autopilot. Unlock the intended identity or ask its owner for access, then retry." }
+            if status == 404 { return "A required setup route is missing. Ask the operator to activate the updated Tower and Autopilot services, then retry." }
+            if status >= 500 { return "A setup service is offline or unavailable. Ask its operator to check the advertised HTTPS service, then retry." }
+        }
+        return error.localizedDescription
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Selected workspace") {
+                    Text(workspace.label)
+                    Text("Registered app identity: " + workspace.appNpub).font(.amb(.caption)).textSelection(.enabled)
+                    Text("Discovery uses the Autopilot HTTPS service advertised by this nStack. No FIPS package is needed.").font(.amb(.footnote))
+                }
+                if let error { Section { Notice(tone: .error, text: error) } }
+                if let setup {
+                    Section("Available agents") {
+                        if setup.agents.isEmpty { Text("No agents are available to this identity. Ask the Autopilot owner to enable an agent and grant you access.") }
+                        ForEach(setup.agents) { agent in
+                            Toggle(isOn: Binding(get: { selected.contains(agent.id) }, set: { if $0 { selected.insert(agent.id) } else { selected.remove(agent.id) } })) {
+                                VStack(alignment: .leading) { Text(agent.name); Text(agent.description).font(.amb(.caption)) }
+                            }
+                        }
+                    }
+                    Text("Adding over HTTPS selects HTTPS for this installation and keeps existing verified FIPS details.").font(.amb(.footnote))
+                    Button("Add selected agents over HTTPS") {
+                        working = true; error = nil
+                        Task {
+                            do { try await model.installNStackAgents(setup, selected: selected, workspace: workspace); dismiss() }
+                            catch { self.error = setupError(error) }
+                            working = false
+                        }
+                    }.disabled(working || selected.isEmpty)
+                }
+                Button(setup == nil ? "Discover available agents" : "Retry discovery") {
+                    working = true; error = nil
+                    Task {
+                        do { setup = try await model.discoverNStackAgents(workspace); selected = [] }
+                        catch { self.error = setupError(error) }
+                        working = false
+                    }
+                }.disabled(working)
+                if working { ProgressView() }
+            }
+            .navigationTitle("Connect agents")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(working) } }
         }
     }
 }
