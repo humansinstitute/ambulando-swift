@@ -1,10 +1,11 @@
 # Personal channel notification choices
 
-Open **Channel options** in the current-context header or a pushed channel screen, then choose
-**Your notifications → Mute except mentions**. The labelled button has a minimum 44-point touch target and a
-VoiceOver label naming the channel. The sidebar ellipsis remains an alternative, also with a 44-point target.
-The action has its own row so scope/channel names stay readable on narrow screens. These shared iPhone/Mac settings
-are available to channel readers without Manage permission. Direct-message channels keep their existing notification settings. The choice is
+Select a channel and open **Deck → Inbox ••• → Channel options → Your notifications → Mute except mentions**.
+Channel options shares the existing Inbox overflow with its four Mark read actions; it adds no header or standalone row.
+The Inbox title wraps when needed on narrow screens and at larger text sizes. Chat, Tasks, Docs and Files retain
+the sidebar channel ellipsis, with a 44-point touch target. From pushed channels, return to Deck and choose the channel through
+existing navigation. There is no additional universal toolbar or row. These shared iPhone/Mac settings are available to channel readers
+without Manage permission. Direct-message channels keep their existing notification settings. The choice is
 personal to the authenticated actor and workspace; it does not alter channel access, messages, unread activity or
 any other notification category.
 
@@ -34,9 +35,10 @@ management still requires existing Manage permission; opening options or muting 
 
 The sample Tower implements the same preference routes and persists its choices for UI automation. Core tests exercise
 old-entry removal/count convergence, mention and other-channel preservation, unmute, saved-choice reload, stale writes,
-and workspace/DM rejection. Simulator automation starts in the normal channel directory and checks reader/admin
-open → mute → close/reopen → saved value → unmute/reopen, channel isolation, linked and pushed channel navigation,
-workspace switching to an unsupported endpoint and accessibility text sizing. The reader fixture advertises only
+and workspace/DM rejection. Simulator automation starts in the normal channel directory, opens Deck’s existing Inbox
+overflow and checks reader/admin open → mute → close/reopen → saved value → unmute/reopen, channel isolation, linked
+channel navigation, pushed-channel return to existing Deck navigation, workspace switching to an unsupported endpoint and accessibility
+text sizing. The reader fixture advertises only
 channel.read/workspace.read so the test cannot accidentally pass with Manage authority. Fixture checks
 are separate from server integration, installed-app checks and actual push receipt.
 

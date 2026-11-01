@@ -163,7 +163,8 @@ private struct DeckCardFrame<Actions: View, Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text(title).font(.amb(.headline)).foregroundStyle(Amb.foreground).lineLimit(1)
+                Text(title).font(.amb(.headline)).foregroundStyle(Amb.foreground)
+                    .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader).accessibilityIdentifier("deck.card.title")
                 Spacer(minLength: 4)
                 actions()
@@ -231,6 +232,7 @@ struct DeckInboxCard: View {
     @State private var startedKey: String?
     @State private var composingThread = false
     @State private var createdThread: ThreadFocus?
+    @State private var channelOptions: ChannelOptionsPresentation?
 
     var body: some View {
         let nav = model.navigation.value
@@ -253,6 +255,7 @@ struct DeckInboxCard: View {
             }
             if filtered.isEmpty { DeckNote(text: emptyText).accessibilityIdentifier("deck.inbox.empty") }
         }
+        .channelOptionsSheet(channelId: context.channelId, selection: $channelOptions)
         .task(id: "\(workspace.id):\(context.encoded()):\(active)") { if active { start(context) } else { snapshot.pause() } }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { refresh(context) } }
         #if os(iOS)
@@ -342,14 +345,15 @@ struct DeckInboxCard: View {
             Button("Mark all docs as read") { markAll(items, [.document], label: "docs") }
             Button("Mark all chats as read") { markAll(items, [.chat], label: "chats") }
             Button("Mark everything as read") { markAll(items, [.chat, .task, .document], label: "Inbox items") }
+            ChannelOptionsAction(channelId: model.context.channelId, selection: $channelOptions)
         } label: {
-            Image(systemName: "ellipsis.circle").font(.amb(.body)).frame(width: 30, height: 30)
+            Image(systemName: "ellipsis.circle").font(.amb(.body)).frame(width: 44, height: 44)
         }
         // On the Mac a bare Menu is a pop-up button that stretched across the card's header; it is one small icon.
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .accessibilityLabel("Inbox read actions")
+        .accessibilityLabel("Inbox options")
         .accessibilityIdentifier("deck.inbox.readMenu")
     }
 

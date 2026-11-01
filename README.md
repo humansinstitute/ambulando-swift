@@ -11,10 +11,11 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
-## Channel options and quiet channels (iPhone/iPad build 69, Mac build 60)
+## Channel options and quiet channels (iPhone/iPad build 70, Mac build 61)
 
-Open a channel and tap **Channel options → Your notifications → Mute except mentions**.
-The current-context header also offers Channel options in Deck, Tasks, Docs and Files; the sidebar **•••** remains available.
+Select a channel, open Deck, and tap the existing **Inbox ••• → Channel options → Your notifications → Mute except mentions**.
+The sidebar channel **•••** remains available from Chat, Tasks, Docs and Files.
+From a pushed channel, return to Deck and choose its channel through the existing navigation.
 Channel options includes rename, order, context, access and archive where your existing permissions allow them.
 This personal choice is available to readers and channel managers alike and is saved by Tower across devices.
 A supporting Tower suppresses ordinary channel/thread push alerts and bell entries, including existing ordinary

@@ -56,20 +56,22 @@ final class ManagementUITests: XCTestCase {
 
     private func verifyChannelOptionsRoundTrip(admin: Bool, extra: [String] = []) {
         let app = launch((admin ? ["-AmbulandoFixtureAdmin"] : ["-AmbulandoFixtureReader"]) + extra)
+        // Start on ordinary Deck, then choose the channel through its existing navigation.
         // Operations/deploys is a reader channel; general is manageable by the fixture admin.
-        let channel = app.buttons[admin ? "channel.general" : "channel.deploys"]
-        XCTAssertTrue(app.scrollTo(channel))
-        channel.tap()
-        let options = app.buttons["channel.options"].firstMatch
-        XCTAssertTrue(options.waitForExistence(timeout: 10))
-        XCTAssertTrue(options.isHittable)
-        XCTAssertGreaterThanOrEqual(options.frame.height, 44)
-        XCTAssertGreaterThanOrEqual(options.frame.width, 44)
-        XCTAssertLessThanOrEqual(options.frame.maxX, app.frame.maxX)
-        XCTAssertTrue(app.buttons["context.bar"].firstMatch.isHittable, "channel navigation remains reachable")
-        XCTAssertTrue(options.label.contains(admin ? "general" : "deploys"), "VoiceOver identifies the current channel")
-        capture(app, "current-channel-options")
-        options.tap()
+        app.section("deck")
+        app.selectSidebarChannel(admin ? "general" : "deploys")
+        app.deckCard("inbox")
+        XCTAssertFalse(app.buttons["channel.options"].exists, "No standalone Channel options row")
+        let title = app.staticTexts.matching(NSPredicate(format: "identifier == 'deck.card.title' AND label BEGINSWITH 'Inbox'")).firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 10))
+        XCTAssertGreaterThan(title.frame.height, 0)
+        let menu = app.buttons["deck.inbox.readMenu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        XCTAssertTrue(menu.isHittable)
+        XCTAssertGreaterThanOrEqual(menu.frame.height, 44)
+        XCTAssertTrue(app.buttons["deck.inbox.new"].exists, "Existing create action remains")
+        capture(app, "inbox-without-extra-row")
+        openInboxOptions(app)
         let toggle = app.switches["channelSettings.mentionsOnly"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 10), "personal choice is available without Manage access")
         XCTAssertTrue(toggle.isEnabled)
@@ -85,15 +87,41 @@ final class ManagementUITests: XCTestCase {
         setMute(toggle, on: true)
         capture(app, "channel-notifications-mentions-only")
         app.buttons["Close"].firstMatch.tap()
-        options.tap()
+        openInboxOptions(app)
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         XCTAssertEqual(toggle.value as? String, "1", "reopening reads the saved Tower choice")
         setMute(toggle, on: false)
         app.buttons["Close"].firstMatch.tap()
-        options.tap()
+        openInboxOptions(app)
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         XCTAssertEqual(toggle.value as? String, "0", "unmute also survives reopening")
         app.buttons["Close"].firstMatch.tap()
+    }
+
+    private func openInboxOptions(_ app: XCUIApplication) {
+        app.buttons["deck.inbox.readMenu"].firstMatch.tap()
+        for title in ["Mark all tasks as read", "Mark all docs as read", "Mark all chats as read", "Mark everything as read"] {
+            XCTAssertTrue(app.buttons[title].exists, "Existing Inbox action remains: \(title)")
+        }
+        let options = app.buttons["channel.options"].firstMatch
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        options.tap()
+    }
+
+    func testInboxExistingReadAndCreateActionsRemainUsable() {
+        let app = launch()
+        app.selectSidebarChannel("general")
+        app.deckCard("inbox")
+        let menu = app.buttons["deck.inbox.readMenu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10)); menu.tap()
+        app.buttons["Mark all tasks as read"].tap()
+        let notice = app.descendants(matching: .any)["deck.inbox.notice"].firstMatch
+        XCTAssertTrue(notice.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(notice.label.contains("tasks") && (notice.label.contains("read") || notice.label.contains("unread")))
+        app.buttons["deck.inbox.new"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["New thread"].waitForExistence(timeout: 10))
+        app.buttons["deck.compose.cancel"].tap()
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
     }
 
     private func setMute(_ toggle: XCUIElement, on: Bool) {
@@ -109,16 +137,14 @@ final class ManagementUITests: XCTestCase {
         let link = app.links.matching(NSPredicate(format: "label CONTAINS 'design'")).firstMatch
         XCTAssertTrue(link.waitForExistence(timeout: 10))
         link.tap()
-        let options = app.buttons.matching(NSPredicate(format: "identifier == 'channel.options' AND label CONTAINS 'design'")).firstMatch
-        XCTAssertTrue(options.waitForExistence(timeout: 10))
-        XCTAssertTrue(options.isHittable)
-        capture(app, "linked-channel-options")
-        options.tap()
+        app.section("deck")
+        app.deckCard("inbox")
+        openInboxOptions(app)
         let toggle = app.switches["channelSettings.mentionsOnly"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         setMute(toggle, on: true)
         app.buttons["Close"].firstMatch.tap()
-        options.tap()
+        openInboxOptions(app)
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         XCTAssertEqual(toggle.value as? String, "1")
         setMute(toggle, on: false)
@@ -127,7 +153,7 @@ final class ManagementUITests: XCTestCase {
     func testWorkspaceSwitchDoesNotDisplayPreviousChoiceOnUnsupportedTower() {
         let app = launch(["-AmbulandoFixtureReader"])
         app.buttons["channel.general"].tap()
-        app.buttons["channel.options"].firstMatch.tap()
+        app.section("deck"); app.deckCard("inbox"); openInboxOptions(app)
         let toggle = app.switches["channelSettings.mentionsOnly"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         setMute(toggle, on: true)
@@ -140,15 +166,14 @@ final class ManagementUITests: XCTestCase {
         app.buttons["Done"].tap()
         app.buttons["workspace.channel.Lab (sample).notes"].firstMatch.tap()
         app.section("chat")
-        let options = app.buttons["channel.options"].firstMatch
-        XCTAssertTrue(options.waitForExistence(timeout: 10)); options.tap()
+        app.section("deck"); app.deckCard("inbox"); openInboxOptions(app)
         XCTAssertTrue(app.staticTexts["channelSettings.notificationError"].waitForExistence(timeout: 10))
         XCTAssertFalse(toggle.exists, "Lab's unsupported endpoint must not show Studio's saved value")
         app.buttons["Close"].firstMatch.tap()
         app.openSidebar()
         app.buttons["workspace.channel.Studio (sample).general"].firstMatch.tap()
         app.section("chat")
-        app.buttons["channel.options"].firstMatch.tap()
+        app.section("deck"); app.deckCard("inbox"); openInboxOptions(app)
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         XCTAssertEqual(toggle.value as? String, "1")
         setMute(toggle, on: false)
@@ -167,17 +192,14 @@ final class ManagementUITests: XCTestCase {
         XCTAssertTrue(task.waitForExistence(timeout: 10)); task.tap()
         let link = app.links.matching(NSPredicate(format: "label CONTAINS 'design'")).firstMatch
         XCTAssertTrue(link.waitForExistence(timeout: 10)); link.tap()
-        let options = app.buttons["channel.options"].firstMatch
-        XCTAssertTrue(options.waitForExistence(timeout: 10))
-        XCTAssertTrue(options.label.contains("design"))
-        XCTAssertTrue(options.isHittable)
-        capture(app, "pushed-channel-options")
-        options.tap()
+        XCTAssertFalse(app.buttons["channel.options"].exists, "Pushed channel adds no standalone row")
+        capture(app, "pushed-channel-without-extra-row")
+        app.section("deck"); app.selectSidebarChannel("design"); app.deckCard("inbox"); openInboxOptions(app)
         let toggle = app.switches["channelSettings.mentionsOnly"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         setMute(toggle, on: true)
         app.buttons["Close"].firstMatch.tap()
-        options.tap()
+        openInboxOptions(app)
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         XCTAssertEqual(toggle.value as? String, "1")
         setMute(toggle, on: false)
@@ -186,20 +208,20 @@ final class ManagementUITests: XCTestCase {
     func testChannelOptionsDoNotReuseAnotherChannelsChoice() {
         let app = launch()
         app.buttons["channel.deploys"].tap()
-        app.buttons["channel.options"].firstMatch.tap()
+        app.section("deck"); app.deckCard("inbox"); openInboxOptions(app)
         let toggle = app.switches["channelSettings.mentionsOnly"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         setMute(toggle, on: true)
         app.buttons["Close"].firstMatch.tap()
-        app.showChannels()
+        app.section("chat"); app.showChannels()
         app.buttons["channel.general"].tap()
-        app.buttons["channel.options"].firstMatch.tap()
+        app.section("deck"); app.deckCard("inbox"); openInboxOptions(app)
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         XCTAssertEqual(toggle.value as? String, "0", "a different channel has its own choice")
         app.buttons["Close"].firstMatch.tap()
-        app.showChannels()
+        app.section("chat"); app.showChannels()
         app.buttons["channel.deploys"].tap()
-        app.buttons["channel.options"].firstMatch.tap()
+        app.section("deck"); app.deckCard("inbox"); openInboxOptions(app)
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
         XCTAssertEqual(toggle.value as? String, "1", "returning restores only this channel's saved choice")
         setMute(toggle, on: false)

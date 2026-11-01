@@ -223,18 +223,6 @@ struct ChannelView: View {
         .modifier(PushedFixtureLabel(enabled: pushed))
         .navigationTitle(title)
         .inlineTitle()
-        .safeAreaInset(edge: .top, spacing: 0) {
-            // The root has the context header. Pushed channels (Search, mentions, record links) need the same action
-            // without competing with the already full global navigation toolbar on a small iPhone.
-            if pushed, model.navigation.value.channel(target.channelId) != nil {
-                HStack {
-                    Spacer(minLength: 0)
-                    ChannelOptionsButton(channelId: target.channelId)
-                }
-                .padding(.horizontal, 16)
-                .background(Amb.background)
-            }
-        }
         .onAppear { model.openChannel(target.channelId, in: workspace) }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openChannel(target.channelId, in: workspace) } }
     }

@@ -77,15 +77,6 @@ struct ContextBar: View {
                 }
             }
             .padding(.horizontal, 16).padding(.vertical, 7)
-            if let channel = nav.channel(context.channelId) {
-                // A row of its own keeps scope/channel names readable on narrow phones and at large text sizes.
-                HStack {
-                    Spacer(minLength: 0)
-                    ChannelOptionsButton(channelId: channel.id)
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 4)
-            }
         }
         .background(Amb.background)
         .overlay(alignment: .bottom) { Rectangle().fill(Amb.border.opacity(0.6)).frame(height: 0.5) }
@@ -98,36 +89,55 @@ struct ContextBar: View {
     }
 }
 
-/// An explicit current-channel action, independent of channel management permission. Keep presentation tied to the
-/// account, connection, workspace and channel that opened it, including while navigation changes behind the sheet.
-struct ChannelOptionsButton: View {
-    @Environment(AppModel.self) private var model
+/// Captures the authority boundary when an existing overflow opens channel settings.
+struct ChannelOptionsPresentation: Identifiable {
+    let id: String
     let channelId: String
-    @State private var presentedContext: String?
 
-    private var contextKey: String {
-        [model.connection?.id ?? "", model.connection?.signerNpub ?? "", model.identity.npub ?? "", model.selectedWorkspace?.id ?? "", channelId].joined(separator: ":")
+    @MainActor static func key(_ model: AppModel, channelId: String?) -> String {
+        [model.connection?.id ?? "", model.connection?.signerNpub ?? "", model.identity.npub ?? "", model.selectedWorkspace?.id ?? "", channelId ?? ""].joined(separator: ":")
     }
+}
+
+struct ChannelOptionsAction: View {
+    @Environment(AppModel.self) private var model
+    let channelId: String?
+    @Binding var selection: ChannelOptionsPresentation?
 
     var body: some View {
-        Button { presentedContext = contextKey } label: {
-            Label("Channel options", systemImage: "ellipsis.circle")
-                .font(.amb(.subheadline).weight(.semibold))
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Amb.primary)
-        .accessibilityLabel("Channel options for \(model.navigation.value.channel(channelId).map { model.navigation.value.label($0) } ?? "channel")")
-        .accessibilityHint("Opens personal notifications and available channel settings")
-        .accessibilityIdentifier("channel.options")
-        .sheet(isPresented: Binding(get: { presentedContext != nil }, set: { if !$0 { presentedContext = nil } })) {
-            if presentedContext == contextKey {
-                ChannelSettingsSheet(channelId: channelId).id(contextKey)
+        if let channelId, model.navigation.value.channel(channelId) != nil {
+            Divider()
+            Button {
+                selection = ChannelOptionsPresentation(id: ChannelOptionsPresentation.key(model, channelId: channelId), channelId: channelId)
+            } label: {
+                Label("Channel options", systemImage: "gearshape")
             }
+            .accessibilityIdentifier("channel.options")
         }
-        .onChange(of: contextKey) { _, _ in presentedContext = nil }
+    }
+}
+
+/// Present from the owning screen, leaving its existing Menu and action state in place.
+private struct ChannelOptionsSheet: ViewModifier {
+    @Environment(AppModel.self) private var model
+    let channelId: String?
+    @Binding var selection: ChannelOptionsPresentation?
+
+    func body(content: Content) -> some View {
+        let key = ChannelOptionsPresentation.key(model, channelId: channelId)
+        content
+            .sheet(item: $selection) { presentation in
+                if presentation.id == key {
+                    ChannelSettingsSheet(channelId: presentation.channelId).id(presentation.id)
+                }
+            }
+            .onChange(of: key) { _, _ in selection = nil }
+    }
+}
+
+extension View {
+    func channelOptionsSheet(channelId: String?, selection: Binding<ChannelOptionsPresentation?>) -> some View {
+        modifier(ChannelOptionsSheet(channelId: channelId, selection: selection))
     }
 }
 
