@@ -612,7 +612,7 @@ private struct ChannelNotificationSettingsSection: View {
     @State private var error: String?
     @State private var unsupported = false
     private var contextKey: String {
-        [model.connection?.id ?? "", model.connection?.signerNpub ?? "", model.selectedWorkspace?.id ?? "", channel.workspaceId, channel.id].joined(separator: ":")
+        [model.connection?.id ?? "", model.connection?.signerNpub ?? "", model.identity.npub ?? "", model.selectedWorkspace?.id ?? "", channel.workspaceId, channel.id].joined(separator: ":")
     }
 
     var body: some View {
@@ -627,6 +627,10 @@ private struct ChannelNotificationSettingsSection: View {
             } else if busy {
                 ProgressView("Loading notification choice…")
             }
+            if busy && preferences != nil {
+                ProgressView("Updating notification choice…")
+                    .accessibilityIdentifier("channelSettings.notificationProgress")
+            }
             if let error {
                 Text(error).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     .accessibilityIdentifier("channelSettings.notificationError")
@@ -638,8 +642,9 @@ private struct ChannelNotificationSettingsSection: View {
         } header: { Text("Your notifications") } footer: {
             Text("Quiet this channel’s push alerts and notification bell entries, except direct mentions of you. Saved across your devices. Messages and unread channel activity stay unchanged.")
         }
-        .task(id: contextKey) { preferences = nil; busy = false; unsupported = false; await load() }
+        .task(id: contextKey) { preferences = nil; busy = false; error = nil; unsupported = false; await load() }
         .onChange(of: scenePhase) { _, phase in if phase == .active && !busy { Task { await load() } } }
+        .onChange(of: model.isUnlocked) { _, unlocked in if unlocked && !busy { Task { await load() } } }
     }
 
     @MainActor private func load() async {

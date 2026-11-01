@@ -426,6 +426,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             let ana = n % 3 != 0
             var body = "\(topics[(n - 1) % topics.count]) (#\(n))"
             if n == 38 { body = "@[Rick](mention:agent:\(Self.rick)) can you check the outbox retry states?" }
+            if n == 40, ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureChannelLink") {
+                body = "Open @[design](mention:channel:\(Self.designChannel)) for channel options."
+            }
             add(n, Self.studio, Self.generalChannel, body, sender: ana ? Self.ana : Self.rick, label: ana ? "Ana" : "Rick")
         }
         let thread = Self.uuid(39, "f1c7bbbb")
@@ -525,8 +528,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         case ("GET", 3, "scopes") where rest[2] == "channels":
             return lock.withLock { (200, ["channels": channelRows(w, scope: rest[1]), "next_cursor": NSNull()]) }
         case ("GET", 1, "me"):
+            let reader = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureReader")
             return (200, ["actor": ["actor_id": "f1c70000-0000-4000-8000-0000000000e1", "npub": actorNpub], "membership": ["role": "member"],
-                          "permissions": ["channel.create", "channel.manage", "channel.read", "channel.write", "scope.create", "workspace.read"]])
+                          "permissions": reader ? ["channel.read", "workspace.read"] : ["channel.create", "channel.manage", "channel.read", "channel.write", "scope.create", "workspace.read"]])
         case ("POST", 3, "scopes") where rest[2] == "channels", ("POST", 1, "scopes"), ("PATCH", 2, "scopes"), ("DELETE", 2, "scopes"),
              ("PATCH", 2, "channels"), ("DELETE", 2, "channels"), ("POST", 3, "channels") where rest.last == "reorder" || rest.count == 2,
              ("PUT", 2, "me"):
@@ -991,7 +995,10 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         // Records the surfaces point at, in the sample task/document routes too.
         let notes = "# Build 7 launch notes\n\nContext Tree, Canvas, agents and the Toolbox are native on iPhone.\n\n- Pins sync with the web\n- Boards are read only"
         work.seedDoc(id: Self.canvasDoc, scope: a, channel: general, title: "Build 7 launch notes", body: Data(notes.utf8), contentType: "text/markdown")
-        work.seedTask(id: Self.canvasTask, scope: a, channel: general, title: "Ship build 7 to TestFlight-free phone", state: "ready", priority: "rock", creator: Self.ana)
+        let channelLink = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureChannelLink")
+            ? "Open @[design](mention:channel:\(design)) for channel options." : nil
+        work.seedTask(id: Self.canvasTask, scope: a, channel: general, title: "Ship build 7 to TestFlight-free phone", description: channelLink,
+                      state: "ready", priority: "rock", creator: Self.ana)
         s.seedRecord(id: Self.canvasDoc, type: "document", title: "Build 7 launch notes", channel: general, scope: a)
         s.seedRecord(id: Self.canvasTask, type: "task", title: "Ship build 7 to TestFlight-free phone", channel: general, scope: a)
         s.seedRecord(id: thread, type: "thread", title: "Native chat review", channel: general, scope: a)

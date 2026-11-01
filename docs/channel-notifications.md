@@ -1,7 +1,10 @@
 # Personal channel notification choices
 
-Channel settings exposes **Your notifications → Mute except mentions** on iPhone and Mac, including for channel
-readers without Manage permission. Direct-message channels keep their existing notification settings. The choice is
+Open **Channel options** in the current-context header or a pushed channel screen, then choose
+**Your notifications → Mute except mentions**. The labelled button has a minimum 44-point touch target and a
+VoiceOver label naming the channel. The sidebar ellipsis remains an alternative, also with a 44-point target.
+The action has its own row so scope/channel names stay readable on narrow screens. These shared iPhone/Mac settings
+are available to channel readers without Manage permission. Direct-message channels keep their existing notification settings. The choice is
 personal to the authenticated actor and workspace; it does not alter channel access, messages, unread activity or
 any other notification category.
 
@@ -24,9 +27,17 @@ on opening and foreground return. Successful writes reset the local notification
 sync job. Tower increments the existing `rules_revision`, so other devices’ notification sync jobs re-list and remove
 ordinary entries and update the bell count. No notification read/dismiss/archive action is sent by muting.
 
+Options presentation and notification results are bound to the connection, current identity, workspace and channel;
+switching that boundary dismisses the current options sheet. Unlocking reloads the personal setting. Loading, update
+progress, failed requests with Retry, unsupported servers and stale-write conflicts are visible in the form. Channel
+management still requires existing Manage permission; opening options or muting grants no additional authority.
+
 The sample Tower implements the same preference routes and persists its choices for UI automation. Core tests exercise
 old-entry removal/count convergence, mention and other-channel preservation, unmute, saved-choice reload, stale writes,
-and workspace/DM rejection. Simulator automation checks that a reader can save and reload the control. Fixture checks
+and workspace/DM rejection. Simulator automation starts in the normal channel directory and checks reader/admin
+open → mute → close/reopen → saved value → unmute/reopen, channel isolation, linked and pushed channel navigation,
+workspace switching to an unsupported endpoint and accessibility text sizing. The reader fixture advertises only
+channel.read/workspace.read so the test cannot accidentally pass with Manage authority. Fixture checks
 are separate from server integration, installed-app checks and actual push receipt.
 
 Android follow-up: add the personal channel control against the same versioned routes and refresh its bell snapshot

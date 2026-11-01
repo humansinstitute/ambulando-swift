@@ -77,15 +77,57 @@ struct ContextBar: View {
                 }
             }
             .padding(.horizontal, 16).padding(.vertical, 7)
-            .background(Amb.background)
-            .overlay(alignment: .bottom) { Rectangle().fill(Amb.border.opacity(0.6)).frame(height: 0.5) }
+            if let channel = nav.channel(context.channelId) {
+                // A row of its own keeps scope/channel names readable on narrow phones and at large text sizes.
+                HStack {
+                    Spacer(minLength: 0)
+                    ChannelOptionsButton(channelId: channel.id)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 4)
+            }
         }
+        .background(Amb.background)
+        .overlay(alignment: .bottom) { Rectangle().fill(Amb.border.opacity(0.6)).frame(height: 0.5) }
     }
 
     private func contextDescription(_ nav: NavigationSnapshot, _ context: WorkContext) -> String {
         guard let scope = nav.scope(context.scopeId) else { return "Current context: all scopes" }
         if let channel = nav.channel(context.channelId) { return "Current scope: \(scope.name), channel: \(nav.label(channel))" }
         return "Current scope: \(scope.name), all channels"
+    }
+}
+
+/// An explicit current-channel action, independent of channel management permission. Keep presentation tied to the
+/// account, connection, workspace and channel that opened it, including while navigation changes behind the sheet.
+struct ChannelOptionsButton: View {
+    @Environment(AppModel.self) private var model
+    let channelId: String
+    @State private var presentedContext: String?
+
+    private var contextKey: String {
+        [model.connection?.id ?? "", model.connection?.signerNpub ?? "", model.identity.npub ?? "", model.selectedWorkspace?.id ?? "", channelId].joined(separator: ":")
+    }
+
+    var body: some View {
+        Button { presentedContext = contextKey } label: {
+            Label("Channel options", systemImage: "ellipsis.circle")
+                .font(.amb(.subheadline).weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Amb.primary)
+        .accessibilityLabel("Channel options for \(model.navigation.value.channel(channelId).map { model.navigation.value.label($0) } ?? "channel")")
+        .accessibilityHint("Opens personal notifications and available channel settings")
+        .accessibilityIdentifier("channel.options")
+        .sheet(isPresented: Binding(get: { presentedContext != nil }, set: { if !$0 { presentedContext = nil } })) {
+            if presentedContext == contextKey {
+                ChannelSettingsSheet(channelId: channelId).id(contextKey)
+            }
+        }
+        .onChange(of: contextKey) { _, _ in presentedContext = nil }
     }
 }
 
@@ -267,7 +309,7 @@ struct SidebarContent: View {
                                         // sol `.sidebar-scope-channel-menu`: Channel settings on every channel.
                                         Button { sheet = .channelSettings(channel) } label: {
                                             Image(systemName: "ellipsis").font(.amb(.caption).weight(.bold)).foregroundStyle(Amb.mutedForeground)
-                                                .frame(width: 30, height: 36).contentShape(Rectangle())
+                                                .frame(width: 44, height: 44).contentShape(Rectangle())
                                         }
                                         .buttonStyle(.plain)
                                         .accessibilityLabel("Channel settings for \(nav.label(channel))")

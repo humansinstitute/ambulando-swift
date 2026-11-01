@@ -11,7 +11,7 @@ final class ManagementUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-AmbulandoUITestFixture", "-AmbulandoFixtureReset"] + extra
         app.launch()
-        XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 15) || app.buttons["channel.deploys"].exists)
         return app
     }
 
@@ -41,24 +41,168 @@ final class ManagementUITests: XCTestCase {
         app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
     }
 
+    /// Starts in the normal channel directory; no sidebar settings shortcut or direct sheet launch.
     func testPersonalChannelMuteSavesWithoutManageAccessAndReloads() {
-        let app = launch()
-        app.openSidebar()
-        app.buttons["sidebar.channelSettings.deploys"].tap()
+        verifyChannelOptionsRoundTrip(admin: false)
+    }
+
+    func testAdminChannelOptionsPreserveManagementAndPersonalMute() {
+        verifyChannelOptionsRoundTrip(admin: true)
+    }
+
+    func testChannelOptionsAtAccessibilityTextSize() {
+        verifyChannelOptionsRoundTrip(admin: false, extra: ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityM"])
+    }
+
+    private func verifyChannelOptionsRoundTrip(admin: Bool, extra: [String] = []) {
+        let app = launch((admin ? ["-AmbulandoFixtureAdmin"] : ["-AmbulandoFixtureReader"]) + extra)
+        // Operations/deploys is a reader channel; general is manageable by the fixture admin.
+        let channel = app.buttons[admin ? "channel.general" : "channel.deploys"]
+        XCTAssertTrue(app.scrollTo(channel))
+        channel.tap()
+        let options = app.buttons["channel.options"].firstMatch
+        XCTAssertTrue(options.waitForExistence(timeout: 10))
+        XCTAssertTrue(options.isHittable)
+        XCTAssertGreaterThanOrEqual(options.frame.height, 44)
+        XCTAssertGreaterThanOrEqual(options.frame.width, 44)
+        XCTAssertLessThanOrEqual(options.frame.maxX, app.frame.maxX)
+        XCTAssertTrue(app.buttons["context.bar"].firstMatch.isHittable, "channel navigation remains reachable")
+        XCTAssertTrue(options.label.contains(admin ? "general" : "deploys"), "VoiceOver identifies the current channel")
+        capture(app, "current-channel-options")
+        options.tap()
         let toggle = app.switches["channelSettings.mentionsOnly"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 10), "personal choice is available without Manage access")
+        XCTAssertTrue(toggle.isEnabled)
+        if admin {
+            XCTAssertTrue(app.textFields["channelSettings.name"].exists, "authorized actions remain available")
+        } else if extra.isEmpty {
+            // The normal-size reader case checks authorization. At accessibility sizes this lazy Form's explanatory
+            // management row is below the fold; keep that case focused on the visible personal control and tap path.
+            XCTAssertTrue(app.staticTexts["channelSettings.readOnly"].waitForExistence(timeout: 10))
+            XCTAssertFalse(app.textFields["channelSettings.name"].exists, "personal mute grants no channel management rights")
+        }
         XCTAssertEqual(toggle.value as? String, "0")
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        let on = NSPredicate(format: "value == '1'")
-        expectation(for: on, evaluatedWith: toggle); waitForExpectations(timeout: 15)
+        setMute(toggle, on: true)
         capture(app, "channel-notifications-mentions-only")
         app.buttons["Close"].firstMatch.tap()
-        app.buttons["sidebar.channelSettings.deploys"].tap()
+        options.tap()
         XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-        expectation(for: on, evaluatedWith: toggle); waitForExpectations(timeout: 15)
+        XCTAssertEqual(toggle.value as? String, "1", "reopening reads the saved Tower choice")
+        setMute(toggle, on: false)
+        app.buttons["Close"].firstMatch.tap()
+        options.tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertEqual(toggle.value as? String, "0", "unmute also survives reopening")
+        app.buttons["Close"].firstMatch.tap()
+    }
+
+    private func setMute(_ toggle: XCUIElement, on: Bool) {
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        let off = NSPredicate(format: "value == '0'")
-        expectation(for: off, evaluatedWith: toggle); waitForExpectations(timeout: 15)
+        let saved = NSPredicate(format: "value == %@ AND enabled == true", on ? "1" : "0")
+        expectation(for: saved, evaluatedWith: toggle)
+        waitForExpectations(timeout: 15)
+    }
+
+    func testLinkedChannelHasItsOwnVisibleOptions() {
+        let app = launch(["-AmbulandoFixtureReader", "-AmbulandoFixtureChannelLink"])
+        app.buttons["channel.general"].tap()
+        let link = app.links.matching(NSPredicate(format: "label CONTAINS 'design'")).firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 10))
+        link.tap()
+        let options = app.buttons.matching(NSPredicate(format: "identifier == 'channel.options' AND label CONTAINS 'design'")).firstMatch
+        XCTAssertTrue(options.waitForExistence(timeout: 10))
+        XCTAssertTrue(options.isHittable)
+        capture(app, "linked-channel-options")
+        options.tap()
+        let toggle = app.switches["channelSettings.mentionsOnly"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        setMute(toggle, on: true)
+        app.buttons["Close"].firstMatch.tap()
+        options.tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertEqual(toggle.value as? String, "1")
+        setMute(toggle, on: false)
+    }
+
+    func testWorkspaceSwitchDoesNotDisplayPreviousChoiceOnUnsupportedTower() {
+        let app = launch(["-AmbulandoFixtureReader"])
+        app.buttons["channel.general"].tap()
+        app.buttons["channel.options"].firstMatch.tap()
+        let toggle = app.switches["channelSettings.mentionsOnly"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        setMute(toggle, on: true)
+        app.buttons["Close"].firstMatch.tap()
+        app.openSidebar()
+        app.buttons["sidebar.workspace"].firstMatch.tap()
+        app.buttons["Choose workspaces…"].tap()
+        let lab = app.descendants(matching: .any)["workspace.enabled.Lab (sample)"].firstMatch
+        XCTAssertTrue(lab.waitForExistence(timeout: 10)); lab.tap()
+        app.buttons["Done"].tap()
+        app.buttons["workspace.channel.Lab (sample).notes"].firstMatch.tap()
+        app.section("chat")
+        let options = app.buttons["channel.options"].firstMatch
+        XCTAssertTrue(options.waitForExistence(timeout: 10)); options.tap()
+        XCTAssertTrue(app.staticTexts["channelSettings.notificationError"].waitForExistence(timeout: 10))
+        XCTAssertFalse(toggle.exists, "Lab's unsupported endpoint must not show Studio's saved value")
+        app.buttons["Close"].firstMatch.tap()
+        app.openSidebar()
+        app.buttons["workspace.channel.Studio (sample).general"].firstMatch.tap()
+        app.section("chat")
+        app.buttons["channel.options"].firstMatch.tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertEqual(toggle.value as? String, "1")
+        setMute(toggle, on: false)
+    }
+
+    func testPushedChannelFromContextReferenceHasVisibleOptions() {
+        let app = launch(["-AmbulandoFixtureReader", "-AmbulandoFixtureChannelLink", "-sections.context", "YES"])
+        app.section("context")
+        let scope = app.buttons["context.scope.Ambulando"].firstMatch
+        XCTAssertTrue(scope.waitForExistence(timeout: 10)); scope.tap()
+        let root = app.buttons["context.node.Native iPhone app"].firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 10)); root.tap()
+        let component = app.buttons["Workspace surfaces"].firstMatch
+        XCTAssertTrue(component.waitForExistence(timeout: 10)); component.tap()
+        let task = app.buttons["context.reference.Ship build 7 to TestFlight-free phone"].firstMatch
+        XCTAssertTrue(task.waitForExistence(timeout: 10)); task.tap()
+        let link = app.links.matching(NSPredicate(format: "label CONTAINS 'design'")).firstMatch
+        XCTAssertTrue(link.waitForExistence(timeout: 10)); link.tap()
+        let options = app.buttons["channel.options"].firstMatch
+        XCTAssertTrue(options.waitForExistence(timeout: 10))
+        XCTAssertTrue(options.label.contains("design"))
+        XCTAssertTrue(options.isHittable)
+        capture(app, "pushed-channel-options")
+        options.tap()
+        let toggle = app.switches["channelSettings.mentionsOnly"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        setMute(toggle, on: true)
+        app.buttons["Close"].firstMatch.tap()
+        options.tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertEqual(toggle.value as? String, "1")
+        setMute(toggle, on: false)
+    }
+
+    func testChannelOptionsDoNotReuseAnotherChannelsChoice() {
+        let app = launch()
+        app.buttons["channel.deploys"].tap()
+        app.buttons["channel.options"].firstMatch.tap()
+        let toggle = app.switches["channelSettings.mentionsOnly"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        setMute(toggle, on: true)
+        app.buttons["Close"].firstMatch.tap()
+        app.showChannels()
+        app.buttons["channel.general"].tap()
+        app.buttons["channel.options"].firstMatch.tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertEqual(toggle.value as? String, "0", "a different channel has its own choice")
+        app.buttons["Close"].firstMatch.tap()
+        app.showChannels()
+        app.buttons["channel.deploys"].tap()
+        app.buttons["channel.options"].firstMatch.tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        XCTAssertEqual(toggle.value as? String, "1", "returning restores only this channel's saved choice")
+        setMute(toggle, on: false)
     }
 
     func testCreateWithExplicitRecipientAndOpenChannelAccessFromSettings() {

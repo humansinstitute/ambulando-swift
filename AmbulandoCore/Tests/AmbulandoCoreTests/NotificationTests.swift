@@ -1194,6 +1194,30 @@ final class NotificationTapTests: XCTestCase {
 
 
 final class ChannelNotificationPreferenceTests: XCTestCase {
+    func testLockedAndDifferentAccountCannotReadOrChangeChannelChoice() async throws {
+        let h = try await NotificationHarness.make(unlocked: false)
+        let channel = ChannelRecord(workspaceId: h.workspace.id, id: Fixtures.channel1, scopeId: Fixtures.scopeA, name: "research", updatedAt: "")
+        do {
+            _ = try await h.sync.loadChannelNotificationPreferences(h.connection, h.workspace)
+            XCTFail("locked identity must not read a personal choice without reader authority")
+        } catch IdentityError.locked {}
+        do {
+            _ = try await h.sync.setChannelNotificationPreference(h.connection, h.workspace, channel: channel, mentionsOnly: true, known: .init())
+            XCTFail("locked identity must not sign a preference write")
+        } catch IdentityError.locked {}
+        try await h.chat.identity.unlock(pin: TestKeys.pin)
+        let other = ConnectionRecord(origin: try TowerOrigin(h.connection.origin), signerNpub: Bech32.encode(hrp: "npub", data: Data(repeating: 0x22, count: 32)), towerNpub: nil)
+        do {
+            _ = try await h.sync.loadChannelNotificationPreferences(other, h.workspace)
+            XCTFail("a connection belonging to another identity must not read")
+        } catch IdentityError.signerMismatch {}
+        do {
+            _ = try await h.sync.setChannelNotificationPreference(other, h.workspace, channel: channel, mentionsOnly: true, known: .init())
+            XCTFail("a connection belonging to another identity must not write")
+        } catch IdentityError.signerMismatch {}
+        XCTAssertTrue(h.tower.channelPreferenceBodies.isEmpty)
+    }
+
     func testSavedFixtureChoiceSurvivesRestartWithItsCASVersion() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
