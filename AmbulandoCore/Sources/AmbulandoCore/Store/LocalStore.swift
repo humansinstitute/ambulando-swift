@@ -59,7 +59,7 @@ public struct ConnectionRecord: Sendable, Equatable, Identifiable, Codable {
 }
 
 enum Schema {
-    static let version = 7
+    static let version = 8
 
     static func migrate(_ db: SQLiteConnection) throws {
         let current = try db.userVersion
@@ -135,6 +135,13 @@ enum Schema {
             if current < 5 { try migrateV5(db) }
             if current < 6 { try migrateV6(db) }
             if current < 7 { try migrateV7(db) }
+            if current < 8 {
+                let info = try db.prepare("PRAGMA table_info(view_states)")
+                var columns = Set<String>()
+                while try info.step() { if let name = info.text(1) { columns.insert(name) } }
+                if !columns.contains("mention_activity_version") { try db.execute("ALTER TABLE view_states ADD COLUMN mention_activity_version INTEGER") }
+                if !columns.contains("channel_mentions_only") { try db.execute("ALTER TABLE view_states ADD COLUMN channel_mentions_only INTEGER NOT NULL DEFAULT 0") }
+            }
             try db.execute("PRAGMA user_version = \(version)")
         }
     }

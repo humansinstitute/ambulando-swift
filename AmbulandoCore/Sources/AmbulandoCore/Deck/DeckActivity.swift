@@ -77,7 +77,11 @@ public enum DeckActivity {
     /// Every Deck Inbox item in `context`, newest first.
     public static func inbox(_ sources: Sources, context: WorkContext) -> [Item] {
         let unread = Dictionary(sources.viewStates.map { ("\($0.resourceType.rawValue):\($0.resourceId)", $0.unread) }, uniquingKeysWith: { a, b in a || b })
+        let mutedChannels = Set(sources.viewStates.filter(\.channelMentionsOnly).compactMap(\.channelId))
         let working = workingKeys(sources.activities)
+        func showsWorking(_ key: String, _ channelId: String?) -> Bool {
+            working.contains(key) && !(channelId.map { mutedChannels.contains($0) } ?? false)
+        }
         func scope(_ scopeId: String?, _ channelId: String?) -> String? { scopeId ?? channelId.flatMap { sources.channelScopes[$0] } }
         func matches(_ scopeId: String?, _ channelId: String?) -> Bool {
             guard let wanted = context.scopeId else { return true }
@@ -90,7 +94,7 @@ public enum DeckActivity {
             items.append(Item(kind: .chat, recordId: thread.threadId, channelId: thread.channelId, scopeId: scope(nil, thread.channelId),
                               title: title, subtitle: MentionCodec.plain(thread.latestBody), reason: thread.messageCount == 1 ? "1 message" : "\(thread.messageCount) messages",
                               activityAt: thread.latestAt, isUnread: unread["thread:\(thread.threadId)"] == true,
-                              isWorking: working.contains("thread:\(thread.threadId)"), taskState: nil, isThread: thread.isThread,
+                              isWorking: showsWorking("thread:\(thread.threadId)", thread.channelId), taskState: nil, isThread: thread.isThread,
                               searchText: [title, thread.latestBody, thread.rootBody ?? ""].joined(separator: " ").lowercased()))
         }
         for task in sources.tasks where matches(task.scopeId, task.channelId) {
@@ -107,7 +111,7 @@ public enum DeckActivity {
                               title: task.title.isEmpty ? "Untitled task" : task.title, subtitle: label,
                               reason: commentDrove ? "\(comments!.count) recent \(comments!.count == 1 ? "comment" : "comments")"
                                                    : (task.updatedAt.isEmpty ? "Task created" : "Task updated"),
-                              activityAt: activity, isUnread: isUnread, isWorking: working.contains("task:\(task.id)"), taskState: task.state,
+                              activityAt: activity, isUnread: isUnread, isWorking: showsWorking("task:\(task.id)", task.channelId), taskState: task.state,
                               searchText: [task.title, task.description ?? "", task.state, label].joined(separator: " ").lowercased()))
         }
         for doc in sources.docs where !doc.archived && matches(doc.scopeId, doc.channelId) {
@@ -119,7 +123,7 @@ public enum DeckActivity {
             items.append(Item(kind: .document, recordId: doc.id, channelId: doc.channelId, scopeId: scope(doc.scopeId, doc.channelId),
                               title: doc.title.isEmpty ? "Untitled document" : doc.title, subtitle: doc.summary ?? "Document",
                               reason: open > 0 ? "\(open) unresolved \(open == 1 ? "comment" : "comments")" : (doc.updatedAt.isEmpty ? "Document created" : "Document updated"),
-                              activityAt: activity, isUnread: unread["document:\(doc.id)"] == true, isWorking: working.contains("document:\(doc.id)"), taskState: nil,
+                              activityAt: activity, isUnread: unread["document:\(doc.id)"] == true, isWorking: showsWorking("document:\(doc.id)", doc.channelId), taskState: nil,
                               searchText: [doc.title, doc.summary ?? ""].joined(separator: " ").lowercased()))
         }
         for file in sources.files where !file.archived && matches(file.scopeId, file.channelId) {

@@ -52,7 +52,8 @@ extension StoreReader {
     public func unreadChannelIds(workspaceId: String) throws -> Set<String> {
         let s = try db.prepare("""
         SELECT DISTINCT channel_id FROM view_states WHERE workspace_id = ? AND channel_id IS NOT NULL
-          AND (activity_version > viewed_activity_version OR (attention_activity_version IS NOT NULL AND attention_activity_version > viewed_activity_version))
+          AND (CASE WHEN channel_mentions_only = 1 THEN COALESCE(mention_activity_version,0) > viewed_activity_version
+            ELSE (activity_version > viewed_activity_version OR COALESCE(attention_activity_version,0) > viewed_activity_version) END)
         """)
         try s.bind([.text(workspaceId)])
         var ids = Set<String>()

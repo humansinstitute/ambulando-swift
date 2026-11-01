@@ -707,7 +707,7 @@ final class NotificationActionTests: XCTestCase {
         try await h.actions.apply(.markRead, to: item, connection: h.connection, workspace: h.workspace)
         try await h.actions.apply(.archive, to: item, connection: h.connection, workspace: h.workspace)
         await h.drainWrites()
-        let viewStateWrites = h.transport.recorded.filter { $0.url!.path.contains("resource-view-states") }
+        let viewStateWrites = h.transport.recorded.filter { $0.url!.path.contains("resource-view-states") && ($0.httpMethod ?? "GET") != "GET" }
         XCTAssertTrue(viewStateWrites.isEmpty, "notification state never writes a resource view")
     }
 }

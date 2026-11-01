@@ -294,8 +294,12 @@ public struct ViewStateRecord: Sendable, Equatable, Identifiable {
     public let updatedAt: String
     public var id: String { "\(resourceType.rawValue):\(resourceId)" }
 
-    public var unread: Bool { activityVersion > viewedActivityVersion }
-    public var needsAttention: Bool { (attentionActivityVersion ?? 0) > viewedActivityVersion }
+    /// Underlying message activity is retained even while its attention is muted.
+    public var underlyingUnread: Bool { activityVersion > viewedActivityVersion }
+    public let mentionActivityVersion: Int?
+    public let channelMentionsOnly: Bool
+    public var unread: Bool { channelMentionsOnly ? (mentionActivityVersion ?? 0) > viewedActivityVersion : underlyingUnread }
+    public var needsAttention: Bool { (channelMentionsOnly ? (mentionActivityVersion ?? 0) : (attentionActivityVersion ?? 0)) > viewedActivityVersion }
 
     public init(raw: Data) throws {
         guard let o = try JSONSerialization.jsonObject(with: raw) as? [String: Any], let w = lowerUUID(o["workspace_id"] as? String),
@@ -305,13 +309,16 @@ public struct ViewStateRecord: Sendable, Equatable, Identifiable {
         scopeId = lowerUUID(o["scope_id"] as? String); channelId = lowerUUID(o["channel_id"] as? String)
         activityVersion = flexibleInt(o["activity_version"]) ?? 0; viewedActivityVersion = flexibleInt(o["viewed_activity_version"]) ?? 0
         attentionActivityVersion = flexibleInt(o["attention_activity_version"])
+        mentionActivityVersion = flexibleInt(o["mention_activity_version"])
+        channelMentionsOnly = o["channel_mentions_only"] as? Bool ?? false
         rowVersion = flexibleInt(o["row_version"]) ?? 0; updatedAt = (o["updated_at"] as? String) ?? ""
     }
 
     public init(workspaceId: String, resourceType: ResourceType, resourceId: String, scopeId: String?, channelId: String?, activityVersion: Int,
-                viewedActivityVersion: Int, attentionActivityVersion: Int? = nil, rowVersion: Int = 1, updatedAt: String) {
+                viewedActivityVersion: Int, attentionActivityVersion: Int? = nil, mentionActivityVersion: Int? = nil, channelMentionsOnly: Bool = false, rowVersion: Int = 1, updatedAt: String) {
         self.workspaceId = workspaceId; self.resourceType = resourceType; self.resourceId = resourceId; self.scopeId = scopeId
         self.channelId = channelId; self.activityVersion = activityVersion; self.viewedActivityVersion = viewedActivityVersion
+        self.mentionActivityVersion = mentionActivityVersion; self.channelMentionsOnly = channelMentionsOnly
         self.attentionActivityVersion = attentionActivityVersion; self.rowVersion = rowVersion; self.updatedAt = updatedAt
     }
 }

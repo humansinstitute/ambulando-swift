@@ -6,11 +6,11 @@ The Inbox title wraps when needed on narrow screens and at larger text sizes. Ch
 the sidebar channel ellipsis, with a 44-point touch target. From pushed channels, return to Deck and choose the channel through
 existing navigation. There is no additional universal toolbar or row. These shared iPhone/Mac settings are available to channel readers
 without Manage permission. Direct-message channels keep their existing notification settings. The choice is
-personal to the authenticated actor and workspace; it does not alter channel access, messages, unread activity or
+personal to the authenticated actor and workspace; it does not alter channel access, messages, underlying unread activity or
 any other notification category.
 
 Tower owns push eligibility and the visible notification inbox. A muted channel suppresses ordinary `flightdeck.core`
-`chat_thread` items; direct person mentions, comment tags, DMs, assignments and notifications from other apps keep their
+`chat_thread` and assignment-only `task_assignment` items; direct person mentions, comment tags, DMs and notifications from other apps keep their
 existing independent category settings. This is not an override of a globally disabled mention preference. Clients
 never infer mention eligibility from message-text substrings.
 
@@ -45,3 +45,22 @@ are separate from server integration, installed-app checks and actual push recei
 Android follow-up: add the personal channel control against the same versioned routes and refresh its bell snapshot
 when `rules_revision` changes. Server push and inbox filtering are shared authority and do not require Android-specific
 preference storage.
+
+## Unread attention
+
+Muted non-DM channels also suppress ordinary unread dots/counts, Unread & Active membership and Deck Inbox
+unread/working emphasis. Activity cards and content remain available. No read cursor is advanced by changing the preference;
+unmuting restores ordinary unread from its original activity/read positions. A direct structured human-recipient mention
+still qualifies until its original event version is read. A later ordinary reply cannot revive a read mention.
+
+Tower adds `mention_activity_version` and `channel_mentions_only` to its existing resource-view-state list. Canonical
+threads expose `attention.policy_version = 1` and a per-recipient `mention_activity_versions` ledger for web record sync.
+Native SQLite retains raw activity/read versions alongside the mention projection. Notification sync refreshes the view-state
+projection after a preference change or cross-device notification wake, using the existing keyed inbox sync job. Sparse
+read-write acknowledgements retain the last known mention/mute projection until the next authoritative list.
+
+Message positions are recorded against the resource sequence. Adding a new recipient during an edit does not refresh an
+existing recipient’s mention; removing/deleting a mention removes its qualification. Historical roots/replies use exact
+thread outbox associations and their event versions. Missing event provenance stays neutral rather than inventing fresh
+attention. An older server without these additive fields retains legacy presentation; deploy Tower with the clients for
+complete muted-unread behavior. Android must adopt the same projection in addition to its outstanding preference control.

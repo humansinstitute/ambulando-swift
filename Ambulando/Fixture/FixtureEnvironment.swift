@@ -500,6 +500,15 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             return handled
         }
         if let handled = try boards.handle(request) ?? surfaces.handle(request) ?? labSurfaces.handle(request) ?? work.handle(request) ?? labWork.handle(request) {
+            if request.httpMethod == "GET", path.hasSuffix("/resource-view-states"),
+               var result = handled.1 as? [String: Any], let states = result["states"] as? [[String: Any]] {
+                result["states"] = states.map { state in
+                    var row = state
+                    row["channel_mentions_only"] = notifications.mentionsOnly(row["channel_id"] as? String ?? "")
+                    return row
+                }
+                return (handled.0, result)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoCommentAvatarCheck"),
                request.httpMethod == "POST", path.hasSuffix("/comments"),
                var body = handled.1 as? [String: Any], var comment = body["comment"] as? [String: Any] {
@@ -912,7 +921,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         seedNotificationsIfNeeded(task: review, doc: plan)
         w.seedViewState(type: "task", resource: review, scope: a, channel: general, activity: 3, viewed: 1, attention: 3)
         w.seedViewState(type: "document", resource: plan, scope: a, channel: general, activity: 2, viewed: 1)
-        w.seedViewState(type: "thread", resource: Self.uuid(39, "f1c7bbbb"), scope: a, channel: general, activity: 4, viewed: 2)
+        w.seedViewState(type: "thread", resource: Self.uuid(39, "f1c7bbbb"), scope: a, channel: general, activity: 4, viewed: 2, mention: ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureUnreadMention") ? 3 : 0)
         w.markSeeded()
     }
 

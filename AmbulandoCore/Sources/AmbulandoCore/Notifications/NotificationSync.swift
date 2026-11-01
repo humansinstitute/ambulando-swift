@@ -81,6 +81,7 @@ extension WorkspaceSync {
                 }
             }
             try await replayNotifications(connection, workspace, api: api, from: status.localSeq, rulesRevision: status.rulesRevision, run: &run)
+            await refreshInbox(connection, workspace, priority: .background, force: force)
             let counts = try await api.notificationCounts(workspaceId: w, appNpub: workspace.appNpub)
             try Task.checkCancellation()
             try await store.writer.saveNotificationCounts(connectionId: c, workspaceId: w, counts)
@@ -315,6 +316,7 @@ extension WorkspaceSync {
         // Re-list the server-filtered inbox, including old ordinary unread items. No message/read-state mutation occurs.
         try await store.writer.resetNotificationCursor(connectionId: connection.id, workspaceId: workspace.id)
         await refreshNotifications(connection, workspace, priority: .visible, force: true)
+        await refreshInbox(connection, workspace, priority: .visible, force: true)
         return updated
     }
 }

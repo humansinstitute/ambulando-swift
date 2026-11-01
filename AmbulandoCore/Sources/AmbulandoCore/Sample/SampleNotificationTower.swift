@@ -128,6 +128,10 @@ public final class SampleNotificationTower: @unchecked Sendable {
         }
     }
 
+    public func mentionsOnly(_ channelId: String) -> Bool {
+        lock.withLock { channelPreferences[channelId]?["mode"] as? String == "mentions_only" }
+    }
+
     public var titles: [String] { lock.withLock { items.values.compactMap { ($0["presentation"] as? [String: Any])?["title"] as? String } } }
 
     // MARK: Routes
@@ -149,7 +153,7 @@ public final class SampleNotificationTower: @unchecked Sendable {
             func visible(_ item: [String: Any]) -> Bool {
                 let app = (item["source"] as? [String: Any])?["app_id"] as? String ?? "", category = item["category"] as? String ?? ""
                 let channel = (item["subject"] as? [String: Any])?["channel_id"] as? String ?? ""
-                if app == "flightdeck.core", category == "chat_thread", channelPreferences[channel]?["mode"] as? String == "mentions_only" { return false }
+                if app == "flightdeck.core", ["chat_thread", "task_assignment"].contains(category), channelPreferences[channel]?["mode"] as? String == "mentions_only" { return false }
                 let matching = rules.values.filter { $0["source_app_id"] as? String == app && $0["category"] as? String == category && $0["channel"] as? String == "inbox"
                     && $0["mode"] as? String != "default" }
                 if let own = matching.first(where: { $0["client_app_id"] as? String == viewer }) { return own["mode"] as? String != "off" }

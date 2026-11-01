@@ -431,19 +431,23 @@ extension StoreWriter {
             var changed = 0
             let s = try db.prepare("""
             INSERT INTO view_states(workspace_id, resource_type, resource_id, scope_id, channel_id, activity_version, viewed_activity_version,
-                                    attention_activity_version, row_version, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)
+                                    attention_activity_version, row_version, updated_at, mention_activity_version, channel_mentions_only) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(workspace_id, resource_type, resource_id) DO UPDATE SET scope_id=excluded.scope_id, channel_id=excluded.channel_id,
               activity_version=MAX(view_states.activity_version, excluded.activity_version),
               viewed_activity_version=MAX(view_states.viewed_activity_version, excluded.viewed_activity_version),
+              mention_activity_version=COALESCE(excluded.mention_activity_version, view_states.mention_activity_version),
+              channel_mentions_only=CASE WHEN excluded.mention_activity_version IS NULL THEN view_states.channel_mentions_only ELSE excluded.channel_mentions_only END,
               attention_activity_version=excluded.attention_activity_version, row_version=excluded.row_version, updated_at=excluded.updated_at
             WHERE excluded.row_version <> view_states.row_version OR excluded.activity_version <> view_states.activity_version
               OR excluded.viewed_activity_version > view_states.viewed_activity_version
               OR excluded.attention_activity_version IS NOT view_states.attention_activity_version
+              OR excluded.mention_activity_version IS NOT view_states.mention_activity_version
+              OR excluded.channel_mentions_only <> view_states.channel_mentions_only
             """)
             for r in rows {
                 try s.run([.text(workspaceId), .text(r.resourceType.rawValue), .text(r.resourceId), r.scopeId.sql, r.channelId.sql,
                            .int(Int64(r.activityVersion)), .int(Int64(r.viewedActivityVersion)), r.attentionActivityVersion.map { .int(Int64($0)) } ?? .null,
-                           .int(Int64(r.rowVersion)), .text(r.updatedAt)])
+                           .int(Int64(r.rowVersion)), .text(r.updatedAt), r.mentionActivityVersion.map { .int(Int64($0)) } ?? .null, .int(r.channelMentionsOnly ? 1 : 0)])
                 changed += db.changes
             }
             if complete {
@@ -696,7 +700,7 @@ extension StoreReader {
 
     public func viewStates(workspaceId: String) throws -> [ViewStateRecord] {
         let s = try db.prepare("""
-        SELECT resource_type, resource_id, scope_id, channel_id, activity_version, viewed_activity_version, attention_activity_version, row_version, updated_at
+        SELECT resource_type, resource_id, scope_id, channel_id, activity_version, viewed_activity_version, attention_activity_version, row_version, updated_at, mention_activity_version, channel_mentions_only
         FROM view_states WHERE workspace_id = ? ORDER BY updated_at DESC
         """)
         try s.bind([.text(workspaceId)])
@@ -705,7 +709,7 @@ extension StoreReader {
             guard let type = ViewStateRecord.ResourceType(rawValue: s.text(0) ?? "") else { continue }
             rows.append(ViewStateRecord(workspaceId: workspaceId, resourceType: type, resourceId: s.text(1)!, scopeId: s.text(2), channelId: s.text(3),
                                         activityVersion: Int(s.int(4)), viewedActivityVersion: Int(s.int(5)),
-                                        attentionActivityVersion: s.isNull(6) ? nil : Int(s.int(6)), rowVersion: Int(s.int(7)), updatedAt: s.text(8)!))
+                                        attentionActivityVersion: s.isNull(6) ? nil : Int(s.int(6)), mentionActivityVersion: s.isNull(9) ? nil : Int(s.int(9)), channelMentionsOnly: s.int(10) != 0, rowVersion: Int(s.int(7)), updatedAt: s.text(8)!))
         }
         return rows
     }

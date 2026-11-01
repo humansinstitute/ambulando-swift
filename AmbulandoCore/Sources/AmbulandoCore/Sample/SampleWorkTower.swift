@@ -231,11 +231,12 @@ public final class SampleWorkTower: @unchecked Sendable {
     public var fileCount: Int { lock.withLock { table("files").count } }
     public func files() -> [[String: Any]] { lock.withLock { Array(table("files").values) } }
 
-    public func seedViewState(type: String, resource: String, scope: String?, channel: String?, activity: Int, viewed: Int, attention: Int? = nil) {
+    public func seedViewState(type: String, resource: String, scope: String?, channel: String?, activity: Int, viewed: Int, attention: Int? = nil, mention: Int = 0) {
         lock.withLock {
             var row: [String: Any] = ["workspace_id": workspaceId, "viewer_actor_id": "sample", "resource_type": type, "resource_id": resource,
                                       "scope_id": scope ?? NSNull(), "channel_id": channel ?? NSNull(), "activity_version": activity,
                                       "viewed_activity_version": viewed, "unread": activity > viewed, "row_version": 1, "created_at": now(), "updated_at": now()]
+            row["mention_activity_version"] = mention
             if let attention { row["attention_policy_version"] = 1; row["attention_activity_version"] = attention; row["attention_unread"] = attention > viewed }
             put("view_states", "\(type):\(resource)", row)
             persist()

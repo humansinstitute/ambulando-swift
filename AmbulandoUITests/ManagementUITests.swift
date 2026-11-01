@@ -54,6 +54,42 @@ final class ManagementUITests: XCTestCase {
         verifyChannelOptionsRoundTrip(admin: false, extra: ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityM"])
     }
 
+    func testMutedOrdinaryUnreadDisappearsFromSidebarAndUnmuteRestoresIt() {
+        verifyUnreadMute(mention: false)
+    }
+
+    func testMutedDirectMentionRetainsSidebarUnread() {
+        verifyUnreadMute(mention: true)
+    }
+
+    private func verifyUnreadMute(mention: Bool) {
+        let app = launch(["-AmbulandoFixtureAdmin"] + (mention ? ["-AmbulandoFixtureUnreadMention"] : []))
+        app.section("deck")
+        app.selectSidebarChannel("general")
+        app.deckCard("inbox")
+        app.openSidebar()
+        XCTAssertTrue(app.buttons["sidebar.unread.general"].waitForExistence(timeout: 10))
+        app.buttons["sidebar.channel.general"].firstMatch.tap()
+        openInboxOptions(app)
+        let toggle = app.switches["channelSettings.mentionsOnly"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        setMute(toggle, on: true)
+        app.buttons["Close"].firstMatch.tap()
+        app.openSidebar()
+        let unread = app.buttons["sidebar.unread.general"].firstMatch
+        let expected = NSPredicate { _, _ in unread.exists == mention }
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: expected, object: app)], timeout: 12) == .completed)
+        capture(app, mention ? "muted-direct-mention-attention" : "muted-ordinary-no-attention")
+        app.buttons["sidebar.channel.general"].firstMatch.tap()
+        XCTAssertFalse(app.buttons["channel.options"].exists)
+        openInboxOptions(app)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        setMute(toggle, on: false)
+        app.buttons["Close"].firstMatch.tap()
+        app.openSidebar()
+        XCTAssertTrue(unread.waitForExistence(timeout: 12), "Unmute restores underlying ordinary unread")
+    }
+
     private func verifyChannelOptionsRoundTrip(admin: Bool, extra: [String] = []) {
         let app = launch((admin ? ["-AmbulandoFixtureAdmin"] : ["-AmbulandoFixtureReader"]) + extra)
         // Start on ordinary Deck, then choose the channel through its existing navigation.
