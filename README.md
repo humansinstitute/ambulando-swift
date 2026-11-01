@@ -11,6 +11,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Installed workspace napplets (iPhone/iPad build 72, Mac build 63)
+
+Toolbox and Deck Apps now discover installed workspace napplets, including Project Register. They open in a private
+native host with the existing read/write bridge, so statuses and notes can save through Tower and reopen with their
+saved values. Unsaved changes require confirmation before refresh or close; failed access and workspace switches
+clear the document. Personal WApps and canvas HTML retain their existing viewing paths.
+See [installed napplet behavior and verification](docs/installed-napplets.md). Source/build validation is separate
+from physical installation and authenticated device acceptance.
+
 ## Channel options and quiet channels (iPhone/iPad build 70, Mac build 61)
 
 Select a channel, open Deck, and tap the existing **Inbox ••• → Channel options → Your notifications → Mute except mentions**.

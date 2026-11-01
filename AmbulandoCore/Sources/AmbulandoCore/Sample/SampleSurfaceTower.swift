@@ -228,6 +228,62 @@ public final class SampleSurfaceTower: @unchecked Sendable {
 
     public func pinRows() -> [[String: Any]] { lock.withLock { Array(table("pins").values) } }
 
+
+    /// Synthetic bridge-v1 fixture. It uses the same keyed record projection, revision and operation-id contract as
+    /// Project Register. No human workspace, notes or keys enter this fixture.
+    public func seedInstalledNapplet(app: String, owner: String, tower: String) {
+        mutate {
+            guard state["napplet_fixture"] == nil else { return }
+            state["napplet_fixture"] = ["app": app, "owner": owner, "tower": tower, "revision": 1,
+                                        "note": "", "status": "active", "operation": ""]
+        }
+    }
+    public static let nappletRecordId = "abc70000-0000-4000-8000-000000000001"
+    public static let nappletHTML = #"""
+    <meta name="viewport" content="width=device-width,initial-scale=1"><h1>Sample Project Register</h1><p id="session"></p>
+    <label>Status<select aria-label="Project status"><option>active</option><option>done</option></select></label>
+    <label>Note<textarea aria-label="Project note"></textarea></label><button>Save note</button><p role="status" id="status">Opening</p>
+    <script>
+    const session=window.nappletSession,send=(type,extra={})=>parent.postMessage({version:1,session,type,...extra},'*');
+    document.getElementById('session').textContent='Session '+session;
+    const note=document.querySelector('textarea'),status=document.querySelector('select'),button=document.querySelector('button'),message=document.getElementById('status');
+    let record,dirty=false,pending=false,operation,baseRevision;
+    function change(){if(!dirty)baseRevision=record.revision;dirty=true;operation=crypto.randomUUID();send('dirty',{dirty:true})}note.oninput=change;status.onchange=change;
+    button.onclick=()=>{pending=true;button.disabled=true;send('write',{method:'PATCH',path:'types/project_register_feedback/records/'+record.id,body:{expected_revision:baseRevision,values:{project_id:'example',status:status.value,note:note.value,operation_id:operation}}})};
+    window.addEventListener('message',e=>{const m=e.data;if(e.source!==parent||m?.version!==1||m.session!==session||m.type!=='state')return;
+      if(m.projection){record=m.projection.records.project_register_feedback[0];if(!dirty||pending&&m.status==='ready'){note.value=record.values.note||'';status.value=record.values.status;dirty=false;pending=false;send('dirty',{dirty:false})}}
+      button.disabled=m.projection?.capabilities.write===false||(m.status!=='ready'&&!(m.status==='error'&&m.retainDraft));message.textContent=m.status==='ready'?'Authorized r'+record.revision:m.error||m.status;
+    });send('ready');
+    </script>
+    """#
+
+    private func nappletRoute(_ p: [String], method: String, object: [String: Any]) -> (Int, Any) {
+        guard var f = state["napplet_fixture"] as? [String: Any] else { return error(403, "org_data_read_required") }
+        if f["denied"] as? Bool == true { return error(403, "org_data_read_required") }
+        if method == "PATCH", p == ["org-data", "types", "project_register_feedback", "records", Self.nappletRecordId] {
+            guard let values = object["values"] as? [String: Any], let operation = values["operation_id"] as? String else { return error(400, "invalid_values") }
+            if operation == f["operation"] as? String { return (200, ["ok": true]) }
+            guard object["expected_revision"] as? Int == f["revision"] as? Int else { return error(409, "record_conflict") }
+            if values["note"] as? String == "fixture conflict" { f["revision"] = (f["revision"] as! Int) + 1; state["napplet_fixture"] = f; return error(409, "record_conflict") }
+            if values["note"] as? String == "fixture revoke" { f["denied"] = true }
+            if values["note"] as? String == "fixture narrow" { f["narrowed"] = true }
+            f["revision"] = (f["revision"] as! Int) + 1; f["note"] = values["note"]; f["status"] = values["status"]; f["operation"] = operation
+            state["napplet_fixture"] = f; return (200, ["ok": true])
+        }
+        guard method == "GET", p.count == 2, ["catalogue", "snapshot"].contains(p[1]) else { return error(404, "not_found") }
+        let capabilities: [String: Any] = ["read": true, "write": f["narrowed"] as? Bool != true, "schema": false]
+        let fields = ["project_id", "status", "note", "operation_id"].filter { f["narrowed"] as? Bool != true || $0 != "note" }.map { ["key": $0, "label": $0, "type": "text"] }
+        let type: [String: Any] = ["key": "project_register_feedback", "label": "Project feedback", "fields": fields, "revision": 1,
+                                   "access": ["read": "members", "write": "members"], "capabilities": capabilities]
+        let installation: [String: Any] = ["key": "project_register", "version": 1, "revision": 1, "bridge_version": 1, "title": "Sample Project Register",
+                                           "capabilities": ["org_data.read", "org_data.write"], "html": Self.nappletHTML, "sha256": SHA256Hex.of(Data(Self.nappletHTML.utf8))]
+        let record: [String: Any] = ["id": Self.nappletRecordId, "type_key": "project_register_feedback", "revision": f["revision"]!,
+                                     "values": ["project_id": "example", "status": f["status"]!, "note": f["note"]!, "operation_id": f["operation"]!]]
+        return (200, ["workspace_id": workspaceId, "identity": ["workspace_id": workspaceId, "app_npub": f["app"]!, "workspace_owner_npub": f["owner"]!,
+                    "tower_service_npub": f["tower"]!, "workspace_service_npub": f["app"]!], "complete": true,
+                      "types": [type], "records": p[1] == "catalogue" ? [] : [record], "installations": [installation], "capabilities": capabilities, "identities": [:]])
+    }
+
     // MARK: Routing
 
     /// Handles a request for these routes, or returns nil for routes it does not own.
@@ -262,7 +318,7 @@ public final class SampleSurfaceTower: @unchecked Sendable {
     static func owns(_ p: [String]) -> Bool {
         guard let first = p.first else { return false }
         switch first {
-        case "canvases", "workspace-agents", "agent-activities", "personal-wapps", "record-sync": return true
+        case "org-data", "canvases", "workspace-agents", "agent-activities", "personal-wapps", "record-sync": return true
         case "scopes": return p.count >= 4 && p[2] == "context"
         case "me": return p.count >= 2 && ["pins", "pin-order", "autopilot-agents"].contains(p[1])
         case "files": return p.count == 5 && p[2] == "versions" && p[4] == "object"
@@ -361,6 +417,9 @@ public final class SampleSurfaceTower: @unchecked Sendable {
         case ("GET", 2, "me") where p[1] == "autopilot-agents":
             let rows = table("agents").values.sorted { ($0["sort_order"] as! Int) < ($1["sort_order"] as! Int) }
             return (200, ["settings": ["row_version": 1, "autopilot_agents": rows.map { ["agent_npub": $0["agent_npub"] ?? "", "url": "https://browser.sample.invalid/agents"] }]])
+        // Installed workspace napplets, separate from personal WApps and canvas HTML Files.
+        case (_, _, "org-data"):
+            return nappletRoute(p, method: method, object: object)
         // Toolbox
         case ("GET", 1, "personal-wapps"):
             let rows = table("wapps").values.sorted { ($0["sort_order"] as! Int) < ($1["sort_order"] as! Int) }

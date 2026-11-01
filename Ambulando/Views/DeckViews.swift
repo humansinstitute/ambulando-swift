@@ -875,6 +875,7 @@ struct DeckHelloCard: View {
     let store: LocalStore
     @State private var name = LiveQuery<String?>(initial: nil)
     @State private var wapps = LiveQuery<[PersonalWappRecord]>(initial: [])
+    @State private var napplets = LiveQuery<[InstalledNapplet]>(initial: [])
 
     var body: some View {
         let nav = model.navigation.value
@@ -898,11 +899,17 @@ struct DeckHelloCard: View {
                     .accessibilityIdentifier("deck.app.\(wapp.title)")
                 }
             }
-            if wapps.loaded && wapps.value.isEmpty { DeckNote(text: "WApps you add in the web app appear here and in Toolbox.") }
+            ForEach(napplets.value) { napplet in
+                NavigationLink(value: WorkRoute.webContent(workspaceId: workspace.id, source: .installedNapplet(key: napplet.key, title: napplet.title))) {
+                    AppLauncherCard(title: napplet.title, subtitle: "Workspace napplet", sources: [], workspace: workspace)
+                }.buttonStyle(.plain).accessibilityIdentifier("deck.napplet.\(napplet.key)")
+            }
+            if wapps.loaded && wapps.value.isEmpty && napplets.value.isEmpty { DeckNote(text: "WApps you add in the web app appear here and in Toolbox.") }
         }
         .task {
             let w = workspace.id, store = store, connection = model.connection?.id ?? "", me = model.connection?.signerNpub
             wapps.start(store: store, matches: { $0.workspaceId == w && $0.table == .toolbox }) { try await store.reader.personalWapps(connectionId: connection, workspaceId: w) }
+            napplets.start(store: store, matches: { $0.table == .appState }) { try await store.reader.installedNapplets(connectionId: connection, workspaceId: w) }
             name.start(store: store, matches: { $0.workspaceId == w && $0.table == .members }) {
                 try await store.reader.members(workspaceId: w).first { $0.npub == me }?.label
             }
@@ -998,6 +1005,7 @@ private extension View {
 private struct MacDeckLaunchers: Equatable, Sendable {
     var name: String?
     var apps: [PersonalWappRecord] = []
+    var napplets: [InstalledNapplet] = []
     var agents: [PersonalAgentLauncher] = []
     var people = PeopleDirectory()
 }
@@ -1035,6 +1043,10 @@ private struct MacDeckWelcome: View {
             guard let url = app.safeLaunchURL else { return nil }
             return MacLauncherItem(id: app.id, title: app.title, subtitle: app.description ?? "WApp", url: url,
                                    logo: .app(app.logoCandidates, initials: PersonInitials.of(app.title)), identifier: "deck.app.\(app.title)")
+        }
+        + snapshot.value.napplets.map { n in
+            MacLauncherItem(id: "napplet:" + n.key, title: n.title, subtitle: "Workspace napplet", url: nil,
+                            logo: .app([], initials: PersonInitials.of(n.title)), identifier: "deck.napplet.\(n.key)", nappletKey: n.key)
         }
         return launcherPanel("Apps") {
             if !items.isEmpty {
@@ -1085,7 +1097,7 @@ private struct MacDeckWelcome: View {
             let saved = try await store.reader.state(key)
             let agents = saved.flatMap { $0.data(using: .utf8) }.flatMap { try? JSONDecoder().decode([PersonalAgentLauncher].self, from: $0) } ?? []
             let people = try await store.reader.people(workspaceId: w)
-            return MacDeckLaunchers(name: try await members.first { $0.npub == me }?.label, apps: try await apps, agents: agents, people: people)
+            return MacDeckLaunchers(name: try await members.first { $0.npub == me }?.label, apps: try await apps, napplets: try await store.reader.installedNapplets(connectionId: connection, workspaceId: w), agents: agents, people: people)
         }
         model.openToolbox(workspace)
         if let sync = model.sync, let connection = model.connection { Task { await sync.refreshPersonalAgentLaunchers(connection, workspace) } }
@@ -1100,6 +1112,7 @@ private struct MacLauncherItem: Identifiable {
     let url: URL?
     let logo: Logo
     let identifier: String
+    var nappletKey: String? = nil
 }
 
 /// sol `.launcher-stack-panel`: collapsed, only the first launcher is a real card, with up to two card edges behind
@@ -1140,7 +1153,7 @@ private struct MacLauncherStack<Footer: View>: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(items.count == 1 && first.url == nil)
+        .disabled(items.count == 1 && first.url == nil && first.nappletKey == nil)
         .help(items.count == 1 ? first.title : "Show all \(items.count) \(noun)")
         .accessibilityLabel(items.count == 1 ? "\(first.title), \(first.subtitle)" : "\(first.title) and \(items.count - 1) more \(noun)")
         .accessibilityHint(items.count == 1 ? "Opens in the browser" : "Shows every launcher")
@@ -1151,8 +1164,8 @@ private struct MacLauncherStack<Footer: View>: View {
                     ForEach(items) { item in
                         Button { launch(item) } label: { MacLauncherPill(item: item, workspace: workspace) }
                             .buttonStyle(.plain)
-                            .disabled(item.url == nil)
-                            .opacity(item.url == nil ? 0.58 : 1)
+                            .disabled(item.url == nil && item.nappletKey == nil)
+                            .opacity(item.url == nil && item.nappletKey == nil ? 0.58 : 1)
                             .accessibilityIdentifier(item.identifier)
                     }
                     footer()
@@ -1165,7 +1178,10 @@ private struct MacLauncherStack<Footer: View>: View {
 
     private func launch(_ item: MacLauncherItem) {
         expanded = nil
-        if let url = item.url { model.browser.launch(url) }
+        if let key = item.nappletKey {
+            model.toolboxPath.append(.webContent(workspaceId: workspace.id, source: .installedNapplet(key: key, title: item.title)))
+            model.show(.toolbox)
+        } else if let url = item.url { model.browser.launch(url) }
     }
 }
 

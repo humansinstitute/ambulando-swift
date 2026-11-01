@@ -5,6 +5,7 @@ import Foundation
 /// addresses of their own and open as in-app browser tabs instead (`BrowserModel.launch`).
 enum WebContentSource: Hashable, Codable {
     case htmlNaplet(canvasId: String, napletId: String, title: String)
+    case installedNapplet(key: String, title: String)
 }
 
 /// The viewer's pins with the state of any pin or unpin still waiting in the write queue.
@@ -95,7 +96,10 @@ extension AppModel {
     }
 
     func openToolbox(_ workspace: WorkspaceRecord, force: Bool = false) {
-        withWorkspace(workspace) { sync, c in await sync.refreshToolbox(c, workspace, force: force) }
+        withWorkspace(workspace) { sync, c in
+            await sync.refreshToolbox(c, workspace, force: force)
+            await sync.refreshInstalledNapplets(c, workspace, force: force)
+        }
     }
 
     func ensureThread(_ threadId: String, in workspace: WorkspaceRecord) {

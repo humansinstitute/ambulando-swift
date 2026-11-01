@@ -4,9 +4,9 @@ import WebKit
 
 // Toolbox (sol `toolbox-manager.js`): the viewer's personal WApps, listed natively. A WApp's UI is a web document its
 // publisher owns at an HTTPS address; it opens as an in-app browser tab (`BrowserModel.launch`), as Context Tree
-// artifact pages do, where `window.nostr` asks the user before anything is shared or signed. HTML naplets are workspace
-// content with no origin of their own, so they stay in the labelled, sandboxed view below: no script bridge, no network,
-// nothing that can reach the app's identity, Tower session or storage.
+// artifact pages do, where `window.nostr` asks the user before anything is shared or signed. Canvas HTML File naplets
+// stay in the bridge-free sandbox below. Workspace-installed bundles use the separate InstalledNappletView host
+// and only their declared, currently authorized typed data capabilities.
 
 struct ToolboxView: View {
     @Environment(AppModel.self) private var model
@@ -14,10 +14,23 @@ struct ToolboxView: View {
     let store: LocalStore
     @State private var wapps = LiveQuery<[PersonalWappRecord]>(initial: [])
     @State private var complete = LiveQuery<Bool>(initial: true)
+    @State private var napplets = LiveQuery<[InstalledNapplet]>(initial: [])
 
     var body: some View {
         let key = WorkspaceSync.toolboxKey(workspace.id)
+        let nappletKey = WorkspaceSync.nappletsKey(model.connection?.id ?? "", workspace.id)
         List {
+            Section("Workspace napplets") {
+                if let error = model.syncError(forKey: nappletKey) {
+                    Label(error, systemImage: "exclamationmark.icloud").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                    Button("Retry workspace napplets") { model.openToolbox(workspace, force: true) }
+                }
+                ForEach(napplets.value) { napplet in
+                    NavigationLink(value: WorkRoute.webContent(workspaceId: workspace.id, source: .installedNapplet(key: napplet.key, title: napplet.title))) {
+                        Label { VStack(alignment: .leading) { Text(napplet.title); Text("Installed napplet · version \(napplet.version)").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground) } } icon: { Image(systemName: "app.badge") }
+                    }.accessibilityIdentifier("napplet.\(napplet.key)")
+                }
+            }
             Section {
                 ForEach(wapps.value) { wapp in
                     if let url = wapp.safeLaunchURL {
@@ -40,7 +53,7 @@ struct ToolboxView: View {
         .scrollContentBackground(.hidden)
         .navigationTitle("Toolbox")
         .overlay {
-            if wapps.loaded && wapps.value.isEmpty {
+            if wapps.loaded && wapps.value.isEmpty && napplets.value.isEmpty && model.syncError(forKey: nappletKey) == nil {
                 if let error = model.syncError(forKey: key) { EmptyNote(title: "Toolbox unavailable", systemImage: "exclamationmark.icloud", detail: error) }
                 else { EmptyNote(title: "No WApps", systemImage: "wrench.and.screwdriver", detail: model.canRead ? "WApps you add in the web app appear here." : "Unlock to load your Toolbox.") }
             }
@@ -52,6 +65,7 @@ struct ToolboxView: View {
             complete.start(store: store, matches: { $0.workspaceId == w && $0.table == .toolbox }) {
                 try await store.reader.listSyncComplete(workspaceId: w, key: WorkspaceSync.toolboxKey(w)) ?? true
             }
+            napplets.start(store: store, matches: { $0.table == .appState }) { try await store.reader.installedNapplets(connectionId: connection, workspaceId: w) }
             model.openToolbox(workspace)
         }
     }
@@ -83,7 +97,9 @@ struct WebContentView: View {
 
     var body: some View {
         Group {
-            if let resolved {
+            if case .installedNapplet(let key, let title) = source {
+                InstalledNappletView(key: key, title: title, workspace: workspace)
+            } else if let resolved {
                 switch resolved {
                 case .html(let html, let title):
                     LabelledWebView(content: .html(html), title: title, label: "Web content · HTML artefact from this workspace (no network access)")
@@ -100,6 +116,7 @@ struct WebContentView: View {
 
     private func resolve() async {
         switch source {
+        case .installedNapplet: return
         case .htmlNaplet(let canvas, let naplet, let title):
             guard let sync = model.sync, let connection = model.connection, model.canRead else { failure = "Unlock to open this HTML artefact."; return }
             do {

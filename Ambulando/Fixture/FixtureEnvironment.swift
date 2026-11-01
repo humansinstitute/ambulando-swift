@@ -998,6 +998,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     /// once per fixture directory. Shapes follow Tower's serializers; it is still sample data, never evidence of Tower.
     func seedSurfacesIfNeeded() {
         let s = surfaces
+        s.seedInstalledNapplet(app: Self.appNpub, owner: Self.ana, tower: Self.appNpub)
         guard !s.seeded() else { return }
         let a = Self.scopeAmbulando, general = Self.generalChannel, design = Self.designChannel
         let thread = Self.uuid(39, "f1c7bbbb")

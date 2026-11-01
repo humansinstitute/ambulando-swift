@@ -241,6 +241,8 @@ public struct EventPlan: Sendable, Equatable {
                 if let channel { plan.refreshes.insert(.agentActivity(channelId: channel)) } else { plan.ignored += 1 }
             case "workspace_agent", "autopilot_connection":
                 plan.refreshes.insert(.agents)
+            case "org_data":
+                plan.refreshes.formUnion([.toolbox, .access])
             case "personal_wapp":
                 plan.refreshes.insert(.toolbox)
             case "notification_item":

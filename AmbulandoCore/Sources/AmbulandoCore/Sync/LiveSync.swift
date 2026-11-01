@@ -298,6 +298,7 @@ extension WorkspaceSync {
         await refreshPins(connection, workspace, priority: .background)
         await refreshCanvases(connection, workspace, priority: .background)
         await refreshToolbox(connection, workspace, priority: .background)
+        await refreshInstalledNapplets(connection, workspace, priority: .background)
         await refreshAgents(connection, workspace, channelIds: [], priority: .background)
     }
 
@@ -449,6 +450,7 @@ extension WorkspaceSync {
         case .notifications:
             await refreshNotifications(connection, workspace, priority: .background)
         case .toolbox:
+            await refreshInstalledNapplets(connection, workspace, priority: .background, force: true)
             let page = try await api.personalWapps(workspaceId: w, appNpub: app)
             try await store.writer.replacePersonalWapps(connectionId: connection.id, workspaceId: w, page.wapps, complete: page.complete)
             try await store.writer.saveListSync(workspaceId: w, key: Self.toolboxKey(w), complete: page.complete)
