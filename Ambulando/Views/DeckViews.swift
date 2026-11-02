@@ -242,7 +242,7 @@ struct DeckInboxCard: View {
         DeckCardFrame(title: channel.map { "Inbox: #\(nav.label($0))" } ?? "Inbox", identifier: "inbox") {
             if let channel { PinButton(type: .channel, id: channel.id, title: nav.label(channel), workspace: workspace) }
             newThreadButton
-            readMenu(filtered)
+            readMenu()
         } content: {
             controls
             if let notice { DeckNote(text: notice).accessibilityIdentifier("deck.inbox.notice") }
@@ -339,12 +339,12 @@ struct DeckInboxCard: View {
         .accessibilityIdentifier("deck.inbox.new")
     }
 
-    private func readMenu(_ items: [DeckActivity.Item]) -> some View {
+    private func readMenu() -> some View {
         Menu {
-            Button("Mark all tasks as read") { markAll(items, [.task], label: "tasks") }
-            Button("Mark all docs as read") { markAll(items, [.document], label: "docs") }
-            Button("Mark all chats as read") { markAll(items, [.chat], label: "chats") }
-            Button("Mark everything as read") { markAll(items, [.chat, .task, .document], label: "Inbox items") }
+            Button("Mark all tasks as read") { markAll([.task], label: "tasks") }
+            Button("Mark all docs as read") { markAll([.document], label: "docs") }
+            Button("Mark all chats as read") { markAll([.chat], label: "chats") }
+            Button("Mark everything as read") { markAll([.chat, .task, .document], label: "Inbox items") }
             ChannelOptionsAction(channelId: model.context.channelId, selection: $channelOptions)
         } label: {
             Image(systemName: "ellipsis.circle").font(.amb(.body)).frame(width: 44, height: 44)
@@ -440,8 +440,9 @@ struct DeckInboxCard: View {
         return type.flatMap { snapshot.value.viewStates["\($0.rawValue):\(item.recordId)"] }
     }
 
-    private func markAll(_ items: [DeckActivity.Item], _ kinds: Set<DeckActivity.Kind>, label: String) {
-        let states = items.filter { kinds.contains($0.kind) && $0.isUnread }.compactMap(viewState)
+    private func markAll(_ kinds: Set<DeckActivity.Kind>, label: String) {
+        let states = DeckActivity.readResources(Array(snapshot.value.viewStates.values), kinds: kinds, context: model.context,
+                                               channelScopes: Dictionary(model.navigation.value.groups.flatMap(\.channels).map { ($0.id, $0.scopeId) }, uniquingKeysWith: { a, _ in a }))
         guard !states.isEmpty else { notice = "No unread \(label) here."; return }
         model.markRead(states, in: workspace)
         notice = "Marked \(states.count) \(label) as read."

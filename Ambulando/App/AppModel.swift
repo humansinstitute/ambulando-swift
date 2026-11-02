@@ -1268,7 +1268,7 @@ final class AppModel {
         let collapsedKey = WorkspaceSync.collapsedKey(connectionId: connection.id, workspaceId: workspaceId)
         let viewer = connection.signerNpub
         navigation.start(store: store, matches: { key in
-            ([.scopes, .channels, .viewStates, .members].contains(key.table) && key.workspaceId == workspaceId) || key.table == .appState
+            ([.scopes, .channels, .viewStates, .tasks, .docs, .threads, .members].contains(key.table) && key.workspaceId == workspaceId) || key.table == .appState
                 || key.table == .profiles
         }) {
             async let scopes = store.reader.scopes(workspaceId: workspaceId)

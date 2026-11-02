@@ -74,6 +74,19 @@ public enum DeckActivity {
     static let completedStates: Set<String> = ["done", "complete", "completed"]
     static let terminalStates: Set<String> = ["done", "complete", "completed", "archive", "archived", "cancelled", "canceled"]
 
+    /// Explicit bulk read uses persisted positions, never the searched/paged cards.
+    /// Include off-deck activity so a later restore cannot resurrect an acknowledged update.
+    public static func readResources(_ states: [ViewStateRecord], kinds: Set<Kind>, context: WorkContext,
+                                     channelScopes: [String: String]) -> [ViewStateRecord] {
+        states.filter { state in
+            let kind: Kind = switch state.resourceType { case .thread: .chat; case .task: .task; case .document: .document }
+            guard kinds.contains(kind), state.underlyingUnread || state.needsAttention else { return false }
+            guard let scope = context.scopeId else { return true }
+            if let channel = context.channelId { return state.channelId == channel }
+            return (state.scopeId ?? state.channelId.flatMap { channelScopes[$0] }) == scope
+        }
+    }
+
     /// Every Deck Inbox item in `context`, newest first.
     public static func inbox(_ sources: Sources, context: WorkContext) -> [Item] {
         let unread = Dictionary(sources.viewStates.map { ("\($0.resourceType.rawValue):\($0.resourceId)", $0.unread) }, uniquingKeysWith: { a, b in a || b })

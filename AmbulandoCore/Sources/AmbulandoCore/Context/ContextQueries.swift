@@ -48,10 +48,23 @@ extension StoreReader {
         return rows
     }
 
+    // Only an explicitly stored lifecycle excludes attention. A missing parent can
+    // be unloaded or paginated and must retain its real unread state.
+    static let attentionEligibleSQL = """
+      NOT EXISTS (SELECT 1 FROM tasks t WHERE view_states.resource_type = 'task'
+        AND t.workspace_id = view_states.workspace_id AND t.id = view_states.resource_id
+        AND lower(trim(t.state)) IN ('archive', 'archived', 'cancelled', 'canceled'))
+      AND NOT EXISTS (SELECT 1 FROM docs d WHERE view_states.resource_type = 'document'
+        AND d.workspace_id = view_states.workspace_id AND d.id = view_states.resource_id AND d.archived = 1)
+      AND NOT EXISTS (SELECT 1 FROM threads t WHERE view_states.resource_type = 'thread'
+        AND t.workspace_id = view_states.workspace_id AND t.id = view_states.resource_id AND (t.archived = 1 OR t.deleted = 1))
+      """
+
     /// Channels with unread or attention-needing activity (any resource in them), for the sidebar.
     public func unreadChannelIds(workspaceId: String) throws -> Set<String> {
         let s = try db.prepare("""
         SELECT DISTINCT channel_id FROM view_states WHERE workspace_id = ? AND channel_id IS NOT NULL
+          AND \(Self.attentionEligibleSQL)
           AND (CASE WHEN channel_mentions_only = 1 THEN COALESCE(mention_activity_version,0) > viewed_activity_version
             ELSE (activity_version > viewed_activity_version OR COALESCE(attention_activity_version,0) > viewed_activity_version) END)
         """)

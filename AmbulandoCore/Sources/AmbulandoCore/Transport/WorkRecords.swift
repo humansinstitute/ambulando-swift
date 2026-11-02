@@ -298,8 +298,9 @@ public struct ViewStateRecord: Sendable, Equatable, Identifiable {
     public var underlyingUnread: Bool { activityVersion > viewedActivityVersion }
     public let mentionActivityVersion: Int?
     public let channelMentionsOnly: Bool
-    public var unread: Bool { channelMentionsOnly ? (mentionActivityVersion ?? 0) > viewedActivityVersion : underlyingUnread }
-    public var needsAttention: Bool { (channelMentionsOnly ? (mentionActivityVersion ?? 0) : (attentionActivityVersion ?? 0)) > viewedActivityVersion }
+    public var attentionEligible = true
+    public var unread: Bool { attentionEligible && (channelMentionsOnly ? (mentionActivityVersion ?? 0) > viewedActivityVersion : underlyingUnread) }
+    public var needsAttention: Bool { attentionEligible && (channelMentionsOnly ? (mentionActivityVersion ?? 0) : (attentionActivityVersion ?? 0)) > viewedActivityVersion }
 
     public init(raw: Data) throws {
         guard let o = try JSONSerialization.jsonObject(with: raw) as? [String: Any], let w = lowerUUID(o["workspace_id"] as? String),

@@ -700,16 +700,18 @@ extension StoreReader {
 
     public func viewStates(workspaceId: String) throws -> [ViewStateRecord] {
         let s = try db.prepare("""
-        SELECT resource_type, resource_id, scope_id, channel_id, activity_version, viewed_activity_version, attention_activity_version, row_version, updated_at, mention_activity_version, channel_mentions_only
+        SELECT resource_type, resource_id, scope_id, channel_id, activity_version, viewed_activity_version, attention_activity_version, row_version, updated_at, mention_activity_version, channel_mentions_only, (\(Self.attentionEligibleSQL))
         FROM view_states WHERE workspace_id = ? ORDER BY updated_at DESC
         """)
         try s.bind([.text(workspaceId)])
         var rows: [ViewStateRecord] = []
         while try s.step() {
             guard let type = ViewStateRecord.ResourceType(rawValue: s.text(0) ?? "") else { continue }
-            rows.append(ViewStateRecord(workspaceId: workspaceId, resourceType: type, resourceId: s.text(1)!, scopeId: s.text(2), channelId: s.text(3),
+            var row = ViewStateRecord(workspaceId: workspaceId, resourceType: type, resourceId: s.text(1)!, scopeId: s.text(2), channelId: s.text(3),
                                         activityVersion: Int(s.int(4)), viewedActivityVersion: Int(s.int(5)),
-                                        attentionActivityVersion: s.isNull(6) ? nil : Int(s.int(6)), mentionActivityVersion: s.isNull(9) ? nil : Int(s.int(9)), channelMentionsOnly: s.int(10) != 0, rowVersion: Int(s.int(7)), updatedAt: s.text(8)!))
+                                        attentionActivityVersion: s.isNull(6) ? nil : Int(s.int(6)), mentionActivityVersion: s.isNull(9) ? nil : Int(s.int(9)), channelMentionsOnly: s.int(10) != 0, rowVersion: Int(s.int(7)), updatedAt: s.text(8)!)
+            row.attentionEligible = s.int(11) != 0
+            rows.append(row)
         }
         return rows
     }
