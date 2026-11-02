@@ -1018,7 +1018,7 @@ struct Composer: View {
                                  focused: $focused, placeholder: placeholder, plainKeyboard: model.fixture?.plainKeyboard == true,
                                  onPasteItems: pasteItems, onSubmit: send, onPickerKey: mentionKey, pickerOpen: !suggestions.isEmpty,
                                  mentionTokens: composer?.presentMentions.map(\.visible) ?? [], onPasteText: pasteText, limitsInline: true,
-                                 insertion: editing == nil ? $insertion : nil, selection: editing == nil ? nil : $selection)
+                                 insertion: $insertion, selection: editing == nil ? nil : $selection)
                     .id(editing?.id) // A revision has its own undo history; Undo cannot pull in an unsent reply.
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .frame(maxHeight: .infinity, alignment: .top)
@@ -1171,8 +1171,14 @@ struct Composer: View {
         }
         Button {
             guard let composer else { return }
-            if !(composer.visibleText.last.map { $0.isWhitespace } ?? true) { composer.visibleText += " " }
-            composer.visibleText += "@"
+            if editing != nil {
+                // Use the native text input path at the caret, preserving any suffix and undo.
+                let prefix = (composer.text as NSString).substring(to: min(selection.location, (composer.text as NSString).length))
+                insertion = (prefix.last.map { $0.isWhitespace } ?? true) ? "@" : " @"
+            } else {
+                if !(composer.visibleText.last.map { $0.isWhitespace } ?? true) { composer.visibleText += " " }
+                composer.visibleText += "@"
+            }
             focused = true
             model.refreshDirectory(workspace)
         } label: { Image(systemName: "at").font(.amb(.body).weight(.semibold)).frame(width: 34, height: 32) }

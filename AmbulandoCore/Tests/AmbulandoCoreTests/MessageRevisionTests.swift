@@ -20,6 +20,25 @@ final class MessageRevisionTests: XCTestCase {
         XCTAssertEqual(MessageRevisionDraft(body: "ordinary edit \(bot.token)").mentions, [bot])
     }
 
+    func testRevisionAddsAndRemovesSameLabelIdentitiesWithoutFlatteningOtherContent() throws {
+        let person = Mention(type: .person, npub: TestKeys.npub, label: "Rick")
+        let suffix = "  after\n@[Plan](mention:document:doc-id)\n![photo](storage://image)\n[file](storage://file) **keep**"
+        let original = "🧭 \(bot.token) @ric" + suffix
+        let caret = ("🧭 \(bot.token) @ric" as NSString).length
+        let selection = NSRange(location: caret, length: 0)
+        let next = try XCTUnwrap(CommentMentions.complete(original, selection: selection, with: person))
+        XCTAssertEqual(next, "🧭 \(bot.token) \(person.token) " + suffix)
+        let moved = ComposerText.remap(selection, from: original, to: next)
+        XCTAssertEqual(moved.location, ("🧭 \(bot.token) \(person.token) " as NSString).length)
+        XCTAssertNil(CommentMentions.query(in: next, selection: moved))
+        XCTAssertEqual(MessageRevisionDraft(body: next).mentions, [bot, person])
+        let removed = next.replacingOccurrences(of: bot.token, with: "@Rick")
+        let revision = MessageRevisionDraft(body: removed)
+        XCTAssertEqual(revision.body, removed)
+        XCTAssertEqual(revision.mentions, [person], "plain same-label text never resurrects a removed identity")
+        XCTAssertTrue(revision.body.hasSuffix(suffix))
+    }
+
     func testEditDraftRecoveryAndCancelNeverTouchUnsentReplyDraft() async throws {
         let h = try await WorkHarness.make()
         let reply = ChatTarget(connectionId: h.connection.id, workspaceId: h.workspace.id, channelId: Fixtures.channel1, threadId: Fixtures.scopeA)

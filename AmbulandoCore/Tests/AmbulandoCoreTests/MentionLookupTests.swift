@@ -147,18 +147,56 @@ final class MentionLookupTests: XCTestCase {
         XCTAssertTrue(literal.isEmpty, "% is matched literally")
     }
 
-    func testMergeGroupsByKindWithAnExactPersonFirst() {
+    func testMergeRanksLabelsBeforeKindAndRecency() {
         let records = [MentionSuggestion(mention: Mention(type: .channel, npub: id(1), label: "rick"), detail: "Channel", updatedAt: "2"),
                        MentionSuggestion(mention: Mention(type: .doc, npub: id(2), label: "Notes for Rick"), detail: "Doc", updatedAt: "1"),
                        MentionSuggestion(mention: Mention(type: .doc, npub: id(3), label: "Rick's notes"), detail: "Doc", updatedAt: "0")]
         let ann = Mention(type: .person, npub: "npub1ann", label: "Ann")
         let merged = MentionRanking.merge(actors: [(ann, "npub1ann"), (rick, rick.npub)], records: records, query: MentionQuery("rick"))
-        XCTAssertEqual(merged.map(\.mention.label), ["Rick", "Rick's notes", "Notes for Rick", "rick"], "exact actor, then docs (prefix first), then channels")
+        XCTAssertEqual(merged.map(\.mention.label), ["Rick", "rick", "Rick's notes", "Notes for Rick"], "exact labels across kinds, then prefix, then substring")
         // People also match their npub, as on the web.
         XCTAssertEqual(MentionRanking.merge(actors: [(ann, "npub1ann")], records: [], query: MentionQuery("npub1an")).map(\.mention), [ann])
         let bare = MentionRanking.merge(actors: [(rick, rick.npub), (ann, "npub1ann"), (ann, "dup")], records: records, query: MentionQuery(""))
         XCTAssertEqual(bare.map(\.mention.type), [.agent, .person, .doc, .doc, .channel])
         XCTAssertTrue(MentionRanking.merge(actors: [(rick, rick.npub)], records: records, query: MentionQuery("task:")).isEmpty)
+    }
+
+    func testRickPrefixesBeatBrickAndIdentityMatchesRegardlessOfDirectoryOrder() {
+        let labels = ["Brick", "ricky", "RIC", "Rick", "ric", "RICH", "Alice"]
+        let actors = labels.enumerated().map { index, label in
+            (mention: Mention(type: index == 3 ? .person : .agent, npub: "id-\(index)", label: label), also: "ric-identity")
+        }
+        let query = MentionQuery("rIc")
+        let expected = ["RIC", "ric", "RICH", "Rick", "ricky", "Brick", "Alice"]
+        for input in [actors, Array(actors.reversed()), Array(actors.dropFirst()) + [actors[0]]] {
+            XCTAssertEqual(MentionRanking.merge(actors: input, records: [], query: query).map(\.mention.label), expected)
+        }
+        let duplicates = ["z", "a"].map { (mention: Mention(type: .agent, npub: $0, label: "Rick"), also: "") }
+        XCTAssertEqual(MentionRanking.merge(actors: duplicates, records: [], query: query).map(\.mention.id), ["a", "z"])
+        XCTAssertEqual(MentionRanking.merge(actors: Array(duplicates.reversed()), records: [], query: query).map(\.mention.id), ["a", "z"])
+        let crowded = (0..<20).map { (mention: Mention(type: .agent, npub: "b-\($0)", label: "Brick \($0)"), also: "") }
+        let result = MentionRanking.merge(actors: crowded + [(rick, "")], records: [], query: MentionQuery("ric"))
+        XCTAssertEqual(result.first?.mention, rick, "prefix survives the ten-result limit")
+        XCTAssertEqual(result.count, 10)
+        XCTAssertTrue(result.dropFirst().allSatisfy { $0.mention.label.hasPrefix("Brick") })
+        let unicode = ["Das ÜBER", "überblick", "ÜBER"].enumerated().map {
+            (mention: Mention(type: .agent, npub: "u-\($0.offset)", label: $0.element), also: "")
+        }
+        XCTAssertEqual(MentionRanking.merge(actors: unicode, records: [], query: MentionQuery("über")).map(\.mention.label),
+                       ["ÜBER", "überblick", "Das ÜBER"])
+    }
+
+    func testExactStoredLabelSurvivesPerKindLimitBeforeNewerPrefixes() async throws {
+        let store = try LocalStore(directory: temporaryDirectory())
+        try await store.writer.upsertChannels(workspaceId: w, scopeId: Fixtures.scopeA,
+                                              [try ChannelRecord(raw: Fixtures.json(Fixtures.channel(Fixtures.channel1, scope: Fixtures.scopeA, name: "general")))], complete: false)
+        var docs = try (0..<15).map { try doc(500 + $0, "Rick \($0)", updated: "2026-11-01T00:00:00.000Z") }
+        docs.append(try doc(600, "rIc", updated: "2020-01-01T00:00:00.000Z"))
+        docs.append(try doc(601, "Brick", updated: "2026-11-02T00:00:00.000Z"))
+        try await store.writer.upsertDocs(workspaceId: w, docs)
+        let rows = try await store.reader.mentionSuggestions(workspaceId: w, query: MentionQuery("ric"), limit: 10)
+        XCTAssertEqual(rows.first?.mention.label, "rIc")
+        XCTAssertEqual(rows.count, 10)
     }
 
     // MARK: Recently tagged first

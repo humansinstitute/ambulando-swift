@@ -365,7 +365,7 @@ final class WorkFlowUITests: XCTestCase {
         XCTAssertTrue(chip.exists, "reaction chip shown")
         message.press(forDuration: 1.0)
         app.buttons["message.edit"].tap()
-        let edit = input(app, "editmessage.field")
+        let edit = input(app, "composer.field")
         edit.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
         edit.typeText(" (edited)")
         app.buttons["editmessage.save"].tap()

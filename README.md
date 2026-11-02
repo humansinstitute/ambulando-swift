@@ -11,6 +11,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Chat mentions and mobile message edits (iPhone/iPad build 76, Mac build 67)
+
+Mention searches order exact labels before prefixes and prefixes before substrings, ignoring case.
+Substring and identity matches remain available, with stable ordering for equal matches.
+On iPhone and iPad, Edit now uses the same chat composer as Mac: discover and select tags with `@`,
+save canonical mention tokens and structured actor identities, or cancel back to the untouched reply draft.
+Existing message attachments and Markdown stay in the revision body; edit drafts remain separate from replies.
+Source/build validation, simulator checks and physical-device installation are separate delivery states.
+
 ## Done from notifications (iPhone/iPad build 75, Mac build 66)
 
 Task notifications offer **Done** alongside Archive and Dismiss when swiped,

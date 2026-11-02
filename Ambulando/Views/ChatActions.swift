@@ -25,7 +25,6 @@ struct MessageCell: View, Equatable {
     /// Tower's thread title, shown above the root when it says something the root's first words do not.
     var threadTitle: String? = nil
     @Environment(\.editChatMessage) private var editChatMessage
-    @State private var editing = false
     @State private var confirmDelete = false
     @State private var gettingItDone = false
     @State private var autopilot: URL?
@@ -92,7 +91,6 @@ struct MessageCell: View, Equatable {
         }
         .contextMenu { actions }
         .sheet(isPresented: $gettingItDone) { GetItDoneSheet(message: message, workspace: workspace) }
-        .sheet(isPresented: $editing) { MessageEditSheet(message: message, workspace: workspace, currentBody: pendingEdit?.string("body") ?? message.body) }
         .confirmationDialog("Delete this message for everyone?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 model.submit(WriteIntent(kind: .messageDelete, targetId: message.id, payload: ["row_version": message.rowVersion]), in: workspace)
@@ -127,11 +125,7 @@ struct MessageCell: View, Equatable {
             .accessibilityIdentifier("message.ref")
         if mine && !message.deleted {
             Button {
-                #if os(macOS)
                 editChatMessage?(message, pendingEdit?.string("body") ?? message.body)
-                #else
-                editing = true
-                #endif
             } label: { Label("Edit", systemImage: "pencil") }.accessibilityIdentifier("message.edit")
             Button(role: .destructive) { confirmDelete = true } label: { Label("Delete message", systemImage: "trash") }.accessibilityIdentifier("message.delete")
         }
@@ -347,43 +341,6 @@ struct ReactionBar: View {
         .padding(.top, 6).padding(.bottom, 8)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reaction.bar")
-    }
-}
-
-struct MessageEditSheet: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let message: MessageRecord
-    let workspace: WorkspaceRecord
-    let currentBody: String
-    @State private var text = ""
-    @State private var mentions: [Mention] = []
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                ContentTextEntry(text: $text, placeholder: "Message", workspace: workspace, field: "edit-message-\(message.id)").lineLimit(3...12).accessibilityIdentifier("editmessage.field")
-                Text("Edits are signed with your identity and replace the message for everyone.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
-            }
-            .navigationTitle("Edit message")
-            .inlineTitle()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).accessibilityIdentifier("editmessage.save")
-                }
-            }
-            .onAppear { let decoded = MentionCodec.decode(body: currentBody); text = decoded.text; mentions = decoded.mentions }
-        }
-    }
-
-    private func save() {
-        let (encoded, kept) = MentionCodec.encode(text: text, selected: mentions)
-        let body = OutboxRequest.normalizedBody(encoded)
-        guard !body.isEmpty, body != message.body else { dismiss(); return }
-        let payload: [String: any Sendable] = ["channel_id": message.channelId, "thread_id": message.threadId ?? "", "body": body,
-                                               "row_version": message.rowVersion, "mentions": kept.map(\.requestObject)]
-        if model.submit(WriteIntent(kind: .messageEdit, targetId: message.id, payload: payload), in: workspace) { dismiss() }
     }
 }
 

@@ -10,7 +10,7 @@ final class ComposerParityUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-AmbulandoUITestFixture", "-AmbulandoFixtureReset"]
         app.launch()
-        XCTAssertTrue(app.staticTexts["Sample data on this iPhone. Not connected to a Tower."].waitForExistence(timeout: 15), "sample data is labelled")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Sample data on this'")).firstMatch.waitForExistence(timeout: 15), "sample data is labelled")
         let general = app.buttons["channel.general"]
         XCTAssertTrue(general.waitForExistence(timeout: 15))
         general.tap()
@@ -36,6 +36,63 @@ final class ComposerParityUITests: XCTestCase {
         shot.name = name
         shot.lifetime = .keepAlways
         add(shot)
+    }
+
+    func testMessageEditUsesSharedMentionComposerAndKeepsReplyOnCancelAndSave() {
+        let app = launch()
+        var input = field(app)
+        input.tap(); input.typeText("Mobile mention revision")
+        app.buttons["composer.send"].tap()
+        let sent = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Mobile mention revision'")).firstMatch
+        XCTAssertTrue(sent.waitForExistence(timeout: 10))
+        sent.tap()
+        let message = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'message' AND label CONTAINS 'Mobile mention revision'")).firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 10))
+        input = field(app)
+        input.tap(); input.typeText("Unsent reply")
+        app.buttons["composer.hideKeyboard"].tap()
+        message.press(forDuration: 1)
+        app.buttons["message.edit"].tap()
+        XCTAssertTrue(app.buttons["editmessage.cancel"].waitForExistence(timeout: 5))
+        input = field(app)
+        XCTAssertEqual(value(input), "Mobile mention revision")
+        input.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.95)).tap()
+        input.typeText(" @ric")
+        let pick = app.buttons["mention.rick"]
+        XCTAssertTrue(pick.waitForExistence(timeout: 5)); pick.tap()
+        XCTAssertTrue(value(input).contains("@[rick](mention:agent:npub1"))
+        input.typeText("cancelled")
+        app.buttons["editmessage.cancel"].tap()
+        XCTAssertEqual(value(field(app)), "Unsent reply")
+        app.buttons["composer.hideKeyboard"].tap()
+        message.press(forDuration: 1)
+        app.buttons["message.edit"].tap()
+        XCTAssertTrue(app.buttons["editmessage.save"].waitForExistence(timeout: 5))
+        input = field(app)
+        XCTAssertEqual(value(input), "Mobile mention revision", "cancel discards the private edit draft")
+        input.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.95)).tap()
+        app.buttons["composer.mention"].tap()
+        input.typeText("ric")
+        XCTAssertTrue(pick.waitForExistence(timeout: 5)); pick.tap()
+        input.typeText("saved")
+        let canonical = value(input)
+        XCTAssertTrue(canonical.hasSuffix(" saved"), "completion keeps the caret after the canonical tag")
+        capture(app, "mobile-message-mention-edit")
+        app.buttons["editmessage.save"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Mobile mention revision @rick saved'")).firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(value(field(app)), "Unsent reply")
+        app.buttons["composer.hideKeyboard"].tap()
+        message.press(forDuration: 1)
+        app.buttons["message.edit"].tap()
+        XCTAssertTrue(app.buttons["editmessage.cancel"].waitForExistence(timeout: 5))
+        input = field(app)
+        XCTAssertEqual(value(input), canonical, "reopening preserves the full saved token")
+        // Delete the whole edit using ordinary native Backspace, then save plain text: no stale routing tag.
+        input.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.95)).tap()
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: canonical.count) + "Mobile mention revision removed")
+        app.buttons["editmessage.save"].tap()
+        XCTAssertTrue(app.staticTexts["Mobile mention revision removed"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(value(field(app)), "Unsent reply")
     }
 
     func testBlankComposerPaddingFocusesAndKeepsDraftAndTools() {

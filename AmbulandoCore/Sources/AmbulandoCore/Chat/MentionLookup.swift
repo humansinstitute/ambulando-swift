@@ -80,6 +80,7 @@ extension StoreReader {
         // pattern, ?5 the limit.
         let match = ascii ? "(?2 = '' OR label LIKE ?3 ESCAPE '\\')" : "amb_ifind(label, ?2) > 0"
         let starts = ascii ? "(label LIKE ?4 ESCAPE '\\')" : "(amb_ifind(label, ?2) = 1)"
+        let exactLabel = ascii ? "(label = ?2 COLLATE NOCASE)" : "(amb_ifind(label, ?2) = 1 AND length(label) = length(?2))"
         let binds: [SQLValue] = [.text(workspaceId), .text(needle), .text("%" + escaped + "%"), .text(escaped + "%"), .int(Int64(limit))]
         let listed = "channel_id IN (SELECT id FROM channels WHERE workspace_id = ?1)"
 
@@ -88,7 +89,7 @@ extension StoreReader {
             guard query.allows(type), mention == nil || mention?.type == type else { return }
             let identity = type == .chat ? "channel_id || '#' || root" : "id"
             let exact = mention == nil ? "" : " AND \(identity) = ?6"
-            let s = try db.prepare("SELECT * FROM (\(sql)) WHERE \(match)\(exact) ORDER BY \(starts) DESC, updated_at DESC, label LIMIT ?5")
+            let s = try db.prepare("SELECT * FROM (\(sql)) WHERE \(match)\(exact) ORDER BY \(exactLabel) DESC, \(starts) DESC, updated_at DESC, label COLLATE NOCASE, label, \(identity) LIMIT ?5")
             try s.bind(binds + (mention.map { [.text($0.id)] } ?? []))
             while try s.step() { if let row = make(s) { out.append(row) } }
         }
@@ -170,9 +171,6 @@ public enum MentionRanking {
     /// Display order of the kinds (sol `searchMentions`: people, docs, tasks, channels, scopes; conversations follow tasks).
     static let order: [MentionType] = [.agent, .person, .doc, .task, .chat, .channel, .scope]
 
-    /// People and agents from the directory (`actors`, each with extra text it also matches, such as the npub) and
-    /// records, merged as the web orders them: grouped by kind in the web's order, an exact person or agent first;
-    /// inside a kind, names starting with the text first, then the most recent.
     /// The mentions a stored body carries, in order. People, agents and the picker's record kinds only; the web's
     /// `document` spelling counts as `doc`.
     public static func mentions(inBody body: String) -> [Mention] {
@@ -187,6 +185,8 @@ public enum MentionRanking {
         }
     }
 
+    /// Merge directory and record matches by exact label, prefix, substring, then identity-only match.
+    /// Ties use kind, recency, case-insensitive label and stable identity; bare `@` retains recent-tag quotas.
     public static func merge(actors: [(mention: Mention, also: String)], records: [MentionSuggestion], query: MentionQuery,
                              recent: [Mention] = []) -> [MentionSuggestion] {
         let limit = query.limit
@@ -211,20 +211,21 @@ public enum MentionRanking {
             return dedupe(out, limit: limit)
         }
         let rows = people + records.filter { query.allows($0.mention.type) && query.rank($0.mention.label) != nil }
-        let sorted = rows.enumerated().sorted { a, b in
-            let x = a.element, y = b.element
-            let exactX = x.mention.type.isActor && query.rank(x.mention.label) == 0
-            let exactY = y.mention.type.isActor && query.rank(y.mention.label) == 0
-            if exactX != exactY { return exactX }
-            let kx = order.firstIndex(of: x.mention.type) ?? 0, ky = order.firstIndex(of: y.mention.type) ?? 0
-            if x.mention.type.isActor && y.mention.type.isActor { return a.offset < b.offset }
+        let sorted = rows.sorted { x, y in
+            // Label relevance comes before directory order, kind and recency. Identity-only
+            // matches remain available after every matching label.
+            let rx = query.rank(x.mention.label) ?? 3, ry = query.rank(y.mention.label) ?? 3
+            if rx != ry { return rx < ry }
+            let kx = x.mention.type.isActor ? 0 : (order.firstIndex(of: x.mention.type) ?? order.count)
+            let ky = y.mention.type.isActor ? 0 : (order.firstIndex(of: y.mention.type) ?? order.count)
             if kx != ky { return kx < ky }
-            let rx = query.rank(x.mention.label) ?? 2, ry = query.rank(y.mention.label) ?? 2
-            if (rx <= 1) != (ry <= 1) { return rx <= 1 }
             if x.updatedAt != y.updatedAt { return x.updatedAt > y.updatedAt }
-            return a.offset < b.offset
+            let comparison = x.mention.label.compare(y.mention.label, options: .caseInsensitive)
+            if comparison != .orderedSame { return comparison == .orderedAscending }
+            if x.mention.label != y.mention.label { return x.mention.label < y.mention.label }
+            return x.id < y.id
         }
-        return dedupe(sorted.map(\.element), limit: limit)
+        return dedupe(sorted, limit: limit)
     }
 
     private static func dedupe(_ rows: [MentionSuggestion], limit: Int) -> [MentionSuggestion] {
