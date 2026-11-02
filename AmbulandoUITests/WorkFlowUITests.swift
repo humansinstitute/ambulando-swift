@@ -155,7 +155,7 @@ final class WorkFlowUITests: XCTestCase {
         app.segmentedControls["tasks.layout"].buttons.element(boundBy: 1).tap()
         let column = app.descendants(matching: .any)["board.in_progress"].firstMatch
         XCTAssertTrue(column.waitForExistence(timeout: 10), "status column remains available")
-        let card = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Test the phone build today'")).firstMatch
+        let card = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Test the phone build today'")).firstMatch
         for _ in 0..<5 where !card.isHittable {
             app.swipeLeft()
         }
@@ -178,6 +178,77 @@ final class WorkFlowUITests: XCTestCase {
         let listRow = app.buttons["task.Test the phone build today"]
         XCTAssertTrue(listRow.waitForExistence(timeout: 10))
         XCTAssertTrue(listRow.label.contains("Review"), "list rows keep their status")
+    }
+
+    func testKanbanSelectionBulkAndCollapsedDropTargets() {
+        let app = launch()
+        tab(app, "Tasks")
+        app.segmentedControls["tasks.layout"].buttons.element(boundBy: 1).tap()
+        let newCollapse = app.buttons["board.collapse.new"]
+        XCTAssertTrue(newCollapse.waitForExistence(timeout: 10))
+        let card = app.buttons["board.check.Dark mode contrast pass"]
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        card.tap()
+        XCTAssertTrue(app.buttons["tasks.actions"].waitForExistence(timeout: 5))
+        app.buttons["tasks.select"].tap()
+        XCTAssertTrue(app.buttons["tasks.select"].label.contains("Select"), "Cancel exits selection")
+        // Collapse New, then Ready, making a distant empty target visible without breaking horizontal scrolling.
+        newCollapse.tap()
+        XCTAssertEqual(newCollapse.label, "Expand New")
+        app.buttons["board.collapse.ready"].tap()
+        // Collapse restoration survives switching layout.
+        app.segmentedControls["tasks.layout"].buttons.element(boundBy: 0).tap()
+        app.segmentedControls["tasks.layout"].buttons.element(boundBy: 1).tap()
+        XCTAssertEqual(app.buttons["board.collapse.new"].label, "Expand New")
+        newCollapse.tap()
+        app.buttons["board.select.new"].tap()
+        app.buttons["tasks.actions"].tap()
+        app.buttons["tasks.bulk.blocked"].tap()
+        XCTAssertTrue(app.staticTexts["tasks.feedback"].waitForExistence(timeout: 10))
+        capture(app, "kanban-bulk-queued")
+        // Real accepted rows are checked in list, independent of horizontally lazy columns.
+        app.buttons["tasks.select"].tap()
+        app.segmentedControls["tasks.layout"].buttons.element(boundBy: 0).tap()
+        let moved = app.buttons["task.Dark mode contrast pass"]
+        XCTAssertTrue(moved.waitForExistence(timeout: 10))
+        XCTAssertTrue(moved.label.contains("Blocked"))
+        app.segmentedControls["tasks.layout"].buttons.element(boundBy: 1).tap()
+        // Restore narrow columns, exposing a draggable blocked card and the adjacent Review target.
+        if app.buttons["board.collapse.new"].label == "Collapse New" { app.buttons["board.collapse.new"].tap() }
+        for _ in 0..<5 where !app.buttons["board.collapse.review"].isHittable { app.swipeLeft() }
+        let reviewCollapse = app.buttons["board.collapse.review"]
+        if reviewCollapse.label == "Collapse Review" { reviewCollapse.tap() }
+        let source = app.descendants(matching: .any)["board.card.Dark mode contrast pass"].firstMatch
+        for _ in 0..<5 where !source.isHittable { app.swipeLeft() }
+        XCTAssertTrue(source.waitForExistence(timeout: 10))
+        source.press(forDuration: 0.8, thenDragTo: reviewCollapse)
+        app.segmentedControls["tasks.layout"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(moved.waitForExistence(timeout: 10))
+        XCTAssertTrue(moved.label.contains("Review"), "drop on collapsed target changes status")
+        capture(app, "kanban-collapsed-drop")
+        app.segmentedControls["tasks.layout"].buttons.element(boundBy: 1).tap()
+        // Make the empty New strip and Review card visible together, then drop onto the empty target.
+        let progress = app.buttons["board.collapse.in_progress"]
+        if progress.label == "Collapse In progress" { progress.tap() }
+        let reviewToggle = app.buttons["board.collapse.review"]
+        if reviewToggle.label == "Expand Review" { reviewToggle.tap() }
+        let reviewSource = app.descendants(matching: .any)["board.card.Dark mode contrast pass"].firstMatch
+        XCTAssertTrue(reviewSource.waitForExistence(timeout: 10))
+        reviewSource.press(forDuration: 0.8, thenDragTo: app.buttons["board.collapse.new"])
+        app.buttons["board.collapse.new"].tap()
+        let sameSource = app.descendants(matching: .any)["board.card.Dark mode contrast pass"].firstMatch
+        XCTAssertTrue(sameSource.waitForExistence(timeout: 10))
+        sameSource.press(forDuration: 0.8, thenDragTo: app.buttons["board.collapse.new"])
+        app.segmentedControls["tasks.layout"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(moved.waitForExistence(timeout: 10))
+        XCTAssertTrue(moved.label.contains("New"), "empty target accepts and same-column drop keeps state")
+        app.segmentedControls["tasks.layout"].buttons.element(boundBy: 1).tap()
+        app.buttons["board.collapse.new"].tap()
+        app.terminate()
+        let again = launch(reset: false)
+        tab(again, "Tasks")
+        again.segmentedControls["tasks.layout"].buttons.element(boundBy: 1).tap()
+        XCTAssertEqual(again.buttons["board.collapse.new"].label, "Expand New", "collapse survives relaunch")
     }
 
     func testDocumentReadEditWithKeyboardAndSave() {

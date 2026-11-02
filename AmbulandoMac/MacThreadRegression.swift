@@ -70,7 +70,7 @@ enum MacThreadRegression {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacKanbanCheck") {
                 try await kanbanCardCheck(window, model: model)
-                print("PASS: narrow Mac Kanban cards omit repeated status; column header, metadata and list status retained"); fflush(stdout); exit(0)
+                print("PASS: native Mac Kanban collapse/expand, multi-selection/cancel and accepted multi-row bulk action; narrow cards omit repeated status and list status remains"); fflush(stdout); exit(0)
             }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacHeaderTintCheck") {
                 try await headerTintCheck(window, model: model)
@@ -953,6 +953,53 @@ enum MacThreadRegression {
               let store = model.store, let workspace = model.selectedWorkspace else {
             throw Failure(description: "Kanban check requires isolated Test app")
         }
+        // Exercise the real shared board, rather than a separate copy of its controls.
+        model.selectContext(.home)
+        try press(window, "section.tasks")
+        window.setContentSize(NSSize(width: 1400, height: 700))
+        await settle(); await settle()
+        guard let picker = find(window, "tasks.layout") else { throw Failure(description: "Missing task layout picker") }
+        func boardOption(_ object: Any, depth: Int = 0) -> NSObject? {
+            guard depth < 15 else { return nil }
+            if (value(object, "AXDescription") as? String) == "Board" { return object as? NSObject }
+            for child in children(object) { if let match = boardOption(child, depth: depth + 1) { return match } }
+            return nil
+        }
+        if find(window, "board.collapse.new") == nil {
+            guard let option = boardOption(picker) else { print(accessibilityText(picker)); throw Failure(description: "Missing Board option") }
+            _ = option
+            try click(window, "rectangle.split.3x1")
+            await settle()
+        }
+        try press(window, "board.collapse.new"); await settle()
+        guard let strip = find(window, "board.new") else { throw Failure(description: "Missing collapsed column") }
+        try require(frame(of: strip).width <= 50, "collapsed column is a narrow strip")
+        try press(window, "board.collapse.new"); await settle()
+        try require(frame(of: find(window, "board.new")!).width >= 270, "column expands")
+        try press(window, "board.select.new"); await settle()
+        try require(find(window, "tasks.actions") != nil, "column count starts selection")
+        if let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53) {
+            if !window.performKeyEquivalent(with: escape) { window.sendEvent(escape) }
+        }
+        await settle()
+        try require(find(window, "tasks.actions") == nil, "Cancel clears selection")
+        let before = try await store.reader.tasks(workspaceId: workspace.id)
+        let parentIds = Set(before.compactMap { TaskTreeNode($0).parentId })
+        let bulkIds = Set(before.filter { ["new", "ready"].contains($0.state) && !parentIds.contains($0.id) }.map(\.id))
+        try require(bulkIds.count >= 2, "sample provides several selectable cards")
+        try press(window, "board.select.new"); await settle()
+        try press(window, "board.select.ready"); await settle()
+        try await menuAction(window, title: "Mark selected blocked", button: "tasks.actions")
+        for _ in 0..<10 {
+            let saved = try await store.reader.tasks(workspaceId: workspace.id)
+            if saved.filter({ bulkIds.contains($0.id) }).allSatisfy({ $0.state == "blocked" }) { break }
+            await settle()
+        }
+        let after = try await store.reader.tasks(workspaceId: workspace.id)
+        try require(after.filter({ bulkIds.contains($0.id) }).allSatisfy({ $0.state == "blocked" }), "bulk action accepted for several real rows")
+        try press(window, "tasks.select"); await settle()
+        try snapshot(window, model: model, name: "mac-kanban-interactions")
         let tasks = try await store.reader.tasks(workspaceId: workspace.id)
         guard let task = tasks.first else { throw Failure(description: "Missing sample task") }
         let row = TaskRow(task: task, writes: [])

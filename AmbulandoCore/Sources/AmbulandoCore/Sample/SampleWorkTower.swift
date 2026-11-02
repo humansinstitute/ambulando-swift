@@ -627,8 +627,11 @@ public final class SampleWorkTower: @unchecked Sendable {
             guard o["row_version"] as? Int == row["row_version"] as? Int else { return error(409, "stale_row_version") }
             let npub = (o["assigned_to_npub"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             row["assigned_to_npub"] = npub ?? NSNull()
-            row["metadata"] = ["assigned_to_npub": (npub as Any?) ?? NSNull()]
+            var metadata = row["metadata"] as? [String: Any] ?? [:]
+            metadata["assigned_to_npub"] = (npub as Any?) ?? NSNull()
+            row["metadata"] = metadata
         }
+        if let metadata = o["metadata"] as? [String: Any] { row["metadata"] = metadata }
         if let t = o["title"] as? String {
             guard !t.trimmingCharacters(in: .whitespaces).isEmpty else { return error(400, "validation_error") }
             row["title"] = t.trimmingCharacters(in: .whitespacesAndNewlines)

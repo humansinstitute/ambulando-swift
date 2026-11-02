@@ -20,6 +20,9 @@ struct TaskRow: Sendable, Equatable, Identifiable {
         for w in mine {
             let p = w.payloadObject
             switch w.kind {
+            case .taskBoardChange:
+                state = (p["state"] as? String) ?? state
+                if let value = p["assignee"] as? String { assignee = value.isEmpty ? nil : value }
             case .taskState: state = (p["state"] as? String) ?? state
             case .taskPatch:
                 let patch = p["patch"] as? [String: Any] ?? [:]
@@ -39,6 +42,8 @@ struct TasksSnapshot: Sendable, Equatable {
     var creating: [WriteItem] = []
     var choice = ScopeChoice()
     var names: [String: String] = [:]
+    var agents: [MemberRecord] = []
+    var boardWrites: [WriteItem] = []
 }
 
 struct TasksView: View {
@@ -51,14 +56,37 @@ struct TasksView: View {
     private var scopeId: String? { model.context.scopeId }
     @State private var snapshot = LiveQuery<TasksSnapshot>(initial: TasksSnapshot())
     @State private var creating = false
+    @State private var selecting = false
+    @State private var selected = Set<String>()
+    @State private var busy = false
+    @State private var feedback: String?
+    @State private var archiveConfirmation = false
+    @State private var targeted: TaskState?
+    @AppStorage("tasks.collapsed.v1") private var collapseJSON = "{}"
+    @AppStorage("tasks.defaultAgent.v1") private var agentJSON = "{}"
+
+    private var preferenceKey: String { "\(model.connection?.id ?? "")/\(workspace.appNpub)/\(workspace.id)/\(model.identity.npub ?? "")" }
+    private var collapsed: Set<String> { Set((decodePreferences(collapseJSON)[preferenceKey] as? [String]) ?? []) }
+    private var defaultAgent: String? {
+        guard let npub = decodePreferences(agentJSON)[preferenceKey] as? String,
+              snapshot.value.agents.contains(where: { $0.npub == npub }) else { return nil }
+        return npub
+    }
+    private var parents: Set<String> { Set(snapshot.value.rows.compactMap { TaskTreeNode($0.task).parentId }) }
+    private var selectable: [TaskRow] { snapshot.value.rows.filter { !parents.contains($0.id) && $0.pending.isEmpty } }
+    private var canWrite: Bool { model.isUnlocked && model.connection != nil && model.selectedWorkspace?.id == workspace.id }
 
     var body: some View {
-        Group {
-            if board { boardView } else { listView }
-        }
-        .navigationTitle("Tasks")
-        .safeAreaInset(edge: .top, spacing: 0) {
+        VStack(spacing: 0) {
             ListHeaderBar {
+                if board {
+                    Button(selecting ? "Cancel" : "Select") {
+                        selecting.toggle(); selected.removeAll(); feedback = nil
+                    }.disabled(busy)
+                        .keyboardShortcut(selecting ? .escape : "s", modifiers: selecting ? [] : [.command, .shift])
+                        .accessibilityIdentifier("tasks.select")
+                    if selecting { selectionMenu }
+                }
                 Spacer()
                 Picker("Layout", selection: $board) {
                     Image(systemName: "list.bullet").tag(false).accessibilityLabel("List")
@@ -70,13 +98,38 @@ struct TasksView: View {
                 Button { creating = true } label: { Image(systemName: "plus.circle.fill").font(.amb(.title2)) }
                     .accessibilityLabel("New task").accessibilityIdentifier("tasks.new")
             }
+            Group { if board { boardView } else { listView } }
+            boardFeedback
         }
+        .navigationTitle("Tasks")
+        .confirmationDialog("Archive \(selected.count) selected tasks?", isPresented: $archiveConfirmation, titleVisibility: .visible) {
+            Button("Archive selected", role: .destructive) { apply(.archive) }
+        }
+
+        .onChange(of: preferenceKey) { _, _ in selected.removeAll(); selecting = false; feedback = nil }
+        .onChange(of: model.context) { _, _ in selected.removeAll(); selecting = false; feedback = nil }
+        .onChange(of: board) { _, _ in selected.removeAll(); selecting = false }
+        .onChange(of: snapshot.value.rows) { _, _ in selected.formIntersection(Set(selectable.map(\.id))) }
+        .onKeyPress(.escape) { if !busy { selected.removeAll(); selecting = false }; return .handled }
         .sheet(isPresented: $creating) {
             TaskCreateSheet(workspace: workspace, store: store, choice: snapshot.value.choice, context: context)
         }
         .refreshable { model.openTasks(workspace, scopeId: scopeId, force: true) }
         .task(id: model.context) { start(); model.openTasks(workspace, scopeId: scopeId) }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openTasks(workspace, scopeId: scopeId) } }
+    }
+
+    private var boardFeedback: some View {
+        ScrollView {
+            VStack(spacing: 4) {
+                if let feedback { Text(feedback).font(.amb(.caption)).accessibilityIdentifier("tasks.feedback") }
+                ForEach(snapshot.value.boardWrites) { item in
+                    WriteStatusLine(item: item, label: item.string("task_title") ?? "Board action")
+                }
+            }.padding(10).frame(maxWidth: .infinity)
+        }
+        .frame(maxHeight: snapshot.value.boardWrites.isEmpty && feedback == nil ? 0 : 110)
+        .background(Amb.card)
     }
 
     private var columns: [(TaskState, [TaskRow])] {
@@ -130,45 +183,186 @@ struct TasksView: View {
         }
     }
 
+    private var selectionMenu: some View {
+        Menu {
+            Button("Select visible") { selected.formUnion(selectable.map(\.id)) }
+                .keyboardShortcut("a", modifiers: .command)
+                .accessibilityIdentifier("tasks.selectVisible")
+            Button("Clear selection") { selected.removeAll() }
+            ForEach(TaskBoardAction.allCases, id: \.self) { action in
+                Button(action.label) {
+                    if action == .archive { archiveConfirmation = true } else { apply(action) }
+                }
+                .disabled(selected.isEmpty || !canWrite || (action == .ready && defaultAgent == nil))
+                .accessibilityIdentifier("tasks.bulk.\(action.rawValue)")
+            }
+            Menu("Default agent on this device") {
+                ForEach(snapshot.value.agents) { agent in
+                    Button(displayName(agent.npub, snapshot.value.names, me: model.identity.npub)) {
+                        savePreference(agent.npub, in: &agentJSON)
+                    }
+                }
+            }
+            if defaultAgent == nil { Text("Choose a default agent to mark tasks ready.") }
+        } label: { Text(busy ? "Queuing…" : "\(selected.count) selected") }
+        .disabled(busy).accessibilityIdentifier("tasks.actions")
+    }
+
     private var boardView: some View {
         ScrollView(.horizontal) {
             LazyHStack(alignment: .top, spacing: 12) {
-                ForEach(columns, id: \.0) { state, rows in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack { TaskStatusBadge(state: state.rawValue); Text("\(rows.count)").foregroundStyle(Amb.itemHeading) }
-                        ScrollView {
-                            LazyVStack(spacing: 8) {
-                                ForEach(rows) { row in
-                                    NavigationLink(value: WorkRoute.task(workspaceId: workspace.id, taskId: row.id)) {
-                                        TaskRowView(row: row, snapshot: snapshot.value, me: model.identity.npub, showsStatus: false).padding(10)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
-                                    }
-                                    .buttonStyle(.plain)
-                                    .contextMenu {
-                                        ForEach(TaskState.board.filter { $0.rawValue != row.state }, id: \.self) { target in
-                                            Button("Move to \(target.label)") { setState(row, target) }
-                                        }
-                                    }
-                                }
-                                if rows.isEmpty { Text("Nothing here").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(.vertical, 20) }
-                            }
-                        }
-                    }
-                    .padding(10)
-                    .frame(width: 280)
-                    .background(Amb.muted.opacity(0.6), in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
-                    .accessibilityIdentifier("board.\(state.rawValue)")
-                }
+                ForEach(columns, id: \.0) { state, rows in boardColumn(state, rows: rows) }
             }
-            .scrollTargetLayout()
-            .padding(12)
+            .scrollTargetLayout().padding(12)
         }
         .scrollTargetBehavior(.viewAligned)
     }
 
+    private func boardColumn(_ state: TaskState, rows: [TaskRow]) -> some View {
+        let closed = collapsed.contains(state.rawValue)
+        return VStack(alignment: .leading, spacing: 8) {
+            if closed {
+                VStack(spacing: 8) {
+                    collapseButton(state, closed: true)
+                    columnSelection(state, rows: rows)
+                    Text(state.label).font(.amb(.subheadline).weight(.semibold))
+                        .fixedSize().rotationEffect(.degrees(90)).frame(width: 24, height: 110)
+                        .accessibilityHidden(true)
+                    Spacer(minLength: 8)
+                }.frame(maxWidth: .infinity)
+            } else {
+                HStack {
+                    collapseButton(state, closed: false)
+                    TaskStatusBadge(state: state.rawValue)
+                    Spacer(minLength: 0)
+                    columnSelection(state, rows: rows)
+                }
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(rows) { row in boardCard(row) }
+                        if rows.isEmpty { Text("Nothing here").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(.vertical, 20) }
+                    }.frame(maxWidth: .infinity, minHeight: 120, alignment: .top)
+                }
+            }
+        }
+        .padding(closed ? 4 : 10)
+        .frame(width: closed ? 44 : 280)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Amb.muted.opacity(0.6), in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
+        .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(targeted == state ? Amb.accentForeground : .clear, lineWidth: 2))
+        .contentShape(Rectangle())
+        .dropDestination(for: String.self) { values, _ in
+            guard values.count == 1, let text = values.first,
+                  let id = TaskBoardDrag.taskId(from: text, signer: model.identity.npub ?? "", connection: model.connection?.id ?? "", workspace: workspace.id, app: workspace.appNpub),
+                  let row = snapshot.value.rows.first(where: { $0.id == id }), canChange(row) else { return false }
+            if row.state != state.rawValue { setState(row, state) }
+            return true
+        } isTargeted: { value in targeted = value ? state : nil }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("board.\(state.rawValue)")
+    }
+
+    private func collapseButton(_ state: TaskState, closed: Bool) -> some View {
+        Button {
+            var values = collapsed
+            if closed { values.remove(state.rawValue) } else { values.insert(state.rawValue) }
+            savePreference(Array(values).sorted(), in: &collapseJSON)
+        } label: { Image(systemName: closed ? "chevron.right" : "chevron.left").frame(minWidth: 32, minHeight: 32).contentShape(Rectangle()) }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(closed ? "Expand" : "Collapse") \(state.label)")
+        .accessibilityIdentifier("board.collapse.\(state.rawValue)")
+    }
+
+    private func columnSelection(_ state: TaskState, rows: [TaskRow]) -> some View {
+        Button {
+            selecting = true
+            selected = TaskBoardSelection.togglingColumn(selected, ids: Set(rows.filter { canChange($0) }.map(\.id)))
+        } label: { Text("\(rows.count)").monospacedDigit().frame(minWidth: 32, minHeight: 32).contentShape(Rectangle()) }
+        .buttonStyle(.plain).disabled(busy)
+        .accessibilityLabel("Select tasks in \(state.label), \(rows.count) tasks")
+        .accessibilityIdentifier("board.select.\(state.rawValue)")
+    }
+
+    private func boardCard(_ row: TaskRow) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            if !parents.contains(row.id) {
+                Button { toggle(row) } label: {
+                    Image(systemName: selected.contains(row.id) ? "checkmark.square.fill" : "square")
+                        .frame(minWidth: 32, minHeight: 36).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!canChange(row)).accessibilityLabel("\(selected.contains(row.id) ? "Deselect" : "Select") \(row.title)")
+                .accessibilityIdentifier("board.check.\(row.title)")
+            }
+            if selecting {
+                Button { toggle(row) } label: { cardContent(row) }.buttonStyle(.plain).disabled(!canChange(row))
+            } else {
+                NavigationLink(value: WorkRoute.task(workspaceId: workspace.id, taskId: row.id)) { cardContent(row) }.buttonStyle(.plain)
+            }
+        }
+        .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+        .background(selected.contains(row.id) ? Amb.accent : Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
+        .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(selected.contains(row.id) ? Amb.accentForeground : .clear))
+        .contextMenu {
+            Button(selected.contains(row.id) ? "Deselect" : "Select") { toggle(row) }.disabled(!canChange(row))
+            ForEach(TaskState.board.filter { $0.rawValue != row.state }, id: \.self) { target in
+                Button("Move to \(target.label)") { setState(row, target) }.disabled(!canChange(row))
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("board.card.\(row.title)")
+        .modifier(TaskCardDrag(text: TaskBoardDrag(signer: model.identity.npub ?? "", connection: model.connection?.id ?? "", workspace: workspace.id, app: workspace.appNpub, task: row.id).text, enabled: canChange(row)))
+    }
+
+    private func cardContent(_ row: TaskRow) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TaskRowView(row: row, snapshot: snapshot.value, me: model.identity.npub, showsStatus: false)
+            if let failure = row.pending.first(where: { !$0.isPending }) {
+                WriteStatusLine(item: failure, label: "Board change")
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+    }
+
+    private func canChange(_ row: TaskRow) -> Bool { canWrite && !busy && !parents.contains(row.id) && row.pending.isEmpty }
+    private func toggle(_ row: TaskRow) {
+        guard canChange(row) else { return }
+        selecting = true
+        if selected.contains(row.id) { selected.remove(row.id) } else { selected.insert(row.id) }
+    }
+
     private func setState(_ row: TaskRow, _ state: TaskState) {
+        guard row.state != state.rawValue, canChange(row) else { return }
         model.submit(WriteIntent(kind: .taskState, targetId: row.id, payload: ["state": state.rawValue]), in: workspace)
+    }
+
+    private func apply(_ action: TaskBoardAction) {
+        guard !busy, canWrite, let sender = model.writes, let connection = model.connection else { return }
+        let rows = snapshot.value.rows.filter { selected.contains($0.id) && canChange($0) }
+        let boundary = model.selectedWorkspaceBoundary
+        let originContext = context
+        let agent = defaultAgent
+        busy = true
+        Task { @MainActor in
+            var queued = Set<String>(), failed = 0
+            for row in rows {
+                guard boundary == model.selectedWorkspaceBoundary, originContext == model.context else { break }
+                guard let intent = action.intent(for: row.task, agent: agent) else { failed += 1; continue }
+                do { _ = try await sender.submit(intent, connection: connection, workspace: workspace); queued.insert(row.id) }
+                catch { failed += 1 }
+            }
+            busy = false
+            guard boundary == model.selectedWorkspaceBoundary, originContext == model.context else { return }
+            selected.subtract(queued)
+            feedback = "\(queued.count) queued. \(failed > 0 ? "\(failed) could not be queued; selection kept. " : "")Changes save when connected. Failed or partial actions appear below and in task details."
+        }
+    }
+
+    private func decodePreferences(_ value: String) -> [String: Any] {
+        (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any] ?? [:]
+    }
+    private func savePreference(_ value: Any, in storage: inout String) {
+        var preferences = decodePreferences(storage); preferences[preferenceKey] = value
+        if let data = try? JSONSerialization.data(withJSONObject: preferences, options: [.sortedKeys]) { storage = String(decoding: data, as: UTF8.self) }
     }
 
     private func start() {
@@ -178,11 +372,21 @@ struct TasksView: View {
             async let writes = store.reader.writes(connectionId: connection, workspaceId: w)
             async let choice = scopeChoice(store, w)
             async let names = directoryNames(store, w)
+            async let members = store.reader.members(workspaceId: w)
             let pending = try await writes
             let creating = pending.filter { $0.kind == .taskCreate }
             return TasksSnapshot(rows: try await tasks.map { TaskRow(task: $0, writes: pending) }, creating: creating,
-                                 choice: try await choice, names: try await names)
+                                 choice: try await choice, names: try await names, agents: try await members.filter { $0.kind == "agent" },
+                                 boardWrites: pending.filter { $0.kind == .taskBoardChange })
         }
+    }
+}
+
+private struct TaskCardDrag: ViewModifier {
+    let text: String
+    let enabled: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if enabled { content.draggable(text) } else { content }
     }
 }
 

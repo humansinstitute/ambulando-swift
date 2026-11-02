@@ -11,6 +11,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Kanban interactions (iPhone/iPad build 74, Mac build 65)
+
+Drag cards between status columns, select several cards for bulk actions, and
+collapse columns to narrow vertical strips. The selected-count menu offers archive,
+done, blocked, ready with a locally chosen default agent, and today. Queued and
+failed changes remain recoverable. See [Kanban behavior and checks](docs/kanban-cards.md).
+Source delivery, signed packages, physical installation and live-account acceptance
+are reported separately.
+
 ## Kanban cards (iPhone/iPad build 73, Mac build 64)
 
 Board cards show status once, in the column heading. Titles, priority, channel,

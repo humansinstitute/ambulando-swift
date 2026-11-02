@@ -5,6 +5,7 @@ import Foundation
 public enum WriteKind: String, Sendable, Codable, CaseIterable {
     case taskCreate = "task.create"
     case taskState = "task.state"
+    case taskBoardChange = "task.boardChange"
     case taskPatch = "task.patch"
     case taskAssign = "task.assign"
     case taskComment = "task.comment"

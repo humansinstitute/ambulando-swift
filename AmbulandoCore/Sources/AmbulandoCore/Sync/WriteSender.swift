@@ -190,6 +190,9 @@ public struct WriteSender: Sendable {
             if r.status == 409 { return .permanent(status: 409, code: "idempotency_conflict", message: "Tower already has a different task with this request.") }
             return Self.classify(status: r.status, body: r.body, attempts: item.attempts + 1, what: "create tasks in this channel")
 
+        case .taskBoardChange:
+            return try await sendTaskBoardChange(item, api: api, client: client)
+
         case .taskState:
             guard let task = item.targetId, let state = p["state"] as? String else { return .permanent(status: nil, code: nil, message: "Missing task.") }
             let r = try await send("POST", base + "/tasks/" + TowerAPI.uuid(task) + "/state", ["state": state])
