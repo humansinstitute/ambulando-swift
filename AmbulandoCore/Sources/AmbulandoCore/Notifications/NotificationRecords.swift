@@ -61,6 +61,14 @@ public struct NotificationItem: Sendable, Equatable, Identifiable {
     public var inInbox: Bool { !isDismissed && !isArchived && (status == .active || status == .resolved) }
     public var isUnread: Bool { !isRead && inInbox }
 
+    /// Task completion is a task command, never a notification read/archive/dismiss mutation.
+    public func taskCompletionIntent(task: TaskRecord, hasPendingWrite: Bool) -> WriteIntent? {
+        guard accessOK, !isFutureVersion, case .task(let taskId) = target,
+              task.workspaceId == workspaceId, task.id == taskId,
+              task.taskState?.isTerminal != true, !hasPendingWrite else { return nil }
+        return WriteIntent(kind: .taskState, targetId: taskId, payload: ["state": "done"])
+    }
+
     public init?(raw: Data, workspaceId expected: String? = nil) {
         guard let o = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] else { return nil }
         self.init(json: o, workspaceId: expected, raw: raw)

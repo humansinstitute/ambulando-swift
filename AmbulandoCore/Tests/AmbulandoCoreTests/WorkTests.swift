@@ -91,6 +91,35 @@ final class WorkTests: XCTestCase {
         }
     }
 
+    func testNotificationDoneUsesTaskStateAndPreservesNotificationActions() async throws {
+        let h = try await WorkHarness.make()
+        let id = h.work.seedTask(scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "From notification")
+        await h.sync.refreshTasks(h.connection, h.workspace); await h.engine.waitUntilIdle()
+        let loaded = try await h.store.reader.task(workspaceId: h.workspace.id, id: id)
+        let task = try XCTUnwrap(loaded)
+        let tower = FakeNotificationTower()
+        let notificationId = tower.put()
+        var json = tower.set(notificationId, read: false)
+        json["action"] = ["target": ["kind": "task_comment", "task_id": id]]
+        let notification = try XCTUnwrap(NotificationItem(json: json, workspaceId: h.workspace.id))
+        XCTAssertNil(notification.taskCompletionIntent(task: task, hasPendingWrite: true))
+        var nonTask = json; nonTask["action"] = ["target": ["kind": "doc", "doc_id": id]]
+        XCTAssertNil(NotificationItem(json: nonTask)?.taskCompletionIntent(task: task, hasPendingWrite: false))
+        var denied = json; denied["access"] = "denied"
+        XCTAssertNil(NotificationItem(json: denied)?.taskCompletionIntent(task: task, hasPendingWrite: false))
+        let intent = try XCTUnwrap(notification.taskCompletionIntent(task: task, hasPendingWrite: false))
+        XCTAssertEqual(intent.kind, .taskState)
+        try await h.writes.submit(intent, connection: h.connection, workspace: h.workspace)
+        await h.drainWrites()
+        let saved = try await h.store.reader.task(workspaceId: h.workspace.id, id: id)
+        XCTAssertEqual(saved?.state, "done")
+        XCTAssertEqual(h.work.task(id)?["state"] as? String, "done")
+        XCTAssertNil(notification.taskCompletionIntent(task: try XCTUnwrap(saved), hasPendingWrite: false))
+        XCTAssertFalse(h.transport.recorded.contains { $0.httpMethod != "GET" && $0.url!.path.contains("notifications") })
+        XCTAssertFalse(notification.isArchived)
+        XCTAssertFalse(notification.isDismissed)
+    }
+
     func testTaskStateAndOfflineRetry() async throws {
         let h = try await WorkHarness.make()
         let id = h.work.seedTask(scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "T")

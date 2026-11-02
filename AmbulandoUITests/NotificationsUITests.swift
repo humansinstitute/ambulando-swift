@@ -54,6 +54,23 @@ final class NotificationsUITests: XCTestCase {
         capture(app, "notifications-all")
     }
 
+    func testTaskSwipeDoneCompletesTaskAndPreservesNotification() {
+        let app = launch()
+        openNotifications(app)
+        let taskNotice = app.staticTexts["Ana assigned you a task"]
+        XCTAssertTrue(taskNotice.waitForExistence(timeout: 15))
+        taskNotice.swipeLeft()
+        let done = app.buttons["notifications.taskDone"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        done.tap()
+        XCTAssertTrue(app.staticTexts["Task marked Done."].waitForExistence(timeout: 20))
+        XCTAssertTrue(taskNotice.exists, "completion must not dismiss or archive the notification")
+        capture(app, "notifications-task-done")
+        taskNotice.tap()
+        XCTAssertTrue(app.staticTexts["Review the native inbox"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["Done"].firstMatch.waitForExistence(timeout: 10))
+    }
+
     func testMarkReadAndArchiveUpdateCountsAndFilters() {
         let app = launch()
         openNotifications(app)

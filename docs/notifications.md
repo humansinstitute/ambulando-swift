@@ -112,3 +112,17 @@ notifications read or navigates. See [the execution and recovery contract](push-
 `NotificationTests.swift` (core, a fake Tower with CAS, folds, tombstones, resets, long listings, offline retries, locked identity)
 and `AmbulandoUITests/NotificationsUITests.swift` (sample data on the dedicated *Ambulando Test iPhone*). Sample results do not
 validate a live Tower.
+
+## Task Done from notifications (iPhone/iPad 75, Mac 66)
+
+Task-backed notifications offer **Done** beside Archive and Dismiss on a trailing
+swipe, and **Mark task Done** in the accessible context menu on iPhone and Mac.
+This submits the normal task-state command. It never archives, dismisses or
+marks the notification read. Completed/archived tasks lose the action; pending
+writes disable duplicate completion, and failed writes show a review prompt.
+Open the task to review or retry a failed save. Tower still checks task write
+permission; notification access grants no task authority. Task views observe the
+accepted task record through the existing local-store live queries.
+
+Android parity is deferred: add the same task-target action using its existing
+task completion command and keep notification mutations separate.

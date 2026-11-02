@@ -41,6 +41,10 @@ struct NotificationsView: View {
     @State private var filter: NotificationFilter = .unread
     @State private var category: String?
     @State private var detail: NotificationItem?
+    @State private var taskStates = LiveQuery<[String: String]>(initial: [:])
+    @State private var completingTaskIds: Set<String> = []
+    @State private var submittedTaskId: String?
+    @State private var completionMessage: String?
     @State private var undo: NotificationItem?
     @State private var undoTask: Task<Void, Never>?
 
@@ -78,8 +82,12 @@ struct NotificationsView: View {
         }
         .task(id: "\(workspace.id)|\(filter.rawValue)|\(category ?? "")") { start() }
         .onAppear { model.openNotifications() }
+        .onChange(of: taskStates.value) { _, states in
+            if let id = submittedTaskId, states[id] == "done" { completionMessage = "Task marked Done." }
+            else if let id = submittedTaskId, states[id] == "failed" { completionMessage = "Could not mark task Done. Open the task to review the failed save and retry." }
+        }
         .onChange(of: filter) { _, now in if now == .archived { model.loadArchivedNotifications() } }
-        .onDisappear { snapshot.pause(); undoTask?.cancel() }
+        .onDisappear { snapshot.pause(); taskStates.pause(); undoTask?.cancel() }
         .sheet(item: $detail) { item in NotificationDetailView(item: item) }
         .accessibilityIdentifier("notifications.screen")
     }
@@ -87,6 +95,17 @@ struct NotificationsView: View {
     private func start() {
         guard let connectionId else { return }
         let workspaceId = workspace.id, filter = filter, category = category
+        taskStates.start(store: store, matches: { $0.workspaceId == workspaceId && [.notifications, .tasks, .writes].contains($0.table) }) {
+            let notifications = try await store.reader.notificationSnapshot(connectionId: connectionId, workspaceId: workspaceId, filter: filter, category: category)
+            var states: [String: String] = [:]
+            for item in notifications.items {
+                guard case .task(let id) = item.target else { continue }
+                let writes = try await store.reader.writes(connectionId: connectionId, workspaceId: workspaceId, targetId: id)
+                if !writes.isEmpty { states[id] = writes.contains(where: { !$0.isPending }) ? "failed" : "pending" }
+                else if let task = try await store.reader.task(workspaceId: workspaceId, id: id) { states[id] = task.state }
+            }
+            return states
+        }
         snapshot.start(store: store, matches: { $0.workspaceId == workspaceId && $0.table == .notifications }) {
             try await store.reader.notificationSnapshot(connectionId: connectionId, workspaceId: workspaceId, filter: filter, category: category)
         }
@@ -98,6 +117,9 @@ struct NotificationsView: View {
         let value = snapshot.value
         List {
             if let banner = banner(value.status) { banner.listRowInsets(EdgeInsets()).listRowBackground(Color.clear) }
+            if let completionMessage {
+                Notice(tone: .info, text: completionMessage).accessibilityIdentifier("notifications.taskResult")
+            }
             ForEach(value.rejected) { rejection in
                 HStack(alignment: .top) {
                     Notice(tone: .warning, text: rejection.message)
@@ -119,6 +141,7 @@ struct NotificationsView: View {
                         }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        taskDoneButton(item)
                         Button(role: .destructive) { dismissItem(item) } label: { Label("Dismiss", systemImage: "xmark.bin") }
                         if item.isArchived {
                             Button { model.changeNotification(.unarchive, item) } label: { Label("Unarchive", systemImage: "tray.and.arrow.up") }.tint(Amb.warning)
@@ -141,6 +164,7 @@ struct NotificationsView: View {
     }
 
     @ViewBuilder private func rowMenu(_ item: NotificationItem) -> some View {
+        taskDoneButton(item)
         Button(item.isRead ? "Mark unread" : "Mark read", systemImage: item.isRead ? "envelope.badge" : "envelope.open") {
             model.changeNotification(item.isRead ? .markUnread : .markRead, item)
         }
@@ -173,6 +197,76 @@ struct NotificationsView: View {
         case .detail:
             detail = item
             if item.isUnread { model.changeNotification(.markRead, item) }
+        }
+    }
+
+    @ViewBuilder private func taskDoneButton(_ item: NotificationItem) -> some View {
+        if item.accessOK, case .task(let taskId) = item.target, !["done", "archive", "archived"].contains(taskStates.value[taskId] ?? "") {
+            Button { completeTask(item, taskId: taskId) } label: {
+                Label(taskStates.value[taskId] == "failed" ? "Review failed save" : (completingTaskIds.contains(taskId) || taskStates.value[taskId] == "pending" ? "Saving…" : "Done"), systemImage: "checkmark")
+            }
+            .tint(Amb.taskStatus("done"))
+            .disabled(!model.isUnlocked || completingTaskIds.contains(taskId) || taskStates.value[taskId] == "pending")
+            .accessibilityLabel("Mark task Done")
+            .accessibilityIdentifier("notifications.taskDone")
+        }
+    }
+
+    private func waitForTaskRead(_ sync: WorkspaceSync, taskId: String) async -> Bool {
+        let key = WorkspaceSync.taskKey(workspace.id, taskId)
+        // Bound the visible operation; unrelated queued jobs and scheduled retries must not hold the button.
+        for _ in 0..<1500 {
+            let state = await sync.engine.snapshot
+            if !state.running.contains(key) && !state.queued.contains(key) { return state.errors[key] == nil }
+            if Task.isCancelled { return false }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
+    }
+
+    private func completeTask(_ item: NotificationItem, taskId: String) {
+        guard item.accessOK, model.isUnlocked, !completingTaskIds.contains(taskId),
+              let connection = model.connection, let sender = model.writes,
+              model.selectedWorkspace?.id == workspace.id else { return }
+        let boundary = model.selectedWorkspaceBoundary
+        completingTaskIds.insert(taskId)
+        completionMessage = nil
+        submittedTaskId = taskId
+        Task { @MainActor in
+            defer { completingTaskIds.remove(taskId) }
+            do {
+                // Use the normal task reader and write queue. A notification grants no task authority.
+                guard let sync = model.sync else { return }
+                await sync.refreshTask(connection, workspace, taskId: taskId, force: true)
+                guard await waitForTaskRead(sync, taskId: taskId) else {
+                    completionMessage = "Could not refresh this task. Open it to check access and try again."
+                    return
+                }
+                guard boundary == model.selectedWorkspaceBoundary else { return }
+                guard let task = try await store.reader.task(workspaceId: workspace.id, id: taskId) else {
+                    completionMessage = "This task is unavailable. Open it to check access."
+                    return
+                }
+                if task.taskState?.isTerminal == true {
+                    completionMessage = task.state == "done" ? "This task is already Done." : "This task is archived."
+                    return
+                }
+                let pending = try await store.reader.writes(connectionId: connection.id, workspaceId: workspace.id, targetId: taskId)
+                guard pending.isEmpty else {
+                    completionMessage = "This task has a pending or failed save. Open the task to review it."
+                    return
+                }
+                guard let intent = item.taskCompletionIntent(task: task, hasPendingWrite: !pending.isEmpty) else { return }
+                _ = try await sender.submit(intent, connection: connection, workspace: workspace)
+                guard boundary == model.selectedWorkspaceBoundary else { return }
+                let remaining = try await store.reader.writes(connectionId: connection.id, workspaceId: workspace.id, targetId: taskId)
+                let saved = try await store.reader.task(workspaceId: workspace.id, id: taskId)
+                completionMessage = remaining.isEmpty && saved?.state == "done"
+                    ? "Task marked Done."
+                    : "Done is pending. Open the task to review sync status or any failure."
+            } catch {
+                if boundary == model.selectedWorkspaceBoundary { completionMessage = "Could not mark task Done: \(error.localizedDescription)" }
+            }
         }
     }
 

@@ -11,6 +11,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Done from notifications (iPhone/iPad build 75, Mac build 66)
+
+Task notifications offer **Done** alongside Archive and Dismiss when swiped,
+with the same action in the context menu. Done completes the actual task and
+keeps notification read/archive/dismiss independent. Pending saves prevent
+repeated completion; failures explain where to review and retry. See
+[notification behavior](docs/notifications.md). Android is a separate follow-up.
+Build, source delivery and device installation evidence are reported separately.
+
 ## Kanban interactions (iPhone/iPad build 74, Mac build 65)
 
 Drag cards between status columns, select several cards for bulk actions, and
