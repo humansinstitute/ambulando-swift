@@ -11,6 +11,13 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Kanban cards (iPhone/iPad build 73, Mac build 64)
+
+Board cards show status once, in the column heading. Titles, priority, channel,
+assignee and pending/error indicators remain. List rows and task detail retain
+status displays and controls. See [Kanban card behavior and checks](docs/kanban-cards.md).
+Source, signed packages and physical installation are reported separately.
+
 ## Installed workspace napplets (iPhone/iPad build 72, Mac build 63)
 
 Toolbox and Deck Apps now discover installed workspace napplets, including Project Register. They open in a private

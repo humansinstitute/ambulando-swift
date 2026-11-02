@@ -140,7 +140,7 @@ struct TasksView: View {
                             LazyVStack(spacing: 8) {
                                 ForEach(rows) { row in
                                     NavigationLink(value: WorkRoute.task(workspaceId: workspace.id, taskId: row.id)) {
-                                        TaskRowView(row: row, snapshot: snapshot.value, me: model.identity.npub).padding(10)
+                                        TaskRowView(row: row, snapshot: snapshot.value, me: model.identity.npub, showsStatus: false).padding(10)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                             .background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
                                     }
@@ -190,12 +190,13 @@ struct TaskRowView: View {
     let row: TaskRow
     let snapshot: TasksSnapshot
     let me: String?
+    var showsStatus = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(row.title).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(3)
             HStack(spacing: 8) {
-                TaskStatusBadge(state: row.state)
+                if showsStatus { TaskStatusBadge(state: row.state) }
                 PriorityBadge(priority: row.priority)
                 if let channel = snapshot.choice.channelName(row.task.channelId) { Text("#\(channel)").lineLimit(1) }
                 if let assignee = row.assignee { Label(displayName(assignee, snapshot.names, me: me), systemImage: "person").lineLimit(1) }

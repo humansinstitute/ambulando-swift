@@ -153,9 +153,31 @@ final class WorkFlowUITests: XCTestCase {
         capture(app, "wp4-task-detail")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.segmentedControls["tasks.layout"].buttons.element(boundBy: 1).tap()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'In progress ·'")).firstMatch.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Test the phone build today'")).firstMatch.exists, "the task is in its board column")
+        let column = app.descendants(matching: .any)["board.in_progress"].firstMatch
+        XCTAssertTrue(column.waitForExistence(timeout: 10), "status column remains available")
+        let card = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Test the phone build today'")).firstMatch
+        for _ in 0..<5 where !card.isHittable {
+            app.swipeLeft()
+        }
+        XCTAssertTrue(card.waitForExistence(timeout: 10), "the task is in its board column")
+        XCTAssertFalse(card.label.contains("In progress"), "board card does not repeat its column status")
+        XCTAssertFalse(card.staticTexts["In progress"].exists)
+        XCTAssertTrue(card.label.contains("SAND"), "priority remains on the card")
         capture(app, "wp4-tasks-board")
+        card.tap()
+        XCTAssertTrue(app.buttons["task.state"].waitForExistence(timeout: 10), "detail keeps the state control")
+        app.buttons["task.state"].tap()
+        app.buttons["Review"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let review = app.descendants(matching: .any)["board.review"].firstMatch
+        XCTAssertTrue(review.waitForExistence(timeout: 10), "Review column remains available")
+        for _ in 0..<5 where !card.isHittable { app.swipeLeft() }
+        XCTAssertTrue(card.waitForExistence(timeout: 10), "status changes keep the card available")
+        XCTAssertFalse(card.label.contains("Review"), "moved card still omits repeated state")
+        app.segmentedControls["tasks.layout"].buttons.element(boundBy: 0).tap()
+        let listRow = app.buttons["task.Test the phone build today"]
+        XCTAssertTrue(listRow.waitForExistence(timeout: 10))
+        XCTAssertTrue(listRow.label.contains("Review"), "list rows keep their status")
     }
 
     func testDocumentReadEditWithKeyboardAndSave() {

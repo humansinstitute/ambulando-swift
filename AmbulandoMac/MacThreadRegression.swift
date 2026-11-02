@@ -68,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacKanbanCheck") {
+                try await kanbanCardCheck(window, model: model)
+                print("PASS: narrow Mac Kanban cards omit repeated status; column header, metadata and list status retained"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacHeaderTintCheck") {
                 try await headerTintCheck(window, model: model)
                 print("PASS: existing Mac header tint, colours, light/dark controls and composer wording"); fflush(stdout); exit(0)
@@ -944,6 +948,38 @@ enum MacThreadRegression {
         // SwiftUI gestures need direct delivery too; a native button may already have consumed the queued release.
         if let release { window.sendEvent(release) }
     }
+    static func kanbanCardCheck(_ window: NSWindow, model: AppModel) async throws {
+        guard Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test",
+              let store = model.store, let workspace = model.selectedWorkspace else {
+            throw Failure(description: "Kanban check requires isolated Test app")
+        }
+        let tasks = try await store.reader.tasks(workspaceId: workspace.id)
+        guard let task = tasks.first else { throw Failure(description: "Missing sample task") }
+        let row = TaskRow(task: task, writes: [])
+        let status = row.taskState?.label ?? row.state
+        var taskSnapshot = TasksSnapshot()
+        taskSnapshot.names = [row.assignee ?? "": "Assigned reviewer"]
+        for theme in [ColorScheme.light, .dark] {
+            window.contentView = NSHostingView(rootView:
+                VStack(alignment: .leading, spacing: 12) {
+                    TaskStatusBadge(state: row.state).accessibilityIdentifier("kanban.column.status")
+                    TaskRowView(row: row, snapshot: taskSnapshot, me: nil, showsStatus: false)
+                        .padding(10).frame(width: 240, alignment: .leading)
+                        .background(Amb.card).accessibilityElement(children: .contain).accessibilityIdentifier("kanban.card")
+                }.padding().preferredColorScheme(theme))
+            window.setContentSize(NSSize(width: 280, height: 300)); await settle()
+            try require(find(window, "kanban.column.status") != nil, "column retains status heading")
+            guard let card = find(window, "kanban.card") else { throw Failure(description: "Missing Kanban card") }
+            try require(containsText(card, row.title), "card title retained")
+            try require(!containsText(card, status), "card does not repeat status")
+            try require(containsText(card, (TaskPriority(rawValue: row.priority)?.label ?? row.priority).uppercased()), "priority retained")
+            try snapshot(window, model: model, name: "mac-kanban-\(theme)")
+            window.contentView = NSHostingView(rootView: TaskRowView(row: row, snapshot: taskSnapshot, me: nil).padding().preferredColorScheme(theme))
+            await settle()
+            try require(containsText(window, status), "list row retains status")
+        }
+    }
+
     static func snapshot(_ window: NSWindow, model: AppModel, name: String) throws {
         guard let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds),
               model.fixture != nil else { throw Failure(description: "Cannot capture app view") }
