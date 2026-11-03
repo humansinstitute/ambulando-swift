@@ -93,6 +93,9 @@ public struct ScopeChannelManager: Sendable {
                                     participantNpub: String) async throws -> ChannelRecord {
         guard NostrKeys.isValidNpub(participantNpub) else { throw ManagementError.invalid("Choose a member to message.") }
         let participants = Array(Set([connection.signerNpub, participantNpub])).sorted()
+        // Never create a second conversation for the same participants: reuse what this workspace already holds.
+        let known = try await store.reader.channels(workspaceId: workspace.id)
+        if let existing = DirectMessagePlanner.existing(in: known, participants: participants) { return existing }
         let body: [String: Any] = ["name": "DM: \(participantNpub)", "description": "dm:" + participants.joined(separator: "|"),
                                    "kind": "dm", "participant_npubs": participants]
         let object = try await send(connection, workspace, method: "POST", path: try base(workspace) + "/scopes/" + TowerAPI.uuid(scopeId) + "/channels",
@@ -260,7 +263,8 @@ public struct WorkspaceMembership: Sendable, Equatable {
 /// The web's visibility rules for management controls (sol `canCreateChannelInScope`, `canManageChannel`,
 /// `canManageScope`, `canAccessScopeSettings`). They only decide what is offered; Tower decides the write.
 public enum ManagementPermissions {
-    public static func isDirectMessageScope(_ scope: ScopeRecord) -> Bool { scope.kind?.lowercased() == "dm" }
+    /// Same rule as the sidebar and the web `isDmScope`: kind `dm`, or a scope named "DMs".
+    public static func isDirectMessageScope(_ scope: ScopeRecord) -> Bool { SidebarNavigation.isDirectMessageScope(scope) }
 
     public static func canCreateChannel(in scope: ScopeRecord, membership: WorkspaceMembership?) -> Bool {
         if isDirectMessageScope(scope) { return true }
@@ -419,5 +423,30 @@ public struct InitialChannelGrant: Sendable, Equatable, Identifiable {
                   seen.insert(grant.id).inserted else { throw ManagementError.invalid("Choose each person or group once and select an access level.") }
             return ["principal_type": grant.principalType, "principal_id": try TowerAPI.uuid(grant.principalId), "access_level": grant.access]
         }
+    }
+}
+
+/// Who can be messaged from a DM scope and which conversation already exists (web `newChannelDmSuggestions` /
+/// `findExistingDmChannel`). Pure, so the sheet and the tests share one rule.
+public enum DirectMessagePlanner {
+    public struct Candidate: Equatable, Identifiable, Sendable {
+        public let member: MemberRecord
+        public let isSelf: Bool
+        public var id: String { member.npub }
+        public var isAgent: Bool { member.kind?.lowercased() == "agent" }
+        public var title: String { isSelf ? member.label + " (Note to self)" : member.label }
+    }
+
+    /// Every workspace member with a valid npub - people and agents - including the viewer (a note to self), once each.
+    public static func candidates(members: [MemberRecord], viewerNpub: String?) -> [Candidate] {
+        var seen = Set<String>()
+        return members.filter { NostrKeys.isValidNpub($0.npub) && seen.insert($0.npub).inserted }
+            .map { Candidate(member: $0, isSelf: $0.npub == viewerNpub) }
+    }
+
+    /// The DM already holding exactly these participants, in any scope the workspace lists.
+    public static func existing(in channels: [ChannelRecord], participants: [String]) -> ChannelRecord? {
+        let wanted = Array(Set(participants)).sorted()
+        return channels.first { SidebarNavigation.isDirectMessageChannel($0) && SidebarNavigation.participants($0) == wanted }
     }
 }

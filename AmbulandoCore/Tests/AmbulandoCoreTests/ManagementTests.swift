@@ -46,6 +46,8 @@ final class FakeManagementTower: @unchecked Sendable {
                 var row = Fixtures.channel(UUID().uuidString.lowercased(), scope: parts[1], name: name, position: Double(channels.count + 1))
                 row["metadata"] = body["metadata"] ?? [:]
                 row["kind"] = body["kind"] ?? "channel"
+                if let description = body["description"] { row["description"] = description }
+                if let participants = body["participant_npubs"] { row["participant_npubs"] = participants }
                 channels.append(row)
                 return (201, ["channel": row])
             case ("POST", 1, "scopes"):
@@ -118,6 +120,43 @@ final class ManagementTests: XCTestCase {
         XCTAssertEqual(chat?["activation"] as? String, "mention_then_continue")
         let stored = try await h.store.reader.channel(workspaceId: Fixtures.workspaceId, id: channel.id)
         XCTAssertEqual(stored?.scopeId, Fixtures.scopeA, "the new channel is in the sidebar's store at once")
+    }
+
+    func testCreateDirectMessageSendsParticipantsOnceAndReusesTheExistingConversation() async throws {
+        let tower = FakeManagementTower()
+        let (h, manager) = try await harness(tower)
+        let other = "npub1sg6plzptd64u62a878hep2kev88swjh3tw00gjsfl8f237lmu63q0uf63m"
+        let first = try await manager.createDirectMessage(h.connection, h.workspace, scopeId: Fixtures.scopeA, participantNpub: other)
+        let sent = try XCTUnwrap(tower.bodies.last)
+        XCTAssertEqual(sent.body["kind"] as? String, "dm")
+        XCTAssertEqual(sent.body["participant_npubs"] as? [String], [h.connection.signerNpub, other].sorted())
+        let posts = tower.bodies.filter { $0.method == "POST" }.count
+        let again = try await manager.createDirectMessage(h.connection, h.workspace, scopeId: Fixtures.scopeA, participantNpub: other)
+        XCTAssertEqual(again.id, first.id, "starting the same DM twice opens the first")
+        XCTAssertEqual(tower.bodies.filter { $0.method == "POST" }.count, posts, "no second create request")
+        let note = try await manager.createDirectMessage(h.connection, h.workspace, scopeId: Fixtures.scopeA, participantNpub: h.connection.signerNpub)
+        XCTAssertNotEqual(note.id, first.id, "a note to self is its own conversation")
+        XCTAssertEqual(SidebarNavigation.participants(note), [h.connection.signerNpub])
+    }
+
+    func testDirectMessagePlannerOffersPeopleAndAgentsAndFindsExistingConversation() throws {
+        let me = TestKeys.npub, bot = "npub1sg6plzptd64u62a878hep2kev88swjh3tw00gjsfl8f237lmu63q0uf63m"
+        let members = [MemberRecord(workspaceId: "w", actorId: "a1", npub: me, kind: "person", displayName: "Pete"),
+                       MemberRecord(workspaceId: "w", actorId: "a2", npub: bot, kind: "agent", displayName: "Bot"),
+                       MemberRecord(workspaceId: "w", actorId: "a3", npub: bot, kind: "agent", displayName: "Bot"),
+                       MemberRecord(workspaceId: "w", actorId: "a4", npub: "not-an-npub", kind: "person", displayName: nil)]
+        let candidates = DirectMessagePlanner.candidates(members: members, viewerNpub: me)
+        XCTAssertEqual(candidates.map(\.member.npub), [me, bot], "valid, de-duplicated; self included")
+        XCTAssertEqual(candidates.map(\.isSelf), [true, false])
+        XCTAssertEqual(candidates.map(\.isAgent), [false, true])
+        XCTAssertEqual(candidates[0].title, "Pete (Note to self)")
+        let dm = ChannelRecord(workspaceId: "w", id: "c1", scopeId: "s", name: "DM: x", kind: "dm", updatedAt: "",
+                               raw: Data(#"{"participant_npubs":["\#(me)","\#(bot)"]}"#.utf8))
+        XCTAssertEqual(DirectMessagePlanner.existing(in: [dm], participants: [bot, me])?.id, "c1")
+        XCTAssertNil(DirectMessagePlanner.existing(in: [dm], participants: [me]))
+        let named = ScopeRecord(workspaceId: "w", id: "s", name: "DMs", kind: nil, updatedAt: "")
+        XCTAssertTrue(ManagementPermissions.isDirectMessageScope(named), "the scope named DMs counts, as in the sidebar and web")
+        XCTAssertTrue(ManagementPermissions.canCreateChannel(in: named, membership: nil))
     }
 
     func testRefusalsAreClassifiedAndNothingIsStored() async throws {

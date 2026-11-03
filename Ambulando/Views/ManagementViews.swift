@@ -102,6 +102,8 @@ struct NewChannelSheet: View {
     @State private var prompt = ""
     @State private var person: String?
     @State private var members: [MemberRecord] = []
+    @State private var directoryLoading = true
+    @State private var directoryError: String?
     @State private var accessMembers: [AdministrationRow] = []
     @State private var accessGroups: [AdministrationRow] = []
     @State private var grants: [InitialChannelGrant] = []
@@ -110,6 +112,8 @@ struct NewChannelSheet: View {
     @State private var phase = ManagementPhase.idle
 
     private var isDirect: Bool { ManagementPermissions.isDirectMessageScope(scope) }
+    private var candidates: [DirectMessagePlanner.Candidate] { DirectMessagePlanner.candidates(members: members, viewerNpub: model.connection?.signerNpub) }
+    private var directoryKey: String { "directory:" + (model.selectedWorkspace?.id ?? "") }
 
     var body: some View {
         NavigationStack {
@@ -117,13 +121,27 @@ struct NewChannelSheet: View {
                 Section { Text(scope.name).foregroundStyle(Amb.mutedForeground) } header: { Text("Scope") }
                 if isDirect {
                     Section {
-                        Picker("Person", selection: $person) {
-                            Text("Choose…").tag(String?.none)
-                            ForEach(members.filter { $0.npub != model.connection?.signerNpub }, id: \.npub) { member in
-                                Text(member.label).tag(String?.some(member.npub))
+                        if directoryLoading && candidates.isEmpty {
+                            HStack(spacing: 8) { ProgressView(); Text("Loading people and agents…").foregroundStyle(Amb.mutedForeground) }
+                                .accessibilityIdentifier("newChannel.loading")
+                        } else if candidates.isEmpty {
+                            Text(directoryError ?? "No other people or agents are available in this workspace yet.")
+                                .foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("newChannel.empty")
+                        } else {
+                            Picker("Person", selection: $person) {
+                                Text("Choose…").tag(String?.none)
+                                ForEach(candidates) { candidate in
+                                    Text(candidate.title + (candidate.isAgent ? " · agent" : "")).tag(String?.some(candidate.id))
+                                }
                             }
+                            .accessibilityIdentifier("newChannel.person")
                         }
-                        .accessibilityIdentifier("newChannel.person")
+                        if let directoryError, !candidates.isEmpty {
+                            Text(directoryError).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if directoryError != nil {
+                            Button("Retry people") { Task { await loadDirectory() } }.accessibilityIdentifier("newChannel.retryPeople")
+                        }
                     } header: { Text("Direct message") } footer: {
                         Text("An existing conversation with this person opens instead of a new one.")
                     }
@@ -188,11 +206,33 @@ struct NewChannelSheet: View {
             .interactiveDismissDisabled(phase.isWorking)
             .task {
                 guard let store = model.store, let workspace = model.selectedWorkspace else { return }
-                if isDirect {
-                    members = (try? await store.reader.directoryMembers(workspaceId: workspace.id)) ?? []
-                } else { await loadAccessRecipients() }
+                if isDirect { await loadDirectory() } else { await loadAccessRecipients() }
+            }
+            .onChange(of: model.isSyncing(directoryKey)) { _, syncing in
+                if isDirect, !syncing { Task { await readDirectory() } }
             }
         }
+    }
+
+    /// Shows the cached directory at once, then asks Tower for the current one; the sheet re-reads when that finishes.
+    private func loadDirectory() async {
+        guard let workspace = model.selectedWorkspace else { return }
+        directoryError = nil
+        await readDirectory()
+        directoryLoading = true
+        model.refreshDirectory(workspace)
+        // The sync is keyed and coalesced; give a quiet queue a moment, then settle on what is stored.
+        try? await Task.sleep(for: .seconds(1))
+        if !model.isSyncing(directoryKey) { await readDirectory() }
+    }
+
+    private func readDirectory() async {
+        guard let store = model.store, let workspace = model.selectedWorkspace, model.selectedWorkspace?.id == workspace.id else { return }
+        members = (try? await store.reader.directoryMembers(workspaceId: workspace.id)) ?? []
+        directoryLoading = model.isSyncing(directoryKey)
+        if !directoryLoading, let error = model.syncError(forKey: directoryKey) {
+            directoryError = "People could not be refreshed: \(error)"
+        } else if !directoryLoading { directoryError = nil }
     }
 
     private func loadAccessRecipients() async {
@@ -221,11 +261,11 @@ struct NewChannelSheet: View {
         let scopeId = scope.id, name = name, description = description, prompt = prompt, grants = grants
         if isDirect, let person {
             let mine = model.connection?.signerNpub ?? ""
-            if let existing = model.navigation.value.groups.first(where: { $0.id == scopeId })?.channels
-                .first(where: { SidebarNavigation.participants($0) == Array(Set([mine, person])).sorted() }) {
+            if let existing = DirectMessagePlanner.existing(in: model.navigation.value.groups.flatMap(\.channels), participants: [mine, person]) {
                 onCreated(existing); dismiss(); return
             }
         }
+        guard !phase.isWorking else { return }
         endEditing(); phase = .working(isDirect ? "Opening the conversation…" : "Creating the channel…")
         let person = person
         Task {

@@ -44,3 +44,12 @@ The timer is a child of the stream attempt, so stream stop, lock, workspace swit
 It does not run in the background or create a second network owner. Tests use a short injected interval and a healthy
 heartbeat-only transport to prove newly eligible channels appear, revocations disappear and polling stops on stream stop.
 A user's restart recovering a channel supports this convergence gap; it does not identify why a specific hint was missed.
+
+## Starting a direct message (iOS build 78 / Mac 69)
+
+Selecting the DMs scope (kind `dm` or named "DMs", the same rule as the sidebar and web `isDmScope`) and tapping New
+opens the person picker. It lists every workspace member, people and agents, plus the viewer as a note to self, from
+the cached directory at once, and force-refreshes the directory with loading, empty, error and retry states.
+`DirectMessagePlanner` supplies candidates and the existing-conversation match; the sheet and
+`createDirectMessage` both reuse an existing DM with the same participants in any listed scope before posting, so a
+repeat start never creates a duplicate. Existing DM history and other workspaces' members are untouched.
