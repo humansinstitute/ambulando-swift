@@ -1012,6 +1012,13 @@ final class AppModel {
         withWorkspace(workspace) { sync, c in await sync.download(c, workspace, file: file, cache: cache) }
     }
 
+    func fileForExport(_ file: FileRecord, in workspace: WorkspaceRecord) async throws -> URL {
+        guard let sync, let connection, let cache = fileCache, isUnlocked, canRead,
+              workspace.id == selectedWorkspace?.id, workspace.appNpub == selectedWorkspace?.appNpub,
+              selectedWorkspaceBoundary != nil else { throw TowerError.malformed("Unlock and reopen this workspace to download.") }
+        return try await sync.fileForExport(connection, workspace, file: file, cache: cache)
+    }
+
     func downloadAttachment(_ objectId: String, in workspace: WorkspaceRecord) {
         guard let cache = fileCache else { return }
         withWorkspace(workspace) { sync, c in await sync.downloadAttachment(c, workspace, objectId: objectId, cache: cache) }

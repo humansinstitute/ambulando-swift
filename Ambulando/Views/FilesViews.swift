@@ -147,6 +147,12 @@ struct FileDetailView: View {
     let store: LocalStore
     @State private var snapshot = LiveQuery<FileDetailSnapshot>(initial: FileDetailSnapshot())
     @State private var preview: URL?
+    @State private var downloadTask: Task<Void, Never>?
+    @State private var downloading = false
+    @State private var downloadError: String?
+    @State private var savedDownload: URL?
+    @State private var exportFile: BrowserDownloadFile?
+    @State private var exporting = false
 
     var body: some View {
         List {
@@ -165,6 +171,23 @@ struct FileDetailView: View {
                     if let description = file.description, !description.isEmpty { Text(description).font(.amb(.footnote)) }
                 }
                 Section {
+                    if downloading {
+                        HStack { ProgressView(); Text("Downloading…") }.appRowTextSize()
+                        Button("Cancel download") { downloadTask?.cancel() }
+                    } else {
+                        Button { beginDownload(file) } label: { Label(downloadError == nil ? "Download" : "Retry download", systemImage: "arrow.down.circle").appRowTextSize() }
+                            .disabled(!model.isUnlocked).accessibilityIdentifier("file.download")
+                        if !model.isUnlocked { Text("Unlock to download.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground) }
+                    }
+                    if let savedDownload {
+                        #if os(macOS)
+                        Text("Saved \(savedDownload.lastPathComponent) to Downloads.").accessibilityIdentifier("file.saved")
+                        Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([savedDownload]) }
+                        #else
+                        Text("Saved \(savedDownload.lastPathComponent) to your chosen location.").accessibilityIdentifier("file.saved")
+                        #endif
+                    }
+                    if let downloadError { Text(downloadError).font(.amb(.footnote)).foregroundStyle(Amb.destructive).accessibilityIdentifier("file.downloadError") }
                     if let url = snapshot.value.cached {
                         Button { preview = url } label: { Label("Preview", systemImage: "eye").appRowTextSize() }.accessibilityIdentifier("file.preview")
                         ShareLink(item: url) { Label("Share or save", systemImage: "square.and.arrow.up").appRowTextSize() }
@@ -174,16 +197,13 @@ struct FileDetailView: View {
                         Button { NSWorkspace.shared.open(url) } label: { Label("Open in Default App", systemImage: "arrow.up.forward.app").appRowTextSize() }
                             .accessibilityIdentifier("file.openExternally")
                         #endif
-                    } else if model.isSyncing(WorkspaceSync.downloadKey(workspace.id, file.id)) {
-                        HStack { ProgressView(); Text("Downloading…").foregroundStyle(Amb.mutedForeground) }.appRowTextSize()
-                    } else {
-                        Button { model.download(file, in: workspace) } label: { Label("Download", systemImage: "arrow.down.circle").appRowTextSize() }
-                            .disabled(!model.isUnlocked).accessibilityIdentifier("file.download")
-                        if !model.isUnlocked { Text("Unlock to download.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground) }
                     }
-                    if let error = model.syncError(forKey: WorkspaceSync.downloadKey(workspace.id, file.id)) { Text(error).font(.amb(.footnote)).foregroundStyle(Amb.destructive) }
                 } footer: {
-                    Text("Downloads are checked against the file's checksum and kept in this app's cache.")
+                    #if os(macOS)
+                    Text("Download saves a checked copy in Downloads. Existing files are kept.")
+                    #else
+                    Text("Download checks the file, then lets you choose where to save it.")
+                    #endif
                 }
             } else if snapshot.loaded {
                 Text("This file is not on this \(Device.name).").foregroundStyle(Amb.mutedForeground).appRowTextSize()
@@ -198,6 +218,46 @@ struct FileDetailView: View {
         .inlineTitle()
         .quickLookPreview($preview)
         .task { start() }
+        .onDisappear { downloadTask?.cancel() }
+        .fileExporter(isPresented: $exporting, document: exportFile, contentType: .data,
+                      defaultFilename: snapshot.value.file?.displayName ?? "file") { result in
+            switch result {
+            case .success(let url): savedDownload = url
+            case .failure(let error): downloadError = "Could not save: \(error.localizedDescription). Try Download again."
+            }
+            exportFile = nil
+        }
+    }
+
+    private func beginDownload(_ file: FileRecord) {
+        guard !downloading else { return }
+        downloading = true
+        downloadError = nil
+        savedDownload = nil
+        downloadTask = Task { @MainActor in
+            defer { downloading = false; downloadTask = nil }
+            // Cancelling the foreground waiter releases its engine slot, even for an unresponsive transport.
+            let operation = Task { try await model.fileForExport(file, in: workspace) }
+            let deadline = Task { try? await Task.sleep(for: .seconds(120)); if !Task.isCancelled { operation.cancel() } }
+            defer { deadline.cancel() }
+            do {
+                let source = try await withTaskCancellationHandler { try await operation.value } onCancel: { operation.cancel() }
+                try Task.checkCancellation()
+                #if os(macOS)
+                let destination = try FileManager.default.url(for: .downloadsDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+                savedDownload = try await Task.detached { try DownloadCopy.save(source, name: file.displayName, directory: destination) }.value
+                #else
+                let bytes = try await Task.detached { try Data(contentsOf: source) }.value
+                try Task.checkCancellation()
+                exportFile = BrowserDownloadFile(bytes: bytes)
+                exporting = true
+                #endif
+            } catch is CancellationError {
+                downloadError = "Download cancelled or timed out. Try Download again."
+            } catch {
+                downloadError = "Could not save download: \(error.localizedDescription). Try Download again."
+            }
+        }
     }
 
     private func start() {

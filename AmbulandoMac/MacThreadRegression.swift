@@ -68,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDownloadCheck") {
+                try await downloadCheck(model: model)
+                print("PASS: native Download saves exact bytes to Downloads, preserves collisions, reports failure and clears busy state for retry"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacKanbanCheck") {
                 try await kanbanCardCheck(window, model: model)
                 print("PASS: native Mac Kanban collapse/expand, multi-selection/cancel and accepted multi-row bulk action; narrow cards omit repeated status and list status remains"); fflush(stdout); exit(0)
@@ -858,6 +862,47 @@ enum MacThreadRegression {
         }
         return children(object).contains { containsText($0, text, depth: depth + 1) }
     }
+    static func downloadCheck(model: AppModel) async throws {
+        guard let fixture = model.fixture, let workspace = model.selectedWorkspace, let store = model.store else { throw Failure(description: "Missing fixture") }
+        let bytes = Data([0, 1, 255, 4, 0, 128])
+        let name = "Ambulando-download-check-\(UUID().uuidString).dmg"
+        let id = fixture.tower.work.seedFile(channel: FixtureTower.generalChannel, scope: FixtureTower.scopeAmbulando, name: name, bytes: bytes, contentType: "application/octet-stream")
+        guard let raw = fixture.tower.work.file(id) else { throw Failure(description: "Missing seeded file") }
+        let file = try FileRecord(raw: JSONSerialization.data(withJSONObject: raw))
+        try await store.writer.upsertFiles(workspaceId: workspace.id, [file])
+        let directory = try FileManager.default.url(for: .downloadsDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
+        print("DOWNLOAD_DIRECTORY \(directory.resolvingSymlinksInPath().path)")
+        let first = directory.appendingPathComponent(name)
+        let second = directory.appendingPathComponent((name as NSString).deletingPathExtension + " (1).dmg")
+        defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 900, height: 700), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: FileDetailView(fileId: id, workspace: workspace, store: store).environment(model))
+        window.makeKeyAndOrderFront(nil)
+        try await waitFor(window, "file.download", "download control")
+        try press(window, "file.download")
+        try await waitFor(window, "file.saved", "download completion")
+        try require(try Data(contentsOf: first) == bytes, "exact first saved bytes")
+        try press(window, "file.download")
+        await settle()
+        try await waitFor(window, "file.saved", "second completion")
+        try require(try Data(contentsOf: second) == bytes && Data(contentsOf: first) == bytes, "collision-safe saved bytes")
+        try snapshot(window, model: model, name: "mac-download-saved")
+        // Purge only the isolated test file, force an authenticated read failure, and verify retry remains usable.
+        if let cached = model.fileCache?.cached(file) { try FileManager.default.removeItem(at: cached) }
+        fixture.tower.work.inject(.status(503, "download_unavailable"), matching: "/files/\(id)/object")
+        try press(window, "file.download")
+        try await waitFor(window, "file.downloadError", "retryable error")
+        try require(find(window, "file.download") != nil, "busy state cleared after failure")
+        try snapshot(window, model: model, name: "mac-download-error")
+        try press(window, "file.download")
+        try await waitFor(window, "file.saved", "retry completion")
+        let third = directory.appendingPathComponent((name as NSString).deletingPathExtension + " (2).dmg")
+        try require(try Data(contentsOf: third) == bytes, "retry saved exact bytes")
+        try FileManager.default.removeItem(at: third)
+    }
+
     static func require(_ condition: Bool, _ message: String) throws {
         guard condition else { throw Failure(description: message) }
     }

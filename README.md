@@ -11,6 +11,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Save downloads (iPhone/iPad build 77, Mac build 68)
+
+File detail → Download now saves a checksum-checked copy in the Mac Downloads folder, keeps existing files
+by numbering duplicate names, and confirms the filename with Reveal in Finder. On iPhone/iPad it opens the
+system save dialog and confirms only a successful export. Cancel, a two-minute timeout and retryable errors
+keep the foreground action bounded. Preview, Share and Save As remain available for cached content.
+See [download behavior and checks](docs/downloads.md). Pushed source and local fixture checks do not establish
+installation or real-account acceptance on Pete's devices.
+
 ## Chat mentions and mobile message edits (iPhone/iPad build 76, Mac build 67)
 
 Mention searches order exact labels before prefixes and prefixes before substrings, ignoring case.

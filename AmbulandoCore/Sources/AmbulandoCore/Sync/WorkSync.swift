@@ -250,6 +250,23 @@ extension WorkspaceSync {
         }
     }
 
+    /// Foreground file export uses the authenticated typed route and returns only verified cached bytes.
+    /// It does not mistake an object-store transfer or an enqueued job for a completed save.
+    public func fileForExport(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, file: FileRecord, cache: FileCache) async throws -> URL {
+        let sync = self
+        return try await engine.perform(Self.downloadKey(workspace.id, file.id)) {
+            try await sync.identity.requireReader(npub: connection.signerNpub)
+            if let cached = cache.cached(file) { return cached }
+            let api = sync.api(origin: try TowerOrigin(connection.origin))
+            let object = try await api.fileObject(workspaceId: workspace.id, appNpub: workspace.appNpub, fileId: file.id)
+            try Task.checkCancellation()
+            if let expected = file.sha256, expected != object.sha256 { throw TowerError.malformed("file changed; refresh Files and retry") }
+            let url = try cache.store(object.bytes, for: file)
+            await sync.store.writer.touch([ChangeKey(.files, workspace.id)])
+            return url
+        }
+    }
+
     /// Chat attachment bytes (signed `GET /api/v4/storage/:id/content` on the pinned origin), cached by object id.
     public func downloadAttachment(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, objectId: String, cache: FileCache) async {
         let sync = self
