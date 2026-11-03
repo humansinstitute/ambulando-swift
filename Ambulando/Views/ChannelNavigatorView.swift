@@ -8,6 +8,9 @@ struct ChatStack<Banner: View>: View {
     @Environment(AppModel.self) private var model
     @Binding var showSettings: Bool
     @ViewBuilder let banner: () -> Banner
+    /// Owned here, not by the toolbar button: toolbar content is rebuilt as sync state changes, which would drop the sheet.
+    @State private var newScope: ScopeRecord?
+    @State private var created: ChannelRecord?
 
     var body: some View {
         @Bindable var model = model
@@ -19,6 +22,7 @@ struct ChatStack<Banner: View>: View {
             }
             .background(Amb.background)
             .toolbarItems(showSettings: $showSettings, pin: ToolbarPin.chat(nil, channel: model.context.channelId, workspace: model.selectedWorkspace))
+            .toolbar { ToolbarItem(placement: .primaryAction) { ChatNewButton(sheetScope: $newScope) } }
             .navigationDestination(for: ChatRoute.self) { route in
                 Group {
                 if let workspace = model.selectedWorkspace, route.workspaceId == workspace.id, let store = model.store, let connection = model.connection {
@@ -37,6 +41,13 @@ struct ChatStack<Banner: View>: View {
                 }
                 .toolbarItems(showSettings: $showSettings, pin: ToolbarPin.chat(route, channel: nil, workspace: model.selectedWorkspace), showsSidebar: false)
             }
+        }
+        .sheet(item: $newScope, onDismiss: {
+            guard let channel = created else { return }
+            created = nil
+            model.selectContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id))
+        }) { scope in
+            NewChannelSheet(scope: scope) { created = $0 }
         }
     }
 }
@@ -65,6 +76,23 @@ struct ChatContextRoot: View {
                 Text(model.workspaces.loaded ? "Discovery found no workspaces for this identity yet. Pull to refresh or check Settings." : "Loading saved workspaces…")
             }
             .refreshable { model.refresh(force: true) }
+        }
+    }
+}
+
+/// "New" in Chat's toolbar for the selected scope: a direct message in a DM scope, a channel elsewhere (where the member
+/// may create one). `ChatStack` presents the same sheet the sidebar's plus opens, then shows the created or reused conversation.
+struct ChatNewButton: View {
+    @Environment(AppModel.self) private var model
+    @Binding var sheetScope: ScopeRecord?
+
+    var body: some View {
+        let nav = model.navigation.value
+        if let scope = nav.scope(model.context.scopeId), ManagementPermissions.canCreateChannel(in: scope, membership: model.membership) {
+            let direct = ManagementPermissions.isDirectMessageScope(scope)
+            Button { sheetScope = scope } label: { Label(direct ? "New message" : "New channel", systemImage: "square.and.pencil") }
+                .accessibilityLabel(direct ? "New direct message" : "New channel in \(scope.name)")
+                .accessibilityIdentifier("chat.new")
         }
     }
 }

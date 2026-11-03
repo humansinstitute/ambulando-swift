@@ -117,3 +117,18 @@ readback have separate messages. No client-side role promotion or transitive enr
 Draft search/key, identity type and picker mode persist per connection/workspace/group. In-flight writes retain their
 captured workspace, and further writes stop when the selected workspace changes. Administration remains online-only.
 The local fixture and contract tests are distinct from actual backend activation and authenticated live verification.
+
+## Start a direct message (iPhone/iPad 79, Mac 70)
+
+Select the DMs scope, open Chat and choose New direct message in the toolbar, or use the DMs sidebar plus.
+The shared recipient sheet offers current-workspace people and agents, including Note to self. It shows cached
+choices while refreshing through the existing directory API, with loading, empty and retryable error states.
+Refresh completion follows the directory sync job; identical results leave the open picker intact. Switching
+accounts or workspaces dismisses the sheet, and late reads cannot publish into another account/workspace.
+
+Create opens the existing conversation for the same participants when found, preserving its history; otherwise
+it uses the supported channel-create API with DM participants. A pending Create disables repeat submissions.
+The Core management tests cover candidate eligibility, participant payload and conversation reuse; the isolated
+UI regression `testNewDirectMessageFromToolbarAndSidebarReusesTheConversation` covers selecting DMs, toolbar New,
+people/agent choices, sidebar New and reopening one conversation. Fixture checks do not establish real Tower
+acceptance or installation on a physical device. Android remains deferred.

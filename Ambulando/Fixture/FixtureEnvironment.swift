@@ -309,6 +309,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     static let removedWorkspace = "f1c70000-0000-4000-8000-0000000000ff"
     static let scopeAmbulando = "f1c70000-0000-4000-8000-0000000000a1"
     static let scopeOps = "f1c70000-0000-4000-8000-0000000000a2"
+    static let scopeDMs = "f1c70000-0000-4000-8000-0000000000a9"
     static let scopeResearch = "f1c70000-0000-4000-8000-0000000000a3"
     static let generalChannel = "f1c70000-0000-4000-8000-0000000000c1"
     static let designChannel = "f1c70000-0000-4000-8000-0000000000c2"
@@ -600,8 +601,12 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     private func persistManaged() { if let data = try? JSONSerialization.data(withJSONObject: managed) { try? data.write(to: manageFile, options: .atomic) } }
 
     private func scopeRows(_ w: String) -> [[String: Any]] {
-        let base = w == Self.studio ? [scope(Self.scopeAmbulando, w, "Ambulando"), scope(Self.scopeOps, w, "Operations")]
+        var base = w == Self.studio ? [scope(Self.scopeAmbulando, w, "Ambulando"), scope(Self.scopeOps, w, "Operations")]
                                     : [scope(Self.scopeResearch, w, "Research")]
+        // Direct messages live in their own scope (kind dm) on a Tower that provisions one; opt-in so other checks keep their layout.
+        if w == Self.studio, ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDMs") {
+            var dm = scope(Self.scopeDMs, w, "DMs"); dm["kind"] = "dm"; base.append(dm)
+        }
         let edits = manageMap("scopeEdits")
         return (base + manageList("scopes").filter { $0["workspace_id"] as? String == w })
             .filter { !archived.contains($0["id"] as? String ?? "") }

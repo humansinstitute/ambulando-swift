@@ -289,6 +289,46 @@ final class ManagementUITests: XCTestCase {
         capture(app, "channel-settings-direct-access")
     }
 
+    /// Sample-data check: New is reachable from the selected DMs scope in the Chat toolbar and the sidebar, lists a person
+    /// and an agent, starts one conversation and reopens it instead of creating a second.
+    func testNewDirectMessageFromToolbarAndSidebarReusesTheConversation() {
+        let app = launch(["-AmbulandoFixtureDMs"])
+        app.openSidebar()
+        let scope = app.buttons["sidebar.scope.DMs"].firstMatch
+        XCTAssertTrue(scope.waitForExistence(timeout: 10), "DMs scope listed")
+        XCTAssertTrue(app.buttons["sidebar.addChannel.DMs"].exists, "sidebar New for the DM scope")
+        scope.tap()
+        app.section("chat")
+        let new = app.buttons["chat.new"].firstMatch
+        XCTAssertTrue(new.waitForExistence(timeout: 10), "toolbar New in the selected DM scope")
+        new.tap()
+        let person = app.descendants(matching: .any).matching(identifier: "newChannel.person").firstMatch
+        XCTAssertTrue(person.waitForExistence(timeout: 15), "people picker")
+        sleep(3)  // let the directory refresh settle; a list change would close an open menu
+        person.tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Ana'")).firstMatch.waitForExistence(timeout: 5), "a person is offered")
+        let rick = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'rick · agent'")).firstMatch
+        XCTAssertTrue(rick.waitForExistence(timeout: 5), "an agent is offered")
+        capture(app, "dm-picker")
+        rick.tap()
+        app.buttons["newChannel.create"].tap()
+        app.openSidebar()
+        let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sidebar.channel.rick'"))
+        XCTAssertTrue(row.firstMatch.waitForExistence(timeout: 15), "the new conversation is in the sidebar")
+        XCTAssertEqual(row.count, 1)
+        // Again from the sidebar plus: the same person opens the existing conversation.
+        app.buttons["sidebar.addChannel.DMs"].firstMatch.tap()
+        let again = app.descendants(matching: .any).matching(identifier: "newChannel.person").firstMatch
+        XCTAssertTrue(again.waitForExistence(timeout: 15))
+        sleep(3)
+        again.tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'rick · agent'")).firstMatch.tap()
+        app.buttons["newChannel.create"].tap()
+        app.openSidebar()
+        XCTAssertTrue(row.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(row.count, 1, "no duplicate conversation")
+    }
+
     func testCreateRenamePromptMoveAndArchiveAChannelInAScopeYouManage() {
         let app = launch()
         app.openSidebar()

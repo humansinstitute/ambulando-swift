@@ -205,32 +205,47 @@ struct NewChannelSheet: View {
             }
             .interactiveDismissDisabled(phase.isWorking)
             .task {
-                guard let store = model.store, let workspace = model.selectedWorkspace else { return }
                 if isDirect { await loadDirectory() } else { await loadAccessRecipients() }
             }
-            .onChange(of: model.isSyncing(directoryKey)) { _, syncing in
-                if isDirect, !syncing { Task { await readDirectory() } }
-            }
+            .onChange(of: model.selectedWorkspaceBoundary) { _, _ in dismiss() }
+            .onChange(of: model.connection?.id) { _, _ in dismiss() }
         }
     }
 
     /// Shows the cached directory at once, then asks Tower for the current one; the sheet re-reads when that finishes.
     private func loadDirectory() async {
-        guard let workspace = model.selectedWorkspace else { return }
+        guard let workspace = model.selectedWorkspace, let connection = model.connection,
+              let sync = model.sync, model.canRead, workspace.id == scope.workspaceId else { return }
+        let boundary = model.selectedWorkspaceBoundary
+        let key = directoryKey
         directoryError = nil
         await readDirectory()
+        guard model.selectedWorkspaceBoundary == boundary, model.connection?.id == connection.id else { return }
         directoryLoading = true
-        model.refreshDirectory(workspace)
-        // The sync is keyed and coalesced; give a quiet queue a moment, then settle on what is stored.
-        try? await Task.sleep(for: .seconds(1))
-        if !model.isSyncing(directoryKey) { await readDirectory() }
+        // Subscribe before enqueueing, then inspect the actual keyed state (UI status is throttled).
+        let changes = await sync.engine.statusStream()
+        await sync.refreshDirectory(connection, workspace, priority: .visible, force: true)
+        for await _ in changes {
+            let status = await sync.engine.snapshot
+            guard !Task.isCancelled, model.selectedWorkspaceBoundary == boundary,
+                  model.connection?.id == connection.id else { return }
+            await readDirectory(status: status)
+            if !status.running.contains(key), !status.queued.contains(key) { return }
+        }
     }
 
-    private func readDirectory() async {
-        guard let store = model.store, let workspace = model.selectedWorkspace, model.selectedWorkspace?.id == workspace.id else { return }
-        members = (try? await store.reader.directoryMembers(workspaceId: workspace.id)) ?? []
-        directoryLoading = model.isSyncing(directoryKey)
-        if !directoryLoading, let error = model.syncError(forKey: directoryKey) {
+    private func readDirectory(status: SyncSnapshot? = nil) async {
+        guard let store = model.store, let workspace = model.selectedWorkspace, let connection = model.connection,
+              workspace.id == scope.workspaceId else { return }
+        let boundary = model.selectedWorkspaceBoundary
+        let rows = (try? await store.reader.directoryMembers(workspaceId: workspace.id)) ?? []
+        guard !Task.isCancelled, model.selectedWorkspaceBoundary == boundary,
+              model.selectedWorkspace?.id == workspace.id, model.connection?.id == connection.id else { return }
+        // Reassigning equal data can dismiss the system Picker while its menu is open.
+        if members != rows { members = rows }
+        let state = status ?? model.syncStatus
+        directoryLoading = state.running.contains(directoryKey) || state.queued.contains(directoryKey)
+        if !directoryLoading, let error = state.errors[directoryKey] {
             directoryError = "People could not be refreshed: \(error)"
         } else if !directoryLoading { directoryError = nil }
     }
