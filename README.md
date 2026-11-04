@@ -11,6 +11,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Exact-identity direct messages (iPhone/iPad build 80, Mac build 71)
+
+DM reuse requires the exact recorded participant npubs. Names, descriptions, groups and historical
+keys cannot substitute recipients. Missing identity stays visibly unresolved; Deck and navigation
+use the same labels, with a key suffix, and the recipient picker exposes the full npub.
+Old conversations keep their participants and history. Source delivery is separate from device
+installation and live channel replacement.
+
 ## Save downloads (iPhone/iPad build 77, Mac build 68)
 
 File detail → Download now saves a checksum-checked copy in the Mac Downloads folder, keeps existing files

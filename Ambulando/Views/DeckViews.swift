@@ -473,7 +473,7 @@ struct DeckInboxCard: View {
         let w = workspace.id, store = store, viewer = model.connection?.signerNpub
         let channelIds = context.scopeId == nil ? nil : model.navigation.value.channels(in: context).map(\.id)
         snapshot.start(store: store, keepingValue: resuming, matches: { key in
-            key.workspaceId == w && [.threads, .messages, .tasks, .docs, .files, .viewStates, .comments, .channels, .agents].contains(key.table)
+            key.workspaceId == w && [.threads, .messages, .tasks, .docs, .files, .viewStates, .comments, .channels, .agents, .members].contains(key.table)
         }) {
             var sources = DeckActivity.Sources()
             async let channels = store.reader.channels(workspaceId: w)
@@ -486,6 +486,8 @@ struct DeckInboxCard: View {
             async let docComments = store.reader.deckCommentActivity(workspaceId: w, parent: .doc, viewerNpub: viewer)
             async let activities = store.reader.agentActivities(workspaceId: w, channelIds: channelIds)
             let channelRows = try await channels
+            let members = try await store.reader.directoryMembers(workspaceId: w)
+            let names = Dictionary(members.map { ($0.npub, $0.label) }, uniquingKeysWith: { a, _ in a })
             sources.channelScopes = Dictionary(channelRows.map { ($0.id, $0.scopeId) }, uniquingKeysWith: { a, _ in a })
             sources.threads = try await threads
             sources.tasks = try await tasks
@@ -497,7 +499,7 @@ struct DeckInboxCard: View {
             sources.activities = try await activities
             return DeckInboxSnapshot(items: DeckActivity.inbox(sources, context: context),
                                      viewStates: Dictionary(sources.viewStates.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }),
-                                     channelLabels: Dictionary(channelRows.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a }))
+                                     channelLabels: Dictionary(channelRows.map { ($0.id, SidebarNavigation.label($0, viewerNpub: viewer, names: names)) }, uniquingKeysWith: { a, _ in a }))
         }
         if !resuming { refresh(context) }
     }

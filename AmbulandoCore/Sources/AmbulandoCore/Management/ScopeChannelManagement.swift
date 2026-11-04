@@ -100,6 +100,11 @@ public struct ScopeChannelManager: Sendable {
                                    "kind": "dm", "participant_npubs": participants]
         let object = try await send(connection, workspace, method: "POST", path: try base(workspace) + "/scopes/" + TowerAPI.uuid(scopeId) + "/channels",
                                     body: body, operation: .createChannel)
+        guard let row = object["channel"] as? [String: Any] else { throw ManagementError.unexpected("Tower did not return the channel.") }
+        let returned = try ChannelRecord(raw: JSONSerialization.data(withJSONObject: row))
+        guard DirectMessagePlanner.existing(in: [returned], participants: participants) != nil else {
+            throw ManagementError.unexpected("Tower returned a DM with missing or different participants. Refresh before opening it.")
+        }
         return try await storeChannel(object, workspace)
     }
 
@@ -434,7 +439,7 @@ public enum DirectMessagePlanner {
         public let isSelf: Bool
         public var id: String { member.npub }
         public var isAgent: Bool { member.kind?.lowercased() == "agent" }
-        public var title: String { isSelf ? member.label + " (Note to self)" : member.label }
+        public var title: String { (isSelf ? member.label + " (Note to self)" : member.label) + " · " + member.npub }
     }
 
     /// Every workspace member with a valid npub - people and agents - including the viewer (a note to self), once each.
@@ -447,6 +452,12 @@ public enum DirectMessagePlanner {
     /// The DM already holding exactly these participants, in any scope the workspace lists.
     public static func existing(in channels: [ChannelRecord], participants: [String]) -> ChannelRecord? {
         let wanted = Array(Set(participants)).sorted()
-        return channels.first { SidebarNavigation.isDirectMessageChannel($0) && SidebarNavigation.participants($0) == wanted }
+        guard !wanted.isEmpty, wanted.allSatisfy(NostrKeys.isValidNpub) else { return nil }
+        return channels.first {
+            let raw = (try? JSONSerialization.jsonObject(with: $0.raw)) as? [String: Any] ?? [:]
+            return raw["archived_at"] as? String == nil && raw["deleted_at"] as? String == nil
+                && !["archived", "deleted"].contains(raw["record_state"] as? String ?? "")
+                && SidebarNavigation.isDirectMessageChannel($0) && SidebarNavigation.participants($0) == wanted
+        }
     }
 }

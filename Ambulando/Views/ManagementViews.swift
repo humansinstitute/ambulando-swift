@@ -343,7 +343,13 @@ struct ChannelSettingsSheet: View {
                 LabeledContent("Channel", value: "#" + nav.label(channel))
                 LabeledContent("Scope", value: nav.scope(channel.scopeId)?.name ?? "—")
                 let participants = SidebarNavigation.participants(channel)
-                if !participants.isEmpty { LabeledContent("Participants", value: "\(participants.count)") }
+                if !participants.isEmpty {
+                    ForEach(participants, id: \.self) { npub in
+                        Text(npub).font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                } else if SidebarNavigation.isDirectMessageChannel(channel) {
+                    Text("Participant identity unavailable. Refresh before starting a new conversation.").foregroundStyle(.secondary)
+                }
             }
             if !SidebarNavigation.isDirectMessageChannel(channel) {
                 ChannelNotificationSettingsSection(channel: channel)

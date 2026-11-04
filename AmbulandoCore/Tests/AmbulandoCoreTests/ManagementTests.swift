@@ -139,6 +139,28 @@ final class ManagementTests: XCTestCase {
         XCTAssertEqual(SidebarNavigation.participants(note), [h.connection.signerNpub])
     }
 
+    func testMemberRecipientUsesActorNpubDespiteStaleMetadata() throws {
+        let current = TestKeys.npub
+        let row = try MemberRecord(workspaceId: "w", raw: Data(#"{"actor":{"id":"a","npub":"\#(current)","kind":"agent","display_name":"Same name"},"metadata":{"npub":"old"},"npub":"old"}"#.utf8))
+        XCTAssertEqual(DirectMessagePlanner.candidates(members: [row], viewerNpub: nil).first?.id, current)
+    }
+
+    func testDirectMessagesNeverInferOrReplaceParticipantAuthority() throws {
+        let me = TestKeys.npub, current = "npub1sg6plzptd64u62a878hep2kev88swjh3tw00gjsfl8f237lmu63q0uf63m"
+        func channel(_ raw: String) -> ChannelRecord {
+            ChannelRecord(workspaceId: "w", id: "c", scopeId: "s", name: "DM: \(current)", kind: "dm", updatedAt: "", raw: Data(raw.utf8))
+        }
+        let stale = channel(#"{"participant_npubs":["\#(me)"],"description":"dm:\#([me,current].sorted().joined(separator: "|"))"}"#)
+        XCTAssertNil(DirectMessagePlanner.existing(in: [stale], participants: [me, current]))
+        let missing = channel(#"{"description":"dm:\#(me)|\#(current)"}"#)
+        XCTAssertEqual(SidebarNavigation.participants(missing), [])
+        XCTAssertTrue(SidebarNavigation.label(missing, viewerNpub: me, names: [:]).contains("identity unavailable"))
+        let archived = channel(#"{"participant_npubs":["\#(me)","\#(current)"],"archived_at":"2026-01-01"}"#)
+        XCTAssertNil(DirectMessagePlanner.existing(in: [archived], participants: [me, current]))
+        let members = [me, current].map { MemberRecord(workspaceId: "w", actorId: $0, npub: $0, kind: "agent", displayName: "Same name") }
+        XCTAssertEqual(DirectMessagePlanner.candidates(members: members, viewerNpub: nil).count, 2)
+    }
+
     func testDirectMessagePlannerOffersPeopleAndAgentsAndFindsExistingConversation() throws {
         let me = TestKeys.npub, bot = "npub1sg6plzptd64u62a878hep2kev88swjh3tw00gjsfl8f237lmu63q0uf63m"
         let members = [MemberRecord(workspaceId: "w", actorId: "a1", npub: me, kind: "person", displayName: "Pete"),
@@ -149,7 +171,7 @@ final class ManagementTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.member.npub), [me, bot], "valid, de-duplicated; self included")
         XCTAssertEqual(candidates.map(\.isSelf), [true, false])
         XCTAssertEqual(candidates.map(\.isAgent), [false, true])
-        XCTAssertEqual(candidates[0].title, "Pete (Note to self)")
+        XCTAssertEqual(candidates[0].title, "Pete (Note to self) · \(me)")
         let dm = ChannelRecord(workspaceId: "w", id: "c1", scopeId: "s", name: "DM: x", kind: "dm", updatedAt: "",
                                raw: Data(#"{"participant_npubs":["\#(me)","\#(bot)"]}"#.utf8))
         XCTAssertEqual(DirectMessagePlanner.existing(in: [dm], participants: [bot, me])?.id, "c1")

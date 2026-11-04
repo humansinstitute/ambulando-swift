@@ -119,25 +119,15 @@ public enum SidebarNavigation {
         let participants = participants(channel)
         if direct, participants.count == 1, participants.first == viewerNpub { return "Note to self" }
         let others = participants.filter { $0 != viewerNpub }
-        if !others.isEmpty { return others.map { names[$0] ?? compact($0) }.joined(separator: ", ") }
+        if !others.isEmpty { return others.map { npub in names[npub].map { "\($0) (\(compact(npub)))" } ?? compact(npub) }.joined(separator: ", ") }
         if direct {
-            let stripped = title.replacingOccurrences(of: "^DM:\\s*", with: "", options: [.regularExpression, .caseInsensitive])
-            if !stripped.isEmpty, stripped.range(of: "^npub1[0-9a-z]+$", options: [.regularExpression, .caseInsensitive]) == nil { return stripped }
-            return "Direct message"
+            return "Direct message · identity unavailable"
         }
         return title.isEmpty ? String(channel.id.prefix(8)) : title
     }
 
     public static func participants(_ channel: ChannelRecord) -> [String] {
-        let details = ChannelDetails(raw: channel.raw)
-        if !details.participants.isEmpty { return Array(Set(details.participants)).sorted() }
-        if details.description.lowercased().hasPrefix("dm:") {
-            return Array(Set(details.description.dropFirst(3).split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })).sorted()
-        }
-        let regex = try? NSRegularExpression(pattern: "npub1[0-9a-z]{20,}", options: [.caseInsensitive])
-        let range = NSRange(channel.name.startIndex..., in: channel.name)
-        let found = regex?.matches(in: channel.name, range: range).compactMap { Range($0.range, in: channel.name).map { String(channel.name[$0]) } } ?? []
-        return Array(Set(found)).sorted()
+        Array(Set(ChannelDetails(raw: channel.raw).participants)).sorted()
     }
 
     static func compact(_ npub: String) -> String { npub.count <= 16 ? npub : "\(npub.prefix(10))...\(npub.suffix(6))" }

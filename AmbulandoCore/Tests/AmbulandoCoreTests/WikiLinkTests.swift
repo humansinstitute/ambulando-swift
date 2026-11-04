@@ -429,7 +429,7 @@ final class WikiMoveTests: XCTestCase {
         let shared = ChannelRecord(workspaceId: "w", id: "c1", scopeId: "s1", name: "general", updatedAt: "")
         let other = ChannelRecord(workspaceId: "w", id: "c2", scopeId: "s2", name: "team", updatedAt: "")
         let note = ChannelRecord(workspaceId: "w", id: "c3", scopeId: "s3", name: "DM: me", kind: "dm", updatedAt: "",
-                                 raw: Data(#"{"participants":["npub1me"],"description":"dm:npub1me"}"#.utf8))
+                                 raw: Data(#"{"participant_npubs":["npub1me"],"description":"dm:npub1me"}"#.utf8))
         let across = DocMovePlan.consequences(from: shared, to: other, viewerNpub: "npub1me")
         XCTAssertFalse(across.touchesPrivateConversation)
         XCTAssertTrue(across.lines.contains { $0.contains("Access follows team") })
