@@ -89,6 +89,19 @@ extension AppModel {
         withWorkspace(workspace) { sync, c in await sync.refreshAgents(c, workspace, channelIds: channelIds, force: force) }
     }
 
+    /// The open conversation's agent lifecycles with their newest public commentary (and recovery of missed entries).
+    func openThreadActivity(_ threadId: String, channelId: String, in workspace: WorkspaceRecord, force: Bool = false) {
+        withWorkspace(workspace) { sync, c in await sync.refreshThreadActivity(c, workspace, channelId: channelId, threadId: threadId, force: force) }
+    }
+
+    /// Tower's activity for the Deck's channels, so "Agent working" is current without opening Agents (bounded).
+    func openDeckActivity(_ workspace: WorkspaceRecord, channelIds: [String]) {
+        let channels = Array(channelIds.prefix(WorkspaceSync.agentActivityChannelLimit))
+        withWorkspace(workspace) { sync, c in
+            for channel in channels { await sync.refreshAgentActivity(c, workspace, channelId: channel, priority: .background) }
+        }
+    }
+
     /// A board shown on a canvas or opened full screen: requested at user priority (coalesces with a queued job; a stored
     /// current version is not fetched again).
     func openBoard(_ board: BoardReference, in workspace: WorkspaceRecord) {

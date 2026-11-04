@@ -11,6 +11,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Live agent activity (iPhone/iPad build 86, Mac build 77)
+
+An open conversation shows each current agent turn with its public commentary as it is
+published, read from Tower only (snapshot, live event deltas and delivery-cursor recovery).
+"Working" clears locally at the lease deadline plus 15 s grace on Tower's clock and shows
+"Stopped responding", never finished; completed turns collapse to earlier activity. Deck's
+"Agent working" follows the same rule. See [live agent activity](docs/agent-activity.md).
+Pushed source and local builds are separate from installation and real-account acceptance.
+
 ## Document reading and editing (iPhone/iPad build 85, Mac build 76)
 
 Document list markers sit with the first text line, and selectable paragraphs and

@@ -62,6 +62,14 @@ public final class SampleSurfaceTower: @unchecked Sendable {
         state["clock"] = clock
         return String(format: "2026-10-24T11:%02d:%02d.%03dZ", (clock / 60_000) % 60, (clock / 1000) % 60, clock % 1000)
     }
+    /// Real time for agent lifecycles and commentary (clients compare them with Tower's clock), strictly increasing so
+    /// rows seeded in one millisecond still order deterministically. The caller holds the lock.
+    private func activityStamp() -> String {
+        let last = (state["activity_clock"] as? Double) ?? 0
+        let next = max(Date().timeIntervalSince1970, last + 0.001)
+        state["activity_clock"] = next
+        return ISO8601DateFormatter.tower.string(from: Date(timeIntervalSince1970: next))
+    }
     private func persist() {
         guard let file, let data = try? JSONSerialization.data(withJSONObject: state) else { return }
         try? data.write(to: file, options: .atomic)
@@ -190,22 +198,72 @@ public final class SampleSurfaceTower: @unchecked Sendable {
         return id
     }
 
+    /// A lifecycle as Tower serializes it. Its lease is `leaseSeconds` from the real clock (clients evaluate it locally).
     @discardableResult
     public func seedActivity(channel: String, scope: String, thread: String, agent: String, state activityState: String, label: String,
-                             summary: String? = nil, sequence: Int = 1, visibility: String = "user_visible") -> String {
+                             summary: String? = nil, body: String? = nil, sequence: Int = 1, visibility: String = "user_visible",
+                             leaseSeconds: TimeInterval = 180, turnId: String? = nil, triggerMessageId: String? = nil) -> String {
         let id = UUID().uuidString.lowercased()
         mutate {
-            let stamp = now()
+            let stamp = activityStamp()
             let terminal = AgentActivityRecord.terminalStates.contains(activityState)
+            let lease = ISO8601DateFormatter.tower.string(from: Date().addingTimeInterval(leaseSeconds))
             put("activities", id, ["id": id, "workspace_id": workspaceId, "scope_id": scope, "channel_id": channel, "thread_id": thread,
-                                   "trigger_message_id": UUID().uuidString.lowercased(), "turn_id": NSNull(), "session_id": "sample-session",
+                                   "trigger_message_id": triggerMessageId ?? UUID().uuidString.lowercased(), "turn_id": turnId ?? NSNull(), "session_id": "sample-session",
                                    "activity_id": "act-\(id.prefix(8))", "agent_npub": agent, "publisher_actor_id": UUID().uuidString.lowercased(),
-                                   "state": activityState, "label": label, "summary": summary ?? NSNull(), "body": NSNull(), "visibility": visibility,
-                                   "sequence": sequence, "expires_at": "2026-10-24T23:00:00.000Z", "last_heartbeat_at": stamp,
-                                   "lease_expires_at": "2026-10-24T23:00:00.000Z", "lease_health": "live", "blocked_by_turn_id": NSNull(),
+                                   "state": activityState, "label": label, "summary": summary ?? NSNull(), "body": body ?? NSNull(), "visibility": visibility,
+                                   "sequence": sequence, "expires_at": lease, "last_heartbeat_at": stamp,
+                                   "lease_expires_at": lease, "lease_health": "live", "blocked_by_turn_id": NSNull(),
                                    "queue_position": NSNull(), "terminal_at": terminal ? stamp : NSNull(), "created_at": stamp, "updated_at": stamp])
+            if activityState == "working", visibility == "user_visible", summary != nil || body != nil {
+                appendCommentary(id, sequence: sequence, label: label, summary: summary, body: body, at: stamp)
+            }
         }
         return id
+    }
+
+    /// A producer write to a seeded lifecycle, with Tower's rules: only a higher sequence changes a non-terminal row,
+    /// every accepted write renews the lease (v1), and working text is appended to history. Returns the event payload
+    /// Tower emits (`agent_activity` with the new commentary entry and cursor), or nil when the write is refused.
+    @discardableResult
+    public func publishActivity(_ id: String, state activityState: String, label: String? = nil, body: String? = nil, leaseSeconds: TimeInterval = 180,
+                                queuePosition: Int? = nil) -> [String: Any]? {
+        var payload: [String: Any]?
+        mutate {
+            guard var row = table("activities")[id], row["terminal_at"] is NSNull else { return }
+            let sequence = (row["sequence"] as? Int ?? 0) + 1
+            let stamp = activityStamp()
+            let lease = ISO8601DateFormatter.tower.string(from: Date().addingTimeInterval(leaseSeconds))
+            row["state"] = activityState; row["sequence"] = sequence; row["label"] = label ?? NSNull(); row["body"] = body ?? NSNull(); row["summary"] = NSNull()
+            row["lease_expires_at"] = lease; row["expires_at"] = lease; row["last_heartbeat_at"] = stamp; row["updated_at"] = stamp
+            row["queue_position"] = queuePosition ?? NSNull()
+            if AgentActivityRecord.terminalStates.contains(activityState) { row["terminal_at"] = stamp }
+            put("activities", id, row)
+            var serialized = row
+            if activityState == "working", let body {
+                let entry = appendCommentary(id, sequence: sequence, label: label, summary: nil, body: body, at: stamp)
+                serialized["commentary_history"] = [entry]
+                serialized["commentary_cursor"] = entry["delivery_cursor"]
+            }
+            payload = ["agent_activity": serialized, "activity_id": row["activity_id"] ?? "", "turn_id": row["turn_id"] ?? NSNull(),
+                       "thread_id": row["thread_id"] ?? NSNull(), "trigger_message_id": row["trigger_message_id"] ?? NSNull()]
+        }
+        return payload
+    }
+
+    /// Appends one history entry with the next delivery cursor; the caller holds the lock.
+    @discardableResult
+    private func appendCommentary(_ id: String, sequence: Int, label: String?, summary: String?, body: String?, at stamp: String) -> [String: Any] {
+        let cursor = (state["commentary_cursor"] as? Int ?? 0) + 1
+        state["commentary_cursor"] = cursor
+        let row = table("activities")[id] ?? [:]
+        let entry: [String: Any] = ["id": UUID().uuidString.lowercased(), "workspace_id": workspaceId, "agent_activity_id": id, "turn_id": row["turn_id"] ?? NSNull(),
+                                    "activity_id": row["activity_id"] ?? "", "state": "working", "label": label ?? NSNull(), "summary": summary ?? NSNull(),
+                                    "body": body ?? NSNull(), "visibility": "user_visible", "sequence": sequence, "delivery_cursor": String(cursor), "created_at": stamp]
+        var entries = (state["commentary"] as? [[String: Any]]) ?? []
+        entries.append(entry)
+        state["commentary"] = entries
+        return entry
     }
 
     @discardableResult
@@ -411,9 +469,29 @@ public final class SampleSurfaceTower: @unchecked Sendable {
         case ("GET", 1, "agent-activities"):
             guard let channel = q(query, "channel_id"), !channel.isEmpty else { return error(400, "validation_error") }
             guard !list("denied_channels").contains(channel) else { return error(403, "permission_denied") }
-            let rows = table("activities").values.filter { $0["channel_id"] as? String == channel }
+            let thread = q(query, "thread_id"), activity = q(query, "activity_id"), after = q(query, "after_commentary_cursor").flatMap { Int($0) }
+            let history = min(200, max(0, Int(q(query, "history_limit") ?? "50") ?? 50))
+            let all = (state["commentary"] as? [[String: Any]]) ?? []
+            let rows = table("activities").values.filter { $0["channel_id"] as? String == channel && (thread == nil || $0["thread_id"] as? String == thread)
+                && (activity == nil || $0["activity_id"] as? String == activity) }
                 .sorted { ($0["created_at"] as! String) > ($1["created_at"] as! String) }
-            return paged(rows, key: "agent_activities", query: query)
+                .map { row -> [String: Any] in
+                    var row = row
+                    let mine = all.filter { $0["agent_activity_id"] as? String == row["id"] as? String }
+                    row["commentary_cursor"] = mine.compactMap { ($0["delivery_cursor"] as? String).flatMap { Int($0) } }.max().map(String.init) ?? "0"
+                    guard history > 0 else { return row }
+                    if let after {
+                        let page = mine.filter { Int($0["delivery_cursor"] as? String ?? "") ?? 0 > after }
+                            .sorted { Int($0["delivery_cursor"] as! String)! < Int($1["delivery_cursor"] as! String)! }
+                        row["commentary_history"] = Array(page.prefix(history))
+                        row["commentary_next_cursor"] = page.count > history ? page[history - 1]["delivery_cursor"]! : NSNull()
+                    } else {
+                        let newest = mine.sorted { ($0["sequence"] as! Int) > ($1["sequence"] as! Int) }.prefix(history)
+                        row["commentary_history"] = Array(newest.reversed())
+                    }
+                    return row
+                }
+            return paged(rows, key: "agent_activities", query: query, extra: ["server_time": ISO8601DateFormatter.tower.string(from: Date())])
         case ("GET", 2, "me") where p[1] == "autopilot-agents":
             let rows = table("agents").values.sorted { ($0["sort_order"] as! Int) < ($1["sort_order"] as! Int) }
             return (200, ["settings": ["row_version": 1, "autopilot_agents": rows.map { ["agent_npub": $0["agent_npub"] ?? "", "url": "https://browser.sample.invalid/agents"] }]])

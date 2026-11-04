@@ -219,7 +219,8 @@ public struct WorkspaceAgentRecord: Sendable, Equatable, Identifiable {
     }
 }
 
-/// One user-visible agent activity Tower materialised for a conversation (`serializeFlightDeckPgAgentActivity`).
+/// One user-visible agent activity Tower materialised for a conversation (`serializeFlightDeckPgAgentActivity`): one
+/// turn's lifecycle. `raw` keeps the row without its commentary page (history is stored as separate entries).
 public struct AgentActivityRecord: Sendable, Equatable, Identifiable {
     public let workspaceId: String
     public let id: String
@@ -227,40 +228,89 @@ public struct AgentActivityRecord: Sendable, Equatable, Identifiable {
     public let scopeId: String?
     public let channelId: String
     public let threadId: String?
+    /// The chat message that started this turn.
+    public let triggerMessageId: String?
+    /// Immutable turn identity (nil only for rows written before Tower recorded it).
+    public let turnId: String?
     public let agentNpub: String
     public let state: String
     public let label: String?
     public let summary: String?
     public let body: String?
     public let sequence: Int
-    /// `live` or `stale` (Tower: lease expired without a terminal state).
+    /// Tower's `lease_health` when the row was serialized. Informational only: an event's copy is computed at write
+    /// time, so liveness is always evaluated locally from `leaseExpiresAt` (`AgentLiveness`).
     public let leaseHealth: String
+    /// Server-time lease deadline, and the additive v2 lease ordering/expiry fields when Tower sends them.
+    public let leaseExpiresAt: Date?
+    public let leaseEpoch: Int?
+    public let leaseSequence: Int?
+    public let expiredAt: Date?
     public let queuePosition: Int?
     public let terminalAt: String?
+    /// Tower's high-water delivery cursor of this lifecycle's commentary (a hint, never recovery progress).
+    public let commentaryCursor: String?
     public let createdAt: String
     public let updatedAt: String
     public let raw: Data
 
     public static let terminalStates: Set<String> = ["completed", "failed", "cancelled"]
     public var isTerminal: Bool { Self.terminalStates.contains(state) || terminalAt != nil }
+    /// The latest public line of the snapshot (Tower keeps the newest working text on the row).
+    public var latestText: String? { body ?? summary ?? label }
+
+    /// Keys of a GET row that belong to the commentary page, not the lifecycle.
+    static let pageKeys = ["commentary_history", "commentary_next_before_sequence", "commentary_next_after_sequence", "commentary_next_cursor"]
 
     public init(raw: Data) throws {
-        let o = try object(raw, "agent activity")
+        var o = try object(raw, "agent activity")
         // Same acceptance as sol `mapPgAgentActivity`: only user-visible rows with an activity id and a sequence.
         guard let id = lowerUUID(o["id"] as? String), let w = lowerUUID(o["workspace_id"] as? String),
               let c = lowerUUID(o["channel_id"] as? String), let activity = nonEmpty(o["activity_id"]),
               o["visibility"] as? String == "user_visible", let sequence = flexibleInt(o["sequence"]), sequence >= 0 else { throw TowerError.malformed("agent activity") }
         self.id = id; workspaceId = w; channelId = c; activityId = activity; self.sequence = sequence
         scopeId = lowerUUID(o["scope_id"] as? String); threadId = lowerUUID(o["thread_id"] as? String)
+        triggerMessageId = lowerUUID(o["trigger_message_id"] as? String)
+        turnId = nonEmpty(o["turn_id"]).flatMap { $0.count <= 255 ? $0 : nil }
         agentNpub = nonEmpty(o["agent_npub"]) ?? ""
         state = (nonEmpty(o["state"]) ?? "working").lowercased()
         label = nonEmpty(o["label"]); summary = nonEmpty(o["summary"]); body = nonEmpty(o["body"])
         leaseHealth = (nonEmpty(o["lease_health"]) ?? "live").lowercased()
+        leaseExpiresAt = Self.time(o["lease_expires_at"]) ?? Self.time(o["expires_at"])
+        leaseEpoch = flexibleInt(o["lease_epoch"]).flatMap { $0 >= 1 ? $0 : nil }
+        leaseSequence = flexibleInt(o["lease_sequence"]).flatMap { $0 >= 0 ? $0 : nil }
+        expiredAt = Self.time(o["expired_at"])
         queuePosition = flexibleInt(o["queue_position"]).flatMap { $0 > 0 ? $0 : nil }
         terminalAt = nonEmpty(o["terminal_at"])
+        commentaryCursor = ((o["commentary_cursor"] as? String) ?? flexibleInt(o["commentary_cursor"]).map(String.init))
+            .flatMap { AgentCommentaryEntry.validCursor($0) ? $0 : nil }
         createdAt = (o["created_at"] as? String) ?? ""
         updatedAt = (o["updated_at"] as? String) ?? createdAt
-        self.raw = raw
+        if Self.pageKeys.contains(where: { o[$0] != nil }) {
+            for key in Self.pageKeys { o[key] = nil }
+            self.raw = try rawJSON(o)
+        } else {
+            self.raw = raw
+        }
+    }
+
+    /// This lifecycle with another copy's lease (and a turn identity learned from it), re-serialized.
+    func with(lease: AgentLease, turnId: String?) -> AgentActivityRecord {
+        guard lease != AgentLease(self) || turnId != self.turnId,
+              var o = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] else { return self }
+        let f = ISO8601DateFormatter.tower
+        o["lease_epoch"] = lease.epoch ?? NSNull()
+        o["lease_sequence"] = lease.sequence ?? NSNull()
+        o["lease_expires_at"] = lease.expiresAt.map { f.string(from: $0) } ?? NSNull()
+        o["expired_at"] = lease.expiredAt.map { f.string(from: $0) } ?? NSNull()
+        if let turnId { o["turn_id"] = turnId }
+        return (try? rawJSON(o)).flatMap { try? AgentActivityRecord(raw: $0) } ?? self
+    }
+
+    static func time(_ value: Any?) -> Date? {
+        guard let text = value as? String, !text.isEmpty else { return nil }
+        if let date = ISO8601DateFormatter.tower.date(from: text) { return date }
+        return ISO8601DateFormatter().date(from: text)
     }
 }
 

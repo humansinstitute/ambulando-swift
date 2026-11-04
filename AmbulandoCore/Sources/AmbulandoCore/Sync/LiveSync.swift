@@ -307,6 +307,7 @@ extension WorkspaceSync {
     public func applyEvents(_ events: [TowerEvent], _ connection: ConnectionRecord, _ workspace: WorkspaceRecord) async throws {
         let plan = EventPlan.make(events, workspaceId: workspace.id)
         try await store.writer.applyTombstones(workspaceId: workspace.id, plan.tombstones)
+        try await applyActivityChanges(plan.activityChanges, workspaceId: workspace.id)
         let visible = await live.feed(workspace.id).visibleChannelId
         let ordered = plan.refreshes.sorted { Self.rank($0, visible) < Self.rank($1, visible) }
         let api = api(origin: try TowerOrigin(connection.origin))
@@ -320,6 +321,21 @@ extension WorkspaceSync {
             }
             try await group.waitForAll()
         }
+    }
+
+    /// Agent lifecycles carried by events are merged directly (every renewal's deadline reaches the device without a
+    /// refetch); their commentary deltas are stored before snapshots coalesce.
+    func applyActivityChanges(_ changes: [EventPlan.ActivityChange], workspaceId: String) async throws {
+        var records: [AgentActivityRecord] = [], commentary: [AgentCommentaryEntry] = []
+        var leases: [(rowId: String, turnId: String?, lease: AgentLease)] = []
+        for change in changes {
+            switch change {
+            case .snapshot(let record, let entries): records.append(record); commentary += entries
+            case .lease(let row, let turn, let lease): leases.append((row, turn, lease))
+            }
+        }
+        if !records.isEmpty { try await store.writer.mergeAgentActivities(workspaceId: workspaceId, records, commentary: commentary) }
+        if !leases.isEmpty { try await store.writer.applyAgentLeases(workspaceId: workspaceId, leases) }
     }
 
     static func rank(_ refresh: EventPlan.Refresh, _ visible: String?) -> Int {
@@ -445,8 +461,9 @@ extension WorkspaceSync {
         case .agentActivity(let channel):
             guard try await store.reader.listSyncComplete(workspaceId: w, key: Self.agentActivityKey(w, channel)) != nil else { return }
             do {
-                try await store.writer.replaceAgentActivities(workspaceId: w, channelId: channel, try await api.agentActivities(workspaceId: w, appNpub: app, channelId: channel))
-            } catch where lost(error) { try await store.writer.replaceAgentActivities(workspaceId: w, channelId: channel, []) }
+                let page = try await api.agentActivityPage(workspaceId: w, appNpub: app, channelId: channel)
+                try await store.writer.applyAgentActivityPage(workspaceId: w, channelId: channel, page, limit: TowerAPI.agentActivityPage)
+            } catch where lost(error) { try await store.writer.purgeAgentActivities(workspaceId: w, channelId: channel) }
         case .notifications:
             await refreshNotifications(connection, workspace, priority: .background)
         case .toolbox:

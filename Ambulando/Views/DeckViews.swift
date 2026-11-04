@@ -373,7 +373,7 @@ struct DeckInboxCard: View {
                         Text(item.title).font(.amb(.subheadline).weight(item.isUnread ? .semibold : .regular)).foregroundStyle(Amb.foreground)
                             .lineLimit(2).multilineTextAlignment(.leading)
                         Text(item.kind == .chat ? item.subtitle : item.reason).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
-                        if item.isWorking { Label("Agent working", systemImage: "sparkles").font(.amb(.caption2)).foregroundStyle(Amb.primary) }
+                        if item.workingUntil != nil { DeckWorkingLabel(until: item.workingUntil) }
                     }
                 }
                 .contentShape(Rectangle())
@@ -456,6 +456,7 @@ struct DeckInboxCard: View {
 
     private func refresh(_ context: WorkContext) {
         model.openInbox(workspace)
+        model.openDeckActivity(workspace, channelIds: model.navigation.value.channels(in: context).map(\.id))
         model.openTasks(workspace, scopeId: context.scopeId)
         model.openDocs(workspace, scopeId: context.scopeId)
         model.openFiles(workspace, scopeId: context.scopeId)
@@ -471,6 +472,7 @@ struct DeckInboxCard: View {
             visible = DeckInbox.pageSize; searchDraft = ""; query = ""; notice = nil
         }
         let w = workspace.id, store = store, viewer = model.connection?.signerNpub
+        let origin = model.connection.flatMap { try? TowerOrigin($0.origin).description }
         let channelIds = context.scopeId == nil ? nil : model.navigation.value.channels(in: context).map(\.id)
         snapshot.start(store: store, keepingValue: resuming, matches: { key in
             key.workspaceId == w && [.threads, .messages, .tasks, .docs, .files, .viewStates, .comments, .channels, .agents, .members].contains(key.table)
@@ -497,6 +499,7 @@ struct DeckInboxCard: View {
             sources.taskComments = try await taskComments
             sources.docComments = try await docComments
             sources.activities = try await activities
+            sources.now = ServerClock.shared.now(origin: origin)
             return DeckInboxSnapshot(items: DeckActivity.inbox(sources, context: context),
                                      viewStates: Dictionary(sources.viewStates.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }),
                                      channelLabels: Dictionary(channelRows.map { ($0.id, SidebarNavigation.label($0, viewerNpub: viewer, names: names)) }, uniquingKeysWith: { a, _ in a }))
@@ -1379,6 +1382,26 @@ struct DeckThreadComposer: View {
             #if !os(macOS)
             close()
             #endif
+        }
+    }
+}
+
+/// "Agent working" on a Deck card until the lifecycle's lease (plus grace) passes on Tower's clock: re-evaluated at that
+/// moment and on foreground, so a turn that died while the list was on screen or the app was suspended never stays marked.
+struct DeckWorkingLabel: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
+    let until: Date?
+
+    var body: some View {
+        let _ = scenePhase
+        let origin = model.connection.flatMap { try? TowerOrigin($0.origin).description }
+        let local = until.map { ServerClock.shared.local($0, origin: origin) }
+        TimelineView(.explicit(local.map { [$0] } ?? [])) { _ in
+            if let until, ServerClock.shared.now(origin: origin) < until {
+                Label("Agent working", systemImage: "sparkles").font(.amb(.caption2)).foregroundStyle(Amb.primary)
+                    .accessibilityIdentifier("deck.inbox.working")
+            }
         }
     }
 }

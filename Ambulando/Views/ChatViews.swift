@@ -327,6 +327,8 @@ struct ThreadView: View {
     @State private var pageIdentity = 0
     /// Where the reader left this thread last time it was open (nil: open at the newest message).
     @State private var resumeAt: String?
+    /// The newest agent activity line shown at the end of the thread.
+    @State private var activityTail = ""
 
     init(target: ChatTarget, workspace: WorkspaceRecord, store: LocalStore) {
         self.target = target
@@ -372,13 +374,18 @@ struct ThreadView: View {
                 if snapshot.loaded && snapshot.value.messages.isEmpty {
                     SyncNote(text: isUnlocked ? "Loading thread…" : "This thread is not saved on this \(Device.name) yet. Unlock to load it.")
                 }
+                // Live agent activity belongs at the newest end of the conversation, after the replies.
+                if !snapshot.value.hasNewer {
+                    ThreadActivityStrip(target: target, workspace: workspace, store: store) { activityTail = $0 }
+                }
                 if snapshot.value.hasNewer { pageButton(earlier: false) }
             }
             .padding(.bottom, 8)
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
-        .modifier(FollowLatest(lastId: snapshot.value.pending.last?.id ?? snapshot.value.messages.last?.id,
+        // New public commentary is followed like a new message: only when the reader is already at the newest one.
+        .modifier(FollowLatest(lastId: (snapshot.value.pending.last?.id ?? snapshot.value.messages.last?.id).map { activityTail.isEmpty ? $0 : "\($0)|\(activityTail)" },
                                pendingCount: snapshot.value.pending.count, nearBottom: atNewest && !snapshot.value.hasNewer,
                                resumeAt: (pageIdentity > 0 ? windowAnchor : resumeAt).flatMap { id in snapshot.value.messages.contains { $0.id == id } ? id : nil }))
         // Directly measured pages have accurate geometry; a newly inserted visibility sentinel can miss its

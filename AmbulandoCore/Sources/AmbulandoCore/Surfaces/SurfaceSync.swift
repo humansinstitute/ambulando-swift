@@ -140,15 +140,85 @@ extension WorkspaceSync {
             try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             do {
-                let activity = try await api.agentActivities(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channelId)
+                let page = try await api.agentActivityPage(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channelId)
                 try Task.checkCancellation()
-                try await sync.store.writer.replaceAgentActivities(workspaceId: workspace.id, channelId: channelId, activity)
+                try await sync.store.writer.applyAgentActivityPage(workspaceId: workspace.id, channelId: channelId, page, limit: TowerAPI.agentActivityPage)
                 try await sync.store.writer.saveListSync(workspaceId: workspace.id, key: Self.agentActivityKey(workspace.id, channelId), complete: true)
+                await sync.persistServerClock(connection)
             } catch where Self.lost(error) {
                 // No channel.read any more: nothing of that channel's activity stays on the phone.
-                try await sync.store.writer.replaceAgentActivities(workspaceId: workspace.id, channelId: channelId, [])
+                try await sync.store.writer.purgeAgentActivities(workspaceId: workspace.id, channelId: channelId)
             }
         }
+    }
+
+    public static func threadActivityKey(_ w: String, _ t: String) -> String { "agent-activity-thread:\(w):\(t)" }
+    /// Lifecycles read for an open conversation, and delivery-cursor pages one recovery may read per lifecycle.
+    public static let threadActivityLimit = 10
+    static let commentaryRecoveryPages = 5
+
+    /// The open conversation's lifecycles with their newest public commentary, then delivery-cursor recovery of entries
+    /// a lifecycle received while this device was not listening (late inserts below already-seen sequences included).
+    /// A lifecycle seen for the first time is seeded with Tower's high-water cursor; older history stays on Tower.
+    public func refreshThreadActivity(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, channelId: String, threadId: String,
+                                      priority: SyncPriority = .visible, force: Bool = false) async {
+        let sync = self
+        await engine.enqueue(Self.threadActivityKey(workspace.id, threadId), priority: priority, force: force) {
+            try await sync.identity.requireReader(npub: connection.signerNpub)
+            let api = sync.api(origin: try TowerOrigin(connection.origin))
+            let w = workspace.id, app = workspace.appNpub
+            do {
+                let page = try await api.agentActivityPage(workspaceId: w, appNpub: app, channelId: channelId, threadId: threadId,
+                                                           historyLimit: TowerAPI.agentCommentaryPage, limit: Self.threadActivityLimit)
+                try Task.checkCancellation()
+                var saved: [String: String] = [:]
+                for activity in page.activities {
+                    if let cursor = try await sync.store.reader.agentCommentaryProgress(workspaceId: w, activityRowId: activity.id) { saved[activity.id] = cursor }
+                }
+                try await sync.store.writer.applyAgentActivityPage(workspaceId: w, channelId: channelId, threadId: threadId, page,
+                                                                   limit: Self.threadActivityLimit, seedProgress: true)
+                await sync.persistServerClock(connection)
+                for activity in page.activities {
+                    guard let from = saved[activity.id], let high = activity.commentaryCursor, Int64(from) ?? 0 < Int64(high) ?? 0 else { continue }
+                    try await sync.recoverCommentary(api: api, workspace: workspace, channelId: channelId, activity: activity, from: from)
+                }
+            } catch where Self.lost(error) {
+                try await sync.store.writer.purgeAgentActivities(workspaceId: w, channelId: channelId)
+            }
+        }
+    }
+
+    /// Reads one lifecycle's entries after `from` in delivery order, saving progress only with each stored page.
+    func recoverCommentary(api: TowerAPI, workspace: WorkspaceRecord, channelId: String, activity: AgentActivityRecord, from: String) async throws {
+        var cursor = from
+        for _ in 0..<Self.commentaryRecoveryPages {
+            try Task.checkCancellation()
+            let page = try await api.agentActivityPage(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channelId,
+                                                       historyLimit: TowerAPI.agentCommentaryPage, activityId: activity.activityId,
+                                                       afterCommentaryCursor: cursor, limit: 1)
+            guard let row = page.activities.first, row.id == activity.id else { return }
+            let entries = page.commentary.filter { $0.activityRowId == row.id }
+            let last = entries.compactMap(\.deliveryCursor).max { (Int64($0) ?? 0) < (Int64($1) ?? 0) }
+            try await store.writer.mergeAgentActivities(workspaceId: workspace.id, [row], commentary: entries,
+                                                        progress: last.map { [row.id: $0] } ?? [:])
+            guard let next = page.nextCommentaryCursor[row.id], next != cursor else { return }
+            cursor = next
+        }
+    }
+
+    /// Keeps the last observed Tower clock offset for the next cold launch (before the first response arrives).
+    func persistServerClock(_ connection: ConnectionRecord) async {
+        guard let origin = try? TowerOrigin(connection.origin).description, let offset = ServerClock.shared.offset(origin: origin) else { return }
+        try? await store.writer.setState(Self.serverClockKey(origin), String(format: "%.3f", offset))
+    }
+
+    public static func serverClockKey(_ origin: String) -> String { "server-clock-offset:\(origin)" }
+
+    /// Restores a persisted Tower clock offset for `connection` (cold launch; a fresh response replaces it).
+    public func restoreServerClock(_ connection: ConnectionRecord) async {
+        guard let origin = try? TowerOrigin(connection.origin).description,
+              let text = try? await store.reader.state(Self.serverClockKey(origin)), let offset = Double(text), abs(offset) < 86_400 else { return }
+        ServerClock.shared.restore(origin: origin, offset: offset)
     }
 
     // MARK: Toolbox

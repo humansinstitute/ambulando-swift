@@ -163,6 +163,7 @@ extension StoreWriter {
     }
 
     func purgeChannelSurfaces(workspaceId: String, channelId: String) throws {
+        try db.prepare("DELETE FROM agent_activity_commentary WHERE workspace_id = ? AND channel_id = ?").run([.text(workspaceId), .text(channelId)])
         try db.prepare("DELETE FROM agent_activities WHERE workspace_id = ? AND channel_id = ?").run([.text(workspaceId), .text(channelId)])
     }
 
@@ -243,22 +244,6 @@ extension StoreWriter {
                         rows: rows.map { [.text($0.id), .text($0.agentNpub), .text($0.displayName), .int(Int64($0.sortOrder)), .int($0.isVisible ? 1 : 0),
                                           .int(Int64($0.rowVersion)), .text($0.updatedAt), .blob($0.raw)] },
                         ids: rows.map(\.id), workspaceId: workspaceId, partition: nil, complete: true)
-        }
-        if changed > 0 { await emit([ChangeKey(.agents, workspaceId)]) }
-        return changed
-    }
-
-    /// Replaces a channel's stored activity with Tower's newest page for it (the only activity shown natively).
-    /// `sequence` stands in for a row version: an older sequence of the same activity never overwrites a newer one.
-    @discardableResult
-    public func replaceAgentActivities(workspaceId: String, channelId: String, _ records: [AgentActivityRecord]) async throws -> Int {
-        let rows = records.filter { $0.workspaceId == workspaceId && $0.channelId == channelId }
-        let changed: Int = try db.transaction {
-            try replace(table: "agent_activities",
-                        columns: ["id", "activity_id", "scope_id", "channel_id", "thread_id", "agent_npub", "state", "row_version", "updated_at", "raw"],
-                        rows: rows.map { [.text($0.id), .text($0.activityId), $0.scopeId.sql, .text($0.channelId), $0.threadId.sql, .text($0.agentNpub),
-                                          .text($0.state), .int(Int64($0.sequence)), .text($0.updatedAt), .blob($0.raw)] },
-                        ids: rows.map(\.id), workspaceId: workspaceId, partition: ("channel_id", channelId), complete: true)
         }
         if changed > 0 { await emit([ChangeKey(.agents, workspaceId)]) }
         return changed

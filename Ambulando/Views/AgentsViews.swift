@@ -23,8 +23,12 @@ struct AgentsView: View {
 
     var body: some View {
         let value = snapshot.value
-        let live = value.activity.filter { !$0.isTerminal && $0.leaseHealth == "live" }
-        let stale = value.activity.filter { !$0.isTerminal && $0.leaseHealth != "live" }
+        // Liveness is evaluated against Tower's clock from each lease deadline, never from a stored `lease_health`.
+        let origin = model.connection.flatMap { try? TowerOrigin($0.origin).description }
+        TimelineView(.periodic(from: .now, by: AgentLiveness.refreshInterval)) { _ in
+        let now = ServerClock.shared.now(origin: origin)
+        let live = value.activity.filter { AgentLiveness.phase($0, now: now).isLive }
+        let stale = value.activity.filter { AgentLiveness.phase($0, now: now) == .stopped }
         let recent = value.activity.filter(\.isTerminal)
         List {
             Section("Agents in this workspace") {
@@ -40,7 +44,7 @@ struct AgentsView: View {
                                 .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
                         }
                         Spacer()
-                        let busy = live.contains { $0.agentNpub == agent.agentNpub }
+                        let busy = live.contains { $0.agentNpub == agent.agentNpub && AgentLiveness.isWorking($0, now: now) }
                         Text(busy ? "Working" : "Idle").font(.amb(.caption).weight(.semibold))
                             .foregroundStyle(busy ? Amb.brandOrange : Amb.mutedForeground)
                     }
@@ -59,6 +63,7 @@ struct AgentsView: View {
         }
         .groupedList()
         .scrollContentBackground(.hidden)
+        }
         .navigationTitle("Agents")
         .toolbar { ToolbarItem(placement: .primaryAction) { Button("Add agents") { showingSetup = true }.disabled(!model.isUnlocked) } }
         .sheet(isPresented: $showingSetup) { NStackAgentSetupView(workspace: workspace) }

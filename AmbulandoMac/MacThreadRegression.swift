@@ -68,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacAgentActivityCheck") {
+                try await agentActivityCheck(window, model: model)
+                print("PASS: live public commentary, local lease expiry to Stopped responding, draft kept"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacChannelNameCheck") {
                 try await channelNameCheck(window, model: model)
                 print("PASS: Mac channel name editing and creation"); fflush(stdout); exit(0)

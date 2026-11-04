@@ -142,6 +142,19 @@ public struct TowerClient: Sendable {
         try await perform(try await signedRequest(method: method, path: path, query: query, appNpub: appNpub, jsonBody: jsonBody), path: path)
     }
 
+    /// Like `request`, with Tower's clock as reported by the response's `Date` header and the request's round trip
+    /// (for `ServerClock`; the header has one-second resolution).
+    public func requestTimed(path: String, query: [URLQueryItem] = [], appNpub: String? = nil) async throws -> (data: Data, serverDate: Date?, roundTrip: TimeInterval) {
+        let request = try await signedRequest(method: "GET", path: path, query: query, appNpub: appNpub, jsonBody: nil)
+        try Task.checkCancellation()
+        let started = clock_gettime_nsec_np(CLOCK_MONOTONIC)
+        let (data, response) = try await transport.send(request)
+        let roundTrip = Double(clock_gettime_nsec_np(CLOCK_MONOTONIC) &- started) / 1e9
+        try Task.checkCancellation()
+        try Self.check(data, response, path: path)
+        return (data, ServerClock.httpDate(response.value(forHTTPHeaderField: "Date")), roundTrip)
+    }
+
     /// Signed request that returns any HTTP status with its body, for callers that classify failures themselves
     /// (the outbox). Every call signs a fresh NIP-98 event over exactly `jsonBody`.
     public func exchange(method: String, path: String, appNpub: String?, jsonBody: Data?, query: [URLQueryItem] = []) async throws -> (status: Int, body: Data) {
@@ -175,12 +188,16 @@ public struct TowerClient: Sendable {
         try Task.checkCancellation()
         let (data, response) = try await transport.send(request)
         try Task.checkCancellation()
+        try Self.check(data, response, path: path)
+        return data
+    }
+
+    private static func check(_ data: Data, _ response: HTTPURLResponse, path: String) throws {
         guard (200..<300).contains(response.statusCode) else {
             let failure = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             throw TowerError.http(status: response.statusCode, code: failure?["code"] as? String ?? failure?["error"] as? String,
                                   stage: Self.stage(path))
         }
-        return data
     }
 
     /// Reads every page of a list route. Tower list routes cap `limit` at 200 and some return

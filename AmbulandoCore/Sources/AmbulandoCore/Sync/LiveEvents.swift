@@ -19,6 +19,9 @@ public struct TowerEvent: Sendable, Equatable {
     /// Canvas of a naplet/element event, and component of a Context Tree reference event (`payload`).
     public let canvasId: String?
     public let componentId: String?
+    /// The `payload` of an `agent_activity` event (the serialized lifecycle with any commentary delta, or a lease
+    /// change), kept so the change is applied directly instead of refetching the channel.
+    public var activityPayload: Data? = nil
 
     public init(rowVersion: Int, cursor: String, workspaceId: String, entityType: String, entityId: String?, operation: String,
                 scopeId: String? = nil, channelId: String? = nil, threadId: String? = nil, parentId: String? = nil, entityRowVersion: Int? = nil,
@@ -41,6 +44,7 @@ public struct TowerEvent: Sendable, Equatable {
                   channelId: lowerUUID(o["channel_id"] as? String) ?? lowerUUID(payload["channel_id"] as? String),
                   threadId: lowerUUID(payload["thread_id"] as? String), parentId: parent, entityRowVersion: flexibleInt(o["entity_row_version"]),
                   canvasId: lowerUUID(payload["canvas_id"] as? String), componentId: lowerUUID(payload["component_id"] as? String))
+        if type == "agent_activity", !payload.isEmpty { activityPayload = try? rawJSON(payload) }
     }
 }
 
@@ -154,7 +158,15 @@ public struct EventPlan: Sendable, Equatable {
         case message(String), thread(String), task(String), doc(String), file(String), comment(String), reaction(String)
     }
 
+    /// A change to one agent lifecycle carried by its event, applied in event order (the merge is order-independent).
+    public enum ActivityChange: Sendable, Equatable {
+        case snapshot(AgentActivityRecord, commentary: [AgentCommentaryEntry])
+        /// A lease renewal or expiry for a stored row (additive lease events); ignored unless its lease ordering is newer.
+        case lease(rowId: String, turnId: String?, AgentLease)
+    }
+
     public var refreshes: Set<Refresh> = []
+    public var activityChanges: [ActivityChange] = []
     public var tombstones: Set<Tombstone> = []
     /// Highest reported `row_version` per direct record refresh; a local row already at that version is not fetched.
     public var versions: [Refresh: Int] = [:]
@@ -178,6 +190,25 @@ public struct EventPlan: Sendable, Equatable {
         refreshes.insert(refresh)
         if let version, !known || versions[refresh] != nil { versions[refresh] = max(versions[refresh] ?? version, version) }
         else { versions[refresh] = nil }
+    }
+
+    /// The lifecycle an `agent_activity` event carries, if it is complete and belongs to this workspace and channel.
+    static func activityChange(_ e: TowerEvent, workspaceId: String, channelId: String) -> ActivityChange? {
+        guard let data = e.activityPayload, let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        if let row = payload["agent_activity"] as? [String: Any] {
+            guard let record = try? AgentActivityRecord(raw: rawJSON(row)), record.workspaceId == workspaceId, record.channelId == channelId,
+                  e.entityId == nil || e.entityId == record.id else { return nil }
+            if let turn = payload["turn_id"] as? String, let mine = record.turnId, turn != mine { return nil }
+            let entries = ((row["commentary_history"] as? [[String: Any]]) ?? []).compactMap { AgentCommentaryEntry(json: $0, activity: record) }
+            return .snapshot(record, commentary: entries)
+        }
+        // Lease deltas: an epoch with either a renewal (sequence + deadline) or an expiry (expired_at + the deadline it
+        // expired). Anything less is refetched.
+        guard let row = e.entityId, let epoch = flexibleInt(payload["lease_epoch"]), epoch >= 1,
+              let deadline = AgentActivityRecord.time(payload["lease_expires_at"]) else { return nil }
+        let sequence = flexibleInt(payload["lease_sequence"]), expired = AgentActivityRecord.time(payload["expired_at"])
+        guard sequence != nil || expired != nil else { return nil }
+        return .lease(rowId: row, turnId: payload["turn_id"] as? String, AgentLease(epoch: epoch, sequence: sequence, expiresAt: deadline, expiredAt: expired))
     }
 
     public static func make(_ events: [TowerEvent], workspaceId: String) -> EventPlan {
@@ -238,7 +269,9 @@ public struct EventPlan: Sendable, Equatable {
             case "personal_pin", "thread_pin":
                 plan.refreshes.insert(.pins)
             case "agent_activity":
-                if let channel { plan.refreshes.insert(.agentActivity(channelId: channel)) } else { plan.ignored += 1 }
+                guard let channel else { plan.ignored += 1; continue }
+                if let change = activityChange(e, workspaceId: workspaceId, channelId: channel) { plan.activityChanges.append(change) }
+                else { plan.refreshes.insert(.agentActivity(channelId: channel)) }
             case "workspace_agent", "autopilot_connection":
                 plan.refreshes.insert(.agents)
             case "org_data":

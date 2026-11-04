@@ -22,13 +22,16 @@ public enum DeckActivity {
         public let reason: String
         public let activityAt: String
         public let isUnread: Bool
-        public let isWorking: Bool
+        /// Server time until which an agent is working on this record (its live lifecycles' lease deadline plus grace),
+        /// evaluated when shown so a lease that passes while the list is on screen clears without a reload.
+        public let workingUntil: Date?
         public let taskState: String?
         /// Chat: false for a channel post stored without a thread id (it opens the channel).
         public var isThread = true
         /// Lower-cased text searched by the Inbox search field.
         public let searchText: String
         public var id: String { "\(kind.rawValue):\(recordId)" }
+        public func isWorking(at serverNow: Date) -> Bool { workingUntil.map { serverNow < $0 } ?? false }
     }
 
     /// One conversation with its latest stored message (a Deck chat card or a Recent channel row).
@@ -65,6 +68,8 @@ public enum DeckActivity {
         public var taskComments: [String: CommentActivity] = [:]
         public var docComments: [String: CommentActivity] = [:]
         public var activities: [AgentActivityRecord] = []
+        /// Tower's time when the sources were read (lifecycles whose lease already passed are not working).
+        public var now = Date()
         /// Channel → scope, for records stored without a scope id.
         public var channelScopes: [String: String] = [:]
         public init() {}
@@ -91,9 +96,9 @@ public enum DeckActivity {
     public static func inbox(_ sources: Sources, context: WorkContext) -> [Item] {
         let unread = Dictionary(sources.viewStates.map { ("\($0.resourceType.rawValue):\($0.resourceId)", $0.unread) }, uniquingKeysWith: { a, b in a || b })
         let mutedChannels = Set(sources.viewStates.filter(\.channelMentionsOnly).compactMap(\.channelId))
-        let working = workingKeys(sources.activities)
-        func showsWorking(_ key: String, _ channelId: String?) -> Bool {
-            working.contains(key) && !(channelId.map { mutedChannels.contains($0) } ?? false)
+        let working = workingKeys(sources.activities, now: sources.now)
+        func showsWorking(_ key: String, _ channelId: String?) -> Date? {
+            channelId.map { mutedChannels.contains($0) } ?? false ? nil : working[key]
         }
         func scope(_ scopeId: String?, _ channelId: String?) -> String? { scopeId ?? channelId.flatMap { sources.channelScopes[$0] } }
         func matches(_ scopeId: String?, _ channelId: String?) -> Bool {
@@ -107,7 +112,7 @@ public enum DeckActivity {
             items.append(Item(kind: .chat, recordId: thread.threadId, channelId: thread.channelId, scopeId: scope(nil, thread.channelId),
                               title: title, subtitle: MentionCodec.plain(thread.latestBody), reason: thread.messageCount == 1 ? "1 message" : "\(thread.messageCount) messages",
                               activityAt: thread.latestAt, isUnread: unread["thread:\(thread.threadId)"] == true,
-                              isWorking: showsWorking("thread:\(thread.threadId)", thread.channelId), taskState: nil, isThread: thread.isThread,
+                              workingUntil: showsWorking("thread:\(thread.threadId)", thread.channelId), taskState: nil, isThread: thread.isThread,
                               searchText: [title, thread.latestBody, thread.rootBody ?? ""].joined(separator: " ").lowercased()))
         }
         for task in sources.tasks where matches(task.scopeId, task.channelId) {
@@ -124,7 +129,7 @@ public enum DeckActivity {
                               title: task.title.isEmpty ? "Untitled task" : task.title, subtitle: label,
                               reason: commentDrove ? "\(comments!.count) recent \(comments!.count == 1 ? "comment" : "comments")"
                                                    : (task.updatedAt.isEmpty ? "Task created" : "Task updated"),
-                              activityAt: activity, isUnread: isUnread, isWorking: showsWorking("task:\(task.id)", task.channelId), taskState: task.state,
+                              activityAt: activity, isUnread: isUnread, workingUntil: showsWorking("task:\(task.id)", task.channelId), taskState: task.state,
                               searchText: [task.title, task.description ?? "", task.state, label].joined(separator: " ").lowercased()))
         }
         for doc in sources.docs where !doc.archived && matches(doc.scopeId, doc.channelId) {
@@ -136,7 +141,7 @@ public enum DeckActivity {
             items.append(Item(kind: .document, recordId: doc.id, channelId: doc.channelId, scopeId: scope(doc.scopeId, doc.channelId),
                               title: doc.title.isEmpty ? "Untitled document" : doc.title, subtitle: doc.summary ?? "Document",
                               reason: open > 0 ? "\(open) unresolved \(open == 1 ? "comment" : "comments")" : (doc.updatedAt.isEmpty ? "Document created" : "Document updated"),
-                              activityAt: activity, isUnread: unread["document:\(doc.id)"] == true, isWorking: showsWorking("document:\(doc.id)", doc.channelId), taskState: nil,
+                              activityAt: activity, isUnread: unread["document:\(doc.id)"] == true, workingUntil: showsWorking("document:\(doc.id)", doc.channelId), taskState: nil,
                               searchText: [doc.title, doc.summary ?? ""].joined(separator: " ").lowercased()))
         }
         for file in sources.files where !file.archived && matches(file.scopeId, file.channelId) {
@@ -144,7 +149,7 @@ public enum DeckActivity {
             items.append(Item(kind: .file, recordId: file.id, channelId: file.channelId, scopeId: scope(file.scopeId, file.channelId),
                               title: file.displayName, subtitle: file.description ?? file.contentType ?? "File",
                               reason: file.updatedAt.isEmpty || file.updatedAt == file.createdAt ? "Uploaded file" : "Edited file",
-                              activityAt: activity, isUnread: false, isWorking: false, taskState: nil,
+                              activityAt: activity, isUnread: false, workingUntil: nil, taskState: nil,
                               searchText: [file.displayName, file.description ?? "", file.contentType ?? ""].joined(separator: " ").lowercased()))
         }
         return items.sorted { a, b in a.activityAt != b.activityAt ? a.activityAt > b.activityAt : a.id < b.id }
@@ -178,9 +183,15 @@ public enum DeckActivity {
         return line.count > 90 ? String(line.prefix(90)) + "…" : line
     }
 
-    /// Records an agent is working on now (activity not ended): `thread:<id>`.
-    static func workingKeys(_ activities: [AgentActivityRecord]) -> Set<String> {
-        Set(activities.filter { !$0.isTerminal }.compactMap { $0.threadId.map { "thread:\($0)" } })
+    /// Records an agent is working on now (`thread:<id>`), with the server time each stops counting as worked on: the
+    /// latest clear point of its live lifecycles. A lifecycle whose lease (plus grace) already passed is not working.
+    static func workingKeys(_ activities: [AgentActivityRecord], now: Date) -> [String: Date] {
+        var keys: [String: Date] = [:]
+        for a in activities where AgentLiveness.isWorking(a, now: now) {
+            guard let thread = a.threadId, let until = AgentLiveness.clearsAt(a) else { continue }
+            keys["thread:\(thread)"] = max(keys["thread:\(thread)"] ?? until, until)
+        }
+        return keys
     }
 }
 

@@ -263,7 +263,7 @@ extension StoreWriter {
             let matches = try owner.step()
             let unique = matches && count == 1
             let tables = ["scopes", "channels", "messages", "threads", "members", "channel_sync"]
-                + Schema.v3WorkspaceTables + Schema.v4WorkspaceTables + Schema.v7WorkspaceTables
+                + Schema.v3WorkspaceTables + Schema.v4WorkspaceTables + Schema.v7WorkspaceTables + Schema.v9WorkspaceTables
                 + ["drafts", "doc_drafts", "outbox", "writes", "profiles"]
             for table in tables {
                 let columns = try legacyColumns(table)

@@ -59,7 +59,7 @@ public struct ConnectionRecord: Sendable, Equatable, Identifiable, Codable {
 }
 
 enum Schema {
-    static let version = 8
+    static let version = 9
 
     static func migrate(_ db: SQLiteConnection) throws {
         let current = try db.userVersion
@@ -142,6 +142,7 @@ enum Schema {
                 if !columns.contains("mention_activity_version") { try db.execute("ALTER TABLE view_states ADD COLUMN mention_activity_version INTEGER") }
                 if !columns.contains("channel_mentions_only") { try db.execute("ALTER TABLE view_states ADD COLUMN channel_mentions_only INTEGER NOT NULL DEFAULT 0") }
             }
+            if current < 9 { try migrateV9(db) }
             try db.execute("PRAGMA user_version = \(version)")
         }
     }
@@ -216,7 +217,7 @@ public actor StoreWriter {
     }
 
     func deleteWorkspaceRows(_ workspaceId: String) throws {
-        for table in ["scopes", "channels", "messages", "threads", "members", "channel_sync"] + Schema.v3WorkspaceTables + Schema.v4WorkspaceTables + Schema.v7WorkspaceTables {
+        for table in ["scopes", "channels", "messages", "threads", "members", "channel_sync"] + Schema.v3WorkspaceTables + Schema.v4WorkspaceTables + Schema.v7WorkspaceTables + Schema.v9WorkspaceTables {
             try db.prepare("DELETE FROM \(table) WHERE workspace_id = ?").run([.text(workspaceId)])
         }
     }

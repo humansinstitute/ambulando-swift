@@ -99,6 +99,8 @@ public actor LiveStream {
         // A move can change the event's scope/access partition while this device is disconnected.
         // Reconcile canonical channel locations even when no historical move event is visible to this viewer.
         await sync.refreshWorkspace(connection, workspace, priority: .background, includeDirectory: false)
+        // Lease deadlines need Tower's clock before the first fresh response: the last observed offset (cold launch only).
+        await sync.restoreServerClock(connection)
         // 1. Bounded catch-up (seeds the cursor on first use, handles gaps), so the stream starts near the head.
         let catchUp = try await sync.catchUpEventsAndWait(connection, workspace, priority: .visible)
         if catchUp.accessLost { return (.accessLost, false) }
@@ -110,7 +112,10 @@ public actor LiveStream {
         let (response, chunks) = try await open(request)
         defer { chunks.cancel() }   // the connection never outlives this attempt
         switch response.statusCode {
-        case 200: break
+        case 200:
+            if let date = ServerClock.httpDate(response.value(forHTTPHeaderField: "Date")) {
+                ServerClock.shared.observe(origin: api.client.origin.description, serverTime: date, roundTrip: 0, resolution: 1)
+            }
         case 403, 404: return (.accessLost, false)
         case 400:
             // Cursor refused: drop it so the next catch-up restarts at the head.
@@ -147,6 +152,11 @@ public actor LiveStream {
                     for frame in try parser.feed(chunk) {
                         switch frame.event {
                         case "connected":
+                            // A fresh frame (never a replayed event time) calibrates Tower's clock for lease deadlines.
+                            if let data = frame.data.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                               let text = object["server_time"] as? String, let time = AgentActivityRecord.time(text) {
+                                ServerClock.shared.observe(origin: api.client.origin.description, serverTime: time, roundTrip: 0, resolution: 0.25)
+                            }
                             await activity.markConnected()
                             await feed.update { $0.stream = .connected; $0.lastError = nil }
                         case "flightdeck_pg.event":

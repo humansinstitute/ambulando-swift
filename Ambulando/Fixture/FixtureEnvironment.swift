@@ -116,6 +116,37 @@ final class FixtureEnvironment {
         }
     }
 
+    /// `-AmbulandoFixtureAgentActivity`: Rick works on the "Native chat review" conversation, publishing public
+    /// commentary through the event log every few seconds with a short (20 s) lease, then replies and completes.
+    /// `-AmbulandoFixtureAgentActivityStall` stops after three lines without a terminal state, so the turn shows
+    /// "Stopped responding" once its lease plus grace passes. Labelled sample data only.
+    func startAgentActivityIfRequested() {
+        let arguments = ProcessInfo.processInfo.arguments
+        let stall = arguments.contains("-AmbulandoFixtureAgentActivityStall")
+        guard stall || arguments.contains("-AmbulandoFixtureAgentActivity") else { return }
+        let tower = tower
+        Task.detached(priority: .utility) {
+            try? await Task.sleep(for: .seconds(2))
+            let channel = FixtureTower.generalChannel, thread = FixtureTower.threadReview
+            let id = tower.surfaces.seedActivity(channel: channel, scope: FixtureTower.scopeAmbulando, thread: thread, agent: FixtureTower.rick,
+                                                 state: "accepted", label: "Accepted", leaseSeconds: 20, turnId: "fixture-turn-\(UUID().uuidString.prefix(8))",
+                                                 triggerMessageId: FixtureTower.uuid(39, "f1c7aaaa"))
+            let lines = ["Reading the conversation", "Checking the outbox retry states", "Comparing request ids across retries",
+                         "Running the focused outbox tests", "Writing up the answer"]
+            for (n, line) in lines.enumerated() {
+                if stall && n == 3 { return }
+                if let payload = tower.surfaces.publishActivity(id, state: "working", label: "Working", body: line, leaseSeconds: 20) {
+                    tower.emitAgentActivity(channel: channel, rowId: id, payload: payload)
+                }
+                try? await Task.sleep(for: .seconds(4))
+            }
+            tower.postAsAgent(channel: channel, threadId: thread, body: "Retry states are consistent: every retry reuses the same request id.")
+            if let payload = tower.surfaces.publishActivity(id, state: "completed", label: "Completed") {
+                tower.emitAgentActivity(channel: channel, rowId: id, payload: payload)
+            }
+        }
+    }
+
     /// `-AmbulandoFixtureSimulateBackgroundRefresh`: runs the same pipeline a BGAppRefreshTask runs (the simulator
     /// cannot be granted real background windows on demand). Labelled as a simulation in the UI.
     func simulateBackgroundRefreshIfRequested(_ model: AppModel) async {
@@ -312,6 +343,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     static let scopeDMs = "f1c70000-0000-4000-8000-0000000000a9"
     static let scopeResearch = "f1c70000-0000-4000-8000-0000000000a3"
     static let generalChannel = "f1c70000-0000-4000-8000-0000000000c1"
+    /// The seeded "Native chat review" conversation in #general (root #39, with replies).
+    static var threadReview: String { uuid(39, "f1c7bbbb") }
     static let designChannel = "f1c70000-0000-4000-8000-0000000000c2"
     static let deploysChannel = "f1c70000-0000-4000-8000-0000000000c3"
     static let notesChannel = "f1c70000-0000-4000-8000-0000000000c4"
@@ -402,7 +435,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         if let data = try? JSONSerialization.data(withJSONObject: ["posted": posted, "revised": revised, "events": eventLog]) { try? data.write(to: file, options: .atomic) }
     }
 
-    private static func uuid(_ n: Int, _ prefix: String) -> String { String(format: "\(prefix)-0000-4000-8000-%012d", n) }
+    static func uuid(_ n: Int, _ prefix: String) -> String { String(format: "\(prefix)-0000-4000-8000-%012d", n) }
     /// Seeded history spans three days (general #1–13, #14–26, the rest), so chat shows its date separators.
     private static func time(_ n: Int) -> String {
         let day = n <= 13 ? 21 : n <= 26 ? 22 : 23
@@ -807,11 +840,34 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     }
 
     /// Appends an event; the caller holds `lock`.
-    private func emitLocked(workspace: String, channel: String?, type: String, id: String?, rowVersion: Int?, operation: String = "created") {
+    private func emitLocked(workspace: String, channel: String?, type: String, id: String?, rowVersion: Int?, operation: String = "created",
+                            payload: [String: Any] = [:]) {
         let row = eventLog.count + 1
         eventLog.append(["id": UUID().uuidString.lowercased(), "cursor": Self.eventCursor(row), "row_version": row, "workspace_id": workspace,
                          "scope_id": NSNull(), "channel_id": channel ?? NSNull(), "entity_type": type, "entity_id": id ?? NSNull(),
-                         "operation": operation, "entity_row_version": rowVersion ?? NSNull(), "payload": [:], "event_type": "flightdeck_pg.\(type).\(operation)"])
+                         "operation": operation, "entity_row_version": rowVersion ?? NSNull(), "payload": payload, "event_type": "flightdeck_pg.\(type).\(operation)"])
+    }
+
+    /// An agent's lifecycle write as Tower emits it (`flightdeck_pg.agent_activity.snapshot` with the serialized row).
+    func emitAgentActivity(channel: String, rowId: String, payload: [String: Any]) {
+        lock.withLock {
+            emitLocked(workspace: Self.studio, channel: channel, type: "agent_activity", id: rowId, rowVersion: nil, operation: "updated", payload: payload)
+            persist()
+        }
+    }
+
+    /// Rick replies in a conversation (the durable final message of an agent turn).
+    func postAsAgent(channel: String, threadId: String, body: String) {
+        lock.withLock {
+            let source = allMessages().first { $0["thread_id"] as? String == threadId && $0["id"] as? String == $0["thread_source_message_id"] as? String }?["id"] as? String
+            let id = UUID().uuidString.lowercased()
+            let now = ISO8601DateFormatter.fixture.string(from: Date())
+            posted.append(["id": id, "workspace_id": Self.studio, "channel_id": channel, "thread_id": threadId, "thread_source_message_id": source ?? id,
+                           "body": body, "client_request_id": NSNull(), "record_state": "active", "row_version": 1,
+                           "sender_npub": Self.rick, "created_by_actor_label": "Rick", "created_at": now, "updated_at": now])
+            emitLocked(workspace: Self.studio, channel: channel, type: "message", id: id, rowVersion: 1)
+            persist()
+        }
     }
 
     func events(workspace: String, after row: Int, limit: Int) -> [[String: Any]] {
@@ -1088,7 +1144,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         s.seedAgent(npub: Self.rick, name: "Rick", sortOrder: 1)
         // A second launcher agent, so the Mac Deck's My Agents stack has a card behind the top one.
         s.seedAgent(npub: Self.brick, name: "Brick", sortOrder: 2, avatarURL: FixtureProfileSource.host + "brick.png")
-        s.seedActivity(channel: general, scope: a, thread: thread, agent: Self.rick, state: "working", label: "Checking the outbox retry states")
+        // A turn that stopped reporting an hour ago (lease lapsed): listed under Not responding, never shown as working.
+        s.seedActivity(channel: general, scope: a, thread: thread, agent: Self.rick, state: "working", label: "Checking the outbox retry states", leaseSeconds: -3600)
         s.seedActivity(channel: general, scope: a, thread: thread, agent: Self.rick, state: "completed", label: "Answered the theme question")
 
         // Toolbox and pins.

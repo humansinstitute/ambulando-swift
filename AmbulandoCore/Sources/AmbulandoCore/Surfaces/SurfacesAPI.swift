@@ -98,16 +98,66 @@ extension TowerAPI {
 
     /// Tower's materialised user-visible activity for one channel: the newest page (no commentary history).
     public static let agentActivityPage = 50
+    /// Commentary entries read per lifecycle for an open conversation, and per recovery page.
+    public static let agentCommentaryPage = 20
 
+    /// One `GET agent-activities` response: lifecycles, the commentary entries returned with them, the continuation of
+    /// a delivery-cursor recovery, and Tower's clock at the response (`server_time`, else the `Date` header).
+    public struct AgentActivityPage: Sendable {
+        public var activities: [AgentActivityRecord] = []
+        public var commentary: [AgentCommentaryEntry] = []
+        /// Per activity row: `commentary_next_cursor` (more entries after a delivery-cursor page) .
+        public var nextCommentaryCursor: [String: String] = [:]
+        public var serverTime: Date?
+        public init() {}
+    }
+
+    /// The channel's newest lifecycles (`history_limit=0`).
     public func agentActivities(workspaceId: String, appNpub: String, channelId: String) async throws -> [AgentActivityRecord] {
-        let query = [URLQueryItem(name: "channel_id", value: try Self.uuid(channelId)), URLQueryItem(name: "history_limit", value: "0"),
-                     URLQueryItem(name: "limit", value: String(Self.agentActivityPage))]
-        let o = try object(try await client.request(path: try Self.base(workspaceId) + "/agent-activities", query: query, appNpub: appNpub), "agent activity")
+        try await agentActivityPage(workspaceId: workspaceId, appNpub: appNpub, channelId: channelId).activities
+    }
+
+    /// `GET agent-activities` for a channel, optionally one thread (with its newest `historyLimit` public entries per
+    /// lifecycle) or one activity's entries after a saved delivery cursor. Every row and entry must belong to the
+    /// requested workspace, channel and thread before it is returned.
+    public func agentActivityPage(workspaceId: String, appNpub: String, channelId: String, threadId: String? = nil, historyLimit: Int = 0,
+                                  activityId: String? = nil, afterCommentaryCursor: String? = nil, limit: Int = TowerAPI.agentActivityPage) async throws -> AgentActivityPage {
+        var query = [URLQueryItem(name: "channel_id", value: try Self.uuid(channelId))]
+        if let threadId { query.append(URLQueryItem(name: "thread_id", value: try Self.uuid(threadId))) }
+        query.append(URLQueryItem(name: "history_limit", value: String(min(max(historyLimit, 0), 200))))
+        if let activityId {
+            guard !activityId.isEmpty, activityId.count <= 255 else { throw TowerError.malformed("agent activity id") }
+            query.append(URLQueryItem(name: "activity_id", value: activityId))
+        }
+        if let afterCommentaryCursor {
+            guard activityId != nil, AgentCommentaryEntry.validCursor(afterCommentaryCursor) else { throw TowerError.malformed("commentary cursor") }
+            query.append(URLQueryItem(name: "after_commentary_cursor", value: afterCommentaryCursor))
+        }
+        query.append(URLQueryItem(name: "limit", value: String(min(max(limit, 1), 200))))
+        let response = try await client.requestTimed(path: try Self.base(workspaceId) + "/agent-activities", query: query, appNpub: appNpub)
+        let o = try object(response.data, "agent activity")
         guard let rows = o["agent_activities"] as? [[String: Any]] else { throw TowerError.malformed("agent activity") }
-        // Rows that are not user-visible or lack an activity id are skipped, as in sol `mapPgAgentActivity`.
-        let activities = rows.compactMap { try? AgentActivityRecord(raw: rawJSON($0)) }
-        guard activities.allSatisfy({ $0.workspaceId == workspaceId && $0.channelId == channelId.lowercased() }) else { throw TowerError.malformed("agent activity") }
-        return activities
+        var page = AgentActivityPage()
+        if let text = o["server_time"] as? String, let time = AgentActivityRecord.time(text) {
+            page.serverTime = time
+            ServerClock.shared.observe(origin: client.origin.description, serverTime: time, roundTrip: response.roundTrip, resolution: 0.001)
+        } else if let date = response.serverDate {
+            page.serverTime = date
+            ServerClock.shared.observe(origin: client.origin.description, serverTime: date, roundTrip: response.roundTrip, resolution: 1)
+        }
+        let channel = channelId.lowercased(), thread = threadId?.lowercased()
+        for row in rows {
+            // Rows that are not user-visible or lack an activity id are skipped, as in sol `mapPgAgentActivity`.
+            guard let activity = try? AgentActivityRecord(raw: rawJSON(row)) else { continue }
+            guard activity.workspaceId == workspaceId, activity.channelId == channel, thread == nil || activity.threadId == thread,
+                  activityId == nil || activity.activityId == activityId else { throw TowerError.malformed("agent activity") }
+            page.activities.append(activity)
+            for entry in (row["commentary_history"] as? [[String: Any]]) ?? [] {
+                if let parsed = AgentCommentaryEntry(json: entry, activity: activity) { page.commentary.append(parsed) }
+            }
+            if let next = row["commentary_next_cursor"] as? String, AgentCommentaryEntry.validCursor(next) { page.nextCommentaryCursor[activity.id] = next }
+        }
+        return page
     }
 
     // MARK: Toolbox

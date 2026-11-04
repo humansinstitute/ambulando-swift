@@ -493,7 +493,7 @@ final class AppModel {
             #endif
             if canRead, !pushOnlyStartup { refresh(force: false); kickOutbox() }
             if isActive { startLive() }
-            if let fixture { fixture.startLiveIfRequested(); await fixture.simulateBackgroundRefreshIfRequested(self) }
+            if let fixture { fixture.startLiveIfRequested(); fixture.startAgentActivityIfRequested(); await fixture.simulateBackgroundRefreshIfRequested(self) }
         } catch {
             phase = .failed(error.localizedDescription)
         }
