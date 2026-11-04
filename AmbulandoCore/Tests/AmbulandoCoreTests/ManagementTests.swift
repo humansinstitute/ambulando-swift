@@ -171,7 +171,7 @@ final class ManagementTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.member.npub), [me, bot], "valid, de-duplicated; self included")
         XCTAssertEqual(candidates.map(\.isSelf), [true, false])
         XCTAssertEqual(candidates.map(\.isAgent), [false, true])
-        XCTAssertEqual(candidates[0].title, "Pete (Note to self) · \(me)")
+        XCTAssertEqual(candidates[0].title, "Pete (Note to self)")
         let dm = ChannelRecord(workspaceId: "w", id: "c1", scopeId: "s", name: "DM: x", kind: "dm", updatedAt: "",
                                raw: Data(#"{"participant_npubs":["\#(me)","\#(bot)"]}"#.utf8))
         XCTAssertEqual(DirectMessagePlanner.existing(in: [dm], participants: [bot, me])?.id, "c1")

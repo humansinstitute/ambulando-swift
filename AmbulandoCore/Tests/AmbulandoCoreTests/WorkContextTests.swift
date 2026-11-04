@@ -102,7 +102,7 @@ final class WorkContextTests: XCTestCase {
 
     func testDirectMessageLabelsUseParticipants() throws {
         let dm = try channel(Self.dmChannel, scope: Self.dmScope, "DM", kind: "dm", participants: [TestKeys.npub, Self.other])
-        XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [Self.other: "Rick"]), "Rick (\(SidebarNavigation.compact(Self.other)))")
+        XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [Self.other: "Rick"]), "Rick")
         let note = try channel(Self.dmChannel, scope: Self.dmScope, "DM", kind: "dm", participants: [TestKeys.npub])
         XCTAssertEqual(SidebarNavigation.label(note, viewerNpub: TestKeys.npub, names: [:]), "Note to self")
         let plain = try channel(Fixtures.channel1, scope: Fixtures.scopeA, "general")

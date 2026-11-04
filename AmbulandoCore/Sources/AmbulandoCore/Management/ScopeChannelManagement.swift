@@ -439,7 +439,7 @@ public enum DirectMessagePlanner {
         public let isSelf: Bool
         public var id: String { member.npub }
         public var isAgent: Bool { member.kind?.lowercased() == "agent" }
-        public var title: String { (isSelf ? member.label + " (Note to self)" : member.label) + " · " + member.npub }
+        public var title: String { isSelf ? member.label + " (Note to self)" : member.label }
     }
 
     /// Every workspace member with a valid npub - people and agents - including the viewer (a note to self), once each.

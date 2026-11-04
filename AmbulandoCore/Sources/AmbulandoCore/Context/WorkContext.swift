@@ -119,7 +119,7 @@ public enum SidebarNavigation {
         let participants = participants(channel)
         if direct, participants.count == 1, participants.first == viewerNpub { return "Note to self" }
         let others = participants.filter { $0 != viewerNpub }
-        if !others.isEmpty { return others.map { npub in names[npub].map { "\($0) (\(compact(npub)))" } ?? compact(npub) }.joined(separator: ", ") }
+        if !others.isEmpty { return others.map { npub in names[npub] ?? compact(npub) }.joined(separator: ", ") }
         if direct {
             return "Direct message · identity unavailable"
         }

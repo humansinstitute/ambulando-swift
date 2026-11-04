@@ -307,7 +307,7 @@ final class ManagementUITests: XCTestCase {
         sleep(3)  // let the directory refresh settle; a list change would close an open menu
         person.tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Ana'")).firstMatch.waitForExistence(timeout: 5), "a person is offered")
-        let rick = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'rick' AND label CONTAINS[c] 'agent' AND label CONTAINS 'npub1'")).firstMatch
+        let rick = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'rick' AND label CONTAINS[c] 'agent'")).firstMatch
         XCTAssertTrue(rick.waitForExistence(timeout: 5), "an agent is offered")
         capture(app, "dm-picker")
         rick.tap()
@@ -322,7 +322,7 @@ final class ManagementUITests: XCTestCase {
         XCTAssertTrue(again.waitForExistence(timeout: 15))
         sleep(3)
         again.tap()
-        app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'rick' AND label CONTAINS[c] 'agent' AND label CONTAINS 'npub1'")).firstMatch.tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'rick' AND label CONTAINS[c] 'agent'")).firstMatch.tap()
         app.buttons["newChannel.create"].tap()
         app.openSidebar()
         XCTAssertTrue(row.firstMatch.waitForExistence(timeout: 10))

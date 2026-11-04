@@ -15,7 +15,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 
 DM reuse requires the exact recorded participant npubs. Names, descriptions, groups and historical
 keys cannot substitute recipients. Missing identity stays visibly unresolved; Deck and navigation
-use the same labels, with a key suffix, and the recipient picker exposes the full npub.
+use the same human names without added key suffixes; recipient choices retain exact identity internally.
 Old conversations keep their participants and history. Source delivery is separate from device
 installation and live channel replacement.
 
