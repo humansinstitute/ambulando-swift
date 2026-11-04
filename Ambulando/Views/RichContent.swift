@@ -184,7 +184,7 @@ private struct RichBlockView: View {
     @Environment(\.documentSelection) private var selection
     #endif
 
-    private var ink: Color { context.muted ? Amb.mutedForeground : Amb.foreground }
+    private var ink: Color { context.muted ? Amb.mutedForeground : context.style == .document ? Amb.paperInk : Amb.foreground }
 
     var body: some View {
         switch block {
@@ -235,7 +235,9 @@ private struct RichBlockView: View {
             let loose = items.contains { $0.blocks.count > 1 }
             VStack(alignment: .leading, spacing: context.desktopChat ? (loose ? 14 : 8) * ChatTypography.scale : 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                    HStack(alignment: .firstTextBaseline, spacing: context.desktopChat ? 9 * ChatTypography.scale : 6) {
+                    // AppKit text bridges do not publish a SwiftUI first baseline. Top alignment
+                    // keeps document markers on the first line for selectable and fallback paragraphs alike.
+                    HStack(alignment: context.style == .document ? .top : .firstTextBaseline, spacing: context.desktopChat ? 9 * ChatTypography.scale : 6) {
                         Group {
                             if let checked = item.checked {
                                 Image(systemName: checked ? "checkmark.square.fill" : "square")
@@ -245,8 +247,8 @@ private struct RichBlockView: View {
                                 Text(ordered ? "\(start + index)." : "•").foregroundStyle(Amb.mutedForeground).monospacedDigit()
                             }
                         }
-                        .font(.amb(.body))
-                        .frame(minWidth: context.desktopChat ? markerWidth * ChatTypography.scale : (ordered ? 22 : 14), alignment: .trailing)
+                        .font(context.style == .document ? DocumentTypography.font() : .amb(.body))
+                        .frame(minWidth: context.desktopChat ? markerWidth * ChatTypography.scale : (context.style == .document ? markerWidth * DocumentTypography.markerScale : (ordered ? 22 : 14)), alignment: .trailing)
                         VStack(alignment: .leading, spacing: context.innerSpacing) {
                             ForEach(Array(item.blocks.enumerated()), id: \.offset) { RichBlockView(block: $0.element, context: context.child(index, $0.offset)) }
                         }
@@ -275,6 +277,7 @@ private struct RichBlockView: View {
 
     /// Chat: h1 1.3rem, h2 1.12rem, h3+ 0.98rem (styles.css `.chat-post-markdown`); documents use larger headings.
     private func headingFont(_ level: Int) -> Font {
+        if context.style == .document { return DocumentTypography.font(heading: level).weight(.semibold) }
         #if os(macOS)
         if context.style == .chat {
             return switch level {
@@ -317,8 +320,8 @@ private struct ParagraphView: View {
     }
 
     private func line(_ runs: [InlineRun]) -> some View {
-        Text(InlineText.attributed(runs)).font(.amb(.body).weight(.regular)).foregroundStyle(context.muted ? Amb.mutedForeground : Amb.foreground)
-            .lineSpacing(context.style == .chat ? ChatTypography.lineSpacing : 0)
+        Text(InlineText.attributed(runs)).font(context.style == .document ? DocumentTypography.font() : .amb(.body).weight(.regular)).foregroundStyle(context.muted ? Amb.mutedForeground : context.style == .document ? Amb.paperInk : Amb.foreground)
+            .lineSpacing(context.style == .chat ? ChatTypography.lineSpacing : DocumentTypography.lineSpacing)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
             .richLayoutFrame("paragraph.\(context.path.map(String.init).joined(separator: "."))")

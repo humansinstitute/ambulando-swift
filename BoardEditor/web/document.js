@@ -330,7 +330,7 @@ Object.defineProperty(window, 'ambulandoDocument', {
     setStyle(json) {
       const style = JSON.parse(json);
       for (const [name, value] of Object.entries(style)) {
-        if (/^[a-z-]+$/.test(name) && Number.isFinite(value)) document.documentElement.style.setProperty(`--doc-${name}`, `${value}px`);
+        if (['body', 'h1', 'h2', 'h3', 'code'].includes(name) && Number.isFinite(value) && value > 0) document.documentElement.style.setProperty(`--doc-${name}`, `${value}px`);
       }
       return true;
     },

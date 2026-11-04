@@ -2,9 +2,9 @@
    white), sizes come from the app's text size (`setStyle`), spacing follows sol `document-typography.css`. */
 :root {
   --doc-body: 15px;
-  --doc-h1: 26px;
-  --doc-h2: 21px;
-  --doc-h3: 17px;
+  --doc-h1: 22px;
+  --doc-h2: 19px;
+  --doc-h3: 16px;
   --doc-code: 13px;
   --ink: #10162b;
   --muted-ink: #596174;
@@ -15,7 +15,7 @@
   color-scheme: light;
 }
 html, body { margin: 0; padding: 0; background: #fff; color: var(--ink); }
-body { font: var(--doc-body)/1.65 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; -webkit-text-size-adjust: 100%; }
+body { font: var(--doc-body)/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; -webkit-text-size-adjust: 100%; }
 #document-root { padding: 4px 2px 48px; }
 .doc-rich-editor .ProseMirror { min-height: 60vh; outline: none; word-wrap: break-word; white-space: pre-wrap; caret-color: var(--primary); }
 .doc-rich-editor .ProseMirror > * + * { margin-top: 0; }
@@ -28,7 +28,12 @@ body { font: var(--doc-body)/1.65 -apple-system, BlinkMacSystemFont, "SF Pro Tex
 .doc-rich-editor .ProseMirror code { font: var(--doc-code) ui-monospace, "SF Mono", Menlo, monospace; background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 6px; }
 .doc-rich-editor .ProseMirror pre { background: var(--code-bg); padding: 0.85em 1em; border-radius: 10px; overflow-x: auto; margin: 0 0 0.75em; }
 .doc-rich-editor .ProseMirror pre code { background: transparent; padding: 0; white-space: pre; }
-.doc-rich-editor .ProseMirror ul, .doc-rich-editor .ProseMirror ol { margin: 0 0 0.75em; padding-left: 1.6em; }
+.doc-rich-editor .ProseMirror ul, .doc-rich-editor .ProseMirror ol { margin: 0 0 0.75em; padding-inline-start: 1.6em; list-style-position: outside; }
+.doc-rich-editor .ProseMirror li { line-height: inherit; }
+.doc-rich-editor .ProseMirror li > :first-child { margin-top: 0; }
+.doc-rich-editor .ProseMirror li > :last-child { margin-bottom: 0; }
+.doc-rich-editor .ProseMirror li + li { margin-top: 0.3em; }
+.doc-rich-editor .ProseMirror li > ul, .doc-rich-editor .ProseMirror li > ol { margin-top: 0.3em; }
 .doc-rich-editor .ProseMirror li > p { margin: 0 0 0.3em; }
 .doc-rich-editor .ProseMirror ul[data-type="taskList"] { list-style: none; padding-left: 0.2em; }
 .doc-rich-editor .ProseMirror ul[data-type="taskList"] li { display: flex; gap: 0.5em; align-items: flex-start; }

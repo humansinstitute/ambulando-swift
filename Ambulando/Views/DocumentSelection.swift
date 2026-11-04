@@ -37,10 +37,11 @@ struct DocumentSelectableText: NSViewRepresentable {
         context.coordinator.parent = self
         let result = NSMutableAttributedString()
         for run in runs {
-            let size: CGFloat = (heading == 0 ? 15 : (heading == 1 ? 25 : 20)) * textScale
+            let sizes = DocumentEditorStyle.sizes()
+            let size = sizes[heading == 0 ? "body" : heading == 1 ? "h1" : heading == 2 ? "h2" : "h3"]!
             var font = run.code ? NSFont.monospacedSystemFont(ofSize: size, weight: .regular) : NSFont.systemFont(ofSize: size, weight: heading > 0 || run.bold ? .semibold : .regular)
             if run.italic { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
-            var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+            var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(Amb.paperInk)]
             if run.underline { attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue }
             if run.strike { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
             if let link = run.link, let url = URL(string: link), (RichLinks.isSafeWeb(url) || (url.scheme == nil && url.host == nil && url.path == "/canvas.html")) {
@@ -56,7 +57,7 @@ struct DocumentSelectableText: NSViewRepresentable {
             }
             result.append(NSAttributedString(string: run.text, attributes: attrs))
         }
-        let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = 5
+        let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = DocumentTypography.lineSpacing
         result.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: result.length))
         if context.coordinator.rendered != result {
             context.coordinator.rendered = result
@@ -70,7 +71,7 @@ struct DocumentSelectableText: NSViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: SelectionTextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width > 0 else { return nil }
         let rect = nsView.attributedString().boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading])
-        return CGSize(width: width, height: max(22, ceil(rect.height)))
+        return CGSize(width: width, height: max(22 * textScale, ceil(rect.height)))
     }
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     final class Coordinator: NSObject, NSTextViewDelegate {

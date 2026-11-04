@@ -11,6 +11,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Document reading and editing (iPhone/iPad build 85, Mac build 76)
+
+Document list markers sit with the first text line, and selectable paragraphs and
+list text share the same type scale. Body headings are restrained; the small serif
+document title stays unchanged. Wrapped and nested lists retain their indent.
+See [typography and checks](docs/document-typography.md). Pushed source and local
+builds are separate from installation and real-account acceptance on Pete's devices.
+
 ## Editable channel name (iPhone/iPad build 84, Mac build 75)
 
 Settings → Scopes & Channels → New channel uses a full-width name input on Mac.

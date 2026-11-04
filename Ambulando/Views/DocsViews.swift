@@ -895,6 +895,7 @@ struct DocumentEditorStatus: View {
 /// Title, lease and save status, pasted uploads, and the editor page, on the white page.
 struct DocumentEditSurface: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Bindable var editor: DocEditorModel
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -937,6 +938,7 @@ struct DocumentEditSurface: View {
             if state == .connected { Task { await editor.reconcileRemote() } }
         }
         .onChange(of: TextScale.shared.factor, initial: true) { _, _ in editor.page?.setStyle(DocumentEditorStyle.sizes()) }
+        .onChange(of: dynamicTypeSize) { _, _ in editor.page?.setStyle(DocumentEditorStyle.sizes()) }
         .onChange(of: model.isUnlocked) { _, unlocked in editor.page?.setEditable(unlocked && !editor.followingRemote && !editor.permissionDenied) }
         .onChange(of: editor.followingRemote) { _, following in editor.page?.setEditable(model.isUnlocked && !following && !editor.permissionDenied) }
         .onChange(of: editor.pageReady) { _, _ in editor.page?.setStyle(DocumentEditorStyle.sizes()) }
@@ -955,12 +957,26 @@ enum TextScaleFactor {
 }
 
 /// Text sizes for the editor page, the same as the reader's at the app's text size.
+enum DocumentTypography {
+    @MainActor static var markerScale: CGFloat { DocumentEditorStyle.sizes()["body"]! / 15 }
+    @MainActor static var lineSpacing: CGFloat { 4 * TextScaleFactor.current }
+    @MainActor static func font(heading: Int = 0) -> Font {
+        #if os(macOS)
+        let sizes = DocumentEditorStyle.sizes()
+        let key = heading == 0 ? "body" : heading == 1 ? "h1" : heading == 2 ? "h2" : "h3"
+        return .system(size: sizes[key]!)
+        #else
+        return .amb(heading == 0 ? .body : heading == 1 ? .title2 : heading == 2 ? .title3 : .headline)
+        #endif
+    }
+}
+
 enum DocumentEditorStyle {
     @MainActor static func sizes() -> [String: CGFloat] {
         #if os(macOS)
-        // The Mac reader's selectable text (DocumentSelection): 15 pt text, 25 pt and 20 pt headings, at the app's scale.
+        // One scale for selectable text, SwiftUI fallback paragraphs, markers and the embedded editor.
         let f = TextScale.shared.factor
-        return ["body": 15 * f, "h1": 25 * f, "h2": 20 * f, "h3": 17 * f, "code": 13 * f]
+        return ["body": 15 * f, "h1": 22 * f, "h2": 19 * f, "h3": 16 * f, "code": 13 * f]
         #else
         func size(_ style: UIFont.TextStyle) -> CGFloat { UIFont.preferredFont(forTextStyle: style).pointSize }
         return ["body": size(.body), "h1": size(.title2), "h2": size(.title3), "h3": size(.headline), "code": size(.footnote)]
