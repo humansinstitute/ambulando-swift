@@ -605,12 +605,15 @@ struct NativeMessageActions: NSViewRepresentable {
         return button
     }
     func updateNSView(_ button: NSButton, context: Context) {
+        MacHangDiagnostics.shared.mark("nativeMenu.update")
         context.coordinator.items = items
-        button.isEnabled = !items.isEmpty
-        button.setAccessibilityIdentifier(identifier)
-        button.setAccessibilityLabel(label)
-        button.setAccessibilityHelp(help)
-        button.identifier = NSUserInterfaceItemIdentifier(identifier)
+        // Avoid AX notifications for unchanged metadata while layout is already resolving AX.
+        // Action closures still refresh on every update; the menu is built from the current items on open.
+        if button.isEnabled != !items.isEmpty { button.isEnabled = !items.isEmpty }
+        if button.accessibilityIdentifier() != identifier { MacHangDiagnostics.shared.mark("nativeMenu.metadataWrite"); button.setAccessibilityIdentifier(identifier) }
+        if button.accessibilityLabel() != label { MacHangDiagnostics.shared.mark("nativeMenu.metadataWrite"); button.setAccessibilityLabel(label) }
+        if button.accessibilityHelp() != help { MacHangDiagnostics.shared.mark("nativeMenu.metadataWrite"); button.setAccessibilityHelp(help) }
+        if button.identifier?.rawValue != identifier { button.identifier = NSUserInterfaceItemIdentifier(identifier) }
     }
 
     final class Coordinator: NSObject {

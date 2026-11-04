@@ -22,6 +22,7 @@ struct AmbulandoMacApp: App {
                 .preferredColorScheme(AppearancePreference(rawValue: appearance)?.colorScheme)
                 .frame(minWidth: 900, minHeight: 600)
                 .onAppear {
+                    MacHangDiagnostics.shared.start()
                     delegate.model.markFirstFrame()
                     delegate.model.sceneDidBecomeActive()
                 }

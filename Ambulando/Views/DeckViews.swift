@@ -223,6 +223,9 @@ struct DeckInboxSnapshot: Sendable, Equatable {
 /// Mark done (review tasks) and the read menu.
 struct DeckInboxCard: View {
     @Environment(AppModel.self) private var model
+    #if os(macOS)
+    @Environment(\.behindModal) private var behindModal
+    #endif
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let workspace: WorkspaceRecord
     let store: LocalStore
@@ -244,8 +247,16 @@ struct DeckInboxCard: View {
     @State private var newDirectScope: ScopeRecord?
 
     var body: some View {
+        #if os(macOS)
+        let _ = MacHangDiagnostics.shared.mark("deck.inbox.body")
+        #endif
         let nav = model.navigation.value
         let context = model.context
+        #if os(macOS)
+        let liveInbox = !behindModal
+        #else
+        let liveInbox = true
+        #endif
         let filtered = DeckActivity.filter(snapshot.value.items, kinds: kinds, query: query)
         let channel = nav.channel(context.channelId)
         DeckCardFrame(title: channel.map { "Inbox: #\(nav.label($0))" } ?? "Inbox", identifier: "inbox") {
@@ -266,7 +277,9 @@ struct DeckInboxCard: View {
         }
         .channelOptionsSheet(channelId: context.channelId, selection: $channelOptions)
         .newDirectMessageSheet(scope: $newDirectScope)
-        .task(id: "\(workspace.id):\(context.encoded()):\(active)") { if active { start(context) } else { snapshot.pause() } }
+        .task(id: "\(workspace.id):\(context.encoded()):\(active):\(liveInbox)") {
+            if active { start(context, liveInbox: liveInbox) } else { snapshot.pause() }
+        }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { refresh(context) } }
         #if os(iOS)
         .fullScreenCover(isPresented: $composingThread, onDismiss: openCreatedThread) { DeckThreadComposer(workspace: workspace, store: store, onCreated: { createdThread = $0 }) }
@@ -473,7 +486,7 @@ struct DeckInboxCard: View {
         model.openFiles(workspace, scopeId: context.scopeId)
     }
 
-    private func start(_ context: WorkContext) {
+    private func start(_ context: WorkContext, liveInbox: Bool) {
         // A new context starts a fresh list with no search, as the web Deck does. Coming back from a record opened here
         // (the task restarts when Deck reappears) keeps the search and how far the list was revealed.
         let key = "\(workspace.id):\(context.encoded())"
@@ -485,8 +498,15 @@ struct DeckInboxCard: View {
         let w = workspace.id, store = store, viewer = model.connection?.signerNpub
         let origin = model.connection.flatMap { try? TowerOrigin($0.origin).description }
         let channelIds = context.scopeId == nil ? nil : model.navigation.value.channels(in: context).map(\.id)
+        #if os(macOS)
+        snapshot.onLoad = { _ in MacHangDiagnostics.shared.mark("deck.inbox.loaded") }
+        #endif
         snapshot.start(store: store, keepingValue: resuming, matches: { key in
-            key.workspaceId == w && [.threads, .messages, .tasks, .docs, .files, .viewStates, .comments, .channels, .agents, .members].contains(key.table)
+            // The Mac Inbox behind a thread retains its place, but does not rebuild its feed/popups
+            // for every incoming reply. Sync and the focused conversation continue normally. Access
+            // invalidation remains live even behind the modal; closing always reloads the current feed.
+            (key.workspaceId == w || key.workspaceId == nil) &&
+                (key.table == .access || (liveInbox && [.threads, .messages, .tasks, .docs, .files, .viewStates, .comments, .channels, .agents, .members].contains(key.table)))
         }) {
             var sources = DeckActivity.Sources()
             async let channels = store.reader.channels(workspaceId: w)
@@ -730,7 +750,12 @@ private struct PinInsertionTarget: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                #if os(macOS)
+                MacHangDiagnostics.shared.mark("pin.geometry")
+                #endif
+                height = $0
+            }
             .overlay(alignment: after == true ? .bottom : .top) {
                 if after != nil {
                     Capsule().fill(Amb.primary.opacity(0.6)).frame(height: 2).allowsHitTesting(false)

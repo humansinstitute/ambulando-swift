@@ -11,6 +11,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Mac responsiveness (Mac build 79)
+
+Divider tracking now avoids repeated workspace-identity hashing and unchanged native menu accessibility writes.
+The Inbox behind an open thread defers ordinary feed-query updates and catches up when the thread closes;
+access invalidation, sync, live activity and drafts remain active. Bounded local diagnostics help investigate a
+recurrence. See [responsiveness checks and diagnostics](docs/mac-hang-diagnostics.md). These are measured
+mitigations; source delivery does not establish installation or resolution of every persistent hang.
+
 ## Start a direct message (iPhone/iPad build 87, Mac build 78)
 
 In **DMs → All channels**, Deck's Inbox **+** (and the iPhone floating **+**) opens

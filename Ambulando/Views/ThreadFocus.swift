@@ -367,8 +367,18 @@ private struct ThreadFocusPanel: View {
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Amb.background)
-        .onPreferenceChange(ThreadTitleKey.self) { title = $0 }
-        .onPreferenceChange(ThreadMenuKey.self) { menu = $0 }
+        .onPreferenceChange(ThreadTitleKey.self) {
+            #if os(macOS)
+            MacHangDiagnostics.shared.mark("thread.titlePreference")
+            #endif
+            title = $0
+        }
+        .onPreferenceChange(ThreadMenuKey.self) {
+            #if os(macOS)
+            MacHangDiagnostics.shared.mark("thread.menuPreference")
+            #endif
+            menu = $0
+        }
         // A mentioned conversation replaces this one; any other record closes the thread and opens in its section.
         .environment(\.openMention, OpenMentionAction { [model] kind, id in
             if kind.lowercased() == "thread" {

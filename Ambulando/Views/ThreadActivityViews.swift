@@ -35,6 +35,9 @@ struct ThreadActivityStrip: View {
         let _ = scenePhase
         let origin = model.connection.flatMap { try? TowerOrigin($0.origin).description }
         TimelineView(ActivitySchedule(items: snapshot.value.items.map(\.record), origin: origin)) { _ in
+            #if os(macOS)
+            let _ = MacHangDiagnostics.shared.mark("activity.render")
+            #endif
             let now = ServerClock.shared.now(origin: origin)
             let visible = Self.visible(snapshot.value.items, now: now)
             VStack(spacing: 6) {

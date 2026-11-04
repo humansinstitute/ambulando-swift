@@ -30,7 +30,7 @@ final class MacRegressionSessionStore: MacRegressionMemory<SessionKey>, SessionK
 enum MacThreadRegression {
     private static var restoreFixtureClipboard: (() -> Void)?
     static func run(model: AppModel) async {
-        DispatchQueue.global().asyncAfter(deadline: .now() + 180) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + (ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDividerSoak") ? 900 : 180)) {
             fputs("FAIL: Mac interaction regression timed out\n", stderr)
             exit(2)
         }
@@ -52,7 +52,14 @@ enum MacThreadRegression {
         try? await Task.sleep(for: .seconds(2))
         // Runs across send/accept/render as well as the explicit sizing checks. The independent
         // process watchdog above still terminates a main actor that never resumes.
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacHangDiagnosticCheck") {
+            do { try await hangDiagnosticCheck(); exit(0) }
+            catch { print("FAIL diagnostic: \(error)"); fflush(stdout); exit(1) }
+        }
         let heartbeat = Task { @MainActor in
+            // The divider check owns a common/eventTracking Timer heartbeat: async tasks need not
+            // be serviced while NSSplitView holds its nested tracking loop.
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDividerCheck") { return }
             while !Task.isCancelled {
                 let start = ContinuousClock.now
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
@@ -68,6 +75,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDividerCheck") {
+                try await dividerCheck(window, model: model)
+                exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacAgentActivityCheck") {
                 try await agentActivityCheck(window, model: model)
                 print("PASS: live public commentary, local lease expiry to Stopped responding, draft kept"); fflush(stdout); exit(0)

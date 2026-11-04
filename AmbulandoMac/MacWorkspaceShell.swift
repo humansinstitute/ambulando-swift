@@ -14,6 +14,7 @@ struct MacWorkspaceShell: View {
     @AppStorage(AppMode.contextPreference) private var showContext = false
 
     var body: some View {
+        let _ = MacHangDiagnostics.shared.mark("shell.body")
         @Bindable var ui = ui
         // Keep split-view membership and the detail hosting view stable while the sidebar is hidden.
         // Removing/reinserting a child during a resize churns AppKit's constraint hierarchy and the live naplets.

@@ -341,6 +341,9 @@ struct ThreadView: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        let _ = MacHangDiagnostics.shared.mark("thread.body")
+        #endif
         VStack(spacing: 0) {
         ScrollView {
             ThreadMessageStack {
@@ -456,6 +459,14 @@ struct ThreadView: View {
         let selectedStart = anchor.flatMap { snapshot.value.order.firstIndex(of: $0) }
         let fallbackStart = selectedStart ?? snapshot.value.windowStart
         let fallback = selectedStart.map { Array(snapshot.value.order.dropFirst($0)) } ?? snapshot.value.messages.map(\.id)
+        #if os(macOS)
+        MacHangDiagnostics.shared.mark("thread.query.start")
+        snapshot.onLoad = { value in
+            MacHangDiagnostics.shared.mark("thread.query.loaded")
+            MacHangDiagnostics.shared.gauge("thread.materializedRows", value.messages.count)
+            MacHangDiagnostics.shared.gauge("thread.historyRows", value.order.count)
+        }
+        #endif
         snapshot.start(store: store, keepingValue: true, matches: { key in
             chatMatches(target.workspaceId)(key) && key.affectsThread(workspaceId: target.workspaceId, channelId: target.channelId, threadId: threadId)
                 || (key.table == .access && (key.workspaceId == nil || key.workspaceId == target.workspaceId))

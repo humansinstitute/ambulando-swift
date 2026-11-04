@@ -11,13 +11,16 @@ final class EnabledWorkspaceEntry: Identifiable {
     var enabled = false
     var collapsed = false
     var colour: WorkspaceColour = .blue
-    nonisolated var id: String { boundary.id }
+    // The boundary is immutable. SwiftUI/AX asks for identity repeatedly during divider tracking;
+    // hashing it here on every lookup needlessly re-enters SHA256 in the UI hot path.
+    nonisolated let id: String
     var navigation: NavigationSnapshot { query.value }
     @ObservationIgnored let query = LiveQuery<NavigationSnapshot>(initial: NavigationSnapshot())
     @ObservationIgnored var runtime: NativeWorkspaceRuntime?
 
     init(connection: ConnectionRecord, workspace: WorkspaceRecord) throws {
         boundary = try WorkspaceBoundary(connection: connection, workspace: workspace)
+        id = boundary.id
         self.connection = connection; self.workspace = workspace
     }
 
