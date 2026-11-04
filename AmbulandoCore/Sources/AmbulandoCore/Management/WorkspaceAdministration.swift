@@ -208,6 +208,7 @@ extension ScopeChannelManager {
         }
         let body = try request.2.map { try JSONSerialization.jsonObject(with: $0) as! [String: Any] }
         let result = try await send(connection, workspace, method: request.0, path: try TowerAPI.base(workspace.id) + request.1, body: body, operation: .readPermissions)
+        if case .addMember(let npub, _) = command { try await store.writer.confirmMemberRemoval(workspace: workspace.id, npub: npub, removed: false) }
         if case .profile = command {
             try await store.writer.confirmAdministrationProfile(connection: connection.id, workspace: workspace.id, submitted: request.2 ?? Data(), returned: JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]))
         }
@@ -217,7 +218,8 @@ extension ScopeChannelManager {
 extension StoreReader {
     public func administrationRows(connection: String, workspace: String, list: AdministrationList) throws -> [AdministrationRow] {
         guard let value = try state(list.key(connection: connection, workspace: workspace)) else { return [] }
-        return try JSONDecoder().decode([AdministrationRow].self, from: Data(value.utf8))
+        let removed = try removedMemberNpubs(workspace: workspace)
+        return try JSONDecoder().decode([AdministrationRow].self, from: Data(value.utf8)).filter { list != .members || !removed.contains($0.fields["npub"] ?? "") }
     }
 }
 
@@ -419,5 +421,126 @@ extension ScopeChannelManager {
         let scopes = try await api.scopes(workspaceId: workspace.id, appNpub: workspace.appNpub)
         try await store.writer.upsertScopes(workspaceId: workspace.id, scopes, complete: true)
         return scopes.first { $0.name.caseInsensitiveCompare(name.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame }
+    }
+}
+
+/// A preview is bound to the complete connection/workspace and exact actor. Only Tower can issue its token.
+public struct WorkspaceMemberRemoval: Sendable {
+    let connection: ConnectionRecord
+    let workspace: WorkspaceRecord
+    public let actor: String
+    public let npub: String
+    public let token: String
+    public let directGrants: [AdministrationRow]
+    public let inheritedGrants: [AdministrationRow]
+    public let groups: [AdministrationRow]
+    public let subscriptionCount: Int
+    public let agentManager: Bool
+    public let consequences: [String]
+}
+
+extension ScopeChannelManager {
+    public func previewMemberRemoval(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, actor: String, npub: String) async throws -> WorkspaceMemberRemoval {
+        guard NostrKeys.isValidNpub(npub), npub != connection.signerNpub, npub != workspace.ownerNpub else {
+            throw ManagementError.forbidden("The workspace owner and your own membership cannot be removed.")
+        }
+        let path = try TowerAPI.base(workspace.id) + "/members/" + TowerAPI.uuid(actor)
+        let access = try await send(connection, workspace, method: "GET", path: path + "/access", operation: .readPermissions)
+        try Self.checkRemovalIdentity(access["actor"], actor: actor, npub: npub)
+        guard access["can_administer"] as? Bool == true else { throw ManagementError.forbidden("Tower requires workspace owner access to remove a member.") }
+        let result = try await send(connection, workspace, method: "POST", path: path + "/removal-preview", body: [:], operation: .readPermissions)
+        guard let preview = result["preview"] as? [String: Any] else { throw ManagementError.unexpected("Tower did not return a removal preview.") }
+        try Self.checkRemovalIdentity(preview["actor"], actor: actor, npub: npub)
+        guard preview["blocked_reason"] == nil || preview["blocked_reason"] is NSNull,
+              let token = preview["confirmation_token"] as? String, !token.isEmpty else {
+            throw ManagementError.forbidden("Tower blocked removal. Refresh access before continuing.")
+        }
+        return WorkspaceMemberRemoval(connection: connection, workspace: workspace, actor: actor, npub: npub, token: token,
+                                      directGrants: (preview["direct_grants"] as? [[String: Any]] ?? []).map(AdministrationRow.init),
+                                      inheritedGrants: (preview["inherited_grants"] as? [[String: Any]] ?? []).map(AdministrationRow.init),
+                                      groups: (preview["groups"] as? [[String: Any]] ?? []).map(AdministrationRow.init),
+                                      subscriptionCount: (preview["subscriptions"] as? [[String: Any]] ?? []).count,
+                                      agentManager: preview["agent_manager"] as? Bool ?? false,
+                                      consequences: preview["consequences"] as? [String] ?? [])
+    }
+
+    private static func checkRemovalIdentity(_ value: Any?, actor: String, npub: String) throws {
+        guard let value = value as? [String: Any], value["id"] as? String == actor, value["npub"] as? String == npub else {
+            throw ManagementError.unexpected("Tower returned a different member identity. Refresh the member list.")
+        }
+    }
+
+    public func removeMember(_ preview: WorkspaceMemberRemoval, confirmNpub: String) async throws {
+        guard confirmNpub == preview.npub, preview.npub != preview.connection.signerNpub,
+              preview.npub != preview.workspace.ownerNpub, !preview.token.isEmpty else {
+            throw ManagementError.invalid("Enter the exact full npub from the removal preview.")
+        }
+        let result = try await send(preview.connection, preview.workspace, method: "POST",
+                           path: try TowerAPI.base(preview.workspace.id) + "/members/" + TowerAPI.uuid(preview.actor) + "/remove",
+                           body: ["confirmation_token": preview.token, "confirm_npub": confirmNpub], operation: .readPermissions)
+        guard result["removed"] as? Bool == true else {
+            throw ManagementError.unexpected("Tower did not confirm removal. Refresh membership before trying again; the request may have reached Tower.")
+        }
+        try Self.checkRemovalIdentity(result["actor"], actor: preview.actor, npub: preview.npub)
+        do {
+            try await store.writer.confirmMemberRemoval(workspace: preview.workspace.id, npub: preview.npub)
+        } catch {
+            throw ManagementError.unexpected("Tower removed this membership, but this device could not save the updated directory. Reconnect and refresh before selecting recipients. Do not repeat removal.")
+        }
+    }
+}
+
+extension StoreReader {
+    public func memberDirectoryRead(workspace: String) throws -> MemberDirectoryRead {
+        MemberDirectoryRead(revision: try state("members.removal-revision.v1:" + workspace))
+    }
+
+    /// Durable safety markers survive stale hydration. Only post-removal authoritative reads or enrolment clear them.
+    public func removedMemberNpubs(workspace: String) throws -> Set<String> {
+        guard let value = try state("members.removed.v1:" + workspace) else { return [] }
+        return Set(try JSONDecoder().decode([String].self, from: Data(value.utf8)))
+    }
+}
+
+extension StoreWriter {
+    public func confirmMemberRemoval(workspace: String, npub: String, removed: Bool = true) async throws {
+        let key = "members.removed.v1:" + workspace
+        let s = try db.prepare("SELECT value FROM app_state WHERE key = ?")
+        try s.bind([.text(key)])
+        var values: Set<String> = []
+        if try s.step(), let value = s.text(0) { values = Set(try JSONDecoder().decode([String].self, from: Data(value.utf8))) }
+        if removed { values.insert(npub) } else { values.remove(npub) }
+        try db.transaction {
+            try writeMemberRemovalState(workspace: workspace, npubs: values)
+        }
+        await emit([ChangeKey(.members, workspace), ChangeKey(.agents, workspace), ChangeKey(.appState)])
+    }
+}
+
+/// Captured before a network directory read, never reconstructed from the returned rows.
+public struct MemberDirectoryRead: Sendable {
+    let revision: String?
+}
+
+extension StoreWriter {
+    private func writeMemberRemovalState(workspace: String, npubs: Set<String>) throws {
+        let write = try db.prepare("INSERT INTO app_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        try write.run([.text("members.removed.v1:" + workspace), .text(String(decoding: JSONEncoder().encode(npubs.sorted()), as: UTF8.self))])
+        try write.run([.text("members.removal-revision.v1:" + workspace), .text(UUID().uuidString)])
+    }
+
+    /// Tower physically removes memberships. A member in a fresh response started after the latest removal is
+    /// authoritative re-enrolment evidence; a response already in flight when removal occurred cannot clear it.
+    func reconcileMemberEnrolment(workspace: String, npubs: Set<String>, read: MemberDirectoryRead) throws {
+        let revision = try db.prepare("SELECT value FROM app_state WHERE key = ?")
+        try revision.bind([.text("members.removal-revision.v1:" + workspace)])
+        let current = try revision.step() ? revision.text(0) : nil
+        guard current == read.revision else { return }
+        let state = try db.prepare("SELECT value FROM app_state WHERE key = ?")
+        try state.bind([.text("members.removed.v1:" + workspace)])
+        guard try state.step(), let value = state.text(0) else { return }
+        let removed = Set(try JSONDecoder().decode([String].self, from: Data(value.utf8)))
+        let remaining = removed.subtracting(npubs)
+        if remaining != removed { try writeMemberRemovalState(workspace: workspace, npubs: remaining) }
     }
 }

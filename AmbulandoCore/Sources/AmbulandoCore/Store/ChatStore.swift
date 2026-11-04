@@ -311,15 +311,16 @@ extension StoreWriter {
     }
 
     /// The directory is small and authoritative: replace it whole.
-    public func replaceMembers(workspaceId: String, _ records: [MemberRecord]) async throws {
+    public func replaceMembers(workspaceId: String, _ records: [MemberRecord], read: MemberDirectoryRead? = nil) async throws {
         try db.transaction {
+            if let read { try reconcileMemberEnrolment(workspace: workspaceId, npubs: Set(records.filter { $0.workspaceId == workspaceId }.map(\.npub)), read: read) }
             try db.prepare("DELETE FROM members WHERE workspace_id = ?").run([.text(workspaceId)])
             let s = try db.prepare("INSERT OR REPLACE INTO members(workspace_id, npub, actor_id, kind, display_name) VALUES(?,?,?,?,?)")
             for r in records where r.workspaceId == workspaceId {
                 try s.run([.text(workspaceId), .text(r.npub), .text(r.actorId), r.kind.sql, r.displayName.sql])
             }
         }
-        await emit([ChangeKey(.members, workspaceId)])
+        await emit([ChangeKey(.members, workspaceId), ChangeKey(.appState)])
     }
 
     /// Removes local messages Tower no longer lists, but only inside the range a completed catch-up actually covered:
@@ -491,11 +492,12 @@ extension StoreReader {
                      attachments: JSONText.attachments(s.text(3)))
     }
 
-    public func members(workspaceId: String) throws -> [MemberRecord] {
+    public func members(workspaceId: String, includingRemoved: Bool = false) throws -> [MemberRecord] {
         let s = try db.prepare("SELECT npub, actor_id, kind, display_name FROM members WHERE workspace_id = ? ORDER BY display_name COLLATE NOCASE, npub")
         try s.bind([.text(workspaceId)])
         var rows: [MemberRecord] = []
-        while try s.step() { rows.append(MemberRecord(workspaceId: workspaceId, actorId: s.text(1)!, npub: s.text(0)!, kind: s.text(2), displayName: s.text(3))) }
+        let removed = includingRemoved ? Set<String>() : try removedMemberNpubs(workspace: workspaceId)
+        while try s.step() { if removed.contains(s.text(0)!) { continue }; rows.append(MemberRecord(workspaceId: workspaceId, actorId: s.text(1)!, npub: s.text(0)!, kind: s.text(2), displayName: s.text(3))) }
         return rows
     }
 

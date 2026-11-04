@@ -185,7 +185,7 @@ public struct PeopleDirectory: Sendable, Equatable {
     /// A workspace agent (Tower `workspace_agents`, or a member of kind agent).
     public func isAgent(_ npub: String) -> Bool { agentNpubs.contains(npub) }
 
-    public init(members: [MemberRecord], agents: [String: AgentInfo], profiles: [ProfileRecord], extra: [String] = []) {
+    public init(members: [MemberRecord], agents: [String: AgentInfo], profiles: [ProfileRecord], extra: [String] = [], removed: Set<String> = []) {
         let profileByNpub = Dictionary(profiles.map { ($0.npub, $0) }, uniquingKeysWith: { a, b in a.isNewer(than: b) ? a : b })
         var memberName: [String: String] = [:]
         agentNpubs = Set(agents.keys).union(members.filter { $0.kind == "agent" }.map(\.npub))
@@ -196,6 +196,8 @@ public struct PeopleDirectory: Sendable, Equatable {
             memberNpubs.insert(m.npub)
             if let name = PersonNamePolicy.usable(m.displayName) { memberName[m.npub] = name }
         }
+        memberNpubs.subtract(removed)
+        agentNpubs.subtract(removed)
         let everyone = Set(members.map(\.npub)).union(agents.keys).union(profileByNpub.keys).union(extra)
         for npub in everyone {
             let profile = profileByNpub[npub]

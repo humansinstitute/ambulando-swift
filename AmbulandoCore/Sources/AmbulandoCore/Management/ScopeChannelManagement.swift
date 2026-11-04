@@ -92,6 +92,9 @@ public struct ScopeChannelManager: Sendable {
     public func createDirectMessage(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, scopeId: String,
                                     participantNpub: String) async throws -> ChannelRecord {
         guard NostrKeys.isValidNpub(participantNpub) else { throw ManagementError.invalid("Choose a member to message.") }
+        guard try await !store.reader.removedMemberNpubs(workspace: workspace.id).contains(participantNpub) else {
+            throw ManagementError.forbidden("This identity has been removed from this workspace. Existing conversations and history remain available.")
+        }
         let participants = Array(Set([connection.signerNpub, participantNpub])).sorted()
         // Never create a second conversation for the same participants: reuse what this workspace already holds.
         let known = try await store.reader.channels(workspaceId: workspace.id)

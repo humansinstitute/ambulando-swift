@@ -3,6 +3,123 @@ import XCTest
 @testable import AmbulandoCore
 
 final class WorkspaceAdministrationTests: XCTestCase {
+    private func removalNpub() throws -> String {
+        try XCTUnwrap(NostrKeys.npub(publicKeyHex: String(repeating: "2", count: 64)))
+    }
+
+    func testRemovalProtectionAndIdentityMismatchNeverMutate() async throws {
+        let h = try await ChatHarness.make()
+        let other = try removalNpub()
+        let transport = StubTransport { request in
+            XCTAssertTrue(request.url!.path.hasSuffix("/access"))
+            return (200, ["can_administer": true, "actor": ["id": Fixtures.scopeA, "npub": TestKeys.npub]])
+        }
+        let manager = ScopeChannelManager(store: h.store, identity: h.identity, transport: transport)
+        do { _ = try await manager.previewMemberRemoval(h.connection, h.workspace, actor: Fixtures.scopeA, npub: h.connection.signerNpub); XCTFail("self") } catch {}
+        XCTAssertTrue(transport.recorded.isEmpty)
+        var owned = try JSONSerialization.jsonObject(with: h.workspace.raw) as! [String: Any]
+        var identity = owned["identity"] as! [String: Any]
+        identity["workspace_owner_npub"] = other; owned["identity"] = identity
+        let protected = try WorkspaceRecord(raw: Fixtures.json(owned))
+        do { _ = try await manager.previewMemberRemoval(h.connection, protected, actor: Fixtures.scopeA, npub: other); XCTFail("owner") } catch {}
+        XCTAssertTrue(transport.recorded.isEmpty)
+        do { _ = try await manager.previewMemberRemoval(h.connection, h.workspace, actor: Fixtures.scopeA, npub: other); XCTFail("mismatch") } catch {}
+        XCTAssertEqual(transport.recorded.count, 1)
+    }
+
+    func testRemovalAccessDenialBlockedPreviewAndMutationFailureKeepMembership() async throws {
+        for failure in ["access", "blocked", "write", "offline", "unconfirmed", "wrong-identity"] {
+            let h = try await ChatHarness.make()
+            let npub = try removalNpub()
+            let actor: [String: String] = ["id": Fixtures.scopeA, "npub": npub]
+            let transport = StubTransport { request in
+                if request.url!.path.hasSuffix("/access") { return (200, ["actor": actor, "can_administer": failure != "access"]) }
+                if request.url!.path.hasSuffix("/removal-preview") {
+                    var preview: [String: Any] = ["actor": actor, "confirmation_token": "token"]
+                    if failure == "blocked" { preview["blocked_reason"] = "cannot_remove_owner" }
+                    return (200, ["preview": preview])
+                }
+                if failure == "offline" { throw URLError(.notConnectedToInternet) }
+                if failure == "unconfirmed" { return (200, ["removed": false, "actor": actor]) }
+                if failure == "wrong-identity" { return (200, ["removed": true, "actor": ["id": Fixtures.scopeB, "npub": npub]]) }
+                return (403, ["code": "permission_denied"])
+            }
+            let manager = ScopeChannelManager(store: h.store, identity: h.identity, transport: transport)
+            do {
+                let preview = try await manager.previewMemberRemoval(h.connection, h.workspace, actor: Fixtures.scopeA, npub: npub)
+                try await manager.removeMember(preview, confirmNpub: npub)
+                XCTFail("must refuse")
+            } catch {}
+            let removed = try await h.store.reader.removedMemberNpubs(workspace: h.workspace.id)
+            XCTAssertTrue(removed.isEmpty)
+            XCTAssertEqual(transport.recorded.count, failure == "access" ? 1 : failure == "blocked" ? 2 : 3)
+        }
+    }
+
+    func testAcknowledgedRemovalSurvivesStaleHydrationAndPreservesHistoricalIdentity() async throws {
+        let h = try await ChatHarness.make()
+        let npub = try removalNpub()
+        let member = MemberRecord(workspaceId: h.workspace.id, actorId: Fixtures.scopeA, npub: npub, kind: "agent", displayName: "Historical name")
+        try await h.store.writer.replaceMembers(workspaceId: h.workspace.id, [member])
+        let oldRead = try await h.store.reader.memberDirectoryRead(workspace: h.workspace.id)
+        let history = h.tower.seed(channel: Fixtures.channel1, body: "@[Historical name](mention:agent:\(npub))", sender: npub)
+        let message = try MessageRecord(raw: Fixtures.json(history))
+        try await h.store.writer.upsertMessages([message])
+        let actor: [String: String] = ["id": Fixtures.scopeA, "npub": npub]
+        let transport = StubTransport { request in
+            XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Nostr ") == true)
+            if request.url!.path.hasSuffix("/access") { return (200, ["actor": actor, "can_administer": true]) }
+            if request.url!.path.hasSuffix("/removal-preview") { return (200, ["preview": ["actor": actor, "confirmation_token": "exact-token", "direct_grants": [["id": Fixtures.scopeA, "permission": "channel.read"]], "groups": [["id": Fixtures.scopeB, "name": "Editors"]], "subscriptions": [["manager_actor_id": Fixtures.scopeA]], "agent_manager": true, "consequences": ["Historical content is preserved"]]]) }
+            XCTAssertTrue(request.url!.path.hasSuffix("/remove")); XCTAssertEqual(request.httpMethod, "POST")
+            let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: String]
+            XCTAssertEqual(body, ["confirmation_token": "exact-token", "confirm_npub": npub])
+            return (200, ["removed": true, "actor": actor])
+        }
+        let manager = ScopeChannelManager(store: h.store, identity: h.identity, transport: transport)
+        let preview = try await manager.previewMemberRemoval(h.connection, h.workspace, actor: Fixtures.scopeA, npub: npub)
+        XCTAssertEqual(preview.directGrants.count, 1); XCTAssertEqual(preview.groups.first?.title, "Editors")
+        XCTAssertEqual(preview.subscriptionCount, 1); XCTAssertTrue(preview.agentManager)
+        XCTAssertEqual(preview.consequences, ["Historical content is preserved"])
+        do { try await manager.removeMember(preview, confirmNpub: npub + " "); XCTFail("exact confirmation") } catch {}
+        XCTAssertEqual(transport.recorded.count, 2)
+        try await manager.removeMember(preview, confirmNpub: npub)
+        // A refresh started before the removal may still return the old member.
+        try await h.store.writer.replaceMembers(workspaceId: h.workspace.id, [member], read: oldRead)
+        let choices = try await h.store.reader.directoryMembers(workspaceId: h.workspace.id)
+        XCTAssertTrue(choices.isEmpty)
+        let people = try await h.store.reader.people(workspaceId: h.workspace.id)
+        XCTAssertEqual(people.name(npub), "Historical name")
+        XCTAssertFalse(people.memberNpubs.contains(npub)); XCTAssertFalse(people.isAgent(npub))
+        let kept = try await h.store.reader.members(workspaceId: h.workspace.id, includingRemoved: true)
+        XCTAssertEqual(kept.count, 1)
+        let other = try await h.store.reader.removedMemberNpubs(workspace: Fixtures.scopeB)
+        XCTAssertTrue(other.isEmpty)
+        do { _ = try await manager.createDirectMessage(h.connection, h.workspace, scopeId: Fixtures.scopeA, participantNpub: npub); XCTFail("removed DM") } catch {}
+        XCTAssertEqual(transport.recorded.count, 3)
+        let reopened = try LocalStore(directory: URL(fileURLWithPath: h.store.path).deletingLastPathComponent())
+        let durable = try await reopened.reader.removedMemberNpubs(workspace: h.workspace.id)
+        XCTAssertTrue(durable.contains(npub))
+        let preserved = try await reopened.reader.message(workspaceId: h.workspace.id, id: message.id)
+        XCTAssertEqual(preserved?.raw, message.raw)
+        let recent = try await reopened.reader.recentMentions(workspaceId: h.workspace.id, senderNpub: npub)
+        XCTAssertTrue(recent.isEmpty)
+        // A failed follow-up read never reverses the acknowledged, locally saved removal.
+        let offline = ScopeChannelManager(store: h.store, identity: h.identity, transport: StubTransport { _ in throw URLError(.notConnectedToInternet) })
+        do { try await offline.refreshAdministration(h.connection, h.workspace, list: .members); XCTFail("offline") } catch {}
+        let stillRemoved = try await h.store.reader.directoryMembers(workspaceId: h.workspace.id)
+        XCTAssertTrue(stillRemoved.isEmpty)
+        let newRead = try await h.store.reader.memberDirectoryRead(workspace: h.workspace.id)
+        // An authoritative read started after removal can recover a genuine enrolment on another device.
+        try await h.store.writer.replaceMembers(workspaceId: h.workspace.id, [member], read: newRead)
+        let enrolled = try await h.store.reader.directoryMembers(workspaceId: h.workspace.id)
+        XCTAssertEqual(enrolled.map(\.npub), [npub])
+        // A second removal has a new revision: even a read started after the first removal is now stale.
+        try await h.store.writer.confirmMemberRemoval(workspace: h.workspace.id, npub: npub)
+        try await h.store.writer.replaceMembers(workspaceId: h.workspace.id, [member], read: newRead)
+        let removedAgain = try await h.store.reader.directoryMembers(workspaceId: h.workspace.id)
+        XCTAssertTrue(removedAgain.isEmpty)
+    }
+
     func testRealWriteShapesAndNarrowGrantBodies() throws {
         func body(_ command: AdministrationCommand, method: String, path: String) throws -> [String: Any] {
             let request = try command.request()

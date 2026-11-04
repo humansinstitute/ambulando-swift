@@ -1283,9 +1283,9 @@ final class AppModel {
             async let order = store.reader.state(orderKey)
             async let collapsed = store.reader.state(collapsedKey)
             async let unread = store.reader.unreadChannelIds(workspaceId: workspaceId)
-            async let members = store.reader.directoryMembers(workspaceId: workspaceId)
+            async let people = store.reader.people(workspaceId: workspaceId)
             let groups = SidebarNavigation.groups(scopes: try await scopes, channels: try await channels, personalOrder: ScopeOrdering.decode(try await order))
-            let names = Dictionary(try await members.map { ($0.npub, $0.label) }, uniquingKeysWith: { a, _ in a })
+            let names = try await people.names
             var labels: [String: String] = [:]
             for channel in groups.flatMap(\.channels) { labels[channel.id] = SidebarNavigation.label(channel, viewerNpub: viewer, names: names) }
             return NavigationSnapshot(workspaceId: workspaceId, groups: groups, collapsed: Set(ScopeOrdering.decode(try await collapsed)),

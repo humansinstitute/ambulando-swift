@@ -150,7 +150,7 @@ extension StoreReader {
     /// Everyone the workspace knows, resolved for display (see `PeopleDirectory`). Cheap enough to run with every chat
     /// snapshot: three bounded, indexed reads.
     public func people(connectionId: String?, workspaceId: String) throws -> PeopleDirectory {
-        let members = try self.members(workspaceId: workspaceId)
+        let members = try self.members(workspaceId: workspaceId, includingRemoved: true)
         var agents: [String: PeopleDirectory.AgentInfo] = [:]
         let a = try db.prepare("SELECT agent_npub, display_name, raw FROM workspace_agents WHERE workspace_id = ? ORDER BY sort_order LIMIT 500")
         try a.bind([.text(workspaceId)])
@@ -160,7 +160,7 @@ extension StoreReader {
             agents[npub] = .init(name: a.text(1) ?? "", avatarURL: raw?["avatar_url"] as? String)
         }
         let profiles = try connectionId.map { try self.profiles(connectionId: $0) } ?? []
-        return PeopleDirectory(members: members, agents: agents, profiles: profiles)
+        return PeopleDirectory(members: members, agents: agents, profiles: profiles, removed: try removedMemberNpubs(workspace: workspaceId))
     }
 
     /// `people(connectionId:workspaceId:)` for the connection the workspace belongs to (screens that only know the

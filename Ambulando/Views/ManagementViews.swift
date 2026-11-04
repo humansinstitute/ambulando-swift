@@ -207,6 +207,14 @@ struct NewChannelSheet: View {
             .task {
                 if isDirect { await loadDirectory() } else { await loadAccessRecipients() }
             }
+            .task {
+                guard isDirect, let store = model.store, let workspace = model.selectedWorkspace else { return }
+                let changes = await store.changes.stream()
+                for await keys in changes {
+                    guard !Task.isCancelled else { return }
+                    if keys.contains(where: { $0.table == .members && $0.workspaceId == workspace.id }) { await readDirectory() }
+                }
+            }
             .onChange(of: model.selectedWorkspaceBoundary) { _, _ in dismiss() }
             .onChange(of: model.connection?.id) { _, _ in dismiss() }
         }
@@ -243,6 +251,7 @@ struct NewChannelSheet: View {
               model.selectedWorkspace?.id == workspace.id, model.connection?.id == connection.id else { return }
         // Reassigning equal data can dismiss the system Picker while its menu is open.
         if members != rows { members = rows }
+        if let selected = person, !rows.contains(where: { $0.npub == selected }) { person = nil }
         let state = status ?? model.syncStatus
         directoryLoading = state.running.contains(directoryKey) || state.queued.contains(directoryKey)
         if !directoryLoading, let error = state.errors[directoryKey] {
@@ -274,17 +283,16 @@ struct NewChannelSheet: View {
 
     private func create() {
         let scopeId = scope.id, name = name, description = description, prompt = prompt, grants = grants
-        if isDirect, let person {
-            let mine = model.connection?.signerNpub ?? ""
-            if let existing = DirectMessagePlanner.existing(in: model.navigation.value.groups.flatMap(\.channels), participants: [mine, person]) {
-                onCreated(existing); dismiss(); return
-            }
-        }
+        let expectedWorkspace = scope.workspaceId, expectedConnection = model.connection?.id
+        guard !isDirect || person != nil else { return }
         guard !phase.isWorking else { return }
         endEditing(); phase = .working(isDirect ? "Opening the conversation…" : "Creating the channel…")
         let person = person
         Task {
             let result = await model.manage { manager, connection, workspace in
+                guard workspace.id == expectedWorkspace, connection.id == expectedConnection else {
+                    throw ManagementError.invalid("The workspace changed. Reopen the recipient picker.")
+                }
                 if let person {
                     return try await manager.createDirectMessage(connection, workspace, scopeId: scopeId, participantNpub: person)
                 }

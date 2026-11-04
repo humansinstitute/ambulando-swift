@@ -93,9 +93,10 @@ extension WorkspaceSync {
         await engine.enqueue("directory:\(workspace.id)", priority: priority, force: force) {
             try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
+            let read = try await sync.store.reader.memberDirectoryRead(workspace: workspace.id)
             let members = try await api.members(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
-            try await sync.store.writer.replaceMembers(workspaceId: workspace.id, members)
+            try await sync.store.writer.replaceMembers(workspaceId: workspace.id, members, read: read)
             let order = try await api.scopeOrder(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
             let encoded = String(decoding: try JSONEncoder().encode(order), as: UTF8.self)

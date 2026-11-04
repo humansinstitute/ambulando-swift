@@ -33,7 +33,7 @@ No owner impersonation, server authority changes, private-key discovery, cache p
 | Managed app activation | admin or explicit selected delegation, server exact filters | App Management | Apps & Integrations / Activate | User-consented HTTPS Autopilot catalog; POST Tower intent then signed Autopilot process; intent, installation and request ids persisted for recovery; no automatic re-create after claim failure |
 | Publishing installation add/edit/destinations/origins | workspace administration; server owner/step-up | App Management | Apps & Integrations / Publishing | GET/PUT wapp-publishing-grants; multiple explicit destinations; replacement consequences shown; missing old destinations block silent omission |
 | Publishing disable/revoke/rotate | same; server step-up preserved | App Management | Publishing row actions / public-key rotation | POST disable/revoke/rotate; no private key handling; rotation nonce/expiry follows web contract |
-| Group rename/delete; general workspace member removal/promotion | unsupported by current PG web adapter | Groups & Members | No unsupported control | Legacy encrypted group APIs are not portable PG contracts; no false parity claim |
+| Group rename/delete; general workspace role promotion | unsupported by current PG web adapter | Groups & Members | No unsupported control | Legacy encrypted group APIs are not portable PG contracts; no false parity claim |
 | Managed app uninstall/runtime teardown | intentionally owner-only, additional approval | App Management | No working uninstall button | Revocation removes authority; it is not proof of runtime teardown. Existing web uninstall is explanatory only |
 | Personal appearance, optional sections, notifications | personal/device | Deck / Notifications | Settings | Existing native controls preserved; web-specific Deck layout and Web Push settings remain distinct |
 | Tower/NStack connection, retry and diagnostics | device identity | Connection & Diagnostics | Settings / Connection, Sync, Diagnostics | Existing HTTPS connection flow retained; native FIPS and browser-specific transports remain unavailable |
@@ -132,3 +132,30 @@ The Core management tests cover candidate eligibility, participant payload and c
 UI regression `testNewDirectMessageFromToolbarAndSidebarReusesTheConversation` covers selecting DMs, toolbar New,
 people/agent choices, sidebar New and reopening one conversation. Fixture checks do not establish real Tower
 acceptance or installation on a physical device. Android remains deferred.
+
+## Remove a workspace identity (iPhone/iPad 82, Mac 73)
+
+Manage Workspace → Members → Remove from workspace opens the selected identity and workspace.
+Preview checks Tower’s `GET members/:actor/access`, then `POST members/:actor/removal-preview`.
+Both responses must identify the exact actor and npub. Tower’s `can_administer`, blocked reason and
+confirmation token remain authoritative; the owner and self are also protected locally. Enter the full
+npub exactly, review the returned grants, groups, subscription links, agent-manager role and consequences, and confirm before `POST members/:actor/remove` with `confirmation_token` and `confirm_npub`.
+The preview and write capture the connection, signer, workspace and app; changing selection disables the form.
+No offline removal queue or new UI polling is used.
+
+An acknowledged removal saves a durable workspace revocation marker before reporting success. Directory
+reads, person/agent mentions, recent actor suggestions, identity details and new-DM requests exclude that
+npub even after stale hydration or relaunch. An open DM picker observes local membership changes and clears
+a removed selection. An explicit acknowledged Add member clears the marker. Directory sync captures the current removal revision
+before its request: an authoritative response begun after the latest removal can clear the marker for a returned
+member (Tower deletes removed memberships), restoring re-enrolment on another device. A response already in
+flight when removal occurs cannot clear the newer marker. Unversioned cache hydration never clears it.
+Messages, authorship, profiles, channel participants and conversation history are retained. Existing conversations
+remain navigable; Tower controls their continued access and sending. Native mention identity cards have no
+separate DM action; they become unavailable when the member is removed. The manager guards DM creation and
+reuse even if called with an old selection. Historical conversation labels retain the display directory.
+
+Removal success followed by a failed directory refresh says access was removed and saved locally, with access
+details still needing refresh. A failed or refused removal never changes local eligibility. If local persistence
+fails after Tower accepts removal, the error explicitly says not to repeat removal and to refresh before selecting
+recipients. These checks use synthetic identities; no real membership is removed for validation.

@@ -33,8 +33,7 @@ final class EnabledWorkspaceEntry: Identifiable {
             let channels = try await store.reader.channels(workspaceId: workspaceId)
             let order = try await store.reader.state(WorkspaceSync.scopeOrderKey(workspaceId))
             let collapsed = try await store.reader.state(WorkspaceSync.collapsedKey(connectionId: connection.id, workspaceId: workspaceId))
-            let members = try await store.reader.directoryMembers(workspaceId: workspaceId)
-            let names = Dictionary(members.map { ($0.npub, $0.label) }, uniquingKeysWith: { a, _ in a })
+            let names = try await store.reader.people(workspaceId: workspaceId).names
             let groups = SidebarNavigation.groups(scopes: scopes, channels: channels, personalOrder: ScopeOrdering.decode(order))
             var labels: [String: String] = [:]
             for channel in channels { labels[channel.id] = SidebarNavigation.label(channel, viewerNpub: connection.signerNpub, names: names) }

@@ -138,7 +138,9 @@ extension StoreReader {
             for mention in MentionRanking.mentions(inBody: s.text(0) ?? "") where seen.insert(mention.type.rawValue + ":" + mention.npub).inserted {
                 // Resolve each identity independently: an old but eligible record need not be in the
                 // truncated default results. Never reuse the historical label or resurrect removed rows.
-                if mention.type.isActor { out.append(mention) }
+                if mention.type.isActor {
+                    if try !removedMemberNpubs(workspace: workspaceId).contains(mention.npub) { out.append(mention) }
+                }
                 else if let current = try mentionSuggestions(workspaceId: workspaceId, query: MentionQuery(""), limit: 1, resolving: mention).first {
                     out.append(current.mention)
                 }

@@ -193,6 +193,10 @@ private struct WorkspaceAdministrationPage: View {
                         VStack(alignment: .leading) {
                             Text(row.title); Text(row.detail).font(.caption).foregroundStyle(.secondary)
                             editor("Edit display name", .memberProfile(row))
+                            NavigationLink("Remove from workspace") {
+                                WorkspaceMemberRemovalPage(member: row, workspace: workspace, connection: connection)
+                            }.disabled(row.fields["npub"] == workspace.ownerNpub || row.fields["npub"] == connection.signerNpub)
+                            .accessibilityIdentifier("admin.removeMember.\(row.id)")
                         }
                     }
                     if members.value.isEmpty { Text("No saved members. Refresh to load the directory.").foregroundStyle(.secondary) }
@@ -766,5 +770,97 @@ struct WorkspaceIdentityHeader: View {
                 Text("Selected workspace").font(.caption).foregroundStyle(.secondary)
             }
         }.accessibilityElement(children: .combine)
+    }
+}
+
+private struct WorkspaceMemberRemovalPage: View {
+    @Environment(AppModel.self) private var model
+    let member: AdministrationRow
+    let workspace: WorkspaceRecord
+    let connection: ConnectionRecord
+    @State private var preview: WorkspaceMemberRemoval?
+    @State private var confirmation = ""
+    @State private var phase = ManagementPhase.idle
+    @State private var removed = false
+    @State private var confirm = false
+
+    private var current: Bool {
+        model.connection?.id == connection.id && model.selectedWorkspace?.id == workspace.id && model.selectedWorkspace?.appNpub == workspace.appNpub
+    }
+    var body: some View {
+        Form {
+            Section("Remove from workspace") {
+                Text(workspace.label)
+                Text(member.title).font(.headline)
+                Text(member.fields["npub"] ?? "Identity unavailable").textSelection(.enabled)
+                Text("Removes this identity’s workspace access. Messages, authorship, audit history, global identity and other workspaces are preserved. Existing conversations remain in history; Tower continues to control access and sending.").font(.caption)
+            }
+            if !removed {
+                Section {
+                    Button("Preview removal") { Task { await loadPreview() } }
+                        .disabled(!current || phase.isWorking)
+                    if let preview {
+                        WorkspaceMemberRemovalConsequences(preview: preview)
+                        TextField("Enter the exact full npub", text: $confirmation).noCapitalization()
+                            .accessibilityIdentifier("admin.removeMember.confirmNpub")
+                        Button("Remove from workspace", role: .destructive) { confirm = true }
+                            .disabled(!current || phase.isWorking || confirmation != preview.npub)
+                            .accessibilityIdentifier("admin.removeMember.submit")
+                    }
+                }
+            }
+        }
+        .macGroupedForm().navigationTitle("Remove member")
+        .modifier(ManagementStatusInset(phase: phase))
+        .interactiveDismissDisabled(phase.isWorking)
+        .confirmationDialog("Remove this exact identity from \(workspace.label)?", isPresented: $confirm, titleVisibility: .visible) {
+            Button("Confirm removal", role: .destructive) { Task { await remove() } }
+        } message: { Text(member.fields["npub"] ?? "") }
+        .onChange(of: current) { _, value in if !value { preview = nil; confirmation = "" } }
+    }
+    private func loadPreview() async {
+        guard current, let manager = model.manager, let npub = member.fields["npub"] else { return }
+        preview = nil; confirmation = ""; phase = .working("Checking access on Tower…")
+        do {
+            let result = try await manager.previewMemberRemoval(connection, workspace, actor: member.id, npub: npub)
+            guard current else { return }
+            preview = result; phase = .idle
+        } catch { if current { phase = .failed((error as? ManagementError) ?? .unexpected(error.localizedDescription)) } }
+    }
+    private func remove() async {
+        guard current, let preview, let manager = model.manager else { return }
+        phase = .working("Waiting for Tower…")
+        self.preview = nil
+        do {
+            try await manager.removeMember(preview, confirmNpub: confirmation)
+            removed = true; confirmation = ""
+            guard current else { return }
+            phase = .done("Workspace access removed. Historical messages and authorship are preserved.")
+            do {
+                try await manager.refreshAdministration(connection, workspace, list: .members)
+                try await manager.refreshAdministration(connection, workspace, list: .groups)
+            } catch {
+                if current { phase = .done("Workspace access removed and saved locally. Some access details could not refresh; reconnect to update them.") }
+            }
+        } catch { if current { confirmation = ""; phase = .failed((error as? ManagementError) ?? .unexpected(error.localizedDescription)) } }
+    }
+}
+
+private struct WorkspaceMemberRemovalConsequences: View {
+    let preview: WorkspaceMemberRemoval
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Direct grants: \(preview.directGrants.count) · Group memberships: \(preview.groups.count) · Inherited grants: \(preview.inheritedGrants.count)")
+            Text("Subscription authority links to revoke: \(preview.subscriptionCount)")
+            Text(preview.agentManager ? "Agent-manager role will be removed." : "No agent-manager role assigned.")
+            ForEach(preview.groups) { group in Text("Group: " + group.title) }
+            ForEach(preview.directGrants) { grant in Text(grantLabel(grant)) }
+            ForEach(preview.consequences, id: \.self) { Text($0).font(.caption) }
+        }
+    }
+    private func grantLabel(_ grant: AdministrationRow) -> String {
+        let permission = grant.fields["permission"] ?? "Permission"
+        let resource = grant.fields["resource_channel_id"] ?? grant.fields["resource_scope_id"] ?? "Workspace"
+        return "Revoke: \(permission) · \(resource)"
     }
 }
