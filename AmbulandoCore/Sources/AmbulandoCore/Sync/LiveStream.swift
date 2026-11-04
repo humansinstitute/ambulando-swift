@@ -96,6 +96,9 @@ public actor LiveStream {
     enum Outcome { case ended, accessLost, reconnect }
 
     private func connectOnce(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, feed: LiveFeed) async throws -> (Outcome, Bool) {
+        // A move can change the event's scope/access partition while this device is disconnected.
+        // Reconcile canonical channel locations even when no historical move event is visible to this viewer.
+        await sync.refreshWorkspace(connection, workspace, priority: .background, includeDirectory: false)
         // 1. Bounded catch-up (seeds the cursor on first use, handles gaps), so the stream starts near the head.
         let catchUp = try await sync.catchUpEventsAndWait(connection, workspace, priority: .visible)
         if catchUp.accessLost { return (.accessLost, false) }

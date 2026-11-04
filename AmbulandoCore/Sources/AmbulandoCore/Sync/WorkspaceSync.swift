@@ -67,23 +67,27 @@ public struct WorkspaceSync: Sendable {
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             let scopes = try await api.scopes(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
-            try await sync.store.writer.upsertScopes(workspaceId: workspace.id, scopes, complete: true)
-            if includeDirectory { await sync.refreshDirectory(connection, workspace, priority: .background) }
+            // Fetch every visible scope before pruning any source list: a channel may have moved to a
+            // destination whose list used to be scheduled later. Canonical rows relocate cached contents.
+            var lists: [(ScopeRecord, [ChannelRecord])] = []
             for scope in scopes {
-                await sync.engine.enqueue("channels:\(workspace.id):\(scope.id)", priority: priority, force: force, retries: SyncBackoff.readRetries) {
-                    try await sync.identity.requireReader(npub: connection.signerNpub)
-                    let channels = try await api.channels(workspaceId: workspace.id, scopeId: scope.id, appNpub: workspace.appNpub)
-                    try Task.checkCancellation()
-                    try await sync.store.writer.upsertChannels(workspaceId: workspace.id, scopeId: scope.id, channels, complete: true)
-                    // Every channel's history is fetched in the background, not only the ones opened on this phone, so
-                    // conversations are there before they are opened (bounded by the engine's background slots).
-                    for channel in channels {
-                        if try await sync.store.reader.channelSync(workspaceId: workspace.id, channelId: channel.id)?.complete != true {
-                            await sync.catchUpChannel(connection, workspace, channelId: channel.id, priority: .background)
-                        }
+                let channels = try await api.channels(workspaceId: workspace.id, scopeId: scope.id, appNpub: workspace.appNpub)
+                lists.append((scope, channels))
+            }
+            try Task.checkCancellation()
+            for (scope, channels) in lists {
+                try await sync.store.writer.upsertChannels(workspaceId: workspace.id, scopeId: scope.id, channels, complete: false)
+            }
+            try await sync.store.writer.upsertScopes(workspaceId: workspace.id, scopes, complete: true)
+            for (scope, channels) in lists {
+                try await sync.store.writer.upsertChannels(workspaceId: workspace.id, scopeId: scope.id, channels, complete: true)
+                for channel in channels {
+                    if try await sync.store.reader.channelSync(workspaceId: workspace.id, channelId: channel.id)?.complete != true {
+                        await sync.catchUpChannel(connection, workspace, channelId: channel.id, priority: .background)
                     }
                 }
             }
+            if includeDirectory { await sync.refreshDirectory(connection, workspace, priority: .background) }
         }
     }
 }

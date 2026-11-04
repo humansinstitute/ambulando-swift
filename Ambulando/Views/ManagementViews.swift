@@ -320,6 +320,7 @@ struct ChannelSettingsSheet: View {
     @State private var phase = ManagementPhase.idle
     @State private var confirmArchive = false
     @State private var loaded = false
+    @State private var showMoveScope = false
 
     var body: some View {
         let nav = model.navigation.value
@@ -394,6 +395,13 @@ struct ChannelSettingsSheet: View {
                     if !channel.contextPrompt.isEmpty { LabeledContent("Context prompt", value: channel.contextPrompt) }
                 }
             }
+            if canManage && ChannelMoveEligibility.supports(channel, source: nav.scope(channel.scopeId)) {
+                Section {
+                    Button("Move to scope…") { showMoveScope = true }
+                        .disabled(phase.isWorking)
+                        .accessibilityIdentifier("channelSettings.moveToScope")
+                }
+            }
             Section {
                 if let workspace = model.selectedWorkspace, let connection = model.connection {
                     NavigationLink("Review and edit channel access") {
@@ -410,6 +418,7 @@ struct ChannelSettingsSheet: View {
             }
         }
         .macGroupedForm()
+        .sheet(isPresented: $showMoveScope) { ChannelMoveScopeSheet(channelId: channelId) }
         .onAppear {
             guard !loaded else { return }
             loaded = true; name = channel.name; prompt = channel.contextPrompt; position = index
@@ -746,6 +755,100 @@ private struct ChannelNotificationSettingsSection: View {
                 self.error = error.localizedDescription
                 if case ChannelNotificationPreferenceError.changedElsewhere(let current) = error { preferences = current }
                 if case ChannelNotificationPreferenceError.unsupported = error { unsupported = true }
+            }
+        }
+    }
+}
+
+/// Shared iPhone/Mac flow: destination → authoritative access preview → explicit confirmation.
+private struct ChannelMoveScopeSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let channelId: String
+    @State private var destination = ""
+    @State private var preview: ChannelMovePreview?
+    @State private var working = false
+    @State private var error: String?
+    @State private var uncertain = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let channel = model.navigation.value.channel(channelId) {
+                    Section {
+                        Text("Move #\(model.navigation.value.label(channel)) with its conversations, tasks, documents and files. IDs and direct access grants stay the same.")
+                        if preview == nil {
+                            Picker("Destination scope", selection: $destination) {
+                                Text("Choose a scope").tag("")
+                                ForEach(model.navigation.value.groups.filter { ChannelMoveEligibility.destination($0.scope, channel: channel, membership: model.membership) }) { group in
+                                    Text(group.scope.name).tag(group.scope.id)
+                                }
+                            }.accessibilityIdentifier("channelMove.destination")
+                            Text("Tower checks management access to the channel and both scopes, plus permission to review channel grants, before a move is allowed.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            Button("Preview access changes") { loadPreview() }
+                                .disabled(destination.isEmpty || working)
+                                .accessibilityIdentifier("channelMove.preview")
+                        }
+                    }
+                    if let preview {
+                        Section("Review access changes") {
+                            Text("Destination: \(model.navigation.value.scope(preview.destinationScopeId)?.name ?? "Unavailable scope")")
+                            Text(preview.accessSummary).textSelection(.enabled)
+                            ForEach(Array(preview.warnings.enumerated()), id: \.offset) { _, warning in Text(warning) }
+                            if uncertain {
+                                Text("The response was interrupted. Retry the same confirmation to recover its result. Do not start a different move until the result is known.")
+                            }
+                            Button(uncertain ? "Retry same confirmation" : "Confirm move") { confirm(preview) }
+                                .disabled(working).accessibilityIdentifier("channelMove.confirm")
+                            if !uncertain {
+                                Button("Choose another scope") { self.preview = nil; error = nil }.disabled(working)
+                            }
+                        }
+                    }
+                } else {
+                    Text("This channel is no longer available. Refresh to check its location and access.")
+                }
+                if let error { Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("channelMove.error") } }
+                if working { ProgressView("Checking Tower…") }
+            }
+            .macGroupedForm()
+            .navigationTitle("Move to scope")
+            .inlineTitle()
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() }.disabled(working) } }
+            .interactiveDismissDisabled(working)
+        }
+        .macSheetSize(minWidth: 520, idealWidth: 620, minHeight: 420, idealHeight: 640)
+    }
+
+    private func loadPreview() {
+        working = true; error = nil
+        let destination = destination
+        Task {
+            let result = await model.manage { m, c, w in
+                try await m.previewChannelMove(c, w, channelId: channelId, destinationScopeId: destination)
+            }
+            working = false
+            switch result {
+            case .success(let value): preview = value; uncertain = false
+            case .failure(let failure): error = failure.localizedDescription
+            }
+        }
+    }
+
+    private func confirm(_ value: ChannelMovePreview) {
+        working = true; error = nil
+        Task {
+            let result = await model.manage { m, c, w in try await m.confirmChannelMove(c, w, preview: value) }
+            working = false
+            switch result {
+            case .success: dismiss()
+            case .failure(let failure):
+                error = failure.localizedDescription
+                switch failure {
+                case .offline, .unexpected, .savedButNotRefreshed: uncertain = true
+                default: preview = nil; uncertain = false
+                }
             }
         }
     }

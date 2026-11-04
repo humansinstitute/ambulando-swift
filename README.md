@@ -11,6 +11,16 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Move channels to another scope (iPhone/iPad build 83, Mac build 74)
+
+Channel settings → **Move to scope…** previews Tower's access changes before confirmation.
+The preview distinguishes channel content access from source/destination scope discovery and management;
+direct grants and content IDs remain intact. Interrupted responses offer an identical confirmation retry.
+Stale previews require a fresh review. Canonical channel updates relocate loaded scope-bound rows,
+and reconnect/structure refreshes materialize destination channels before pruning source lists.
+See [channel move behavior and checks](docs/channel-move.md). Pushed source and local builds do not
+establish installation or authenticated acceptance on Pete's devices.
+
 ## Exact-identity direct messages (iPhone/iPad build 80, Mac build 71)
 
 DM reuse requires the exact recorded participant npubs. Names, descriptions, groups and historical

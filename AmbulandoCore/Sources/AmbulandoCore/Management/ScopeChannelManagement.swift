@@ -306,13 +306,14 @@ public enum ManagementPermissions {
 }
 
 public enum ManagementOperation: Sendable {
-    case readPermissions, createChannel, manageChannel, createScope, manageScope, scopeOrder, renameThread
+    case readPermissions, createChannel, manageChannel, createScope, manageScope, scopeOrder, renameThread, relocateChannel
 
     var permissionSentence: String {
         switch self {
         case .readPermissions: "You don't have access to this workspace."
         case .createChannel: "You don't have permission to create channels in this scope."
         case .manageChannel: "You need Manage access on this channel."
+        case .relocateChannel: "You need management access to the channel and both scopes, plus permission to review channel grants, to move it."
         case .createScope: "You don't have permission to create scopes in this workspace."
         case .manageScope: "You need Manage access on this scope."
         case .scopeOrder: "Your scope order couldn't be saved for this workspace."
@@ -361,12 +362,17 @@ public enum ManagementError: LocalizedError, Equatable, Sendable {
         case (409, "duplicate_channel"): return .duplicate("A channel with this name already exists in this scope.")
         case (409, "duplicate_scope"): return .duplicate("A scope with this name already exists in this workspace.")
         case (409, "scope_order_conflict"): return .conflict("Your scope order changed in another session. Try your move again.")
+        case (409, _) where operation == .relocateChannel:
+            return .conflict((object["message"] as? String) ?? "This channel, destination or access changed, or this kind of channel cannot move. Preview again before confirming.")
         case (409, _): return .conflict("This changed elsewhere. Refresh and try again.")
         case (400, _), (422, _):
             let fields = ((object["details"] as? [String: Any])?["fields"] as? [[String: Any]])?.compactMap { $0["message"] as? String } ?? []
             return .invalid(fields.isEmpty ? (object["message"] as? String ?? "Tower refused the request (\(code.isEmpty ? "HTTP \(status)" : code)).")
                                            : fields.joined(separator: " "))
         default:
+            if operation == .relocateChannel {
+                return .unexpected("Tower returned HTTP \(status). The move result is not confirmed. Retry the same confirmation or refresh to check its location.")
+            }
             return .unexpected("Tower returned HTTP \(status)\(code.isEmpty ? "" : " (\(code))"). Nothing was changed.")
         }
     }

@@ -329,6 +329,28 @@ final class ManagementUITests: XCTestCase {
         XCTAssertEqual(row.count, 1, "no duplicate conversation")
     }
 
+    func testMoveToScopeRequiresAccessReviewBeforeConfirmation() {
+        let app = launch(["-AmbulandoFixtureChannelMove"])
+        app.openSidebar()
+        app.buttons["sidebar.channelSettings.design"].tap()
+        let move = app.buttons["channelSettings.moveToScope"]
+        for _ in 0..<6 where !move.isHittable { app.swipeUp() }
+        XCTAssertTrue(move.waitForExistence(timeout: 5)); move.tap()
+        XCTAssertFalse(app.buttons["channelMove.confirm"].exists)
+        let picker = app.buttons["channelMove.destination"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5)); picker.tap()
+        app.buttons["Operations"].tap()
+        app.buttons["channelMove.preview"].tap()
+        let confirm = app.buttons["channelMove.confirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        XCTAssertTrue(status(app, "Direct channel grants: unchanged").exists)
+        XCTAssertTrue(status(app, "Scope grants do not confer channel content access.").exists)
+        capture(app, "channel-move-review")
+        confirm.tap()
+        XCTAssertEqual(XCTWaiter().wait(for: [expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: confirm)], timeout: 10), .completed)
+        XCTAssertTrue(status(app, "Operations").exists)
+    }
+
     func testCreateRenamePromptMoveAndArchiveAChannelInAScopeYouManage() {
         let app = launch()
         app.openSidebar()

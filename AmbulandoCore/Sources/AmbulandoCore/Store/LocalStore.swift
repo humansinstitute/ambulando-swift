@@ -314,7 +314,9 @@ public actor StoreWriter {
             for r in records where r.workspaceId == workspaceId && r.scopeId == scopeId {
                 try s.run([.text(workspaceId), .text(r.id), .text(scopeId), .text(r.name), r.kind.sql, r.position.sql,
                            .int(Int64(r.rowVersion)), .text(r.updatedAt), .blob(r.raw)])
-                changed += db.changes
+                let wrote = db.changes
+                changed += wrote
+                if wrote > 0 { try relocateLoadedChannelRows(workspaceId: workspaceId, channelId: r.id, scopeId: r.scopeId) }
             }
             if complete {
                 let keep = Set(records.map(\.id))
@@ -331,13 +333,40 @@ public actor StoreWriter {
             }
             return (changed, purged)
         }
-        if changed > 0 { await emit(purged ? Self.channelContentKeys(workspaceId).union([ChangeKey(.access, workspaceId)]) : [ChangeKey(.channels, workspaceId)]) }
+        if changed > 0 { await emit(purged ? Self.channelContentKeys(workspaceId).union([ChangeKey(.access, workspaceId)]) : Self.channelContentKeys(workspaceId)) }
         return changed
+    }
+
+    /// A canonical channel projection relocates all loaded scope-bound rows in the same transaction.
+    /// IDs, versions, drafts, bodies and direct grants remain intact; fresh delta rows may follow later.
+    private func relocateLoadedChannelRows(workspaceId: String, channelId: String, scopeId: String) throws {
+        try db.prepare("UPDATE view_states SET scope_id = ? WHERE workspace_id = ? AND channel_id = ?")
+            .run([.text(scopeId), .text(workspaceId), .text(channelId)])
+        for table in ["tasks", "docs", "files", "agent_activities", "pins", "messages", "threads", "folders"] {
+            let hasScopeColumn = !["messages", "threads", "folders"].contains(table)
+            let scopeFilter = hasScopeColumn ? " AND (scope_id IS NULL OR scope_id != ?)" : ""
+            let read = try db.prepare("SELECT rowid, raw FROM \(table) WHERE workspace_id = ? AND channel_id = ?" + scopeFilter)
+            try read.bind([.text(workspaceId), .text(channelId)] + (hasScopeColumn ? [.text(scopeId)] : []))
+            var updates: [(Int64, Data)] = []
+            while try read.step() {
+                guard var object = try JSONSerialization.jsonObject(with: read.blob(1)) as? [String: Any] else { continue }
+                if !hasScopeColumn && (object["scope_id"] == nil || object["scope_id"] as? String == scopeId) { continue }
+                object["scope_id"] = scopeId
+                updates.append((read.int(0), try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])))
+            }
+            for (id, raw) in updates {
+                if hasScopeColumn {
+                    try db.prepare("UPDATE \(table) SET scope_id = ?, raw = ? WHERE rowid = ?").run([.text(scopeId), .blob(raw), .int(id)])
+                } else {
+                    try db.prepare("UPDATE \(table) SET raw = ? WHERE rowid = ?").run([.blob(raw), .int(id)])
+                }
+            }
+        }
     }
 
     static func channelContentKeys(_ w: String) -> Set<ChangeKey> {
         Set([StoreTable.channels, .messages, .threads, .tasks, .comments, .docs, .docBodies, .files, .folders, .viewStates, .reactions,
-             .contextTree, .agents].map { ChangeKey($0, w) })
+             .contextTree, .agents, .pins].map { ChangeKey($0, w) })
     }
 
     /// Removes everything stored for a channel the actor can no longer see (access loss or archive). Drafts and unsent

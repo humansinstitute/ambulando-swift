@@ -541,6 +541,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             let reader = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureReader")
             return (200, ["actor": ["actor_id": "f1c70000-0000-4000-8000-0000000000e1", "npub": actorNpub], "membership": ["role": "member"],
                           "permissions": reader ? ["channel.read", "workspace.read"] : ["channel.create", "channel.manage", "channel.read", "channel.write", "scope.create", "workspace.read"]])
+        case ("POST", 3, "channels") where ["move-preview", "move"].contains(rest[2]):
+            return try fixtureChannelMove(request, workspace: w, rest: rest)
         case ("POST", 3, "scopes") where rest[2] == "channels", ("POST", 1, "scopes"), ("PATCH", 2, "scopes"), ("DELETE", 2, "scopes"),
              ("PATCH", 2, "channels"), ("DELETE", 2, "channels"), ("POST", 3, "channels") where rest.last == "reorder" || rest.count == 2,
              ("PUT", 2, "me"):
@@ -614,27 +616,26 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
                 var row = row
                 let id = row["id"] as? String ?? ""
                 for (k, v) in edits[id] ?? [:] { row[k] = v }
-                row["can_manage"] = id != Self.scopeOps
+                row["can_manage"] = id != Self.scopeOps || ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureChannelMove")
                 return row
             }
     }
 
     private func channelRows(_ w: String, scope s: String) -> [[String: Any]] {
-        let base: [[String: Any]] = switch s {
-        case Self.scopeAmbulando: [channel(Self.generalChannel, w, s, "general", 1), channel(Self.designChannel, w, s, "design", 2)]
-        case Self.scopeOps: [channel(Self.deploysChannel, w, s, "deploys", 1)]
-        case Self.scopeResearch: [channel(Self.notesChannel, w, s, "notes", 1)]
-        default: []
-        }
+        let base: [[String: Any]] = w == Self.studio
+            ? [channel(Self.generalChannel, w, Self.scopeAmbulando, "general", 1),
+               channel(Self.designChannel, w, Self.scopeAmbulando, "design", 2),
+               channel(Self.deploysChannel, w, Self.scopeOps, "deploys", 1)]
+            : [channel(Self.notesChannel, w, Self.scopeResearch, "notes", 1)]
         let edits = manageMap("channelEdits"), gone = archived
-        let created: [[String: Any]] = manageList("channels").filter { $0["workspace_id"] as? String == w && $0["scope_id"] as? String == s }
+        let created: [[String: Any]] = manageList("channels").filter { $0["workspace_id"] as? String == w }
         var rows: [[String: Any]] = []
         for original in base + created {
             let id = original["id"] as? String ?? ""
             guard !gone.contains(id) else { continue }
             var row = original
             for (k, v) in edits[id] ?? [:] { row[k] = v }
-            rows.append(row)
+            if row["scope_id"] as? String == s { rows.append(row) }
         }
         func key(_ row: [String: Any]) -> (Double, String) { ((row["position"] as? Double) ?? 0, (row["id"] as? String) ?? "") }
         return rows.sorted { key($0) < key($1) }
@@ -657,6 +658,27 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         row["updated_at"] = ISO8601DateFormatter.fixture.string(from: Date())
         edits[id] = row
         managed["channelEdits"] = edits
+    }
+
+    /// Explicit sample-only move contract for native interaction coverage; never reaches a live Tower.
+    private func fixtureChannelMove(_ request: URLRequest, workspace w: String, rest: [String]) throws -> (Int, Any) {
+        let body = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:]
+        return lock.withLock {
+            guard ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureChannelMove") else { return (403, ["code": "forbidden"]) }
+            let c = rest[1], destination = body["destination_scope_id"] as? String ?? ""
+            guard let source = channelScope(w, c), scopeRows(w).contains(where: { $0["id"] as? String == destination }) else { return (404, ["code": "not_found"]) }
+            if rest[2] == "move-preview" {
+                return (200, ["preview": ["channel_id": c, "source_scope_id": source, "destination_scope_id": destination,
+                    "confirmation_token": "sample-move-token", "access_changes": ["gained": [], "lost": [],
+                        "retained": [["label": "Sample member", "permissions": ["channel.read"]]], "direct_grants_preserved": true,
+                        "direct_grant_count": 1, "source_scope_access": [], "destination_scope_access": []],
+                    "warnings": ["Scope grants do not confer channel content access."]]])
+            }
+            guard body["confirmation_token"] as? String == "sample-move-token", UUID(uuidString: body["mutation_id"] as? String ?? "") != nil else { return (409, ["code": "stale_preview"]) }
+            editChannel(c, ["scope_id": destination, "row_version": 2])
+            persistManaged()
+            return (200, ["channel": channelRows(w, scope: destination).first { $0["id"] as? String == c }!])
+        }
     }
 
     private func manage(_ request: URLRequest, workspace w: String, rest: [String]) throws -> (Int, Any) {
