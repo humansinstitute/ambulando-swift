@@ -325,6 +325,31 @@ not a proven explanation of that historical exception. The separate long-message
 full-draft composer measurement on the main thread.
 
 
+## Channel name input regression
+
+Mac build 75 gives New channel an explicit prompt and a hidden duplicate label with a rounded
+native text-field border. A grouped macOS Form otherwise places the title on the left as static
+text and leaves a separate unmarked editing area on the right. The visible example text must
+belong to the editable control, as it already does in existing-channel rename.
+Workspace management presents this existing channel sheet directly: pushing its NavigationStack
+inside the management stack hid Create behind the enclosing Done action on macOS.
+
+Build `AmbulandoMacTest`, then run the isolated real-window check:
+
+```sh
+'build/test-mac/Build/Products/Test/Ambulando Test.app/Contents/MacOS/Ambulando Test' \
+  -AmbulandoMacThreadRegression -AmbulandoMacChannelNameCheck -AmbulandoFixtureAdmin
+```
+
+The check opens Settings and its nested workspace-management sheet, navigates to New channel,
+clicks the visible left side of the name row at default size, sends a native key event, enlarges
+the sheet to expose the lower fields, transfers focus through
+description/context and back, creates the sample channel and checks saved values, then renames
+that existing channel in an independently hosted settings view. The check does not establish the
+parent management list refreshing after creation. `WorkspaceAdministrationUITests.testChannelNameFromWorkspaceScopesAcceptsEditingAndCreates`
+checks the corresponding iPhone management path. These checks use synthetic local transports;
+they do not establish hardware input, real Tower acceptance, or installation on Pete's MacBook.
+
 ## New-thread interaction regression
 
 Mac build 11 fixes a presentation input trap: the app disabled its background when either a thread or New thread

@@ -176,7 +176,12 @@ struct NewChannelSheet: View {
                         }
                     }
                     Section("Channel name") {
-                        TextField("e.g. general, design, ops", text: $name)
+                        TextField("Channel name", text: $name, prompt: Text("e.g. general, design, ops"))
+                            #if os(macOS)
+                            // Grouped forms otherwise render the example as a static left label,
+                            // with an unmarked editable area only on the right of the boxed row.
+                            .labelsHidden().textFieldStyle(.roundedBorder)
+                            #endif
                             .noCapitalization()
                             .accessibilityIdentifier("newChannel.name")
                     }

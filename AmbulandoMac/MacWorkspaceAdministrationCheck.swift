@@ -4,6 +4,77 @@ import AppKit
 import SwiftUI
 
 extension MacThreadRegression {
+    static func channelNameCheck(_ original: NSWindow, model: AppModel) async throws {
+        guard model.fixture != nil, let workspace = model.selectedWorkspace, let connection = model.connection else { throw Failure(description: "Missing sample workspace") }
+        let hostWindow = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 1100, height: 780), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        hostWindow.isReleasedWhenClosed = false
+        defer { hostWindow.close() }
+        hostWindow.contentView = NSHostingView(rootView: ManagementSettingsHost().environment(model))
+        hostWindow.makeKeyAndOrderFront(nil)
+        await settle(); await settle()
+        guard let settings = hostWindow.attachedSheet else { throw Failure(description: "Settings sheet") }
+        try press(settings, "settings.manageWorkspace"); await settle(); await settle()
+        guard let management = settings.attachedSheet else { throw Failure(description: "Workspace management sheet") }
+        try click(management, "admin.section.scopes"); await settle()
+        try press(management, "admin.scope.\(FixtureTower.scopeAmbulando)"); await settle()
+        try press(management, "admin.newChannel.\(FixtureTower.scopeAmbulando)"); await settle(); await settle()
+        guard let window = NSApp.keyWindow, find(window, "newChannel.name") != nil else {
+            throw Failure(description: "New channel sheet")
+        }
+        try snapshot(window, model: model, name: "channel-name-before-click")
+        guard let node = find(window, "newChannel.name") else { throw Failure(description: "Missing name field") }
+        print("NAME enabled=\(String(describing: value(node, "AXEnabled"))) frame=\(frame(of: node))")
+        // Click the visible prompt on the left of the row, where a person naturally clicks.
+        // In macOS grouped forms an automatic TextField title can become a noneditable label.
+        let rect = frame(of: node)
+        try require(rect.width > window.contentView!.bounds.width * 0.65, "name editor spans the visible prompt region")
+        // Click the visible prompt near the left edge of the full-width editable control.
+        let point = NSPoint(x: window.convertPoint(fromScreen: NSPoint(x: rect.minX + 8, y: rect.midY)).x,
+                           y: window.convertPoint(fromScreen: NSPoint(x: rect.minX, y: rect.midY)).y)
+        print("NAME_LEFT_HIT \(String(describing: window.contentView?.hitTest(window.contentView!.convert(point, from: nil))))")
+        try sendClick(window, point: point); await settle()
+        print("NAME responder=\(String(describing: window.firstResponder))")
+        try require(window.firstResponder is NSTextView, "click focuses native channel name editor")
+        try postKey(window, key: "x", code: 7, modifiers: []); await settle()
+        try require(value(node, "AXValue") as? String == "x", "keyboard edits channel name after click")
+        guard let nameEditor = window.firstResponder as? NSTextView else { throw Failure(description: "Name editor") }
+        nameEditor.insertText("-click-review", replacementRange: nameEditor.selectedRange()); await settle()
+        // The default sheet proves name hit testing; enlarge it for the lower content-field checks.
+        window.setContentSize(NSSize(width: 700, height: 900)); await settle()
+        for (id, text) in [("newChannel.description", "Editable description"), ("newChannel.prompt", "Editable context")] {
+            try click(window, id); await settle()
+            guard let editor = window.firstResponder as? NSTextView else { throw Failure(description: "Focus \(id)") }
+            try require(editor !== nameEditor, "content focus leaves scalar name")
+            editor.insertText(text, replacementRange: editor.selectedRange()); await settle()
+            // Returning to the prompt side must focus the name even after a content editor was active.
+            try click(window, "newChannel.name"); await settle()
+            try require(value(node, "AXValue") as? String == "x-click-review", "focus transfer preserves name")
+            try require(window.firstResponder is NSTextView, "name regains text focus")
+        }
+        try snapshot(window, model: model, name: "channel-name-after-editing")
+        try press(window, "newChannel.create"); await settle(); await settle()
+        let channels = try await model.store!.reader.channels(workspaceId: workspace.id)
+        guard let created = channels.first(where: { $0.name == "x-click-review" }) else { throw Failure(description: "Created channel readback") }
+        try require(created.contextPrompt == "Editable context", "created context retained")
+        let raw = try JSONSerialization.jsonObject(with: created.raw) as? [String: Any]
+        try require(raw?["description"] as? String == "Editable description", "created description retained")
+        // Check existing-channel editing independently of the management list's post-create refresh.
+        let editWindow = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 700, height: 900), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        editWindow.isReleasedWhenClosed = false
+        defer { editWindow.close() }
+        editWindow.contentView = NSHostingView(rootView: NavigationStack { ChannelSettingsSheet(channelId: created.id) }.environment(model))
+        editWindow.makeKeyAndOrderFront(nil); await settle(); await settle()
+        try click(editWindow, "channelSettings.name"); await settle()
+        guard let rename = editWindow.firstResponder as? NSTextView else { throw Failure(description: "Existing name focus") }
+        rename.selectAll(nil); rename.insertText("renamed-click-review", replacementRange: rename.selectedRange()); await settle()
+        try press(editWindow, "channelSettings.rename"); await settle(); await settle()
+        let renamed = try await model.store!.reader.channel(workspaceId: workspace.id, id: created.id)
+        try require(renamed?.name == "renamed-click-review", "existing-channel rename readback")
+        try snapshot(editWindow, model: model, name: "channel-name-existing-rename")
+        _ = original
+        _ = connection
+    }
+
     static func workspaceAdministrationCheck(_ original: NSWindow, model: AppModel) async throws {
         guard model.fixture != nil, let workspace = model.selectedWorkspace, let connection = model.connection else { throw Failure(description: "Missing isolated sample workspace") }
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 1100, height: 780), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)

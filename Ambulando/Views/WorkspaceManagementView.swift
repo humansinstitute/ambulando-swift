@@ -104,6 +104,7 @@ private struct WorkspaceAdministrationPage: View {
     @State private var search = ""
     @State private var phase = ManagementPhase.idle
     @State private var pending: AdministrationCommand?
+    @State private var newChannelScope: ScopeRecord?
     private var admin: Bool { model.membership?.isAdmin == true }
 
     var body: some View {
@@ -177,10 +178,17 @@ private struct WorkspaceAdministrationPage: View {
                                     NavigationLink(channel.name) { ChannelSettingsSheet(channelId: channel.id) }
                                 }
                                 if ManagementPermissions.canCreateChannel(in: group.scope, membership: model.membership) {
-                                    NavigationLink("New channel") { NewChannelSheet(scope: group.scope, onCreated: { _ in }) }
+                                    // This editor owns a NavigationStack and confirmation toolbar.
+                                    // Present it as a sheet rather than nesting its stack in management.
+                                    Button("New channel") { newChannelScope = group.scope }
+                                        .accessibilityIdentifier("admin.newChannel.\(group.scope.id)")
                                 }
                             }.navigationTitle(group.scope.name)
+                            .sheet(item: $newChannelScope) { scope in
+                                NewChannelSheet(scope: scope, onCreated: { _ in })
+                            }
                         }
+                        .accessibilityIdentifier("admin.scope.\(group.scope.id)")
                     }
                 }
 

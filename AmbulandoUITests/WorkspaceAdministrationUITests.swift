@@ -21,6 +21,38 @@ import XCTest
     private func capture(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
     }
+    func testChannelNameFromWorkspaceScopesAcceptsEditingAndCreates() {
+        let app = launch()
+        app.openSidebar()
+        app.buttons["sidebar.workspace"].firstMatch.tap()
+        app.buttons["Manage Workspace"].tap()
+        app.buttons["admin.section.scopes"].tap()
+        let scope = "f1c70000-0000-4000-8000-0000000000a1"
+        let scopeLink = app.buttons["admin.scope.\(scope)"]
+        XCTAssertTrue(scopeLink.waitForExistence(timeout: 10)); scopeLink.tap()
+        app.buttons["admin.newChannel.\(scope)"].tap()
+        let name = app.textFields["newChannel.name"]
+        for _ in 0..<5 where !name.isHittable { app.swipeUp() }
+        XCTAssertTrue(name.waitForExistence(timeout: 5)); XCTAssertTrue(name.isEnabled)
+        name.tap(); name.typeText("field-review")
+        XCTAssertEqual(name.value as? String, "field-review")
+        app.buttons["keyboard.done"].firstMatch.tap()
+        let description = app.textFields["newChannel.description"]
+        description.tap(); description.typeText("Editable description")
+        app.buttons["keyboard.done"].firstMatch.tap()
+        let prompt = app.textFields["newChannel.prompt"]
+        for _ in 0..<5 where !prompt.isHittable { app.swipeUp() }
+        prompt.tap(); prompt.typeText("Editable context")
+        app.buttons["keyboard.done"].firstMatch.tap()
+        // Focus must transfer back from both content fields to the ordinary name field.
+        for _ in 0..<5 where !name.isHittable { app.swipeDown() }
+        name.tap(); name.typeText("-saved")
+        XCTAssertEqual(name.value as? String, "field-review-saved")
+        app.buttons["keyboard.done"].firstMatch.tap()
+        capture(app, "iphone-channel-name-edited-in-management")
+        app.buttons["newChannel.create"].tap()
+        XCTAssertTrue(app.buttons["field-review-saved"].waitForExistence(timeout: 10))
+    }
     func testGroupWriteAndDraftRelaunchInNativeManagement() {
         var app = launch()
         openGroups(app)

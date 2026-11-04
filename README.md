@@ -11,6 +11,16 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Editable channel name (iPhone/iPad build 84, Mac build 75)
+
+Settings → Scopes & Channels → New channel uses a full-width name input on Mac.
+The example appears inside the editable control, so clicking its visible text focuses the name.
+Management presents the channel sheet with its own Create action instead of nesting navigation toolbars.
+Previously the grouped form displayed that example as a static label beside an unmarked editor.
+Description, context and existing-channel rename retain their native editors. See the
+[Mac regression check](docs/mac.md#channel-name-input-regression) for local sample validation;
+source delivery does not establish installation on Pete's devices.
+
 ## Move channels to another scope (iPhone/iPad build 83, Mac build 74)
 
 Channel settings → **Move to scope…** previews Tower's access changes before confirmation.

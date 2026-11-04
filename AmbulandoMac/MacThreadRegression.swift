@@ -68,6 +68,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacChannelNameCheck") {
+                try await channelNameCheck(window, model: model)
+                print("PASS: Mac channel name editing and creation"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDownloadCheck") {
                 try await downloadCheck(model: model)
                 print("PASS: native Download saves exact bytes to Downloads, preserves collisions, reports failure and clears busy state for retry"); fflush(stdout); exit(0)
