@@ -213,6 +213,19 @@ private struct DeckNote: View {
 
 // MARK: Inbox
 
+// Query lifecycle identity must use values, never serialized JSON (object key order can vary
+// between evaluations and repeatedly restart a channel query during SwiftUI updates).
+private struct InboxContextIdentity: Hashable {
+    let workspaceId: String
+    let context: WorkContext
+}
+
+private struct InboxQueryIdentity: Hashable {
+    let context: InboxContextIdentity
+    let active: Bool
+    let liveInbox: Bool
+}
+
 struct DeckInboxSnapshot: Sendable, Equatable {
     var items: [DeckActivity.Item] = []
     var viewStates: [String: ViewStateRecord] = [:]
@@ -240,7 +253,7 @@ struct DeckInboxCard: View {
     @State private var query = ""
     @State private var visible = DeckInbox.pageSize
     @State private var notice: String?
-    @State private var startedKey: String?
+    @State private var startedKey: InboxContextIdentity?
     @State private var composingThread = false
     @State private var createdThread: ThreadFocus?
     @State private var channelOptions: ChannelOptionsPresentation?
@@ -277,7 +290,7 @@ struct DeckInboxCard: View {
         }
         .channelOptionsSheet(channelId: context.channelId, selection: $channelOptions)
         .newDirectMessageSheet(scope: $newDirectScope)
-        .task(id: "\(workspace.id):\(context.encoded()):\(active):\(liveInbox)") {
+        .task(id: InboxQueryIdentity(context: InboxContextIdentity(workspaceId: workspace.id, context: context), active: active, liveInbox: liveInbox)) {
             if active { start(context, liveInbox: liveInbox) } else { snapshot.pause() }
         }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { refresh(context) } }
@@ -489,7 +502,7 @@ struct DeckInboxCard: View {
     private func start(_ context: WorkContext, liveInbox: Bool) {
         // A new context starts a fresh list with no search, as the web Deck does. Coming back from a record opened here
         // (the task restarts when Deck reappears) keeps the search and how far the list was revealed.
-        let key = "\(workspace.id):\(context.encoded())"
+        let key = InboxContextIdentity(workspaceId: workspace.id, context: context)
         let resuming = startedKey == key
         if !resuming {
             startedKey = key

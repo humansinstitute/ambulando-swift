@@ -3,6 +3,19 @@ import XCTest
 @testable import AmbulandoCore
 
 final class WorkContextTests: XCTestCase {
+    func testFreshChannelContextHasStableEncodingAndValueIdentity() {
+        // A channel has both keys, unlike Home/scope. Unsorted JSON alternated key order
+        // when Deck used it as task identity, restarting/resetting its observed query.
+        let channel = WorkContext(scopeId: "new-scope", channelId: "devops")
+        let expected = "{\"channelId\":\"devops\",\"scopeId\":\"new-scope\"}"
+        for _ in 0..<1000 {
+            XCTAssertEqual(channel.encoded(), expected)
+            XCTAssertEqual(WorkContext.decode(channel.encoded()), channel)
+        }
+        XCTAssertNotEqual(channel, WorkContext(scopeId: "new-scope"))
+        XCTAssertNotEqual(channel, WorkContext(scopeId: "new-scope", channelId: "other"))
+    }
+
     static let channel3 = "0617d526-0000-4000-8000-000000000003"
     static let dmScope = "76d518f7-0000-4000-8000-0000000000dd"
     static let dmChannel = "0617d526-0000-4000-8000-0000000000dd"

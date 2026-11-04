@@ -24,7 +24,9 @@ public struct WorkContext: Sendable, Equatable, Hashable, Codable {
     public static func stateKey(connectionId: String, workspaceId: String) -> String { "context:\(connectionId):\(workspaceId)" }
 
     public func encoded() -> String {
-        String(decoding: (try? JSONEncoder().encode(self)) ?? Data("{}".utf8), as: UTF8.self)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: (try? encoder.encode(self)) ?? Data("{}".utf8), as: UTF8.self)
     }
 
     public static func decode(_ text: String?) -> WorkContext? {

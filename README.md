@@ -11,6 +11,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Channel selection identity (Mac build 80)
+
+Deck now keys its Inbox query and retained context by the workspace and `WorkContext` values.
+Previously it used JSON text: encoding an unchanged scope/channel can alternate object key order,
+restarting the query and resetting observed view state during rendering. Context persistence now
+also uses sorted keys. This correction applies with or without channel content; it does not change
+pins, drafts, access filtering or stored context compatibility. A focused context regression and
+local builds validate the change; Pete's reported DevOps failure still needs device acceptance.
+
 ## Mac responsiveness (Mac build 79)
 
 Divider tracking now avoids repeated workspace-identity hashing and unchanged native menu accessibility writes.
