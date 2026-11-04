@@ -128,13 +128,19 @@ struct NewChannelSheet: View {
                             Text(directoryError ?? "No other people or agents are available in this workspace yet.")
                                 .foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("newChannel.empty")
                         } else {
-                            Picker("Person", selection: $person) {
-                                Text("Choose…").tag(String?.none)
-                                ForEach(candidates) { candidate in
-                                    Text(candidate.title + (candidate.isAgent ? " · agent" : "")).tag(String?.some(candidate.id))
+                            ForEach(candidates) { candidate in
+                                Button { person = candidate.id } label: {
+                                    HStack {
+                                        Text(candidate.title + (candidate.isAgent ? " · agent" : ""))
+                                        Spacer()
+                                        if person == candidate.id { Image(systemName: "checkmark").accessibilityHidden(true) }
+                                    }
+                                    .contentShape(Rectangle())
                                 }
+                                .buttonStyle(.plain)
+                                .accessibilityAddTraits(person == candidate.id ? .isSelected : [])
+                                .accessibilityIdentifier("newChannel.recipient.\(candidate.id)")
                             }
-                            .accessibilityIdentifier("newChannel.person")
                         }
                         if let directoryError, !candidates.isEmpty {
                             Text(directoryError).font(.caption).foregroundStyle(.secondary)
@@ -201,7 +207,7 @@ struct NewChannelSheet: View {
             .macSheetSize(minWidth: 480, idealWidth: 560, minHeight: 420, idealHeight: 600)
             .inlineTitle()
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(phase.isWorking) }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(phase.isWorking).accessibilityIdentifier("newChannel.cancel") }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") { create() }
                         .disabled(phase.isWorking || (isDirect ? person == nil : name.trimmingCharacters(in: .whitespaces).isEmpty))
@@ -220,6 +226,10 @@ struct NewChannelSheet: View {
                     if keys.contains(where: { $0.table == .members && $0.workspaceId == workspace.id }) { await readDirectory() }
                 }
             }
+            .onChange(of: model.syncStatus) { _, status in
+                guard isDirect else { return }
+                Task { await readDirectory(status: status) }
+            }
             .onChange(of: model.selectedWorkspaceBoundary) { _, _ in dismiss() }
             .onChange(of: model.connection?.id) { _, _ in dismiss() }
         }
@@ -228,7 +238,11 @@ struct NewChannelSheet: View {
     /// Shows the cached directory at once, then asks Tower for the current one; the sheet re-reads when that finishes.
     private func loadDirectory() async {
         guard let workspace = model.selectedWorkspace, let connection = model.connection,
-              let sync = model.sync, model.canRead, workspace.id == scope.workspaceId else { return }
+              let sync = model.sync, model.canRead, workspace.id == scope.workspaceId else {
+            directoryLoading = false
+            directoryError = "Unlock and reopen this workspace to load people and agents."
+            return
+        }
         let boundary = model.selectedWorkspaceBoundary
         let key = directoryKey
         directoryError = nil
@@ -261,6 +275,8 @@ struct NewChannelSheet: View {
         directoryLoading = state.running.contains(directoryKey) || state.queued.contains(directoryKey)
         if !directoryLoading, let error = state.errors[directoryKey] {
             directoryError = "People could not be refreshed: \(error)"
+        } else if !directoryLoading, state.connectionFailures.contains(directoryKey) {
+            directoryError = "People could not be refreshed. Check your connection and retry."
         } else if !directoryLoading { directoryError = nil }
     }
 
@@ -856,5 +872,44 @@ private struct ChannelMoveScopeSheet: View {
                 }
             }
         }
+    }
+}
+
+/// Deck's scope-level plus starts a private conversation; a selected channel keeps its thread composer.
+extension AppModel {
+    var directMessageCreationScope: ScopeRecord? {
+        guard context.channelId == nil, let scope = navigation.value.scope(context.scopeId),
+              ManagementPermissions.isDirectMessageScope(scope) else { return nil }
+        return scope
+    }
+}
+
+private struct DirectMessageSheet: ViewModifier {
+    @Environment(AppModel.self) private var model
+    @Binding var scope: ScopeRecord?
+    @State private var created: ChannelRecord?
+    @State private var createdBoundary: WorkspaceBoundary?
+
+    func body(content: Content) -> some View {
+        content.sheet(item: $scope, onDismiss: {
+            guard let channel = created else { return }
+            created = nil
+            let boundary = createdBoundary
+            createdBoundary = nil
+            guard boundary == model.selectedWorkspaceBoundary, channel.workspaceId == model.selectedWorkspace?.id else { return }
+            model.selectContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id))
+            model.show(.chat)
+        }) { scope in
+            NewChannelSheet(scope: scope) {
+                createdBoundary = model.selectedWorkspaceBoundary
+                created = $0
+            }
+        }
+    }
+}
+
+extension View {
+    func newDirectMessageSheet(scope: Binding<ScopeRecord?>) -> some View {
+        modifier(DirectMessageSheet(scope: scope))
     }
 }

@@ -302,13 +302,8 @@ final class ManagementUITests: XCTestCase {
         let new = app.buttons["chat.new"].firstMatch
         XCTAssertTrue(new.waitForExistence(timeout: 10), "toolbar New in the selected DM scope")
         new.tap()
-        let person = app.descendants(matching: .any).matching(identifier: "newChannel.person").firstMatch
-        XCTAssertTrue(person.waitForExistence(timeout: 15), "people picker")
-        sleep(3)  // let the directory refresh settle; a list change would close an open menu
-        person.tap()
-        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Ana'")).firstMatch.waitForExistence(timeout: 5), "a person is offered")
-        let rick = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'rick' AND label CONTAINS[c] 'agent'")).firstMatch
-        XCTAssertTrue(rick.waitForExistence(timeout: 5), "an agent is offered")
+        let rick = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'newChannel.recipient.' AND label CONTAINS[c] 'rick'")).firstMatch
+        XCTAssertTrue(rick.waitForExistence(timeout: 15), "a workspace agent is offered")
         capture(app, "dm-picker")
         rick.tap()
         app.buttons["newChannel.create"].tap()
@@ -318,15 +313,101 @@ final class ManagementUITests: XCTestCase {
         XCTAssertEqual(row.count, 1)
         // Again from the sidebar plus: the same person opens the existing conversation.
         app.buttons["sidebar.addChannel.DMs"].firstMatch.tap()
-        let again = app.descendants(matching: .any).matching(identifier: "newChannel.person").firstMatch
-        XCTAssertTrue(again.waitForExistence(timeout: 15))
-        sleep(3)
-        again.tap()
-        app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'rick' AND label CONTAINS[c] 'agent'")).firstMatch.tap()
+        XCTAssertTrue(rick.waitForExistence(timeout: 15))
+        rick.tap()
         app.buttons["newChannel.create"].tap()
         app.openSidebar()
         XCTAssertTrue(row.firstMatch.waitForExistence(timeout: 10))
         XCTAssertEqual(row.count, 1, "no duplicate conversation")
+    }
+
+    private func openDmDeck(_ app: XCUIApplication) {
+        app.openSidebar()
+        app.buttons["sidebar.scope.DMs"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["deck.inbox.new"].waitForExistence(timeout: 10))
+    }
+
+    private func chooseDmAgent(_ app: XCUIApplication) {
+        let rick = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'newChannel.recipient.' AND label CONTAINS[c] 'rick'")).firstMatch
+        XCTAssertTrue(rick.waitForExistence(timeout: 15))
+        rick.tap()
+    }
+
+    func testDmDeckPlusCreatesReusesAndKeepsSelectedDmThreadAction() {
+        let app = launch(["-AmbulandoFixtureDMs"])
+        openDmDeck(app)
+        app.buttons["deck.inbox.new"].tap()
+        XCTAssertFalse(app.buttons["newChannel.create"].isEnabled, "no recipient selected")
+        app.buttons["newChannel.cancel"].tap()
+        XCTAssertTrue(app.buttons["deck.fab.new"].waitForExistence(timeout: 5))
+        app.buttons["deck.fab.new"].tap()
+        chooseDmAgent(app)
+        capture(app, "dm-deck-recipient-picker")
+        app.buttons["newChannel.create"].tap()
+        XCTAssertTrue(app.navigationBars.matching(NSPredicate(format: "identifier CONTAINS[c] 'rick'")).firstMatch.waitForExistence(timeout: 15))
+        app.openSidebar()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sidebar.channel.rick'"))
+        XCTAssertEqual(rows.count, 1)
+        app.buttons["sidebar.scope.DMs"].firstMatch.tap()
+        app.buttons["deck.inbox.new"].tap()
+        chooseDmAgent(app)
+        app.buttons["newChannel.create"].tap()
+        app.openSidebar()
+        XCTAssertEqual(rows.count, 1, "reused, no duplicate")
+        rows.firstMatch.tap()
+        app.section("deck")
+        app.buttons["deck.inbox.new"].tap()
+        XCTAssertTrue(app.buttons["deck.compose.cancel"].waitForExistence(timeout: 5), "selected DM still starts a thread")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'newChannel.recipient.'")).firstMatch.exists)
+    }
+
+    func testDmDeckEmptyDirectoryAndDirectoryFailureCanCancel() {
+        for flag in ["-AmbulandoFixtureDMDirectoryEmpty", "-AmbulandoFixtureDMDirectoryFail"] {
+            let app = launch(["-AmbulandoFixtureDMs", flag])
+            openDmDeck(app)
+            app.buttons["deck.inbox.new"].tap()
+            XCTAssertTrue(app.staticTexts["newChannel.empty"].waitForExistence(timeout: 15))
+            XCTAssertFalse(app.buttons["newChannel.create"].isEnabled)
+            if flag.hasSuffix("Fail") { XCTAssertTrue(app.buttons["newChannel.retryPeople"].exists) }
+            app.buttons["newChannel.cancel"].tap()
+            XCTAssertTrue(app.buttons["deck.inbox.new"].waitForExistence(timeout: 5))
+            app.terminate()
+        }
+    }
+
+    func testDmDeckCreationErrorKeepsRecipientAndAllowsCancel() {
+        let app = launch(["-AmbulandoFixtureDMs", "-AmbulandoFixtureDMCreateFail"])
+        openDmDeck(app)
+        app.buttons["deck.inbox.new"].tap()
+        chooseDmAgent(app)
+        app.buttons["newChannel.create"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["manage.error"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'newChannel.recipient.'")).firstMatch.exists)
+        app.buttons["newChannel.cancel"].tap()
+        app.openSidebar()
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sidebar.channel.rick'")).firstMatch.exists)
+    }
+
+    func testStackedSidebarDmPlusActivatesItsWorkspaceBeforeCreation() {
+        let app = launch(["-AmbulandoFixtureDMs"])
+        app.openSidebar()
+        app.buttons["sidebar.workspace"].firstMatch.tap()
+        app.buttons["Choose workspaces…"].tap()
+        let lab = app.descendants(matching: .any)["workspace.enabled.Lab (sample)"].firstMatch
+        XCTAssertTrue(lab.waitForExistence(timeout: 10)); lab.tap()
+        app.buttons["Done"].tap()
+        let notes = app.buttons["workspace.channel.Lab (sample).notes"]
+        XCTAssertTrue(notes.waitForExistence(timeout: 15)); notes.tap()
+        app.openSidebar()
+        let plus = app.buttons["workspace.addChannel.Studio (sample).DMs"]
+        XCTAssertTrue(plus.waitForExistence(timeout: 10)); plus.tap()
+        chooseDmAgent(app)
+        app.buttons["newChannel.create"].tap()
+        app.openSidebar()
+        let studioDm = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'workspace.channel.Studio (sample).rick'"))
+        XCTAssertTrue(studioDm.firstMatch.waitForExistence(timeout: 15))
+        XCTAssertEqual(studioDm.count, 1)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'workspace.channel.Lab (sample).rick'")).firstMatch.exists)
     }
 
     func testMoveToScopeRequiresAccessReviewBeforeConfirmation() {

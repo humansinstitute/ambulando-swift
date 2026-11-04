@@ -11,6 +11,16 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Start a direct message (iPhone/iPad build 87, Mac build 78)
+
+In **DMs → All channels**, Deck's Inbox **+** (and the iPhone floating **+**) opens
+recipient selection. Choose a workspace person or agent to create a private DM or
+open the existing conversation. The sidebar updates and Chat opens the conversation.
+A selected DM retains the new-thread action. Multiworkspace sidebars also offer the
+scope **+**, activating that workspace before loading recipients. See
+[direct messages and local checks](docs/direct-messages.md). Source delivery and
+sample checks remain separate from installation and real-account acceptance.
+
 ## Live agent activity (iPhone/iPad build 86, Mac build 77)
 
 An open conversation shows each current agent turn with its public commentary as it is

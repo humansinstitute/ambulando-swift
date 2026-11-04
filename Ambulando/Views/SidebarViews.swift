@@ -220,7 +220,13 @@ struct SidebarContent: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if model.enabledWorkspaceEntries.count > 1 {
-                        StackedWorkspaceNavigation()
+                        StackedWorkspaceNavigation { entry, scope in
+                            Task {
+                                await model.activateWorkspace(entry)
+                                guard entry.enabled, model.selectedWorkspaceBoundary == entry.boundary else { return }
+                                sheet = .newChannel(scope)
+                            }
+                        }
                         if model.selectedWorkspace != nil {
                             Button { sheet = .manageScopes } label: {
                                 Label("Manage scopes in \(model.selectedWorkspace?.label ?? "workspace")", systemImage: "slider.horizontal.3")

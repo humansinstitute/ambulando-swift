@@ -4,6 +4,90 @@ import AppKit
 import SwiftUI
 
 extension MacThreadRegression {
+    static func directMessageCheck(_ window: NSWindow, model: AppModel) async throws {
+        guard let workspace = model.selectedWorkspace, let store = model.store else { throw Failure(description: "Sample workspace") }
+        model.selectContext(WorkContext(scopeId: FixtureTower.scopeDMs))
+        model.show(.deck)
+        await settle(); await settle()
+        try press(window, "deck.inbox.new"); await settle(); await settle()
+        guard let picker = window.attachedSheet else { throw Failure(description: "DM plus must open recipient sheet") }
+        try require(find(picker, "deck.compose.channel") == nil, "scope plus must not choose an existing channel")
+        guard let createControl = find(picker, "newChannel.create") else { throw Failure(description: "Create control") }
+        let enabledSelector = NSSelectorFromString("isAccessibilityEnabled")
+        typealias Enabled = @convention(c) (AnyObject, Selector) -> Bool
+        let enabled = unsafeBitCast(createControl.method(for: enabledSelector), to: Enabled.self)
+        try require(!enabled(createControl, enabledSelector), "empty selection disables Create")
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDMDirectoryEmpty") || ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDMDirectoryFail") {
+            for _ in 0..<30 where find(picker, "newChannel.empty") == nil { await settle() }
+            try require(find(picker, "newChannel.empty") != nil, "empty/error directory is explained")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDMDirectoryFail") {
+                try require(find(picker, "newChannel.retryPeople") != nil, "directory failure offers Retry")
+            }
+            try press(picker, "newChannel.cancel"); await settle()
+            try require(window.attachedSheet == nil, "cancel closes empty/error picker")
+            return
+        }
+        try press(picker, "newChannel.cancel"); await settle()
+        try require(window.attachedSheet == nil, "cancel closes recipient picker")
+        try require(model.context.channelId == nil && model.mode == .deck, "cancel keeps DM scope")
+        try press(window, "deck.inbox.new"); await settle(); await settle()
+        guard let create = window.attachedSheet else { throw Failure(description: "Reopened picker") }
+        try press(create, "newChannel.recipient.\(FixtureTower.rick)"); await settle()
+        try snapshot(create, model: model, name: "dm-deck-picker")
+        try press(create, "newChannel.create"); await settle(); await settle()
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDMCreateFail") {
+            try require(find(create, "manage.error") != nil, "creation failure stays visible")
+            try require(find(create, "newChannel.recipient.\(FixtureTower.rick)") != nil, "recipient retained after failure")
+            try press(create, "newChannel.cancel"); await settle()
+            try require(model.context.channelId == nil, "failed creation does not navigate")
+            return
+        }
+        guard let id = model.context.channelId else { throw Failure(description: "Created DM selected") }
+        let rows = try await store.reader.channels(workspaceId: workspace.id)
+        guard let dm = rows.first(where: { $0.id == id }) else { throw Failure(description: "Created DM stored") }
+        try require(SidebarNavigation.participants(dm) == [model.connection!.signerNpub, FixtureTower.rick].sorted(), "exact private participants")
+        try require(model.mode == .chat && window.attachedSheet == nil, "created conversation opens in Chat")
+        for _ in 0..<20 where model.navigation.value.channel(id) == nil { await settle() }
+        try require(model.navigation.value.channel(id) != nil, "sidebar refreshes immediately")
+        model.selectContext(WorkContext(scopeId: FixtureTower.scopeDMs)); model.show(.deck)
+        await settle(); await settle()
+        try press(window, "deck.inbox.new"); await settle(); await settle()
+        guard let reuse = window.attachedSheet else { throw Failure(description: "Reuse picker") }
+        try press(reuse, "newChannel.recipient.\(FixtureTower.rick)"); await settle()
+        try press(reuse, "newChannel.create"); await settle(); await settle()
+        try require(model.context.channelId == id && model.mode == .chat, "existing DM reused and opened")
+        let after = try await store.reader.channels(workspaceId: workspace.id)
+        try require(after.count == rows.count, "no duplicate DM")
+        model.show(.deck); await settle(); await settle()
+        try press(window, "deck.inbox.new"); await settle()
+        try require(model.composingThread && find(window, "deck.compose") != nil, "selected DM still starts a thread")
+        try press(window, "deck.compose.cancel"); await settle()
+        try snapshot(window, model: model, name: "dm-created-selected")
+        guard let lab = model.workspaceEntries.first(where: { $0.workspace.id == FixtureTower.lab }) else { throw Failure(description: "Lab fixture workspace") }
+        model.setWorkspaceEnabled(lab, true)
+        for _ in 0..<30 where model.enabledWorkspaceEntries.count < 2 { await settle() }
+        await model.activateWorkspace(lab); await settle(); await settle()
+        try press(window, "workspace.addChannel.Studio (sample).DMs"); await settle(); await settle()
+        guard let stacked = window.attachedSheet else { throw Failure(description: "Stacked workspace DM picker") }
+        try require(model.selectedWorkspace?.id == workspace.id, "plus activates captured workspace")
+        try press(stacked, "newChannel.recipient.\(FixtureTower.rick)"); await settle()
+        try press(stacked, "newChannel.create"); await settle(); await settle()
+        try require(model.context.channelId == id && model.selectedWorkspace?.id == workspace.id, "stacked plus reuses DM in its workspace")
+        model.loadMembership(force: true)
+        for _ in 0..<30 where model.membership == nil { await settle() }
+        try press(window, "workspace.addChannel.Studio (sample).Ambulando"); await settle(); await settle()
+        guard let normal = window.attachedSheet else { throw Failure(description: "Ordinary new channel sheet") }
+        try require(find(normal, "newChannel.recipient.\(FixtureTower.rick)") == nil, "ordinary scope retains named channel form")
+        try click(normal, "newChannel.name"); await settle()
+        guard let editor = normal.firstResponder as? NSTextView else { throw Failure(description: "Ordinary channel name editor") }
+        editor.insertText("dm-regression-normal", replacementRange: editor.selectedRange()); await settle()
+        try press(normal, "newChannel.create"); await settle(); await settle()
+        let normalRows = try await store.reader.channels(workspaceId: workspace.id)
+        guard let named = normalRows.first(where: { $0.name == "dm-regression-normal" }) else { throw Failure(description: "Ordinary channel created") }
+        try require(named.kind == "channel" && named.scopeId == FixtureTower.scopeAmbulando, "ordinary channel contract preserved")
+        try require(model.context.channelId == named.id && model.mode == .chat, "ordinary channel opens in Chat")
+    }
+
     static func channelNameCheck(_ original: NSWindow, model: AppModel) async throws {
         guard model.fixture != nil, let workspace = model.selectedWorkspace, let connection = model.connection else { throw Failure(description: "Missing sample workspace") }
         let hostWindow = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 1100, height: 780), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)

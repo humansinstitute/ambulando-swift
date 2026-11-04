@@ -138,6 +138,7 @@ struct WorkspaceSelectionEmptyState: View {
 /// Each action captures the entry rather than consulting the currently viewed workspace.
 struct StackedWorkspaceNavigation: View {
     @Environment(AppModel.self) private var model
+    let onNewChannel: (EnabledWorkspaceEntry, ScopeRecord) -> Void
 
     var body: some View {
         let entries = model.enabledWorkspaceEntries
@@ -153,7 +154,7 @@ struct StackedWorkspaceNavigation: View {
             }
         }
         ForEach(entries) { entry in
-            WorkspaceNavigationGroup(entry: entry)
+            WorkspaceNavigationGroup(entry: entry, onNewChannel: onNewChannel)
                 .padding(.top, 8)
         }
     }
@@ -162,6 +163,7 @@ struct StackedWorkspaceNavigation: View {
 private struct WorkspaceNavigationGroup: View {
     @Environment(AppModel.self) private var model
     let entry: EnabledWorkspaceEntry
+    let onNewChannel: (EnabledWorkspaceEntry, ScopeRecord) -> Void
 
     private var active: Bool { model.selectedWorkspaceBoundary == entry.boundary }
 
@@ -219,6 +221,14 @@ private struct WorkspaceNavigationGroup: View {
                                 .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        if ManagementPermissions.canCreateChannel(in: group.scope, membership: active ? model.membership : nil) {
+                            Button { onNewChannel(entry, group.scope) } label: {
+                                Image(systemName: "plus").font(.amb(.caption).weight(.bold)).frame(width: 30, height: 32)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Create \(group.isDirectMessages ? "direct message" : "channel") in \(group.scope.name), \(entry.workspace.label)")
+                            .accessibilityIdentifier("workspace.addChannel.\(entry.workspace.label).\(group.scope.name)")
+                        }
                     }
                     .foregroundStyle(Amb.mutedForeground)
                     if !collapsed {

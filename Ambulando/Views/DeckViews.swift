@@ -13,6 +13,7 @@ struct DeckView: View {
     let store: LocalStore
     @SceneStorage("deck.card") private var storedCard = DeckCard.inbox.rawValue
     @State private var card: DeckCard?
+    @State private var newDirectScope: ScopeRecord?
     #if os(iOS)
     /// New thread from the floating button or the Inbox heading's +: one composer for the context Deck shows.
     @State private var composingThread = false
@@ -48,11 +49,12 @@ struct DeckView: View {
             .accessibilityIdentifier("deck.track")
             // Above the dots, so it never covers them or the section bar; hidden while the keyboard is up.
             .overlay(alignment: .bottomTrailing) {
-                if !keyboardShown { DeckNewThreadButton { composingThread = true }.padding(.trailing, 16).padding(.bottom, 12) }
+                if !keyboardShown { DeckNewThreadButton { startConversation() }.padding(.trailing, 16).padding(.bottom, 12) }
             }
             DeckPagination(cards: cards, selection: $card)
         }
         .navigationTitle("Deck")
+        .newDirectMessageSheet(scope: $newDirectScope)
         .onKeyboard(willHide: { keyboardShown = false }, didShow: { keyboardShown = true })
         .fullScreenCover(isPresented: $composingThread, onDismiss: openCreatedThread) {
             DeckThreadComposer(workspace: workspace, store: store, onCreated: { createdThread = $0 })
@@ -76,7 +78,7 @@ struct DeckView: View {
         case .hello: DeckHelloCard(workspace: workspace, store: store)
         case .inbox:
             #if os(iOS)
-            DeckInboxCard(workspace: workspace, store: store, active: model.mode == .deck && self.card == .inbox, onNewThread: { composingThread = true })
+            DeckInboxCard(workspace: workspace, store: store, active: model.mode == .deck && self.card == .inbox, onNewThread: { startConversation() })
             #else
             DeckInboxCard(workspace: workspace, store: store, active: model.mode == .deck && self.card == .inbox)
             #endif
@@ -88,6 +90,11 @@ struct DeckView: View {
     }
 
     #if os(iOS)
+    private func startConversation() {
+        if let scope = model.directMessageCreationScope { newDirectScope = scope }
+        else { composingThread = true }
+    }
+
     private func openCreatedThread() {
         if let createdThread { model.focusThread(createdThread); self.createdThread = nil }
     }
@@ -97,6 +104,7 @@ struct DeckView: View {
 #if os(iOS)
 /// Deck's floating New thread button (lower right, above the page dots): starts a thread in the context Deck shows.
 private struct DeckNewThreadButton: View {
+    @Environment(AppModel.self) private var model
     let action: () -> Void
 
     var body: some View {
@@ -109,8 +117,8 @@ private struct DeckNewThreadButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("New thread")
-        .accessibilityHint("Starts a thread in the scope Deck is showing")
+        .accessibilityLabel(model.directMessageCreationScope == nil ? "New thread" : "New direct message")
+        .accessibilityHint(model.directMessageCreationScope == nil ? "Starts a thread in the scope Deck is showing" : "Choose a person or agent to message privately")
         .accessibilityIdentifier("deck.fab.new")
     }
 }
@@ -233,6 +241,7 @@ struct DeckInboxCard: View {
     @State private var composingThread = false
     @State private var createdThread: ThreadFocus?
     @State private var channelOptions: ChannelOptionsPresentation?
+    @State private var newDirectScope: ScopeRecord?
 
     var body: some View {
         let nav = model.navigation.value
@@ -256,6 +265,7 @@ struct DeckInboxCard: View {
             if filtered.isEmpty { DeckNote(text: emptyText).accessibilityIdentifier("deck.inbox.empty") }
         }
         .channelOptionsSheet(channelId: context.channelId, selection: $channelOptions)
+        .newDirectMessageSheet(scope: $newDirectScope)
         .task(id: "\(workspace.id):\(context.encoded()):\(active)") { if active { start(context) } else { snapshot.pause() } }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { refresh(context) } }
         #if os(iOS)
@@ -326,6 +336,7 @@ struct DeckInboxCard: View {
 
     private var newThreadButton: some View {
         Button {
+            if let scope = model.directMessageCreationScope { newDirectScope = scope; return }
             if let onNewThread { onNewThread(); return }
             #if os(macOS)
             model.composingThread = true
@@ -335,7 +346,7 @@ struct DeckInboxCard: View {
         } label: {
             Image(systemName: "plus").font(.amb(.body).weight(.semibold)).frame(width: 30, height: 30)
         }
-        .accessibilityLabel("New thread")
+        .accessibilityLabel(model.directMessageCreationScope == nil ? "New thread" : "New direct message")
         .accessibilityIdentifier("deck.inbox.new")
     }
 

@@ -72,6 +72,10 @@ enum MacThreadRegression {
                 try await agentActivityCheck(window, model: model)
                 print("PASS: live public commentary, local lease expiry to Stopped responding, draft kept"); fflush(stdout); exit(0)
             }
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDMCheck") {
+                try await directMessageCheck(window, model: model)
+                print("PASS: Mac DM scope plus, recipient selection, creation/reuse and cancel/error checks"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacChannelNameCheck") {
                 try await channelNameCheck(window, model: model)
                 print("PASS: Mac channel name editing and creation"); fflush(stdout); exit(0)

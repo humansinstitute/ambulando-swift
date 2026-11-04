@@ -581,6 +581,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
              ("PUT", 2, "me"):
             return try manage(request, workspace: w, rest: rest)
         case ("GET", 1, "members"):
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDMDirectoryFail") { return (503, ["code": "unavailable"]) }
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDMDirectoryEmpty") { return (200, ["members": [], "next_cursor": NSNull()]) }
             let me = actorNpub
             return (200, ["members": [member(me, "You (sample identity)", "human"), member(Self.ana, "Ana", "human"), member(Self.rick, "Rick", "agent"),
                                       member(Self.bea, nil, "human")],
@@ -724,6 +726,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             switch (method, rest.count, rest.first) {
             case ("POST", 3, "scopes"):
                 let s = rest[1]
+                if body["kind"] as? String == "dm", ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDMCreateFail") { return forbidden }
                 guard scopeRows(w).contains(where: { $0["id"] as? String == s }) else { return (404, ["code": "scope_not_found"]) }
                 if s == Self.scopeOps { return forbidden }
                 let name = (body["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
