@@ -9,9 +9,9 @@ final class AgentLivenessTests: XCTestCase {
 
     private func record(id: String = "7e1a0000-0000-4000-8000-000000000001", turn: String? = "turn-1", state: String = "working", sequence: Int,
                         lease: Date?, epoch: Int? = nil, leaseSequence: Int? = nil, expiredAt: Date? = nil, body: String? = nil,
-                        created: String = "2026-11-04T02:00:00.000Z", channel: String = Fixtures.channel1, thread: String = "7e1a0000-0000-4000-8000-0000000000aa") -> AgentActivityRecord {
+                        created: String = "2026-11-04T02:00:00.000Z", channel: String = Fixtures.channel1, thread: String = "7e1a0000-0000-4000-8000-0000000000aa", agent: String = TestKeys.npub) -> AgentActivityRecord {
         var o: [String: Any] = ["id": id, "workspace_id": Fixtures.workspaceId, "channel_id": channel, "thread_id": thread, "activity_id": "act-1",
-                                "visibility": "user_visible", "sequence": sequence, "state": state, "agent_npub": TestKeys.npub, "created_at": created,
+                                "visibility": "user_visible", "sequence": sequence, "state": state, "agent_npub": agent, "created_at": created,
                                 "updated_at": created, "lease_health": "live"]
         if let turn { o["turn_id"] = turn }
         if let lease { o["lease_expires_at"] = f.string(from: lease) }
@@ -303,6 +303,45 @@ final class AgentLivenessTests: XCTestCase {
         let ok = AgentCommentaryEntry(json: ["sequence": 2, "turn_id": "turn-1", "body": "Reading", "delivery_cursor": "0012"], activity: a)
         XCTAssertEqual(ok?.text, "Reading")
         XCTAssertNil(ok?.deliveryCursor, "a malformed cursor is never used for recovery")
+    }
+
+    // MARK: Supersession of stale failures
+
+    func testNewerWorkSupersedesOlderFailureOfSameAgentAndThreadOnly() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let live = now.addingTimeInterval(60)
+        let old = "2026-11-04T02:00:00.000Z", new = "2026-11-05T02:00:00.000Z"
+        func id(_ n: Int) -> String { "7e1a0000-0000-4000-8000-00000000010\(n)" }
+        let failed = record(id: id(1), state: "failed", sequence: 5, lease: nil, created: old)
+        let working = record(id: id(2), sequence: 2, lease: live, created: new)
+        XCTAssertEqual(AgentLiveness.supersededFailures([working, failed], now: now), [failed.id], "recovery: newer live work retires the failure")
+        XCTAssertEqual(AgentLiveness.supersededFailures([failed, working], now: now), [failed.id], "input order is irrelevant")
+
+        // Completion survives reconnect/history reload: no live row any more, the newer completion still supersedes.
+        let done = record(id: id(2), state: "completed", sequence: 9, lease: nil, created: new)
+        XCTAssertEqual(AgentLiveness.supersededFailures([failed, done], now: now.addingTimeInterval(86_400)), [failed.id])
+        // Stopped and cancelled attempts are retired the same way.
+        let stopped = record(id: id(3), sequence: 1, lease: now.addingTimeInterval(-600), created: old)
+        let cancelled = record(id: id(4), state: "cancelled", sequence: 1, lease: nil, created: old)
+        XCTAssertEqual(AgentLiveness.supersededFailures([stopped, cancelled, working], now: now), [stopped.id, cancelled.id])
+
+        // Out-of-order replay: a delayed old failure (older created_at, bumped sequence) never resurrects over newer work
+        // and a failure newer than the work is never masked.
+        let replayed = record(id: id(1), state: "failed", sequence: 99, lease: nil, created: old)
+        XCTAssertEqual(AgentLiveness.supersededFailures([working, replayed], now: now), [replayed.id])
+        let currentFailure = record(id: id(5), state: "failed", sequence: 3, lease: nil, created: "2026-11-05T03:00:00.000Z")
+        XCTAssertTrue(AgentLiveness.supersededFailures([working, currentFailure], now: now).isEmpty, "newer failure is current")
+        XCTAssertTrue(AgentLiveness.supersededFailures([failed], now: now).isEmpty, "a lone failure stays")
+
+        // Isolation: other agent, other thread, and non-authoritative successors do not supersede.
+        let otherAgent = record(id: id(6), sequence: 2, lease: live, created: new, agent: "npub1other")
+        let otherThread = record(id: id(7), sequence: 2, lease: live, created: new, thread: "7e1a0000-0000-4000-8000-0000000000bb")
+        XCTAssertTrue(AgentLiveness.supersededFailures([failed, otherAgent, otherThread], now: now).isEmpty)
+        let queued = record(id: id(8), state: "queued", sequence: 1, lease: live, created: new)
+        let expired = record(id: id(9), sequence: 1, lease: now.addingTimeInterval(-600), created: new)
+        XCTAssertTrue(AgentLiveness.supersededFailures([failed, queued, expired], now: now).isEmpty, "queued or lease-expired work is not fresh")
+        // Existing lease expiry: once the newer work's lease lapses it stops superseding.
+        XCTAssertTrue(AgentLiveness.supersededFailures([failed, working], now: live.addingTimeInterval(AgentLiveness.grace)).isEmpty)
     }
 
     private func activityEvent(_ row: Int, id: String, payload: [String: Any]) -> TowerEvent {

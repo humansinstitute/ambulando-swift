@@ -137,6 +137,29 @@ public enum AgentLiveness {
         switch phase(a, now: now) { case .working, .waiting: true; default: false }
     }
 
+    // MARK: Supersession
+
+    /// Row ids of unsuccessful attempts (failed, cancelled, or stopped responding) that newer authoritative work has
+    /// replaced in the current-activity UI. Scope is the same thread and the same agent; order is the lifecycle's
+    /// immutable `created_at` (never `updated_at`, which a delayed or replayed event can bump), so an old row replayed
+    /// late stays old. Only a newer lifecycle that is live (working or waiting, by lease) or completed supersedes: a
+    /// queued, stopped, failed or cancelled successor does not, and an attempt that is itself the newest is never hidden.
+    /// This is presentation only; messages, commentary and the stored rows are untouched.
+    public static func supersededFailures(_ activities: [AgentActivityRecord], now: Date) -> Set<String> {
+        var hidden: Set<String> = []
+        for old in activities {
+            let phase = phase(old, now: now)
+            guard phase == .failed || phase == .cancelled || phase == .stopped, let oldAt = AgentActivityRecord.time(old.createdAt) else { continue }
+            let replaced = activities.contains { new in
+                guard new.id != old.id, new.threadId == old.threadId, new.agentNpub == old.agentNpub,
+                      let newAt = AgentActivityRecord.time(new.createdAt), newAt > oldAt else { return false }
+                switch self.phase(new, now: now) { case .working, .waiting, .completed: return true; default: return false }
+            }
+            if replaced { hidden.insert(old.id) }
+        }
+        return hidden
+    }
+
     // MARK: Merge
 
     /// Merges two copies of one lifecycle (same workspace row) whatever order they arrive in: state and commentary take

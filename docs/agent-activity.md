@@ -19,6 +19,12 @@ composer and list keep their height):
 | lease deadline + 15 s passed, not terminal | "Stopped responding · last update hh:mm" for 10 min, then hidden | collapsed |
 | completed / failed / cancelled | "Earlier activity · completed" (newest finished turn only, if it said anything) | collapsed |
 
+**Stale failures.** A failed, cancelled or stopped turn leaves the conversation strip once newer work of the same agent in
+the same thread is live (working or waiting, by lease) or completed (`AgentLiveness.supersededFailures`). Order is the
+lifecycle's immutable `created_at`, so a delayed or replayed old event cannot bring an old failure back and the result
+holds across reconnect and history reload. A newer failure, other agents, other threads, queued or lease-expired
+successors never supersede or get masked. Presentation only: messages, commentary and stored rows are untouched.
+
 Durable final replies are ordinary messages and are never hidden or replaced. New lines are followed like new messages:
 only when the reader is already at the newest message. Drafts are untouched.
 

@@ -55,7 +55,9 @@ struct ThreadActivityStrip: View {
 
     static func visible(_ items: [ThreadActivitySnapshot.Item], now: Date) -> [ThreadActivitySnapshot.Item] {
         var shownTerminal = false
-        return items.prefix(shown).filter { item in
+        // Newer same-agent work in this thread retires that agent's older failed/stopped attempts from the strip.
+        let superseded = AgentLiveness.supersededFailures(items.map(\.record), now: now)
+        return items.filter { !superseded.contains($0.id) }.prefix(shown).filter { item in
             let phase = AgentLiveness.phase(item.record, now: now)
             if phase.isLive { return true }
             if phase == .stopped {
