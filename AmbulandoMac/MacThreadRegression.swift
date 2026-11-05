@@ -75,6 +75,10 @@ enum MacThreadRegression {
         defer { heartbeat.cancel() }
         do {
             try require(find(window, "fixture.banner") != nil, "fixture banner")
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacPRTCheck") {
+                try await prtNavigationProbe(window, model: model)
+                print("PASS: synthetic PRT scroll/select rename/delete stale selection"); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDividerCheck") {
                 try await dividerCheck(window, model: model)
                 exit(0)
@@ -1313,6 +1317,56 @@ extension MacThreadRegression {
             try press(window, "thread.focus.close")
         }
 
+    }
+}
+extension MacThreadRegression {
+    /// Run only the isolated Test app with -AmbulandoMacThreadRegression -AmbulandoMacPRTCheck.
+    /// Synthetic local rows exercise the shipped sidebar; this does not inspect or validate live PRT.
+    /// Scopes are flat in the native schema; parent metadata deliberately survives a parent's removal.
+    static func prtNavigationProbe(_ window: NSWindow, model: AppModel) async throws {
+        guard Bundle.main.bundleIdentifier?.hasSuffix(".test") == true,
+              model.fixture != nil, let store = model.store, let w = model.selectedWorkspace else {
+            throw Failure(description: "PRT probe requires isolated Test fixture")
+        }
+        let parent = "f1c70000-0000-4000-8000-000000000aaa"
+        let prt = "f1c70000-0000-4000-8000-000000000bbb"
+        func scope(_ id: String, _ name: String, parent: String? = nil) throws -> ScopeRecord {
+            var row: [String: Any] = ["id": id, "workspace_id": w.id, "name": name, "kind": "project", "row_version": 1, "updated_at": "2026-11-05T00:00:00Z"]
+            row["parent_id"] = parent ?? NSNull() as Any
+            return try ScopeRecord(raw: JSONSerialization.data(withJSONObject: row))
+        }
+        var scopes = try await store.reader.scopes(workspaceId: w.id)
+        for n in 0..<60 { scopes.append(try scope(String(format: "f1c70000-0000-4000-8000-%012d", 1000+n), "Project \(n)")) }
+        scopes.append(try scope(parent, "Retired projects"))
+        scopes.append(try scope(prt, "Plantrite", parent: parent))
+        try await store.writer.upsertScopes(workspaceId: w.id, scopes, complete: true)
+        await settle(); await settle()
+        model.selectContext(WorkContext(scopeId: parent, channelId: "f1c70000-0000-4000-8000-000000000ccc"))
+        scopes.removeAll { $0.id == parent || $0.id == prt }
+        scopes.append(try scope(prt, "PRT", parent: parent))
+        try await store.writer.upsertScopes(workspaceId: w.id, scopes, complete: true)
+        for _ in 0..<30 { if model.context.isHome && model.navigation.value.scope(prt)?.name == "PRT" { break }; await settle() }
+        try require(model.context.isHome, "deleted selection falls back to Home")
+        window.setFrame(NSRect(x: 30, y: 30, width: 1000, height: 650), display: true)
+        await settle()
+        var scrolled = false
+        for scroll in nativeScrollViews(window.contentView!) {
+            guard let document = scroll.documentView, document.bounds.height > scroll.contentView.bounds.height else { continue }
+            // Sidebar is the narrow scroll region; do not scroll the Deck content.
+            guard scroll.bounds.width < 450 else { continue }
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: document.isFlipped ? document.bounds.maxY-scroll.contentView.bounds.height : 0))
+            scroll.reflectScrolledClipView(scroll.contentView); scrolled = true
+        }
+        await settle()
+        try require(scrolled, "native sidebar scroll reached final PRT row")
+        try await waitFor(window, "sidebar.scope.PRT", "scrolled PRT row")
+        try press(window, "sidebar.scope.PRT"); await settle(); await settle()
+        try require(model.context == WorkContext(scopeId: prt) && model.mode == .deck, "actual PRT scope row selection opens Deck")
+        model.selectContext(WorkContext(scopeId: prt, channelId: "f1c70000-0000-4000-8000-000000000ccc"))
+        model.validateContext(); await settle()
+        try require(model.context == WorkContext(scopeId: prt), "stale channel narrows to PRT")
+        for _ in 0..<3 { try press(window, "sidebar.scope.PRT"); await settle() }
+        print("PRT_SYNTHETIC_ONLY scopes=\(scopes.count) nativeScroll=true realAXSelect=true renameSameUUID=true removedParent=true staleSelection=true")
     }
 }
 #endif
