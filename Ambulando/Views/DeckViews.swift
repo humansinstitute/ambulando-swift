@@ -376,7 +376,13 @@ struct DeckInboxCard: View {
         .accessibilityIdentifier("deck.inbox.new")
     }
 
-    private func readMenu() -> some View {
+    @ViewBuilder private func readMenu() -> some View {
+        #if os(macOS)
+        NativeMessageActions(items: inboxActions, identifier: "deck.inbox.readMenu", label: "Inbox options")
+            .frame(width: 44, height: 44)
+            .accessibilityLabel("Inbox options")
+            .accessibilityIdentifier("deck.inbox.readMenu")
+        #else
         Menu {
             Button("Mark all tasks as read") { markAll([.task], label: "tasks") }
             Button("Mark all docs as read") { markAll([.document], label: "docs") }
@@ -392,7 +398,25 @@ struct DeckInboxCard: View {
         .fixedSize()
         .accessibilityLabel("Inbox options")
         .accessibilityIdentifier("deck.inbox.readMenu")
+        #endif
     }
+
+    #if os(macOS)
+    private var inboxActions: [NativeMessageAction] {
+        var actions = [
+            NativeMessageAction("Mark all tasks as read", "checkmark") { markAll([.task], label: "tasks") },
+            NativeMessageAction("Mark all docs as read", "checkmark") { markAll([.document], label: "docs") },
+            NativeMessageAction("Mark all chats as read", "checkmark") { markAll([.chat], label: "chats") },
+            NativeMessageAction("Mark everything as read", "checkmark") { markAll([.chat, .task, .document], label: "Inbox items") }
+        ]
+        if let channelId = model.context.channelId, model.navigation.value.channel(channelId) != nil {
+            actions.append(NativeMessageAction("Channel options", "gearshape") {
+                channelOptions = ChannelOptionsPresentation(id: ChannelOptionsPresentation.key(model, channelId: channelId), channelId: channelId)
+            })
+        }
+        return actions
+    }
+    #endif
 
     @ViewBuilder private func row(_ item: DeckActivity.Item, labels: [String: String]) -> some View {
         HStack(alignment: .top, spacing: 8) {

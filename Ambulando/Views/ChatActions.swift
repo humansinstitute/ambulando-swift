@@ -595,7 +595,6 @@ struct NativeMessageActions: NSViewRepresentable {
     var identifier = "message.actions"
     var label = "Message actions"
     var help = "Opens the message action menu"
-    var transparent = false
 
     func makeCoordinator() -> Coordinator { Coordinator(items: items) }
     func makeNSView(context: Context) -> NSButton {
@@ -604,7 +603,6 @@ struct NativeMessageActions: NSViewRepresentable {
             .withSymbolConfiguration(.init(pointSize: 12, weight: .bold))
         button.imagePosition = .imageOnly
         button.isBordered = false
-        if transparent { button.image = nil }
         button.contentTintColor = .secondaryLabelColor
         button.image?.isTemplate = true
         button.setAccessibilityLabel(label)
@@ -627,12 +625,18 @@ struct NativeMessageActions: NSViewRepresentable {
 
     final class Coordinator: NSObject {
         var items: [NativeMessageAction]
+        weak var anchor: NSView?
         init(items: [NativeMessageAction]) { self.items = items }
 
-        @objc func open(_ button: NSButton) {
+        func openAtAnchor() {
+            guard let anchor else { return }
+            open(in: anchor)
+        }
+        @objc func open(_ button: NSButton) { open(in: button) }
+        private func open(in view: NSView) {
             MacHangDiagnostics.shared.mark("nativeMenu.open")
             let menu = makeMenu(items)
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY), in: button)
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.maxY), in: view)
         }
         private func makeMenu(_ actions: [NativeMessageAction]) -> NSMenu {
             let menu = NSMenu()
@@ -654,4 +658,28 @@ struct NativeMessageActions: NSViewRepresentable {
         init(perform: (() -> Void)?) { self.perform = perform }
     }
 }
+
+/// A noninteractive positioning anchor for a labelled SwiftUI Button. The button owns its ordinary
+/// accessibility and hit region; no empty transparent NSButton or SwiftUI popup adaptor is needed.
+struct NativeMenuAnchor: NSViewRepresentable {
+    let items: [NativeMessageAction]
+    let presenter: NativeMessageActions.Coordinator
+    let identifier: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = AnchorView()
+        view.identifier = NSUserInterfaceItemIdentifier(identifier)
+        view.setAccessibilityElement(false)
+        presenter.anchor = view
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) {
+        presenter.items = items
+        presenter.anchor = view
+    }
+    private final class AnchorView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
 #endif

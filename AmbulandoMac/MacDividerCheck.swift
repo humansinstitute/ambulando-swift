@@ -57,6 +57,30 @@ extension MacThreadRegression {
         guard let divider = window.contentView.flatMap({ split(in: $0) }) else {
             throw Failure(description: "Missing actual NSSplitView")
         }
+        func popupCount(_ view: NSView) -> Int {
+            (view is NSPopUpButton ? 1 : 0) + view.subviews.reduce(0) { $0 + popupCount($1) }
+        }
+        try require(popupCount(window.contentView!) == 0, "Deck/sidebar contain no eager popup adaptors")
+        func workspaceAnchor(_ view: NSView) -> NSView? {
+            if view.identifier?.rawValue == "sidebar.workspace.anchor" { return view }
+            return view.subviews.lazy.compactMap { workspaceAnchor($0) }.first
+        }
+        guard let workspaceButton = workspaceAnchor(window.contentView!),
+              let inboxButton = nativeActionsButton(window.contentView!, id: "deck.inbox.readMenu") else {
+            throw Failure(description: "Missing lazy workspace/Inbox buttons")
+        }
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacPopupCheck") {
+            try await menuAction(window, title: "Collapse workspace", button: "sidebar.workspace")
+            await settle()
+            try await menuAction(window, title: "Expand workspace", button: "sidebar.workspace")
+            await settle()
+            try await menuAction(window, title: "Mark all chats as read", button: "deck.inbox.readMenu")
+            try require(workspaceAnchor(window.contentView!) === workspaceButton, "workspace button remains stable after menu actions")
+            try require(popupCount(window.contentView!) == 0, "menus leave no persistent popup controls")
+            print("POPUP_PASS workspaceCollapseExpand=true inboxMarkRead=true stableButtons=true eagerPopups=0"); fflush(stdout)
+            return
+        }
+        let menuOpensBefore = MacHangDiagnostics.shared.snapshot()["nativeMenu.open", default: 0]
         let focus = ThreadFocus(workspaceId: workspace.id, channelId: FixtureTower.generalChannel, threadId: FixtureTower.threadReview)
         let initial = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: focus.threadId, limit: 500).count
         let updates = Task.detached {
@@ -72,7 +96,12 @@ extension MacThreadRegression {
         var maxReleaseDelay = 0.0
         var maxDuration = 0.0
         for cycle in 0..<20 {
-            if cycle == 5 { model.focusThread(focus); await settle(); try type(window, "Divider draft preserved") }
+            if cycle == 5 {
+                // Keep the background Inbox on the channel receiving the synthetic updates.
+                // A focused thread intentionally does not change the underlying context.
+                try press(window, "sidebar.channel.general"); await settle()
+                model.focusThread(focus); await settle(); try type(window, "Divider draft preserved")
+            }
             if cycle == 6 {
                 pausedLoads = MacHangDiagnostics.shared.snapshot()["deck.inbox.loaded", default: 0]
                 panelButton = nativeActionsButton(window.contentView!, id: "thread.focus.actions")
@@ -130,8 +159,29 @@ extension MacThreadRegression {
             try require(abs(after - before) > 10, "actual divider must move")
             try require(upPosted.load() != nil && releaseDelay < 2, "divider must return within2s after posted mouseUp")
             try require(maxPulseGap < 2, "common/eventTracking heartbeat must remain responsive")
+            if model.focusedThread == nil {
+                let channel = cycle.isMultiple(of: 2) ? FixtureTower.designChannel : FixtureTower.generalChannel
+                let label = cycle.isMultiple(of: 2) ? "design" : "general"
+                let navigationStart = ProcessInfo.processInfo.systemUptime
+                try press(window, "sidebar.channel.\(label)")
+                await settle()
+                try require(model.context.channelId == channel, "sidebar click selects exact channel after drag")
+                try require(ProcessInfo.processInfo.systemUptime - navigationStart < 2, "channel navigation remains responsive")
+                try require(workspaceAnchor(window.contentView!) === workspaceButton, "workspace button identity survives resize/navigation")
+                try require(nativeActionsButton(window.contentView!, id: "deck.inbox.readMenu") === inboxButton, "Inbox button identity survives resize/navigation")
+                try require(popupCount(window.contentView!) == 0, "no popup adaptor after channel navigation")
+                print("CHANNEL_AFTER_DRAG cycle=\(cycle) label=\(label) seconds=\(ProcessInfo.processInfo.systemUptime - navigationStart)"); fflush(stdout)
+            }
             try? await Task.sleep(for: .milliseconds(250))
         }
+        // Only the explicit focused-message menu action above should have opened a menu.
+        try require(MacHangDiagnostics.shared.snapshot()["nativeMenu.open", default: 0] == menuOpensBefore + 1, "resize/navigation never opens or materializes lazy menus")
+        try await menuAction(window, title: "Collapse workspace", button: "sidebar.workspace")
+        await settle()
+        try await menuAction(window, title: "Expand workspace", button: "sidebar.workspace")
+        await settle()
+        try await menuAction(window, title: "Mark all chats as read", button: "deck.inbox.readMenu")
+        print("LAZY_MENU_PASS workspaceCollapseExpand=true inboxMarkRead=true stableButtons=true eagerPopups=0"); fflush(stdout)
         await updates.value
         model.focusThread(focus)
         for _ in 0..<30 {

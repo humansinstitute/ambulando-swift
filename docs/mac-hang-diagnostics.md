@@ -4,6 +4,30 @@ Mac build 79 reduces work in the UI update path during split-divider tracking. A
 
 These are measured mitigations, not proof that every persistent SwiftUI hang is fixed. A busy SwiftUI/AttributeGraph/accessibility stack inside `NSSplitView.mouseDown` identifies the interval being sampled, not the cause or recovery time. A hang report's duration is its observation window. Inspect the process lifetime and time since wake separately before attributing a failure to startup or wake.
 
+## Build 84: persistent popup controls
+
+The build 80 recurrence places all 22 main-thread samples in SwiftUI graph updates, with
+`AppKitPopUpAdaptor` and accessibility label resolution prominent. The 17.18-second report
+window is not the total hang length. Unlike the earlier split-view-tracking report, these
+samples show a normal run-loop graph transaction; resizing is a reported recent action,
+not a proven trigger. Stabilizing channel-query identity in build 80 did not eliminate it.
+
+The remaining persistent popup controls in the workspace footer, stacked workspace options
+and Deck Inbox header now use stable buttons with native menus. The workspace options and
+Inbox reuse the AppKit action button; the footer uses a plain labelled SwiftUI button and
+a noninteractive AppKit positioning anchor. Each refreshes current closures but builds its
+`NSMenu` only on an explicit click/accessibility press. The footer keeps its visual label
+and an explicit button accessibility label;
+menu item labels no longer participate in SwiftUI's popup accessibility graph during resize.
+iPhone/iPad keep their existing SwiftUI menus. This is a focused mitigation with moderate
+cause confidence, not proof against every framework hang or real-account recurrence.
+
+The divider regression additionally asserts no `NSPopUpButton` in the tested Deck/sidebar,
+stable workspace anchor/Inbox native button identity, exact alternating channel selection after
+drags within two seconds, no lazy-menu opens during resize/navigation, and actual workspace
+collapse/expand and Inbox mark-read menu actions. Its synthetic incoming updates, draft and
+tracking heartbeat checks remain enabled. Run the bounded check without the soak flag.
+
 ## Bounded local diagnostics
 
 The Mac app starts a half-second heartbeat in common and event-tracking run-loop modes. An independent utility queue writes one record after a heartbeat has been absent for at least four seconds, including when the main thread never recovers. Wake resets the heartbeat. Eight fixed cache slots, each limited to 16 KiB, bound disk use; a process writes at most eight records. The files are local only and are never uploaded automatically:
@@ -25,6 +49,10 @@ Build the separate Test bundle with `./scripts/test-app.py mac --reset`. Quit on
   -AmbulandoFixtureReset -AmbulandoMacThreadRegression \
   -AmbulandoMacDividerCheck -AmbulandoFixtureAgentActivityStall
 ```
+
+For a smaller menu-only check, add `-AmbulandoMacPopupCheck` to the same command. It verifies
+workspace collapse/expand and Inbox mark-read through real native menu tracking, stable button identity,
+and absence of persistent popup controls, then exits before divider/traffic checks.
 
 The check calls the real `NSSplitView.mouseDown` with queued mouse-drag/up events, verifies actual divider movement, mouse-up-to-return latency and a common/event-tracking timer heartbeat (both under two seconds), and covers incoming replies/Inbox activity, thread presentation, native menu tracking/actions, live-activity expiry, menu identity and draft retention. Calling the divider directly under a modal deliberately stresses otherwise shielded background layout; it does not remove the product's input shield. It also verifies the background Inbox stops reloading for ordinary changes and catches up after closing.
 

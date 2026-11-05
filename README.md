@@ -11,7 +11,16 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
-## Branch history (iPhone/iPad build 88, Mac build 81)
+## Mac resize responsiveness (Mac build 84)
+
+The workspace footer, stacked workspace options and Inbox options now use stable buttons and native menus.
+Their menus are created only when opened, avoiding SwiftUI popup/accessibility graph rebuilding
+while the sidebar resizes or channels change. This addresses the popup path seen in the recurring
+build 80 hang; the report does not identify one control as the definitive cause.
+See [responsiveness checks and limits](docs/mac-hang-diagnostics.md). Source/package delivery is
+separate from installation and real-account acceptance on Pete's MacBook.
+
+## Branch history (iPhone/iPad build 88, Mac build 82)
 
 Branches now load Tower's effective transcript, including inherited context through the selected message,
 then their own replies. The local store keeps conversation membership separate from original message ownership,

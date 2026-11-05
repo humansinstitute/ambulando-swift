@@ -180,6 +180,16 @@ private struct WorkspaceNavigationGroup: View {
                 Circle().fill(entry.colour.nativeColour).frame(width: 9, height: 9).accessibilityHidden(true)
                 Text(entry.workspace.label).font(.amb(.subheadline).weight(.bold)).lineLimit(1)
                 Spacer(minLength: 0)
+                #if os(macOS)
+                NativeMessageActions(items: [
+                    NativeMessageAction("Move up", "arrow.up") { model.moveWorkspace(entry, offset: -1) },
+                    NativeMessageAction("Move down", "arrow.down") { model.moveWorkspace(entry, offset: 1) },
+                    NativeMessageAction("Pause workspace", "pause") { model.setWorkspaceEnabled(entry, false) }
+                ], identifier: "workspace.options.\(entry.workspace.label)", label: "Options for \(entry.workspace.label)")
+                    .frame(width: 28, height: 32)
+                    .accessibilityLabel("Options for \(entry.workspace.label)")
+                    .accessibilityIdentifier("workspace.options.\(entry.workspace.label)")
+                #else
                 Menu {
                     Button("Move up", systemImage: "arrow.up") { model.moveWorkspace(entry, offset: -1) }
                     Button("Move down", systemImage: "arrow.down") { model.moveWorkspace(entry, offset: 1) }
@@ -189,6 +199,7 @@ private struct WorkspaceNavigationGroup: View {
                 .fixedSize()
                 .accessibilityLabel("Options for \(entry.workspace.label)")
                 .accessibilityIdentifier("workspace.options.\(entry.workspace.label)")
+                #endif
             }
             .foregroundStyle(Amb.foreground)
             if !entry.collapsed {

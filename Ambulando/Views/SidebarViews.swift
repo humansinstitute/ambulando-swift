@@ -425,7 +425,30 @@ private struct WorkspaceFooter: View {
     @Environment(AppModel.self) private var model
     @State private var showManagement = false
     @State private var showSelection = false
+    #if os(macOS)
+    @State private var menuPresenter = NativeMessageActions.Coordinator(items: [])
+    #endif
     var body: some View {
+        workspaceMenu
+        .sheet(isPresented: $showSelection) { WorkspaceSelectionView() }
+        .sheet(isPresented: $showManagement) {
+            if let workspace = model.selectedWorkspace, let connection = model.connection {
+                WorkspaceManagementView(workspace: workspace, connection: connection)
+                    .id("\(connection.id):\(workspace.id)")
+            }
+        }
+        .padding(12)
+        .overlay(alignment: .top) { Rectangle().fill(Amb.border).frame(height: 0.5) }
+    }
+
+    @ViewBuilder private var workspaceMenu: some View {
+        #if os(macOS)
+        Button { menuPresenter.openAtAnchor() } label: { footerLabel }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Switch workspace, current \(model.selectedWorkspace?.label ?? "none")")
+            .accessibilityIdentifier("sidebar.workspace")
+            .background(NativeMenuAnchor(items: workspaceActions, presenter: menuPresenter, identifier: "sidebar.workspace.anchor"))
+        #else
         Menu {
             Button("Choose workspaces…", systemImage: "checklist") { showSelection = true }
             if let entry = model.enabledWorkspaceEntries.first(where: { $0.boundary == model.selectedWorkspaceBoundary }) {
@@ -436,31 +459,41 @@ private struct WorkspaceFooter: View {
             Divider()
             if model.selectedWorkspace != nil { Button("Manage Workspace", systemImage: "gearshape.2") { showManagement = true } }
         } label: {
-            HStack(spacing: 10) {
-                WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 32)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Workspace").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
-                    Text(model.selectedWorkspace?.label ?? "Ambulando").font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
-                }
-                Spacer()
-                Image(systemName: "chevron.up.chevron.down").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
-            }
-            .padding(10)
-            .background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+            footerLabel
         }
         .fullLabelMenu()
         .accessibilityLabel("Switch workspace, current \(model.selectedWorkspace?.label ?? "none")")
         .accessibilityIdentifier("sidebar.workspace")
-        .sheet(isPresented: $showSelection) { WorkspaceSelectionView() }
-        .sheet(isPresented: $showManagement) {
-            if let workspace = model.selectedWorkspace, let connection = model.connection {
-                WorkspaceManagementView(workspace: workspace, connection: connection)
-                    .id("\(connection.id):\(workspace.id)")
+        #endif
+    }
 
-            }
+    #if os(macOS)
+    private var workspaceActions: [NativeMessageAction] {
+        var actions = [NativeMessageAction("Choose workspaces…", "checklist") { showSelection = true }]
+        if let entry = model.enabledWorkspaceEntries.first(where: { $0.boundary == model.selectedWorkspaceBoundary }) {
+            actions.append(NativeMessageAction(entry.collapsed ? "Expand workspace" : "Collapse workspace", "chevron.up.chevron.down") {
+                model.toggleWorkspaceCollapsed(entry)
+            })
         }
-        .padding(12)
-        .overlay(alignment: .top) { Rectangle().fill(Amb.border).frame(height: 0.5) }
+        if model.selectedWorkspace != nil {
+            actions.append(NativeMessageAction("Manage Workspace", "gearshape.2") { showManagement = true })
+        }
+        return actions
+    }
+    #endif
+
+    private var footerLabel: some View {
+        HStack(spacing: 10) {
+            WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 32)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Workspace").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
+                Text(model.selectedWorkspace?.label ?? "Ambulando").font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: "chevron.up.chevron.down").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
+        }
+        .padding(10)
+        .background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
     }
 }
 
