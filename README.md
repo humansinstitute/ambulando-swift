@@ -11,6 +11,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Branch history (iPhone/iPad build 88, Mac build 81)
+
+Branches now load Tower's effective transcript, including inherited context through the selected message,
+then their own replies. The local store keeps conversation membership separate from original message ownership,
+so refreshing a parent does not erase inherited history. Inherited rows are read-only in the branch;
+branching from one uses the currently open conversation. Earlier/newer navigation reads 50 message bodies
+at a time and can reach history older than the previous 500-message limit. See [branch history](docs/branch-history.md).
+Pushed source and signed packages remain separate from installation and real-account acceptance.
+
 ## Channel selection identity (Mac build 80)
 
 Deck now keys its Inbox query and retained context by the workspace and `WorkContext` values.

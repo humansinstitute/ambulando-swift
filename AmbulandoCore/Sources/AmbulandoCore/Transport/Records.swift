@@ -125,8 +125,10 @@ public struct MessageRecord: Sendable, Equatable, Identifiable {
     /// Channel-level post (thread root), as the web client maps it: `thread_source_message_id == id`, or no thread.
     public var isThreadRoot: Bool { threadId == nil || threadSourceId == id }
 
+    public func isInherited(in effectiveThreadId: String) -> Bool { threadId != effectiveThreadId }
+
     struct DTO: Decodable {
-        let id: String; let workspace_id: String; let channel_id: String; let thread_id: String?; let thread_source_message_id: String?
+        let id: String; let workspace_id: String; let channel_id: String; let thread_id: String?; let owning_thread_id: String?; let thread_source_message_id: String?
         let body: String?; let sender_npub: String?; let created_by_actor_label: String?; let client_request_id: String?
         let created_at: String?; let updated_at: String?; let row_version: Int?; let record_state: String?
     }
@@ -135,7 +137,7 @@ public struct MessageRecord: Sendable, Equatable, Identifiable {
         let dto = try JSONDecoder().decode(DTO.self, from: raw)
         guard UUID(uuidString: dto.id) != nil, UUID(uuidString: dto.channel_id) != nil else { throw TowerError.malformed("message") }
         workspaceId = dto.workspace_id.lowercased(); id = dto.id.lowercased(); channelId = dto.channel_id.lowercased()
-        threadId = dto.thread_id?.lowercased(); threadSourceId = dto.thread_source_message_id?.lowercased()
+        threadId = (dto.owning_thread_id ?? dto.thread_id)?.lowercased(); threadSourceId = dto.thread_source_message_id?.lowercased()
         body = dto.body ?? ""; senderNpub = dto.sender_npub; senderLabel = dto.created_by_actor_label; clientRequestId = dto.client_request_id
         createdAt = dto.created_at ?? ""; updatedAt = dto.updated_at ?? createdAt; rowVersion = dto.row_version ?? 0
         deleted = dto.record_state == "deleted"; self.raw = raw

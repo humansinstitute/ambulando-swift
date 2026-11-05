@@ -4,8 +4,8 @@ import SwiftUI
 /// The web's message menu actions that go beyond a local write: Get it done, Branch from here, Autopilot Link.
 extension AppModel {
     /// Starts a thread from `message` (Tower `…/threads/:t/branches`) and opens it over the current screen.
-    func branch(from message: MessageRecord, in workspace: WorkspaceRecord, recipient: String?) {
-        guard let sync, let connection, let parent = message.threadId, workspace.id == selectedWorkspace?.id else {
+    func branch(from message: MessageRecord, in workspace: WorkspaceRecord, recipient: String?, effectiveThreadId: String? = nil) {
+        guard let sync, let connection, let parent = effectiveThreadId ?? message.threadId, workspace.id == selectedWorkspace?.id else {
             notice = "Open this message from a conversation to branch it."
             return
         }

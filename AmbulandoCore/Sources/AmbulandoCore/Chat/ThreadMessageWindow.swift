@@ -13,10 +13,18 @@ public struct ThreadMessageWindow: Sendable, Equatable {
         let size = max(1, size)
         let ids = history.map(\.id)
         order = ids
-        if let anchor {
-            start = ids.firstIndex(of: anchor) ?? fallback.lazy.compactMap { ids.firstIndex(of: $0) }.first
-                ?? min(max(0, fallbackStart), max(0, history.count - 1))
-        } else { start = max(0, history.count - size) }
+        start = Self.start(in: ids, anchor: anchor, fallback: fallback, fallbackStart: fallbackStart, size: size)
         messages = Array(history.dropFirst(start).prefix(size))
+    }
+    public init(messages: [MessageRecord], order: [String], start: Int) {
+        self.messages = messages; self.order = order; self.start = start
+    }
+
+    static func start(in ids: [String], anchor: String?, fallback: [String], fallbackStart: Int, size: Int) -> Int {
+        if let anchor {
+            return ids.firstIndex(of: anchor) ?? fallback.lazy.compactMap { ids.firstIndex(of: $0) }.first
+                ?? min(max(0, fallbackStart), max(0, ids.count - 1))
+        }
+        return max(0, ids.count - max(1, size))
     }
 }

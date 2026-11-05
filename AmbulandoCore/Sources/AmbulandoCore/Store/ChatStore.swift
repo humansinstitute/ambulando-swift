@@ -310,6 +310,19 @@ extension StoreWriter {
         return changed
     }
 
+    /// Replace only the effective conversation membership after every page succeeds. Parent rows stay canonical.
+    public func replaceThreadMembership(workspaceId: String, channelId: String, threadId: String, messageIds: [String]) async throws {
+        try db.transaction {
+            try db.prepare("DELETE FROM thread_membership WHERE workspace_id = ? AND thread_id = ?")
+                .run([.text(workspaceId), .text(threadId)])
+            let insert = try db.prepare("INSERT OR IGNORE INTO thread_membership(workspace_id, thread_id, message_id, position) VALUES(?,?,?,?)")
+            for (position, id) in messageIds.enumerated() {
+                try insert.run([.text(workspaceId), .text(threadId), .text(id), .int(Int64(position))])
+            }
+        }
+        await emit([ChangeKey(.messages, workspaceId, chatScope: .conversation(channelId: channelId, threadId: threadId))])
+    }
+
     /// The directory is small and authoritative: replace it whole.
     public func replaceMembers(workspaceId: String, _ records: [MemberRecord], read: MemberDirectoryRead? = nil) async throws {
         try db.transaction {
@@ -411,13 +424,37 @@ extension StoreReader {
     /// Messages of one thread (root first), newest `limit`, oldest first.
     public func threadMessages(workspaceId: String, threadId: String, limit: Int) throws -> [MessageRecord] {
         let s = try db.prepare("""
-        SELECT \(Self.messageColumns) FROM messages WHERE workspace_id = ? AND thread_id = ? AND deleted = 0
-        ORDER BY created_at DESC, id DESC LIMIT ?
+        SELECT \(Self.messageColumns) FROM messages WHERE workspace_id = ? AND deleted = 0 AND
+          (thread_id = ? OR id IN (SELECT message_id FROM thread_membership WHERE workspace_id = ? AND thread_id = ?))
+        ORDER BY COALESCE((SELECT position FROM thread_membership tm WHERE tm.workspace_id = messages.workspace_id
+          AND tm.thread_id = ? AND tm.message_id = messages.id), 9223372036854775807) DESC, created_at DESC, id DESC LIMIT ?
         """)
-        try s.bind([.text(workspaceId), .text(threadId), .int(Int64(limit))])
+        try s.bind([.text(workspaceId), .text(threadId), .text(workspaceId), .text(threadId), .text(threadId), .int(Int64(limit))])
         var rows: [MessageRecord] = []
         while try s.step() { rows.append(Self.message(s, workspaceId: workspaceId)) }
         return rows.reversed()
+    }
+
+    /// Lightweight complete order; only the selected page's bodies are materialized by the UI.
+    public func threadMessageIds(workspaceId: String, threadId: String) throws -> [String] {
+        let s = try db.prepare("""
+        SELECT id FROM messages WHERE workspace_id = ? AND deleted = 0 AND
+          (thread_id = ? OR id IN (SELECT message_id FROM thread_membership WHERE workspace_id = ? AND thread_id = ?))
+        ORDER BY COALESCE((SELECT position FROM thread_membership tm WHERE tm.workspace_id = messages.workspace_id
+          AND tm.thread_id = ? AND tm.message_id = messages.id), 9223372036854775807) ASC, created_at ASC, id ASC
+        """)
+        try s.bind([.text(workspaceId), .text(threadId), .text(workspaceId), .text(threadId), .text(threadId)])
+        var ids: [String] = []
+        while try s.step() { if let id = s.text(0) { ids.append(id) } }
+        return ids
+    }
+
+    public func threadMessagePage(workspaceId: String, threadId: String, anchor: String? = nil,
+                                  fallback: [String] = [], fallbackStart: Int = 0, size: Int = 50) throws -> ThreadMessageWindow {
+        let ids = try threadMessageIds(workspaceId: workspaceId, threadId: threadId)
+        let start = ThreadMessageWindow.start(in: ids, anchor: anchor, fallback: fallback, fallbackStart: fallbackStart, size: size)
+        let rows = try ids.dropFirst(start).prefix(max(1, size)).compactMap { try message(workspaceId: workspaceId, id: $0) }
+        return ThreadMessageWindow(messages: rows, order: ids, start: start)
     }
 
     public func message(workspaceId: String, id: String) throws -> MessageRecord? {

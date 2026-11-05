@@ -358,7 +358,7 @@ struct ThreadView: View {
                         // A faint line shows where one message ends and the next begins (not under the replies rule).
                         if index > 0 && !(index == 1 && snapshot.value.messages[0].isThreadRoot) { Rectangle().fill(Amb.border.opacity(0.45)).frame(height: 1).padding(.horizontal, 24) }
                         #endif
-                        MessageCell(message: message, people: snapshot.value.people, workspace: workspace, extras: snapshot.value.extras.forMessage(message.id)).equatable()
+                        MessageCell(message: message, people: snapshot.value.people, workspace: workspace, extras: snapshot.value.extras.forMessage(message.id), effectiveThreadId: target.threadId).equatable()
                         // The root, or the first message of a thread stored without its source id.
                         if (message.isThreadRoot || (index == 0 && snapshot.value.windowStart == 0)) && snapshot.value.order.count > 1 {
                             RepliesRule(count: snapshot.value.order.count - 1)
@@ -474,10 +474,12 @@ struct ThreadView: View {
             let historyLimit = 500
             async let thread = store.reader.thread(workspaceId: target.workspaceId, id: threadId)
             async let messages = store.reader.threadMessages(workspaceId: target.workspaceId, threadId: threadId, limit: historyLimit)
+            async let pageRows = store.reader.threadMessagePage(workspaceId: target.workspaceId, threadId: threadId, anchor: anchor,
+                                                               fallback: fallback, fallbackStart: fallbackStart)
             async let pending = store.reader.outbox(target: target)
             async let directory = people(store, target)
             let history = try await messages
-            let window = ThreadMessageWindow(history, anchor: anchor, fallback: fallback, fallbackStart: fallbackStart)
+            let window = try await pageRows
             let rows = window.messages
             MessageDisplayCache.shared.prepare(rows)
             let record = try await thread
@@ -494,7 +496,7 @@ struct ThreadView: View {
     }
 }
 
-/// A thread renders a 50-message page of its 500-message history, with explicit older/newer navigation, as a plain
+/// A thread renders a 50-message page of its complete local history, with explicit older/newer navigation, as a plain
 /// (measured) stack. Lazy row estimates kept invalidating native text layout on the Mac while sync changed the content,
 /// and on the iPhone and iPad they placed a reopened thread at estimated offsets: rows came back a few messages away
 /// from where the reader left, or not at all until a scroll (an empty screen). Measured rows put the reader exactly

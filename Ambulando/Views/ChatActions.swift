@@ -11,7 +11,7 @@ import AppKit
 struct MessageCell: View, Equatable {
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.message == rhs.message && lhs.people == rhs.people && lhs.workspace == rhs.workspace && lhs.extras == rhs.extras
-            && lhs.route == rhs.route && lhs.replyCount == rhs.replyCount && lhs.lastReplyAt == rhs.lastReplyAt && lhs.threadTitle == rhs.threadTitle
+            && lhs.effectiveThreadId == rhs.effectiveThreadId && lhs.route == rhs.route && lhs.replyCount == rhs.replyCount && lhs.lastReplyAt == rhs.lastReplyAt && lhs.threadTitle == rhs.threadTitle
     }
 
     @Environment(AppModel.self) private var model
@@ -19,6 +19,8 @@ struct MessageCell: View, Equatable {
     let people: PeopleDirectory
     let workspace: WorkspaceRecord
     let extras: MessageExtras
+    var effectiveThreadId: String? = nil
+    private var inherited: Bool { effectiveThreadId.map { message.isInherited(in: $0) } ?? false }
     var route: ChatRoute? = nil
     var replyCount = 0
     var lastReplyAt: String? = nil
@@ -44,6 +46,10 @@ struct MessageCell: View, Equatable {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if inherited {
+                Text("Inherited context · read only").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
+                    .padding(.leading, 60).padding(.top, 6)
+            }
             Group {
                 if let route {
                     ThreadRouteLink(route: route) {
@@ -81,7 +87,7 @@ struct MessageCell: View, Equatable {
                 }
             }
             .overlay(alignment: .topTrailing) { messageControls }
-            if model.identity.npub != nil && !message.deleted {
+            if model.identity.npub != nil && !message.deleted && !inherited {
                 ReactionBar(reactions: reactions, me: model.identity.npub) { toggle($0) }
                     .padding(.leading, 60).padding(.trailing, 16)
             }
@@ -100,19 +106,19 @@ struct MessageCell: View, Equatable {
 
     /// The message's actions, shared by the visible ⋮ menu and the long-press / right-click menu.
     @ViewBuilder private var actions: some View {
-        Menu {
+        if !inherited { Menu {
             ForEach(ReactionEmoji.allCases, id: \.self) { emoji in
                 Button { toggle(emoji.rawValue) } label: { Label(emoji.name, systemImage: emoji.symbol) }
                     .accessibilityIdentifier("react.\(emoji.rawValue)")
             }
         } label: { Label("React", systemImage: "face.smiling") }
-            .accessibilityIdentifier("message.react")
+            .accessibilityIdentifier("message.react") }
         if !message.deleted {
             Button { gettingItDone = true } label: { Label("Get it done", systemImage: "checkmark.circle") }
                 .accessibilityIdentifier("message.getitdone")
         }
         if message.threadId != nil && !message.deleted {
-            Button { model.branch(from: message, in: workspace, recipient: agentSender) } label: { Label("Branch from here", systemImage: "arrow.triangle.branch") }
+            Button { model.branch(from: message, in: workspace, recipient: agentSender, effectiveThreadId: effectiveThreadId) } label: { Label("Branch from here", systemImage: "arrow.triangle.branch") }
                 .accessibilityIdentifier("message.branch")
         }
         Button { Pasteboard.copy(MentionCodec.plain(message.body)) } label: { Label("Copy message", systemImage: "doc.on.doc") }
@@ -123,7 +129,7 @@ struct MessageCell: View, Equatable {
         }
         Button { Pasteboard.copy(Self.reference(for: message)) } label: { Label("FD Ref", systemImage: "link") }
             .accessibilityIdentifier("message.ref")
-        if mine && !message.deleted {
+        if mine && !message.deleted && !inherited {
             Button {
                 editChatMessage?(message, pendingEdit?.string("body") ?? message.body)
             } label: { Label("Edit", systemImage: "pencil") }.accessibilityIdentifier("message.edit")
@@ -182,7 +188,7 @@ struct MessageCell: View, Equatable {
 
     #if os(macOS)
     private var nativeActions: [NativeMessageAction] {
-        var items = [NativeMessageAction("React", "face.smiling", children: ReactionEmoji.allCases.map { emoji in
+        var items = inherited ? [] : [NativeMessageAction("React", "face.smiling", children: ReactionEmoji.allCases.map { emoji in
             NativeMessageAction(emoji.name, emoji.symbol) { toggle(emoji.rawValue) }
         })]
         if !message.deleted {
@@ -190,7 +196,7 @@ struct MessageCell: View, Equatable {
         }
         if message.threadId != nil && !message.deleted {
             items.append(NativeMessageAction("Branch from here", "arrow.triangle.branch") {
-                model.branch(from: message, in: workspace, recipient: agentSender)
+                model.branch(from: message, in: workspace, recipient: agentSender, effectiveThreadId: effectiveThreadId)
             })
         }
         items.append(NativeMessageAction("Copy message", "doc.on.doc") { Pasteboard.copy(MentionCodec.plain(message.body)) })
@@ -198,7 +204,7 @@ struct MessageCell: View, Equatable {
             items.append(NativeMessageAction("Autopilot Link", "arrow.up.forward.app") { Task { await openAutopilot() } })
         }
         items.append(NativeMessageAction("FD Ref", "link") { Pasteboard.copy(Self.reference(for: message)) })
-        if mine && !message.deleted {
+        if mine && !message.deleted && !inherited {
             items.append(NativeMessageAction("Edit", "pencil") { editChatMessage?(message, pendingEdit?.string("body") ?? message.body) })
             items.append(NativeMessageAction("Delete message", "trash") { confirmDelete = true })
         }
@@ -225,6 +231,7 @@ struct MessageCell: View, Equatable {
     }
 
     private func toggle(_ emoji: String) {
+        guard !inherited else { return }
         if let existing = reactions.first(where: { $0.emoji == emoji && $0.reactorNpub == model.identity.npub }) {
             if existing.id.hasPrefix("pending-") {
                 Task { try? await model.store?.writer.discardWrite(id: String(existing.id.dropFirst("pending-".count))) }
@@ -588,6 +595,7 @@ struct NativeMessageActions: NSViewRepresentable {
     var identifier = "message.actions"
     var label = "Message actions"
     var help = "Opens the message action menu"
+    var transparent = false
 
     func makeCoordinator() -> Coordinator { Coordinator(items: items) }
     func makeNSView(context: Context) -> NSButton {
@@ -596,6 +604,7 @@ struct NativeMessageActions: NSViewRepresentable {
             .withSymbolConfiguration(.init(pointSize: 12, weight: .bold))
         button.imagePosition = .imageOnly
         button.isBordered = false
+        if transparent { button.image = nil }
         button.contentTintColor = .secondaryLabelColor
         button.image?.isTemplate = true
         button.setAccessibilityLabel(label)
@@ -621,6 +630,7 @@ struct NativeMessageActions: NSViewRepresentable {
         init(items: [NativeMessageAction]) { self.items = items }
 
         @objc func open(_ button: NSButton) {
+            MacHangDiagnostics.shared.mark("nativeMenu.open")
             let menu = makeMenu(items)
             menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.maxY), in: button)
         }

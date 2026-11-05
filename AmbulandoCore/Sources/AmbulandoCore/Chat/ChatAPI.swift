@@ -16,17 +16,24 @@ extension TowerAPI {
     public static let messagePageLimit = 200   // Tower parseLimit caps at 200
 
     public func messagesPage(workspaceId: String, appNpub: String, channelId: String, threadId: String? = nil,
-                             cursor: String?, limit: Int = messagePageLimit) async throws -> MessagePage {
+                             cursor: String?, limit: Int = messagePageLimit, effectiveTranscript: Bool = false) async throws -> MessagePage {
         var query = [URLQueryItem(name: "limit", value: String(limit))]
         if let threadId { query.append(URLQueryItem(name: "thread_id", value: try Self.uuid(threadId))) }
+        if effectiveTranscript { query.append(URLQueryItem(name: "effective_transcript", value: "true")) }
         if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
         let data = try await client.request(path: try Self.base(workspaceId) + "/channels/" + Self.uuid(channelId) + "/messages",
                                             query: query, appNpub: appNpub)
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rows = object["messages"] as? [[String: Any]] else { throw TowerError.malformed("messages") }
+        if effectiveTranscript, let threadId {
+            guard rows.allSatisfy({ row in
+                guard let effective = row["effective_thread_id"] as? String else { return true }
+                return effective.lowercased() == threadId.lowercased()
+            }) else { throw TowerError.malformed("effective messages") }
+        }
         let messages = try rows.map { try MessageRecord(raw: JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys])) }
         // A page that does not belong to the requested channel is never materialised.
-        guard messages.allSatisfy({ $0.workspaceId == workspaceId && $0.channelId == channelId && (threadId == nil || $0.threadId == threadId) }) else {
+        guard messages.allSatisfy({ $0.workspaceId == workspaceId && $0.channelId == channelId && (threadId == nil || effectiveTranscript || $0.threadId == threadId) }) else {
             throw TowerError.malformed("messages")
         }
         let next = object["next_cursor"] as? String

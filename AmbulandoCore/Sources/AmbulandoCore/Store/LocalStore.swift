@@ -59,7 +59,7 @@ public struct ConnectionRecord: Sendable, Equatable, Identifiable, Codable {
 }
 
 enum Schema {
-    static let version = 9
+    static let version = 10
 
     static func migrate(_ db: SQLiteConnection) throws {
         let current = try db.userVersion
@@ -143,6 +143,18 @@ enum Schema {
                 if !columns.contains("channel_mentions_only") { try db.execute("ALTER TABLE view_states ADD COLUMN channel_mentions_only INTEGER NOT NULL DEFAULT 0") }
             }
             if current < 9 { try migrateV9(db) }
+            if current < 10 {
+                try db.execute("""
+                CREATE TABLE IF NOT EXISTS thread_membership(
+                  workspace_id TEXT NOT NULL, thread_id TEXT NOT NULL, message_id TEXT NOT NULL, position INTEGER NOT NULL,
+                  PRIMARY KEY(workspace_id, thread_id, message_id),
+                  FOREIGN KEY(workspace_id, message_id) REFERENCES messages(workspace_id, id) ON DELETE CASCADE);
+                CREATE INDEX IF NOT EXISTS thread_membership_order ON thread_membership(workspace_id, thread_id, position);
+                CREATE TRIGGER IF NOT EXISTS thread_membership_thread_delete AFTER DELETE ON threads BEGIN
+                  DELETE FROM thread_membership WHERE workspace_id = old.workspace_id AND thread_id = old.id;
+                END;
+                """)
+            }
             try db.execute("PRAGMA user_version = \(version)")
         }
     }
@@ -410,6 +422,7 @@ public actor StoreWriter {
         """)
         let retire = try db.prepare("DELETE FROM outbox WHERE id = ? AND workspace_id = ? AND signer_npub = ?")
         let previous = try db.prepare("SELECT channel_id, thread_id FROM messages WHERE workspace_id = ? AND id = ?")
+        let members = try db.prepare("SELECT thread_id FROM thread_membership WHERE workspace_id = ? AND message_id = ?")
         for r in records {
             try previous.bind([.text(r.workspaceId), .text(r.id)])
             var oldScope: ChatChangeScope?
@@ -423,6 +436,10 @@ public actor StoreWriter {
             if db.changes > 0 {
                 changed += 1
                 keys.insert(ChangeKey(.messages, r.workspaceId, chatScope: .conversation(channelId: r.channelId, threadId: r.threadId)))
+                try members.bind([.text(r.workspaceId), .text(r.id)])
+                while try members.step() {
+                    keys.insert(ChangeKey(.messages, r.workspaceId, chatScope: .conversation(channelId: r.channelId, threadId: members.text(0))))
+                }
                 if let oldScope { keys.insert(ChangeKey(.messages, r.workspaceId, chatScope: oldScope)) }
             }
             if let request = r.clientRequestId, let sender = r.senderNpub {
