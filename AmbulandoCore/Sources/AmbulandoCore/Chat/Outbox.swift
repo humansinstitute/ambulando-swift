@@ -95,14 +95,15 @@ public struct OutboxSender: Sendable {
     /// Composes a message into the outbox (clearing that draft) and starts sending if unlocked.
     @discardableResult
     public func send(text: String, mentions selected: [Mention], target: ChatTarget, connection: ConnectionRecord,
-                     workspace: WorkspaceRecord, attachments: [PendingAttachment] = []) async throws -> OutboxItem? {
+                     workspace: WorkspaceRecord, attachments: [PendingAttachment] = [], requestId: String? = nil) async throws -> OutboxItem? {
         guard target.connectionId == connection.id, target.workspaceId == workspace.id else { throw TowerError.unsafePath }
         let (encoded, mentions) = MentionCodec.encode(text: text, selected: selected)
         let body = OutboxRequest.normalizedBody(encoded)
         guard !body.isEmpty || !attachments.isEmpty else { return nil }
         // A pasted item still uploading would otherwise be sent as its placeholder text.
         guard !UploadToken.contains(in: body) else { throw ComposerUploadError.unresolved }
-        let item = try await store.writer.enqueueSend(target: target, origin: connection.origin, signerNpub: connection.signerNpub,
+        // A caller that must be able to recognise the sent message later (a conversation being created) fixes the id.
+        let item = try await store.writer.enqueueSend(id: requestId?.lowercased() ?? UUID().uuidString.lowercased(), target: target, origin: connection.origin, signerNpub: connection.signerNpub,
                                                       appNpub: workspace.appNpub, body: body, mentions: mentions, attachments: attachments)
         await kick(connection)
         return item

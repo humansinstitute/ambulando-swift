@@ -90,12 +90,19 @@ public struct ThreadSummary: Sendable, Equatable, Identifiable {
     public let replyCount: Int
     public let lastActivityAt: String
     public let archived: Bool
+
+    public init(id: String, channelId: String, title: String?, rootBody: String, rootSender: String?, latestBody: String = "",
+                latestSender: String? = nil, replyCount: Int, lastActivityAt: String, archived: Bool = false) {
+        self.id = id; self.channelId = channelId; self.title = title; self.rootBody = rootBody; self.rootSender = rootSender
+        self.latestBody = latestBody; self.latestSender = latestSender; self.replyCount = replyCount
+        self.lastActivityAt = lastActivityAt; self.archived = archived
+    }
 }
 
 extension StoreReader {
     /// Threads of a channel with replies, newest activity first. Threads known only from their messages (no thread
     /// record, or no stored source message) are included, so no synced conversation is hidden.
-    public func channelThreads(workspaceId: String, channelId: String, limit: Int = 200) throws -> [ThreadSummary] {
+    public func channelThreads(workspaceId: String, channelId: String, limit: Int = 200, minimumMessages: Int = 2) throws -> [ThreadSummary] {
         let s = try db.prepare("""
         WITH ids(id) AS (
           SELECT id FROM threads WHERE workspace_id = ?1 AND channel_id = ?2 AND deleted = 0
@@ -114,10 +121,10 @@ extension StoreReader {
           (SELECT sender_npub FROM messages m WHERE m.workspace_id = ?1 AND m.thread_id = stats.id AND m.deleted = 0 ORDER BY created_at DESC, id DESC LIMIT 1),
           (SELECT sender_npub FROM messages m WHERE m.workspace_id = ?1 AND m.thread_id = stats.id AND m.deleted = 0 ORDER BY created_at, id LIMIT 1)
         FROM stats LEFT JOIN threads t ON t.workspace_id = ?1 AND t.id = stats.id
-        WHERE stats.total > 1
+        WHERE stats.total >= ?4
         ORDER BY stats.last_at DESC, stats.id LIMIT ?3
         """)
-        try s.bind([.text(workspaceId), .text(channelId), .int(Int64(limit))])
+        try s.bind([.text(workspaceId), .text(channelId), .int(Int64(limit)), .int(Int64(minimumMessages))])
         var rows: [ThreadSummary] = []
         while try s.step() {
             let total = Int(s.int(3))
