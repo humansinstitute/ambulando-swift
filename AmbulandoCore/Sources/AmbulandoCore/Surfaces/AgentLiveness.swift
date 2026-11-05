@@ -142,8 +142,9 @@ public enum AgentLiveness {
     /// Row ids of unsuccessful attempts (failed, cancelled, or stopped responding) that newer authoritative work has
     /// replaced in the current-activity UI. Scope is the same thread and the same agent; order is the lifecycle's
     /// immutable `created_at` (never `updated_at`, which a delayed or replayed event can bump), so an old row replayed
-    /// late stays old. Only a newer lifecycle that is live (working or waiting, by lease) or completed supersedes: a
-    /// queued, stopped, failed or cancelled successor does not, and an attempt that is itself the newest is never hidden.
+    /// late stays old. Any newer lifecycle that has begun (not queued) supersedes, whatever state it is in now: its
+    /// existence is immutable evidence, so the successor completing, failing or its lease expiring never brings the older
+    /// failure back. The newest attempt is never hidden, so a current failure or stopped turn stays visible.
     /// This is presentation only; messages, commentary and the stored rows are untouched.
     public static func supersededFailures(_ activities: [AgentActivityRecord], now: Date) -> Set<String> {
         var hidden: Set<String> = []
@@ -153,7 +154,8 @@ public enum AgentLiveness {
             let replaced = activities.contains { new in
                 guard new.id != old.id, new.threadId == old.threadId, new.agentNpub == old.agentNpub,
                       let newAt = AgentActivityRecord.time(new.createdAt), newAt > oldAt else { return false }
-                switch self.phase(new, now: now) { case .working, .waiting, .completed: return true; default: return false }
+                // Raw state, not phase: an expired queued row classifies as stopped but never started.
+                return new.state != "queued"
             }
             if replaced { hidden.insert(old.id) }
         }

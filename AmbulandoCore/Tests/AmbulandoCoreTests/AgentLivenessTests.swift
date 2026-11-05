@@ -338,10 +338,19 @@ final class AgentLivenessTests: XCTestCase {
         let otherThread = record(id: id(7), sequence: 2, lease: live, created: new, thread: "7e1a0000-0000-4000-8000-0000000000bb")
         XCTAssertTrue(AgentLiveness.supersededFailures([failed, otherAgent, otherThread], now: now).isEmpty)
         let queued = record(id: id(8), state: "queued", sequence: 1, lease: live, created: new)
+        XCTAssertTrue(AgentLiveness.supersededFailures([failed, queued], now: now).isEmpty, "queued work has not begun")
+        let queuedExpired = record(id: id(8), state: "queued", sequence: 1, lease: now.addingTimeInterval(-600), created: new)
+        let queuedNoLease = record(id: id(8), state: "queued", sequence: 1, lease: nil, created: new)
+        XCTAssertTrue(AgentLiveness.supersededFailures([failed, queuedExpired], now: now).isEmpty, "expired queued row never started")
+        XCTAssertTrue(AgentLiveness.supersededFailures([failed, queuedNoLease], now: now).isEmpty, "queued row without a lease never started")
+        // Successor evidence is immutable: lease expiry, later failure or cancellation of the newer work never resurrect the old failure.
         let expired = record(id: id(9), sequence: 1, lease: now.addingTimeInterval(-600), created: new)
-        XCTAssertTrue(AgentLiveness.supersededFailures([failed, queued, expired], now: now).isEmpty, "queued or lease-expired work is not fresh")
-        // Existing lease expiry: once the newer work's lease lapses it stops superseding.
-        XCTAssertTrue(AgentLiveness.supersededFailures([failed, working], now: live.addingTimeInterval(AgentLiveness.grace)).isEmpty)
+        let laterFailed = record(id: id(9), state: "failed", sequence: 4, lease: nil, created: new)
+        XCTAssertEqual(AgentLiveness.supersededFailures([failed, expired], now: now), [failed.id])
+        XCTAssertEqual(AgentLiveness.supersededFailures([failed, working], now: live.addingTimeInterval(AgentLiveness.grace)), [failed.id])
+        XCTAssertEqual(AgentLiveness.supersededFailures([failed, laterFailed], now: now), [failed.id], "only the newest failure stays")
+        XCTAssertFalse(AgentLiveness.supersededFailures([failed, laterFailed], now: now).contains(laterFailed.id), "current failure preserved")
+        XCTAssertFalse(AgentLiveness.supersededFailures([failed, expired], now: now).contains(expired.id), "current stopped preserved")
     }
 
     private func activityEvent(_ row: Int, id: String, payload: [String: Any]) -> TowerEvent {
