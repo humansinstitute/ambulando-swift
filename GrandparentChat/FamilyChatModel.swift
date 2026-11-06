@@ -20,11 +20,20 @@ final class FamilyChatModel {
     var notice: String?
 
     @ObservationIgnored private var verifyTask: Task<FamilyVerification?, Never>?
+    /// Bumped whenever the binding or account changes, so an answer to an earlier question is never applied to a later one.
+    @ObservationIgnored private var verifyGeneration = 0
 
     init(app: AppModel) {
         self.app = app
         // Every outbox of every workspace asks this before each send attempt. Until it is installed, nothing is sent.
         app.outboxGuard?.install(FamilySendGuard.make { [weak self] signer in await self?.storedBinding(signer) })
+    }
+
+    /// Forgets any live answer and abandons a check in flight: it was about a binding that is gone.
+    private func resetVerification() {
+        verifyGeneration &+= 1
+        verifyTask?.cancel(); verifyTask = nil
+        isVerifying = false; live = nil
     }
 
     var signer: String? { app.identity.npub }
@@ -43,9 +52,9 @@ final class FamilyChatModel {
         guard let signer, let store = app.catalogStore, bindingLoadedFor != signer else { return }
         let stored = try? await store.reader.familyBinding(signerNpub: signer)
         guard signer == self.signer else { return }
+        resetVerification()
         binding = stored
         bindingLoadedFor = signer
-        live = nil
         await alignConnection()
         await refreshAccess()
     }
@@ -54,7 +63,8 @@ final class FamilyChatModel {
         guard let store = app.catalogStore else { return }
         do {
             try await store.writer.setFamilyBinding(next)
-            binding = next; bindingLoadedFor = next.signerNpub; live = nil
+            resetVerification()
+            binding = next; bindingLoadedFor = next.signerNpub
             // The app keeps syncing only what it shows: the other workspaces of this account are switched off.
             restrictSync(to: next)
             await refreshAccess()
@@ -67,7 +77,8 @@ final class FamilyChatModel {
         guard let binding, let store = app.catalogStore else { return }
         do {
             try await store.writer.clearFamilyBinding(signerNpub: binding.signerNpub)
-            self.binding = nil; live = nil; access = .checking
+            resetVerification()
+            self.binding = nil; access = .checking
         } catch { notice = error.localizedDescription }
     }
 
@@ -159,11 +170,13 @@ final class FamilyChatModel {
     func verifyNow() async -> FamilyVerification? {
         if let verifyTask { return await verifyTask.value }
         guard let binding, app.canRead, let entry = boundEntry, let api = api(for: entry) else { return nil }
+        let generation = verifyGeneration
         isVerifying = true
         let task = Task { @MainActor [weak self] () -> FamilyVerification? in
             let result = await FamilyVerification.verify(binding, api: api)
-            guard let self else { return result }
-            if binding == self.binding, !result.isUnreachable { self.live = result }
+            // Only the check for the current binding may change state; a superseded one just returns its answer to its caller.
+            guard let self, generation == self.verifyGeneration, binding == self.binding else { return result }
+            if !result.isUnreachable { self.live = result }
             self.isVerifying = false
             self.verifyTask = nil
             await self.refreshAccess()
