@@ -242,7 +242,7 @@ final class AppModel {
     @ObservationIgnored private var restoringPath = false
 
     // The catalog owns connection/discovery metadata only. Content is always read from a boundary partition.
-    @ObservationIgnored private var catalogStore: LocalStore?
+    @ObservationIgnored private(set) var catalogStore: LocalStore?
     @ObservationIgnored private var catalogSync: WorkspaceSync?
     @ObservationIgnored private var connectionDiscoveries: [String: WorkspaceSync] = [:]
     @ObservationIgnored private var storePool: WorkspaceStorePool?
@@ -839,7 +839,7 @@ final class AppModel {
     func scheduleBackgroundRefresh() {
         #if os(iOS)
         guard fixture == nil else { return }
-        let request = BGAppRefreshTaskRequest(identifier: AppDelegate.refreshTaskIdentifier)
+        let request = BGAppRefreshTaskRequest(identifier: Product.refreshTaskIdentifier)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         do { try BGTaskScheduler.shared.submit(request); backgroundScheduleError = nil }
         catch { backgroundScheduleError = (error as NSError).localizedDescription + " (\((error as NSError).domain) \((error as NSError).code))" }

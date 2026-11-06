@@ -83,7 +83,7 @@ struct BrandHeader: View {
     var body: some View {
         VStack(spacing: 12) {
             PassageMark(size: 64)
-            Text("Ambulando").font(.amb(.largeTitle, design: .serif).weight(.semibold)).foregroundStyle(Amb.foreground)
+            Text(Product.name).font(.amb(.largeTitle, design: .serif).weight(.semibold)).foregroundStyle(Amb.foreground)
             if let subtitle { Text(subtitle).font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center) }
         }
         .frame(maxWidth: .infinity)

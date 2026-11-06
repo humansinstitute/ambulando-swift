@@ -9,12 +9,15 @@
 /* Begin PBXBuildFile section */
 		D10000000000000000000003 /* AmbulandoCore in Frameworks */ = {isa = PBXBuildFile; productRef = D10000000000000000000002 /* AmbulandoCore */; };
 		C10000000000000000000003 /* AmbulandoCore in Frameworks */ = {isa = PBXBuildFile; productRef = C10000000000000000000002 /* AmbulandoCore */; };
+	F10000000000000000000003 /* AmbulandoCore in Frameworks */ = {isa = PBXBuildFile; productRef = F10000000000000000000002 /* AmbulandoCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		D1000000000000000000000A /* Ambulando.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ambulando.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000000000000000000000A /* Ambulando.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ambulando.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B1000000000000000000000A /* AmbulandoUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AmbulandoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+	F1000000000000000000000A /* Grandparent Chat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Grandparent Chat.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+	F2000000000000000000000A /* GrandparentChatUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GrandparentChatUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -26,12 +29,23 @@
 			);
 			target = D10000000000000000000005 /* AmbulandoMac */;
 		};
+	F10000000000000000000019 /* Exceptions for "Ambulando" folder in "GrandparentChat" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				App/AmbulandoApp.swift,
+				App/AppDelegate.swift,
+				Assets.xcassets,
+			);
+			target = F10000000000000000000005 /* GrandparentChat */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		A10000000000000000000007 /* Ambulando */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (D10000000000000000000019 /* Exceptions for "Ambulando" folder in "AmbulandoMac" target */, ); path = Ambulando; sourceTree = "<group>"; };
+		A10000000000000000000007 /* Ambulando */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (D10000000000000000000019 /* Exceptions for "Ambulando" folder in "AmbulandoMac" target */, F10000000000000000000019 /* Exceptions for "Ambulando" folder in "GrandparentChat" target */, ); path = Ambulando; sourceTree = "<group>"; };
 		D10000000000000000000007 /* AmbulandoMac */ = {isa = PBXFileSystemSynchronizedRootGroup; path = AmbulandoMac; sourceTree = "<group>"; };
 		B10000000000000000000007 /* AmbulandoUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = AmbulandoUITests; sourceTree = "<group>"; };
+		F10000000000000000000007 /* GrandparentChat */ = {isa = PBXFileSystemSynchronizedRootGroup; path = GrandparentChat; sourceTree = "<group>"; };
+		F2000000000000000000007 /* GrandparentChatUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = GrandparentChatUITests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -58,6 +72,21 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F1000000000000000000000F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F10000000000000000000003 /* AmbulandoCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F200000000000000000000F0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXContainerItemProxy section */
@@ -68,6 +97,13 @@
 			remoteGlobalIDString = A10000000000000000000005;
 			remoteInfo = Ambulando;
 		};
+		F2000000000000000000020 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F10000000000000000000005;
+			remoteInfo = GrandparentChat;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXTargetDependency section */
@@ -75,6 +111,11 @@
 			isa = PBXTargetDependency;
 			target = A10000000000000000000005 /* Ambulando */;
 			targetProxy = B10000000000000000000020 /* PBXContainerItemProxy */;
+		};
+		F2000000000000000000021 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F10000000000000000000005 /* GrandparentChat */;
+			targetProxy = F2000000000000000000020 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -85,6 +126,8 @@
 				A10000000000000000000007 /* Ambulando */,
 				B10000000000000000000007 /* AmbulandoUITests */,
 				D10000000000000000000007 /* AmbulandoMac */,
+				F10000000000000000000007 /* GrandparentChat */,
+				F2000000000000000000007 /* GrandparentChatUITests */,
 				A10000000000000000000004 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -95,6 +138,8 @@
 				A1000000000000000000000A /* Ambulando.app */,
 				B1000000000000000000000A /* AmbulandoUITests.xctest */,
 				D1000000000000000000000A /* Ambulando.app */,
+				F1000000000000000000000A /* Grandparent Chat.app */,
+				F2000000000000000000000A /* GrandparentChatUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -172,6 +217,51 @@
 			productReference = B1000000000000000000000A /* AmbulandoUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		F10000000000000000000005 /* GrandparentChat */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F1000000000000000000000C /* Build configuration list for PBXNativeTarget "GrandparentChat" */;
+			buildPhases = (
+				F1000000000000000000000E /* Sources */,
+				F1000000000000000000000F /* Frameworks */,
+				F10000000000000000000010 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000007 /* Ambulando */,
+				F10000000000000000000007 /* GrandparentChat */,
+			);
+			name = GrandparentChat;
+			packageProductDependencies = (
+				F10000000000000000000002 /* AmbulandoCore */,
+			);
+			productName = "Grandparent Chat";
+			productReference = F1000000000000000000000A /* Grandparent Chat.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F2000000000000000000005 /* GrandparentChatUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F200000000000000000000C0 /* Build configuration list for PBXNativeTarget "GrandparentChatUITests" */;
+			buildPhases = (
+				F200000000000000000000E0 /* Sources */,
+				F200000000000000000000F0 /* Frameworks */,
+				F2000000000000000000010 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F2000000000000000000021 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F2000000000000000000007 /* GrandparentChatUITests */,
+			);
+			name = GrandparentChatUITests;
+			productName = GrandparentChatUITests;
+			productReference = F2000000000000000000000A /* GrandparentChatUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -184,6 +274,9 @@
 				TargetAttributes = {
 					B10000000000000000000005 = {
 						TestTargetID = A10000000000000000000005;
+					};
+					F2000000000000000000005 = {
+						TestTargetID = F10000000000000000000005;
 					};
 				};
 			};
@@ -207,6 +300,8 @@
 				A10000000000000000000005 /* Ambulando */,
 				B10000000000000000000005 /* AmbulandoUITests */,
 				D10000000000000000000005 /* AmbulandoMac */,
+				F10000000000000000000005 /* GrandparentChat */,
+				F2000000000000000000005 /* GrandparentChatUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -227,6 +322,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		B10000000000000000000010 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F10000000000000000000010 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F2000000000000000000010 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -294,6 +403,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		B1000000000000000000000E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F1000000000000000000000E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F200000000000000000000E0 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -558,6 +681,130 @@
 			};
 			name = Test;
 		};
+		F10000000000000000000017 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/GrandparentChat.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/GrandparentChat-Info.plist";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				MARKETING_VERSION = 0.1.0;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				INFOPLIST_KEY_CFBundleDisplayName = "Grandparent Chat";
+				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.grandparentchat;
+				PRODUCT_NAME = "Grandparent Chat";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "GRANDPARENT_CHAT DEBUG $(inherited)";
+			};
+			name = Debug;
+		};
+		F10000000000000000000018 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/GrandparentChat.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/GrandparentChat-Info.plist";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				MARKETING_VERSION = 0.1.0;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				INFOPLIST_KEY_CFBundleDisplayName = "Grandparent Chat";
+				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.grandparentchat;
+				PRODUCT_NAME = "Grandparent Chat";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "GRANDPARENT_CHAT $(inherited)";
+			};
+			name = Release;
+		};
+		F10000000000000000000021 /* Test */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/GrandparentChat.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/GrandparentChat-Info.plist";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				MARKETING_VERSION = 0.1.0;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				INFOPLIST_KEY_CFBundleDisplayName = "Grandparent Chat Test";
+				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.grandparentchat.test;
+				PRODUCT_NAME = "Grandparent Chat Test";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "GRANDPARENT_CHAT DEBUG AMBULANDO_TEST $(inherited)";
+				SUPPORTED_PLATFORMS = iphonesimulator;
+			};
+			name = Test;
+		};
+		F2000000000000000000017 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.grandparentchat.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = GrandparentChat;
+			};
+			name = Debug;
+		};
+		F2000000000000000000018 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.grandparentchat.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = GrandparentChat;
+			};
+			name = Release;
+		};
+		F2000000000000000000019 /* Test */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = studio.otherstuff.grandparentchat.test.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = GrandparentChat;
+			};
+			name = Test;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -601,6 +848,26 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		F1000000000000000000000C /* Build configuration list for PBXNativeTarget "GrandparentChat" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F10000000000000000000017 /* Debug */,
+				F10000000000000000000021 /* Test */,
+				F10000000000000000000018 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F200000000000000000000C0 /* Build configuration list for PBXNativeTarget "GrandparentChatUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F2000000000000000000017 /* Debug */,
+				F2000000000000000000019 /* Test */,
+				F2000000000000000000018 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -616,6 +883,10 @@
 			productName = AmbulandoCore;
 		};
 		C10000000000000000000002 /* AmbulandoCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AmbulandoCore;
+		};
+		F10000000000000000000002 /* AmbulandoCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AmbulandoCore;
 		};

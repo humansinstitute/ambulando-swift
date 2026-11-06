@@ -94,11 +94,14 @@ public struct FamilyFacts: Sendable {
     public var channel: ChannelRecord?
     public var threadLoaded: Bool
     public var thread: ThreadRecord?
+    /// Tower just returned `thread` for this account, which also proves the channel is readable (no channel listing needed).
+    public var threadConfirmedLive: Bool
 
     public init(signerNpub: String?, connection: ConnectionRecord?, accessibleWorkspaces: [WorkspaceRecord]?, channelsLoaded: Bool = false,
-                channel: ChannelRecord? = nil, threadLoaded: Bool = false, thread: ThreadRecord? = nil) {
+                channel: ChannelRecord? = nil, threadLoaded: Bool = false, thread: ThreadRecord? = nil, threadConfirmedLive: Bool = false) {
         self.signerNpub = signerNpub; self.connection = connection; self.accessibleWorkspaces = accessibleWorkspaces
         self.channelsLoaded = channelsLoaded; self.channel = channel; self.threadLoaded = threadLoaded; self.thread = thread
+        self.threadConfirmedLive = threadConfirmedLive
     }
 }
 
@@ -112,8 +115,8 @@ public enum FamilyAccessEvaluator {
         guard connection.origin == binding.origin, connection.signerNpub == binding.signerNpub else { return .differentTower }
         guard let workspaces = facts.accessibleWorkspaces else { return .checking }
         guard workspaces.contains(where: { $0.id == binding.workspaceId && $0.appNpub == binding.appNpub }) else { return .workspaceUnavailable }
-        guard facts.channelsLoaded else { return .checking }
-        guard facts.channel?.id == binding.channelId else { return .channelUnavailable }
+        let channelKnown = facts.channel?.id == binding.channelId || facts.threadConfirmedLive
+        if !channelKnown { return facts.channelsLoaded ? .channelUnavailable : .checking }
         if binding.threadId == nil { return binding.pendingCreation == nil ? .conversationUnavailable : .awaitingCreation }
         guard facts.threadLoaded else { return .checking }
         guard let thread = facts.thread, thread.id == binding.threadId, thread.channelId == binding.channelId,
@@ -142,13 +145,6 @@ public enum FamilyRouting {
         }
     }
 
-    /// An alert for any other destination is not shown while the app is open (the system would otherwise present a
-    /// banner whose tap this app refuses to follow).
-    public static func presentsBanner(_ destination: PushDestination?, binding: FamilyBinding?) -> Bool {
-        guard let destination else { return false }
-        return resolve(destination, binding: binding) == .showConversation
-    }
-
     private static func same(_ a: String, _ b: String) -> Bool { a.lowercased() == b.lowercased() }
 }
 
@@ -161,6 +157,18 @@ public struct FamilyConversationOption: Equatable, Identifiable, Sendable {
     public let messageCount: Int
     public let lastActivityAt: String
     public let archived: Bool
+
+    /// From Tower's thread list for a channel (the authoritative one used when setting up): its title, else the newest
+    /// message's text. Deleted threads are never offered; archived ones are listed but marked.
+    public static func options(fromThreads threads: [ThreadRecord]) -> [FamilyConversationOption] {
+        threads.filter { !$0.deleted }.map { thread in
+            let latest = MentionCodec.plain(thread.latest ?? "")
+            let title = (thread.title?.isEmpty == false ? thread.title.map(MentionCodec.plain) : nil) ?? String(latest.prefix(60))
+            return FamilyConversationOption(id: thread.id, title: title.isEmpty ? "Conversation" : title, firstMessage: latest, startedBy: nil,
+                                            messageCount: 0, lastActivityAt: thread.updatedAt, archived: thread.archived)
+        }
+        .sorted { ($0.lastActivityAt, $0.id) > ($1.lastActivityAt, $1.id) }
+    }
 
     public static func options(from summaries: [ThreadSummary]) -> [FamilyConversationOption] {
         summaries.map { summary in

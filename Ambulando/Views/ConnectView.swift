@@ -16,7 +16,7 @@ struct ConnectView: View {
                 BrandHeader(subtitle: model.identity.npub.map { "Signed in as \(shortNpub($0))" }).padding(.top, 32)
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Connect your nStack").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
-                    Text("Enter the HTTPS address of your Tower. Ambulando reads its public service descriptor first, then lists the workspaces your identity can access.")
+                    Text("Enter the HTTPS address of your Tower. \(Product.name) reads its public service descriptor first, then lists the workspaces your identity can access.")
                         .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
                     TextField("https://your-tower.example", text: $origin)
                         .urlEntry().autocorrectionDisabled()

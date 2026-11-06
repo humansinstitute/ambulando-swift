@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Deliberately empty: Grandparent Chat v1 requests no push entitlement. Alerts need Tower support for this app's
+	     bundle identifier first (see docs/grandparent-chat.md), so nothing here may be copied from Ambulando blindly. -->
+</dict>
+</plist>

@@ -6,7 +6,7 @@ import UserNotifications
 /// Owns the one `AppModel` and the iOS entry points SwiftUI does not cover: BackgroundTasks registration (which must
 /// happen before launch finishes) and background `URLSession` event delivery.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
-    static let refreshTaskIdentifier = "studio.otherstuff.ambulando.native.refresh"
+    static let refreshTaskIdentifier = Product.refreshTaskIdentifier
 
     @MainActor let model = AppModel()
 

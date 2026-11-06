@@ -170,7 +170,7 @@ final class FixtureEnvironment {
         #if os(macOS)
         let expectedBundle = "studio.otherstuff.ambulando.mac.test"
         #else
-        let expectedBundle = "studio.otherstuff.ambulando.native.test"
+        let expectedBundle = Product.testBundleIdentifier
         #endif
         guard Bundle.main.bundleIdentifier == expectedBundle,
               !args.contains("-AmbulandoTestMissingFixture") else { return nil }

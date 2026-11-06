@@ -61,6 +61,10 @@ final class FamilyBindingTests: XCTestCase {
         XCTAssertEqual(FamilyAccessEvaluator.evaluate(binding(), try facts(thread: .some(nil), threadLoaded: false)), .checking)
         XCTAssertEqual(FamilyAccessEvaluator.evaluate(binding(), try facts(thread: .some(nil))), .conversationUnavailable)
         XCTAssertFalse(FamilyAccess.checking.canSend, "nothing is sent until the target is confirmed")
+        // A live thread answer proves channel access before the channel listing has loaded.
+        var live = try facts(channel: .some(nil), channelsLoaded: false)
+        live.threadConfirmedLive = true
+        XCTAssertEqual(FamilyAccessEvaluator.evaluate(binding(), live), .ready)
     }
 
     func testAnotherThreadIsNeverSubstituted() throws {
@@ -157,13 +161,6 @@ final class FamilyBindingTests: XCTestCase {
         XCTAssertEqual(FamilyRouting.resolve(.threadById(workspaceId: w, threadId: Self.thread), binding: binding(thread: nil, pending: FamilyCreationGate.makePending())), .ignore)
     }
 
-    func testOnlyTheBoundConversationPresentsABanner() {
-        let b = binding()
-        XCTAssertTrue(FamilyRouting.presentsBanner(.threadById(workspaceId: Fixtures.workspaceId, threadId: Self.thread), binding: b))
-        XCTAssertFalse(FamilyRouting.presentsBanner(.threadById(workspaceId: Fixtures.workspaceId, threadId: Self.otherThread), binding: b))
-        XCTAssertFalse(FamilyRouting.presentsBanner(nil, binding: b))
-    }
-
     // MARK: Setup choices
 
     func testOptionsIncludeSingleMessageConversationsAndSortNewestFirst() async throws {
@@ -183,6 +180,23 @@ final class FamilyBindingTests: XCTestCase {
         XCTAssertEqual(options.map(\.id), [busy, lonely])
         XCTAssertEqual(options[1].title, "Anyone for Sunday?")
         XCTAssertEqual(options[0].messageCount, 2)
+    }
+
+    func testOptionsFromTowerThreadListSkipDeletedAndMarkArchived() throws {
+        func record(_ id: String, title: String?, latest: String?, state: String, at: String) throws -> ThreadRecord {
+            try ThreadRecord(raw: Fixtures.json(["id": id, "workspace_id": Fixtures.workspaceId, "channel_id": Fixtures.channel1, "source_message_id": NSNull(),
+                                                 "title": title as Any? ?? NSNull(), "latest": latest as Any? ?? NSNull(), "record_state": state,
+                                                 "row_version": 1, "updated_at": at]))
+        }
+        let a = "7a1c0000-0000-4000-8000-00000000000a", b = "7a1c0000-0000-4000-8000-00000000000b", c = "7a1c0000-0000-4000-8000-00000000000c"
+        let options = FamilyConversationOption.options(fromThreads: [
+            try record(a, title: "Sunday lunch", latest: "See you at one", state: "active", at: "2026-11-02T10:00:00.000Z"),
+            try record(b, title: nil, latest: "Photos from the park", state: "archived", at: "2026-11-03T10:00:00.000Z"),
+            try record(c, title: "Gone", latest: nil, state: "deleted", at: "2026-11-04T10:00:00.000Z")])
+        XCTAssertEqual(options.map(\.id), [b, a])
+        XCTAssertEqual(options[0].title, "Photos from the park")
+        XCTAssertTrue(options[0].archived)
+        XCTAssertEqual(options[1].title, "Sunday lunch")
     }
 
     func testCreationNeedsAFreshListingAndAnExplicitChoiceWhenConversationsExist() {
