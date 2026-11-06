@@ -65,6 +65,8 @@ final class AppModel {
             if identity == .none, oldValue != .none { browser.reset() }
         }
     }
+    /// Grandparent Chat's per-attempt send guard, shared by the outbox of every workspace runtime. Ambulando has none.
+    @ObservationIgnored let outboxGuard: OutboxGuardSlot? = Product.isGrandparentChat ? OutboxGuardSlot(failClosed: true) : nil
     /// The in-app browser (full-screen tabs with `window.nostr`); see `BrowserModel`.
     @ObservationIgnored let browser = BrowserModel()
     /// Why an existing identity cannot be opened (sealed while the iPhone is locked, or a damaged file).
@@ -390,7 +392,8 @@ final class AppModel {
             self.staging = staging
             self.fileCache = FileCache(root: fixture.map { $0.directory.appendingPathComponent("FileCache", isDirectory: true) }
                 ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(ProductionStorage.fileCacheDirectoryName, isDirectory: true))
-            self.outbox = OutboxSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers)
+            self.outbox = OutboxSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers,
+                                       guardSlot: outboxGuard)
             self.writes = WriteSender(store: store, engine: engine, identity: identity, transport: transport, staging: staging, transfers: transfers,
                                       afterNotificationWrite: { connection, workspaceId in
                 // The sync job is the only reader of the inbox: it picks up the item versions Tower produced.
@@ -1484,7 +1487,7 @@ extension AppModel {
         if entry.runtime != nil { return }
         try await partition.writer.resetInterruptedSends()
         try await partition.writer.resetInterruptedWrites()
-        let runtime = NativeWorkspaceRuntime(entry: entry, store: partition, shared: sharedEngine, identity: identity,
+        let runtime = NativeWorkspaceRuntime(entry: entry, store: partition, shared: sharedEngine, identity: identity, outboxGuard: outboxGuard,
                                              transport: workspaceTransport, events: workspaceEvents, staging: staging, cacheRoot: workspaceCacheRoot,
                                              afterWikiCreate: { [weak self] connection, item, created, capturedStore, capturedSaver, capturedWorkspace in
             try await self?.bindCreatedWikiPage(connection, item, created, capturedStore: capturedStore,

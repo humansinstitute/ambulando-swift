@@ -7,6 +7,36 @@ public enum SendOutcome: Sendable, Equatable {
     case permanent(status: Int, code: String?, message: String)
 }
 
+/// A product's say over each actual send attempt (not only over composing). It runs just before a row's attachments are
+/// uploaded and again just before its request is posted, so a row queued long ago, or retried in the background, is still
+/// checked against what is true now.
+public enum OutboxSendDecision: Sendable, Equatable {
+    case allow
+    /// Cannot be decided or sent now (offline, still starting): the row stays queued and is retried.
+    case hold(String)
+    /// This message must not be sent: it stays unsent, visibly, until the person retries, edits or discards it.
+    case block(String)
+}
+
+public typealias OutboxSendGuard = @Sendable (OutboxItem, TowerAPI) async -> OutboxSendDecision
+
+/// Where a product installs its `OutboxSendGuard`, shared by every outbox of the app (one per workspace runtime). A slot
+/// that fails closed holds every send until a guard is installed.
+public final class OutboxGuardSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var installed: OutboxSendGuard?
+    public let failClosed: Bool
+
+    public init(failClosed: Bool) { self.failClosed = failClosed }
+
+    public func install(_ guardFunction: OutboxSendGuard?) { lock.withLock { installed = guardFunction } }
+
+    func decide(_ item: OutboxItem, _ api: TowerAPI) async -> OutboxSendDecision {
+        guard let current = lock.withLock({ installed }) else { return failClosed ? .hold("Getting ready; will send in a moment.") : .allow }
+        return await current(item, api)
+    }
+}
+
 public enum OutboxRequest {
     /// Tower trims the body before verifying the kind 33358 content, so the client signs the trimmed text.
     public static func normalizedBody(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -83,11 +113,13 @@ public struct OutboxSender: Sendable {
     public let staging: URL?
     /// Background transfers for presigned attachment uploads (nil: in-process).
     public let transfers: BackgroundTransfers?
+    /// A product's per-attempt send guard (nil: every row is sent).
+    public let guardSlot: OutboxGuardSlot?
 
     public init(store: LocalStore, engine: SyncEngine, identity: IdentityService, transport: HTTPTransport, staging: URL? = nil,
-                transfers: BackgroundTransfers? = nil) {
+                transfers: BackgroundTransfers? = nil, guardSlot: OutboxGuardSlot? = nil) {
         self.store = store; self.engine = engine; self.identity = identity; self.transport = transport; self.staging = staging
-        self.transfers = transfers
+        self.transfers = transfers; self.guardSlot = guardSlot
     }
 
     public static func key(_ connection: ConnectionRecord) -> String { "outbox:\(connection.id)" }
@@ -95,15 +127,14 @@ public struct OutboxSender: Sendable {
     /// Composes a message into the outbox (clearing that draft) and starts sending if unlocked.
     @discardableResult
     public func send(text: String, mentions selected: [Mention], target: ChatTarget, connection: ConnectionRecord,
-                     workspace: WorkspaceRecord, attachments: [PendingAttachment] = [], requestId: String? = nil) async throws -> OutboxItem? {
+                     workspace: WorkspaceRecord, attachments: [PendingAttachment] = []) async throws -> OutboxItem? {
         guard target.connectionId == connection.id, target.workspaceId == workspace.id else { throw TowerError.unsafePath }
         let (encoded, mentions) = MentionCodec.encode(text: text, selected: selected)
         let body = OutboxRequest.normalizedBody(encoded)
         guard !body.isEmpty || !attachments.isEmpty else { return nil }
         // A pasted item still uploading would otherwise be sent as its placeholder text.
         guard !UploadToken.contains(in: body) else { throw ComposerUploadError.unresolved }
-        // A caller that must be able to recognise the sent message later (a conversation being created) fixes the id.
-        let item = try await store.writer.enqueueSend(id: requestId?.lowercased() ?? UUID().uuidString.lowercased(), target: target, origin: connection.origin, signerNpub: connection.signerNpub,
+        let item = try await store.writer.enqueueSend(target: target, origin: connection.origin, signerNpub: connection.signerNpub,
                                                       appNpub: workspace.appNpub, body: body, mentions: mentions, attachments: attachments)
         await kick(connection)
         return item
@@ -164,6 +195,22 @@ public struct OutboxSender: Sendable {
         let client = TowerClient(origin: origin, transport: transport, signer: identity)
         var blocked = Set<String>()        // conversations waiting behind a retryable failure
         var nextRetry: Int?
+        /// Applies the product guard to one row: false means the row was held or blocked and must not go further.
+        func admitted(_ item: OutboxItem) async throws -> Bool {
+            guard let guardSlot else { return true }
+            switch await guardSlot.decide(item, TowerAPI(client: client)) {
+            case .allow: return true
+            case .hold(let message):
+                try Task.checkCancellation()
+                try await store.writer.markOutbox(id: item.id, state: .retrying, error: message, countAttempt: true)
+                blocked.insert(item.target.draftKey); nextRetry = min(nextRetry ?? .max, item.attempts + 1)
+                return false
+            case .block(let message):
+                try Task.checkCancellation()
+                try await store.writer.markOutbox(id: item.id, state: .failed, error: message, countAttempt: true)
+                return false
+            }
+        }
         for item in try await store.reader.outbox(connectionId: connection.id, signerNpub: npub) {
             try Task.checkCancellation()
             guard item.origin == connection.origin, item.signerNpub == npub else { continue }
@@ -175,6 +222,8 @@ public struct OutboxSender: Sendable {
             if blocked.contains(conversation) { continue }
             var request = item.request
             if request == nil {
+                // Nothing is uploaded for a message that may not be sent.
+                if item.attachments.contains(where: { !$0.complete }), !(try await admitted(item)) { continue }
                 try await identity.requireSigner(npub: item.signerNpub)
                 let ready: OutboxItem
                 do {
@@ -195,6 +244,7 @@ public struct OutboxSender: Sendable {
                 request = try await store.reader.outboxItem(id: item.id)?.request
             }
             guard let request else { continue }
+            guard try await admitted(item) else { continue }
             try await store.writer.markOutbox(id: item.id, state: .sending, status: item.lastStatus, code: item.lastCode, error: item.lastError)
             let exchanged: Result<(status: Int, body: Data), Error>
             do {

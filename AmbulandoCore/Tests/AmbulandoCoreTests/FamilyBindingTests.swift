@@ -6,10 +6,10 @@ final class FamilyBindingTests: XCTestCase {
     static let thread = "7a1c0000-0000-4000-8000-000000000001"
     static let otherThread = "7a1c0000-0000-4000-8000-000000000002"
 
-    func binding(thread: String? = FamilyBindingTests.thread, pending: FamilyBinding.PendingCreation? = nil, signer: String = TestKeys.npub) -> FamilyBinding {
+    func binding(thread: String = FamilyBindingTests.thread, signer: String = TestKeys.npub) -> FamilyBinding {
         FamilyBinding(connectionId: "conn-1", origin: "https://tower.example", signerNpub: signer, workspaceId: Fixtures.workspaceId,
                       appNpub: Fixtures.appNpub, workspaceLabel: "Studio", channelId: Fixtures.channel1, channelName: "Family",
-                      threadId: thread, conversationTitle: "Sunday lunch", pendingCreation: pending)
+                      threadId: thread, conversationTitle: "Sunday lunch")
     }
 
     func connection(origin: String = "https://tower.example", signer: String = TestKeys.npub) throws -> ConnectionRecord {
@@ -82,15 +82,6 @@ final class FamilyBindingTests: XCTestCase {
         XCTAssertEqual(FamilyAccessEvaluator.evaluate(binding(), try facts(thread: .some(try thread(state: "deleted")))), .conversationUnavailable)
     }
 
-    func testConversationBeingCreatedWaitsForTower() throws {
-        let pending = FamilyCreationGate.makePending()
-        let waiting = binding(thread: nil, pending: pending)
-        XCTAssertTrue(waiting.isWellFormed)
-        XCTAssertNil(waiting.target)
-        XCTAssertEqual(FamilyAccessEvaluator.evaluate(waiting, try facts()), .awaitingCreation)
-        XCTAssertFalse(binding(thread: nil).isWellFormed, "no thread and no creation in flight is not a binding")
-    }
-
     // MARK: Persistence
 
     func testBindingRoundTripsAndIsScopedPerSigner() async throws {
@@ -120,7 +111,7 @@ final class FamilyBindingTests: XCTestCase {
 
     func testMalformedBindingIsNotSavedOrRestored() async throws {
         let store = try LocalStore(directory: temporaryDirectory())
-        do { try await store.writer.setFamilyBinding(binding(thread: nil)); XCTFail("saved a binding with no conversation") }
+        do { try await store.writer.setFamilyBinding(binding(thread: "not-a-uuid")); XCTFail("saved a binding with no real conversation") }
         catch { XCTAssertEqual(error as? FamilyBindingError, .malformed) }
         try await store.writer.setState(StoreReader.familyBindingKey(signerNpub: TestKeys.npub), "{\"not\":\"a binding\"}")
         let none = try await store.reader.familyBinding(signerNpub: TestKeys.npub)
@@ -131,7 +122,7 @@ final class FamilyBindingTests: XCTestCase {
         let h = try await ChatHarness.make()
         let mine = binding()
         try await h.store.writer.setFamilyBinding(mine)
-        let target = try XCTUnwrap(mine.target)
+        let target = mine.target
         let sameTarget = ChatTarget(connectionId: h.connection.id, workspaceId: target.workspaceId, channelId: target.channelId, threadId: target.threadId)
         try await h.store.writer.saveDraft(sameTarget, Draft(text: "half written", mentions: []))
         try await h.store.writer.clearFamilyBinding(signerNpub: TestKeys.npub)
@@ -158,7 +149,6 @@ final class FamilyBindingTests: XCTestCase {
         XCTAssertEqual(FamilyRouting.resolve(.doc(workspaceId: w, docId: "d"), binding: b), .ignore)
         XCTAssertEqual(FamilyRouting.resolve(.notification(workspaceId: w, notificationId: "n"), binding: b), .ignore)
         XCTAssertEqual(FamilyRouting.resolve(.thread(workspaceId: w, channelId: c, threadId: Self.thread), binding: nil), .ignore)
-        XCTAssertEqual(FamilyRouting.resolve(.threadById(workspaceId: w, threadId: Self.thread), binding: binding(thread: nil, pending: FamilyCreationGate.makePending())), .ignore)
     }
 
     // MARK: Setup choices
@@ -197,40 +187,6 @@ final class FamilyBindingTests: XCTestCase {
         XCTAssertEqual(options[0].title, "Photos from the park")
         XCTAssertTrue(options[0].archived)
         XCTAssertEqual(options[1].title, "Sunday lunch")
-    }
-
-    func testCreationNeedsAFreshListingAndAnExplicitChoiceWhenConversationsExist() {
-        let existing = [FamilyConversationOption(id: Self.thread, title: "Sunday lunch", firstMessage: "Hi", startedBy: nil, messageCount: 3,
-                                                 lastActivityAt: "2026-11-02T10:00:00.000Z", archived: false)]
-        XCTAssertEqual(FamilyCreationGate.check(refreshedFromTower: false, existing: [], acknowledgedExisting: false, firstMessage: "Hello"), .refreshRequired)
-        XCTAssertEqual(FamilyCreationGate.check(refreshedFromTower: true, existing: existing, acknowledgedExisting: false, firstMessage: "Hello"), .existingConversations(existing))
-        XCTAssertEqual(FamilyCreationGate.check(refreshedFromTower: true, existing: existing, acknowledgedExisting: true, firstMessage: "Hello"), .allowed)
-        XCTAssertEqual(FamilyCreationGate.check(refreshedFromTower: true, existing: [], acknowledgedExisting: false, firstMessage: "  \n "), .emptyMessage)
-        XCTAssertEqual(FamilyCreationGate.check(refreshedFromTower: true, existing: [], acknowledgedExisting: false, firstMessage: "Hello"), .allowed)
-        let archivedOnly = [FamilyConversationOption(id: Self.thread, title: "Old", firstMessage: "", startedBy: nil, messageCount: 2, lastActivityAt: "", archived: true)]
-        XCTAssertEqual(FamilyCreationGate.check(refreshedFromTower: true, existing: archivedOnly, acknowledgedExisting: false, firstMessage: "Hello"), .allowed)
-    }
-
-    // MARK: Creation idempotency
-
-    func testRepeatedCreationRequestMakesOneConversationAndIsRecognisedAfterwards() async throws {
-        let h = try await ChatHarness.make()
-        let pending = FamilyCreationGate.makePending()
-        h.tower.inject(.dropResponseAfterCommit)
-        let first = try await h.outbox.send(text: "Hello family", mentions: [], target: h.target(), connection: h.connection, workspace: h.workspace,
-                                            requestId: pending.requestId)
-        XCTAssertEqual(first?.id, pending.requestId, "the fixed request id is the outbox row and the wire client_request_id")
-        await h.engine.waitUntilIdle()
-        // The answer was lost, so the row is still waiting; Tower already committed. Retry replays the same request.
-        await h.outbox.kick(h.connection, force: true)
-        await h.engine.waitUntilIdle()
-        try await waitFor { try await h.store.reader.outboxItem(id: pending.requestId) == nil }
-        XCTAssertEqual(h.tower.messageCount, 1, "Tower holds one message for the request id")
-        let created = try await h.store.reader.familyCreatedThread(workspaceId: Fixtures.workspaceId, requestId: pending.requestId)
-        XCTAssertNotNil(created, "the bound conversation can be recognised from the request id after relaunch")
-        XCTAssertEqual(created?.body, "Hello family")
-        let missing = try await h.store.reader.familyCreatedThread(workspaceId: Fixtures.workspaceId, requestId: UUID().uuidString)
-        XCTAssertNil(missing)
     }
 
     // MARK: Live verification before sending
@@ -272,12 +228,168 @@ final class FamilyBindingTests: XCTestCase {
     func testVerificationReportsLostWorkspaceAndOfflineSeparately() async throws {
         let h = try await ChatHarness.make()
         let root = h.tower.seed(channel: Fixtures.channel1, body: "Family")
-        var b = binding(thread: root["thread_id"] as? String)
+        var b = binding(thread: root["thread_id"] as! String)
         b.connectionId = h.connection.id
         let removed = await FamilyVerification.verify(b, api: try api(h, workspaceIds: [Fixtures.workspaceId2]))
         XCTAssertEqual(removed, .workspaceLost)
         let offline = await FamilyVerification.verify(b, api: try api(h, offline: true))
         guard case .unreachable = offline else { return XCTFail("\(offline)") }
         XCTAssertFalse(offline.allowsSend)
+    }
+}
+
+
+/// The per-attempt guard on every outbox: a queued or background-retried message is re-checked against the binding and
+/// Tower at the moment it would be posted.
+final class FamilySendGuardTests: XCTestCase {
+    final class BindingBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [FamilyBinding?]
+        private(set) var reads = 0
+        init(_ values: [FamilyBinding?]) { self.values = values }
+        func set(_ value: FamilyBinding?) { lock.withLock { values = [value] } }
+        func read() -> FamilyBinding? { lock.withLock { reads += 1; return values.count > 1 ? values.removeFirst() : values.first ?? nil } }
+    }
+
+    final class Flag: @unchecked Sendable {
+        private let lock = NSLock(); private var value: Bool
+        init(_ value: Bool) { self.value = value }
+        var isOn: Bool { get { lock.withLock { value } } set { lock.withLock { value = newValue } } }
+    }
+
+    func binding(thread: String, channel: String = Fixtures.channel1) -> FamilyBinding {
+        FamilyBinding(connectionId: "c", origin: "https://tower.example", signerNpub: TestKeys.npub, workspaceId: Fixtures.workspaceId,
+                      appNpub: Fixtures.appNpub, workspaceLabel: "Studio", channelId: channel, channelName: "Family",
+                      threadId: thread, conversationTitle: "Family")
+    }
+
+    func sender(_ h: ChatHarness, slot: OutboxGuardSlot?, online: Flag = Flag(true)) -> OutboxSender {
+        let transport = StubTransport { request in
+            if !online.isOn, request.httpMethod == "GET" { throw URLError(.notConnectedToInternet) }
+            if request.url?.path == "/api/v4/flightdeck-pg/workspaces" { return (200, ["workspaces": [Fixtures.workspace(Fixtures.workspaceId, label: "Studio")]]) }
+            return try h.tower.handler()(request)
+        }
+        return OutboxSender(store: h.store, engine: h.engine, identity: h.identity, transport: transport, guardSlot: slot)
+    }
+
+    func slot(_ box: BindingBox) -> OutboxGuardSlot {
+        let slot = OutboxGuardSlot(failClosed: true)
+        slot.install(FamilySendGuard.make { _ in box.read() })
+        return slot
+    }
+
+    func state(_ h: ChatHarness, _ id: String) async throws -> OutboxItem? { try await h.store.reader.outboxItem(id: id) }
+
+    func testBoundConversationIsSentAfterAFreshCheck() async throws {
+        let h = try await ChatHarness.make()
+        let thread = h.tower.seed(channel: Fixtures.channel1, body: "Family")["thread_id"] as! String
+        let box = BindingBox([binding(thread: thread)])
+        let outbox = sender(h, slot: slot(box))
+        let item = try await XCTUnwrapAsync(try await outbox.send(text: "Hello", mentions: [], target: h.target(thread: thread), connection: h.connection, workspace: h.workspace))
+        await h.engine.waitUntilIdle()
+        XCTAssertEqual(h.tower.recordedPosts.count, 1)
+        let remaining = try await state(h, item.id)
+        XCTAssertNil(remaining, "accepted and retired")
+        XCTAssertGreaterThanOrEqual(box.reads, 2, "the binding is read before and after the check")
+    }
+
+    func testChangingTheFamilyChatStopsQueuedMessagesFromGoingToTheOldOne() async throws {
+        let h = try await ChatHarness.make()
+        let old = h.tower.seed(channel: Fixtures.channel1, body: "Old family")["thread_id"] as! String
+        let new = h.tower.seed(channel: Fixtures.channel1, body: "New family")["thread_id"] as! String
+        let box = BindingBox([binding(thread: new)])      // the person has since chosen another conversation
+        let outbox = sender(h, slot: slot(box))
+        let item = try await XCTUnwrapAsync(try await outbox.send(text: "Meant for old", mentions: [], target: h.target(thread: old), connection: h.connection, workspace: h.workspace))
+        await h.engine.waitUntilIdle()
+        XCTAssertEqual(h.tower.recordedPosts.count, 0)
+        let blocked = try await state(h, item.id)
+        XCTAssertEqual(blocked?.state, .failed)
+        XCTAssertEqual(blocked?.threadId, old, "never retargeted")
+        box.set(nil)                                          // and with no binding at all
+        try await outbox.retry(item.id, connection: h.connection)
+        await h.engine.waitUntilIdle()
+        XCTAssertEqual(h.tower.recordedPosts.count, 0)
+    }
+
+    func testAThreadArchivedAfterQueueingIsNotReopened() async throws {
+        let h = try await ChatHarness.make()
+        let thread = h.tower.seed(channel: Fixtures.channel1, body: "Family")["thread_id"] as! String
+        let box = BindingBox([binding(thread: thread)])
+        h.tower.setThreadState(thread, "archived")
+        let outbox = sender(h, slot: slot(box))
+        let item = try await XCTUnwrapAsync(try await outbox.send(text: "Too late", mentions: [], target: h.target(thread: thread), connection: h.connection, workspace: h.workspace))
+        await h.engine.waitUntilIdle()
+        XCTAssertEqual(h.tower.recordedPosts.count, 0)
+        let blocked = try await state(h, item.id)
+        XCTAssertEqual(blocked?.state, .failed)
+        XCTAssertTrue(blocked?.lastError?.contains("archived") == true)
+    }
+
+    func testOfflineHoldsTheMessageAndSendsItToTheSameConversationLater() async throws {
+        let h = try await ChatHarness.make()
+        let thread = h.tower.seed(channel: Fixtures.channel1, body: "Family")["thread_id"] as! String
+        let box = BindingBox([binding(thread: thread)])
+        let online = Flag(false)
+        let outbox = sender(h, slot: slot(box), online: online)
+        let item = try await XCTUnwrapAsync(try await outbox.send(text: "Later", mentions: [], target: h.target(thread: thread), connection: h.connection, workspace: h.workspace))
+        try await waitFor { try await h.store.reader.outboxItem(id: item.id)?.state == .retrying }
+        XCTAssertEqual(h.tower.recordedPosts.count, 0, "nothing is posted while the target cannot be checked")
+        let held = try await state(h, item.id)
+        XCTAssertEqual(held?.state, .retrying)
+        online.isOn = true
+        try await outbox.retry(item.id, connection: h.connection)
+        await h.engine.waitUntilIdle()
+        try await waitFor { try await h.store.reader.outboxItem(id: item.id) == nil }
+        let post = try XCTUnwrap(h.tower.recordedPosts.first)
+        XCTAssertEqual((try JSONSerialization.jsonObject(with: post.body) as? [String: Any])?["thread_id"] as? String, thread)
+        XCTAssertEqual(h.tower.recordedPosts.count, 1)
+    }
+
+    func testNothingIsSentUntilAGuardIsInstalled() async throws {
+        let h = try await ChatHarness.make()
+        let thread = h.tower.seed(channel: Fixtures.channel1, body: "Family")["thread_id"] as! String
+        let slot = OutboxGuardSlot(failClosed: true)
+        let outbox = sender(h, slot: slot)
+        let item = try await XCTUnwrapAsync(try await outbox.send(text: "Early", mentions: [], target: h.target(thread: thread), connection: h.connection, workspace: h.workspace))
+        try await waitFor { try await h.store.reader.outboxItem(id: item.id)?.state == .retrying }
+        XCTAssertEqual(h.tower.recordedPosts.count, 0)
+        let early = try await state(h, item.id)
+        XCTAssertEqual(early?.state, .retrying)
+        let fixed = binding(thread: thread)
+        slot.install(FamilySendGuard.make { _ in fixed })
+        try await outbox.retry(item.id, connection: h.connection)
+        await h.engine.waitUntilIdle()
+        XCTAssertEqual(h.tower.recordedPosts.count, 1)
+    }
+
+    func testABindingChangeWhileTowerIsBeingAskedBlocksTheSend() async throws {
+        let h = try await ChatHarness.make()
+        let thread = h.tower.seed(channel: Fixtures.channel1, body: "Family")["thread_id"] as! String
+        let other = h.tower.seed(channel: Fixtures.channel1, body: "Other")["thread_id"] as! String
+        let box = BindingBox([binding(thread: thread), binding(thread: other)])   // changed between the two reads
+        let outbox = sender(h, slot: slot(box))
+        let item = try await XCTUnwrapAsync(try await outbox.send(text: "Racing", mentions: [], target: h.target(thread: thread), connection: h.connection, workspace: h.workspace))
+        await h.engine.waitUntilIdle()
+        XCTAssertEqual(h.tower.recordedPosts.count, 0)
+        let blocked = try await state(h, item.id)
+        XCTAssertEqual(blocked?.state, .failed)
+    }
+
+    func testRowsAreAdmittedOnlyForTheExactOriginSignerWorkspaceChannelAndThread() throws {
+        let b = binding(thread: FamilyBindingTests.thread)
+        func item(origin: String = "https://tower.example", signer: String = TestKeys.npub, workspace: String = Fixtures.workspaceId,
+                  app: String = Fixtures.appNpub, channel: String = Fixtures.channel1, thread: String? = FamilyBindingTests.thread) -> OutboxItem {
+            OutboxItem(id: UUID().uuidString, connectionId: "other-connection-id", origin: origin, signerNpub: signer, workspaceId: workspace, appNpub: app,
+                       channelId: channel, threadId: thread, createThread: false, body: "x", mentions: [], request: nil, state: .queued, attempts: 0,
+                       lastStatus: nil, lastCode: nil, lastError: nil, createdAt: "2026-11-01T00:00:00.000Z", attachments: [])
+        }
+        XCTAssertTrue(b.admits(item()), "a reconnect to the same NStack may carry another connection id")
+        XCTAssertFalse(b.admits(item(origin: "https://elsewhere.example")))
+        XCTAssertFalse(b.admits(item(signer: Bech32.encode(hrp: "npub", data: Data(repeating: 0x22, count: 32)))))
+        XCTAssertFalse(b.admits(item(workspace: Fixtures.workspaceId2)))
+        XCTAssertFalse(b.admits(item(app: "npub1other")))
+        XCTAssertFalse(b.admits(item(channel: Fixtures.channel2)))
+        XCTAssertFalse(b.admits(item(thread: FamilyBindingTests.otherThread)))
+        XCTAssertFalse(b.admits(item(thread: nil)), "a new conversation is never admitted")
     }
 }

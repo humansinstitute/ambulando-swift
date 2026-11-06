@@ -64,7 +64,7 @@ final class NativeWorkspaceRuntime {
     var starting: Task<Void, Never>?
     var startRevision = UUID()
 
-    init(entry: EnabledWorkspaceEntry, store: LocalStore, shared: SyncEngine, identity: IdentityService,
+    init(entry: EnabledWorkspaceEntry, store: LocalStore, shared: SyncEngine, identity: IdentityService, outboxGuard: OutboxGuardSlot? = nil,
          transport: HTTPTransport, events: EventStreamTransport, staging: URL, cacheRoot: URL,
          afterWikiCreate: @escaping @Sendable (ConnectionRecord, WriteItem, DocRecord, LocalStore, DocumentSaver, WorkspaceRecord) async throws -> Void) {
         self.store = store
@@ -77,7 +77,7 @@ final class NativeWorkspaceRuntime {
         sync = WorkspaceSync(store: store, engine: engine, identity: identity, transport: guarded, boundary: entry.boundary)
         stream = LiveStream(sync: sync, transport: WorkspaceEventStreamTransport(base: events, activity: activity))
         let writeTransport = WorkspaceHTTPTransport(base: guarded, activity: writeActivity)
-        outbox = OutboxSender(store: store, engine: engine, identity: identity, transport: writeTransport, staging: staging)
+        outbox = OutboxSender(store: store, engine: engine, identity: identity, transport: writeTransport, staging: staging, guardSlot: outboxGuard)
         let sync = sync, workspace = entry.workspace
         saver = DocumentSaver(store: store, identity: identity, transport: writeTransport)
         let saver = saver

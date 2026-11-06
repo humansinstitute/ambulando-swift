@@ -18,9 +18,6 @@ final class FamilySetupModel {
     /// True only when the thread list of the chosen channel was fetched from Tower during this setup.
     var refreshedFromTower = false
     var incomplete = false
-    var creating = false
-    var newMessage = ""
-    var existingWarning: [FamilyConversationOption] = []
 
     func chooseWorkspace(_ entry: EnabledWorkspaceEntry, app: AppModel) async {
         self.entry = entry; error = nil; loading = true; defer { loading = false }
@@ -39,7 +36,7 @@ final class FamilySetupModel {
 
     func chooseChannel(_ channel: ChannelRecord, label: String, family: FamilyChatModel) async {
         self.channel = channel; channelLabel = label; step = .conversation
-        options = []; refreshedFromTower = false; existingWarning = []
+        options = []; refreshedFromTower = false
         await reloadConversations(family: family)
     }
 
@@ -65,7 +62,7 @@ final class FamilySetupModel {
         switch step {
         case .workspace: break
         case .channel: step = .workspace; entry = nil
-        case .conversation: step = .channel; channel = nil; options = []; newMessage = ""; existingWarning = []
+        case .conversation: step = .channel; channel = nil; options = []
         }
     }
 }
@@ -75,7 +72,6 @@ struct FamilySetupView: View {
     @Environment(FamilyChatModel.self) private var family
     @State private var setup = FamilySetupModel()
     @State private var showSettings = false
-    @State private var composing = false
 
     var body: some View {
         ScrollView {
@@ -110,7 +106,7 @@ struct FamilySetupView: View {
         VStack(alignment: .leading, spacing: 12) {
             StepTitle(number: 1, text: "Where does your family chat live?")
             if entries.isEmpty {
-                FamilyNotice(tone: .info, text: "Looking for the spaces your account can open… If this stays empty, your account has no space yet. Ask whoever runs your Tower to add you.")
+                FamilyNotice(tone: .info, text: "Looking for the spaces your account can open… If this stays empty, your account has no space yet. Ask whoever runs your NStack to add you.")
                 Button { app.retryConnection(); app.refresh(force: true) } label: { Text("Check again") }
                     .buttonStyle(PrimaryButtonStyle())
             }
@@ -150,24 +146,17 @@ struct FamilySetupView: View {
             Text("\(setup.entry?.workspace.label ?? "") · \(setup.channelLabel)").font(.amb(.headline)).foregroundStyle(Amb.mutedForeground)
             if setup.loading && setup.options.isEmpty { ProgressView().frame(maxWidth: .infinity) }
             if setup.refreshedFromTower && setup.options.isEmpty {
-                FamilyNotice(tone: .info, text: "There are no conversations in this channel yet. You can start one below.")
+                FamilyNotice(tone: .info, text: "There is no conversation in this channel yet. Start your family conversation once in Ambulando, then come back here and choose it. This app only opens a conversation that already exists.")
+                    .accessibilityIdentifier("family.setup.empty")
             }
             ForEach(setup.options) { option in
                 ChoiceRow(title: option.title, detail: detail(option), identifier: "family.conversation.\(option.id)") { Task { await bind(option) } }
             }
             if setup.incomplete { FamilyNotice(tone: .info, text: "Only the most recent conversations are shown.") }
-            if !setup.refreshedFromTower {
-                Button { Task { await setup.reloadConversations(family: family) } } label: { Text("Load conversations again") }
-                    .buttonStyle(PrimaryButtonStyle())
-            }
-            Divider().padding(.vertical, 8)
-            Text("Not listed?").font(.amb(.headline)).foregroundStyle(Amb.foreground)
-            Button { composing = true } label: { Label("Start a new family conversation", systemImage: "plus.bubble").font(.amb(.title3)) }
+            Button { Task { await setup.reloadConversations(family: family) } } label: { Text(setup.refreshedFromTower ? "Look again" : "Load conversations again") }
                 .buttonStyle(.bordered).controlSize(.large).frame(minHeight: Amb.touchTarget)
-                .disabled(!setup.refreshedFromTower)
-                .accessibilityIdentifier("family.setup.new")
+                .accessibilityIdentifier("family.setup.reload")
         }
-        .sheet(isPresented: $composing) { NewConversationSheet(setup: setup) }
     }
 
     private func detail(_ option: FamilyConversationOption) -> String? {
@@ -224,74 +213,5 @@ private struct ChoiceRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(identifier)
-    }
-}
-
-/// The deliberate path to a new conversation: re-reads the channel from Tower, warns if conversations already exist,
-/// and only then sends the first message under a request id fixed in advance.
-private struct NewConversationSheet: View {
-    @Environment(AppModel.self) private var app
-    @Environment(FamilyChatModel.self) private var family
-    @Environment(\.dismiss) private var dismiss
-    let setup: FamilySetupModel
-    @State private var message = ""
-    @State private var existing: [FamilyConversationOption] = []
-    @State private var acknowledged = false
-    @State private var working = false
-    @State private var problem: String?
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("This sends your first message and starts a new conversation in \(setup.channelLabel). Everyone in that channel who can see it will see it, in Ambulando too.")
-                        .font(.amb(.body)).foregroundStyle(Amb.mutedForeground)
-                    TextField("Say hello to the family", text: $message, axis: .vertical)
-                        .lineLimit(2...6).font(.amb(.title3)).padding(14)
-                        .background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-                        .accessibilityIdentifier("family.new.message")
-                    if !existing.isEmpty {
-                        FamilyNotice(tone: .warning, text: "This channel already has \(existing.count == 1 ? "a conversation" : "\(existing.count) conversations"): \(existing.prefix(3).map(\.title).joined(separator: ", ")). Choose one of those if it is your family chat. Another family member may have started it.")
-                        Toggle("I still want to start a new one", isOn: $acknowledged).font(.amb(.title3))
-                            .accessibilityIdentifier("family.new.acknowledge")
-                    }
-                    if let problem { FamilyNotice(tone: .error, text: problem) }
-                    Button { Task { await create() } } label: {
-                        if working { ProgressView().tint(Amb.primaryForeground) } else { Text("Start conversation and send") }
-                    }
-                    .buttonStyle(PrimaryButtonStyle()).disabled(working || (!existing.isEmpty && !acknowledged))
-                    .accessibilityIdentifier("family.new.create")
-                }
-                .padding(20)
-            }
-            .navigationTitle("New family conversation").inlineTitle()
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
-        }
-    }
-
-    private func create() async {
-        guard let entry = setup.entry, let channel = setup.channel, let connection = app.connection, let runtime = entry.runtime else { return }
-        working = true; problem = nil; defer { working = false }
-        // Look again right now, not at the earlier list: someone may have created it since.
-        await setup.reloadConversations(family: family)
-        existing = setup.options.filter { !$0.archived }
-        switch FamilyCreationGate.check(refreshedFromTower: setup.refreshedFromTower, existing: setup.options, acknowledgedExisting: acknowledged, firstMessage: message) {
-        case .refreshRequired: problem = "Could not check what already exists in this channel. Check the connection and try again."; return
-        case .existingConversations: return
-        case .emptyMessage: problem = "Write your first message."; return
-        case .allowed: break
-        }
-        let pending = FamilyCreationGate.makePending()
-        let binding = FamilyBinding(connectionId: connection.id, origin: connection.origin, signerNpub: connection.signerNpub,
-                                    workspaceId: entry.workspace.id, appNpub: entry.workspace.appNpub, workspaceLabel: entry.workspace.label,
-                                    channelId: channel.id, channelName: setup.channelLabel, threadId: nil, conversationTitle: setup.channelLabel,
-                                    pendingCreation: pending)
-        // The choice and its request id are on disk before anything is sent, so a relaunch finishes the same creation.
-        await family.save(binding)
-        do {
-            _ = try await runtime.outbox.send(text: message, mentions: [], target: binding.creationTarget, connection: connection,
-                                              workspace: entry.workspace, requestId: pending.requestId)
-            dismiss()
-        } catch { problem = error.localizedDescription }
     }
 }

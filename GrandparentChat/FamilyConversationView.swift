@@ -18,23 +18,22 @@ struct FamilyConversationView: View {
     @Environment(AppModel.self) private var app
     @Environment(FamilyChatModel.self) private var family
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
     let binding: FamilyBinding
+    @State private var keyboardUp = false
     @State private var snapshot = LiveQuery<FamilySnapshot>(initial: FamilySnapshot())
     @State private var limit = 100
     @State private var showSettings = false
 
-    private var creating: Bool { binding.threadId == nil }
-
     var body: some View {
         VStack(spacing: 0) {
-            header
+            // With the keyboard up at an accessibility text size, the list and the field need the whole screen.
+            if !(typeSize.isAccessibilitySize && keyboardUp) { header }
             statusBanners
             if let store = family.boundStore, let workspace = family.boundEntry?.workspace {
                 messageList(workspace: workspace)
-                if creating {
-                    EmptyView()
-                } else if family.access.canSend || family.access == .checking, let target = binding.target {
-                    FamilyComposer(target: target, workspace: workspace, store: store)
+                if family.access.canSend || family.access == .checking {
+                    FamilyComposer(target: binding.target, workspace: workspace, store: store)
                 } else if family.access == .conversationArchived {
                     FamilyNotice(tone: .warning, text: "This conversation was archived in Ambulando, so it is read-only here. You can still read it.").padding(12)
                 }
@@ -47,19 +46,14 @@ struct FamilyConversationView: View {
         .tabletReadingWidth(900)
         .background(Amb.background)
         .sheet(isPresented: $showSettings) { FamilySettingsView(binding: binding) }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardUp = false }
         .task(id: loadKey) { start() }
         .task(id: "\(loadKey)-sync-\(scenePhase == .active)") { await openForSync() }
-        .task(id: creating ? binding.pendingCreation?.requestId : nil) {
-            // Waiting for Tower to confirm a new conversation: look again until it is there.
-            while creating, !Task.isCancelled {
-                await family.resolvePendingCreation()
-                try? await Task.sleep(for: .seconds(2))
-            }
-        }
         .accessibilityElement(children: .contain).accessibilityIdentifier("family.conversation")
     }
 
-    private var loadKey: String { "\(binding.threadId ?? "creating")-\(family.boundStore != nil)-\(limit)" }
+    private var loadKey: String { "\(binding.threadId)-\(family.boundStore != nil)-\(limit)" }
 
     // MARK: Header and status
 
@@ -69,7 +63,9 @@ struct FamilyConversationView: View {
                 Text(binding.conversationTitle.isEmpty ? "Family chat" : binding.conversationTitle)
                     .font(.amb(.title2).weight(.bold)).foregroundStyle(Amb.foreground).lineLimit(2)
                     .accessibilityAddTraits(.isHeader).accessibilityIdentifier("family.title")
-                Text("\(binding.workspaceLabel) · \(binding.channelName)").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                if !typeSize.isAccessibilitySize {
+                    Text("\(binding.workspaceLabel) · \(binding.channelName)").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
             Button { showSettings = true } label: {
@@ -109,7 +105,7 @@ struct FamilyConversationView: View {
                         .accessibilityIdentifier("family.earlier")
                 }
                 if snapshot.loaded && snapshot.value.messages.isEmpty && snapshot.value.pending.isEmpty {
-                    Text(creating ? "Starting your family chat…" : "No messages yet. Say hello!").font(.amb(.title3)).foregroundStyle(Amb.mutedForeground)
+                    Text("No messages yet. Say hello!").font(.amb(.title3)).foregroundStyle(Amb.mutedForeground)
                         .frame(maxWidth: .infinity).padding(32)
                 }
                 ForEach(snapshot.value.messages, id: \.id) { message in
@@ -136,18 +132,15 @@ struct FamilyConversationView: View {
     private func start() {
         guard let store = family.boundStore else { return }
         let binding = binding, limit = limit
-        let target = binding.target ?? binding.creationTarget
+        let target = binding.target
         snapshot.start(store: store, keepingValue: true, matches: { key in
             (key.workspaceId == binding.workspaceId || key.workspaceId == nil)
                 && [.messages, .outbox, .members, .agents, .threads, .profiles, .access].contains(key.table)
-                && (binding.threadId.map { key.affectsThread(workspaceId: binding.workspaceId, channelId: binding.channelId, threadId: $0) } ?? true)
+                && key.affectsThread(workspaceId: binding.workspaceId, channelId: binding.channelId, threadId: binding.threadId)
         }) {
             async let pending = store.reader.outbox(target: target)
             async let directory = store.reader.people(connectionId: target.connectionId, workspaceId: target.workspaceId)
-            var rows: [MessageRecord] = []
-            if let threadId = binding.threadId {
-                rows = try await store.reader.threadMessages(workspaceId: binding.workspaceId, threadId: threadId, limit: limit + 1)
-            }
+            let rows = try await store.reader.threadMessages(workspaceId: binding.workspaceId, threadId: binding.threadId, limit: limit + 1)
             let hasEarlier = rows.count > limit
             let shown = Array(rows.suffix(limit))
             MessageDisplayCache.shared.prepare(shown)
@@ -159,7 +152,8 @@ struct FamilyConversationView: View {
 
     /// Reads only the bound conversation from Tower (its thread, and the channel feed for live updates).
     private func openForSync() async {
-        guard scenePhase == .active, let workspace = family.boundEntry?.workspace, let threadId = binding.threadId,
+        let threadId = binding.threadId
+        guard scenePhase == .active, let workspace = family.boundEntry?.workspace,
               app.selectedWorkspaceId == binding.workspaceId else { return }
         app.openChannel(binding.channelId, in: workspace)
         app.openThread(threadId, channelId: binding.channelId, in: workspace)
@@ -167,9 +161,9 @@ struct FamilyConversationView: View {
     }
 
     private func refresh() async {
-        guard let workspace = family.boundEntry?.workspace, let threadId = binding.threadId else { return }
+        guard let workspace = family.boundEntry?.workspace else { return }
         app.retryConnection()
-        app.openThread(threadId, channelId: binding.channelId, in: workspace)
+        app.openThread(binding.threadId, channelId: binding.channelId, in: workspace)
         await family.verifyNow()
         try? await Task.sleep(for: .milliseconds(700))
     }
@@ -180,6 +174,7 @@ struct FamilyComposer: View {
     @Environment(AppModel.self) private var app
     @Environment(FamilyChatModel.self) private var family
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
     let target: ChatTarget
     let workspace: WorkspaceRecord
     let store: LocalStore
@@ -189,6 +184,8 @@ struct FamilyComposer: View {
     @State private var sending = false
     @State private var problem: String?
     @FocusState private var focused: Bool
+
+    private var stacked: Bool { typeSize.isAccessibilitySize }
 
     private var canSend: Bool {
         guard let composer, !sending else { return false }
@@ -206,34 +203,17 @@ struct FamilyComposer: View {
                     FamilyNotice(tone: .error, text: failure).padding(.horizontal, 12).padding(.top, 6)
                 }
                 if let problem { FamilyNotice(tone: .warning, text: problem).padding(.horizontal, 12).padding(.top, 6).accessibilityIdentifier("family.send.problem") }
-                HStack(alignment: .bottom, spacing: 10) {
-                    PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
-                        VStack(spacing: 2) {
-                            Image(systemName: "photo.on.rectangle.angled").font(.system(size: 26))
-                            Text("Photo").font(.amb(.caption).weight(.semibold))
-                        }
-                        .frame(width: 64, height: 60)
+                if stacked {
+                    // Accessibility text sizes: the field gets the full width, with Photo and a wide Send beneath it.
+                    VStack(spacing: 8) {
+                        field(composer)
+                        HStack(spacing: 10) { photoButton; sendButton(composer) }
                     }
-                    .accessibilityLabel("Add a photo").accessibilityIdentifier("family.photo")
-                    TextField("Write a message", text: $composer.text, axis: .vertical)
-                        .lineLimit(1...5).font(.amb(.title3)).focused($focused)
-                        .padding(.horizontal, 14).padding(.vertical, 14)
-                        .frame(minHeight: 60)
-                        .background(Amb.muted, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .accessibilityIdentifier("family.field")
-                    Button { send(composer) } label: {
-                        VStack(spacing: 2) {
-                            Image(systemName: "paperplane.fill").font(.system(size: 24))
-                            Text("Send").font(.amb(.headline))
-                        }
-                        .foregroundStyle(canSend ? Amb.primaryForeground : Amb.mutedForeground)
-                        .frame(minWidth: 84, minHeight: 60)
-                        .background(canSend ? Amb.primary : Amb.muted, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    }
-                    .disabled(!canSend)
-                    .accessibilityLabel("Send").accessibilityIdentifier("family.send")
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                } else {
+                    HStack(alignment: .bottom, spacing: 10) { photoButton; field(composer); sendButton(composer) }
+                        .padding(.horizontal, 12).padding(.vertical, 10)
                 }
-                .padding(.horizontal, 12).padding(.vertical, 10)
             }
         }
         .background(Amb.card)
@@ -255,6 +235,41 @@ struct FamilyComposer: View {
         }
         .onChange(of: scenePhase) { _, phase in if phase != .active { composer?.saveNow() } }
         .onDisappear { composer?.saveNow() }
+    }
+
+    private var photoButton: some View {
+        PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
+            VStack(spacing: 2) {
+                Image(systemName: "photo.on.rectangle.angled").font(.system(size: 26))
+                if !stacked { Text("Photo").font(.amb(.caption).weight(.semibold)) }
+            }
+            .frame(minWidth: 64, minHeight: 60)
+        }
+        .accessibilityLabel("Add a photo").accessibilityIdentifier("family.photo")
+    }
+
+    private func field(_ composer: ComposerModel) -> some View {
+        @Bindable var composer = composer
+        return TextField("Write a message", text: $composer.text, axis: .vertical)
+            .lineLimit(1...3).font(.amb(.title3)).focused($focused)
+            .padding(.horizontal, 14).padding(.vertical, 14)
+            .frame(minHeight: 60)
+            .background(Amb.muted, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .accessibilityIdentifier("family.field")
+    }
+
+    private func sendButton(_ composer: ComposerModel) -> some View {
+        let enabled = canSend
+        return Button { send(composer) } label: {
+            Label { Text("Send").font(.amb(.headline)) } icon: { Image(systemName: "paperplane.fill").font(.system(size: 24)) }
+                .labelStyle(SendLabelStyle(stacked: !stacked))
+                .foregroundStyle(enabled ? Amb.primaryForeground : Amb.mutedForeground)
+                .frame(maxWidth: stacked ? .infinity : nil, minHeight: 60)
+                .frame(minWidth: 84)
+                .background(enabled ? Amb.primary : Amb.muted, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .disabled(!enabled)
+        .accessibilityLabel("Send").accessibilityIdentifier("family.send")
     }
 
     private func send(_ composer: ComposerModel) {
@@ -289,5 +304,14 @@ struct FamilyNotice: View {
         Label(text, systemImage: icon).font(.amb(.callout)).foregroundStyle(fg).padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(bg, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// Send's icon above its word on the regular layout, beside it on the wide one.
+private struct SendLabelStyle: LabelStyle {
+    let stacked: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        if stacked { VStack(spacing: 2) { configuration.icon; configuration.title } }
+        else { HStack(spacing: 10) { configuration.icon; configuration.title } }
     }
 }

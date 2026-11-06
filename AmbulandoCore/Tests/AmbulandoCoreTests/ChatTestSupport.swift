@@ -61,6 +61,9 @@ final class FakeChatTower: @unchecked Sendable {
 
     func delete(id: String) { lock.withLock { messages.removeAll { $0["id"] as? String == id } } }
 
+    /// Changes a thread's `record_state` (for example to `archived`), as another member would.
+    func setThreadState(_ id: String, _ state: String) { lock.withLock { threads[id]?["record_state"] = state } }
+
     func handler() -> StubTransport.Handler {
         { [self] request in try self.route(request) }
     }

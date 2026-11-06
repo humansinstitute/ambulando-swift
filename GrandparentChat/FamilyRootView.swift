@@ -23,7 +23,20 @@ struct FamilyRootView: View {
                 content
             }
         }
-        .fixtureLabel()
+        .safeAreaInset(edge: .top, spacing: 0) {
+            #if DEBUG
+            if app.fixture != nil {
+                Text("Synthetic test · no live messages")
+                    .font(.system(size: 12, weight: .semibold))
+                    .dynamicTypeSize(.large)
+                    .foregroundStyle(Amb.warning)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .background(Amb.warningBackground)
+                    .accessibilityIdentifier("fixture.banner")
+            }
+            #endif
+        }
         .imageLightboxHost()
         .task(id: "\(app.identity.npub ?? "")-\(app.phase == .ready)") { await family.loadBinding() }
     }
@@ -69,7 +82,6 @@ private struct BoundChatView: View {
         }
         .task(id: trigger) {
             family.activateBoundWorkspace()
-            await family.resolvePendingCreation()
             await family.refreshAccess()
         }
         // A live look at Tower when the app comes forward and once the connection is usable, so a removed member,
@@ -87,7 +99,7 @@ private struct BoundChatView: View {
     private var trigger: String {
         [app.identity.npub ?? "", app.connection?.id ?? "", app.selectedWorkspaceId ?? "", String(app.workspaceEntries.count),
          String(app.workspaceEntries.first { $0.workspace.id == binding.workspaceId }?.navigation.loaded ?? false),
-         binding.threadId ?? "creating"].joined(separator: "|")
+         binding.threadId].joined(separator: "|")
     }
 }
 
@@ -141,7 +153,7 @@ struct FamilyBlockedView: View {
     private var title: String {
         switch access {
         case .differentAccount: "This is a different account"
-        case .differentTower: "This is a different Tower"
+        case .differentTower: "This is a different NStack"
         case .workspaceUnavailable: "You can no longer open \(binding.workspaceLabel)"
         case .channelUnavailable: "The \(binding.channelName) channel is not available"
         case .conversationUnavailable: "This family chat is gone"
@@ -152,7 +164,7 @@ struct FamilyBlockedView: View {
     private var message: String {
         switch access {
         case .differentAccount: "Grandparent Chat was set up with another account. Nothing was changed. Sign in with that account, or choose a family chat for this one."
-        case .differentTower: "Your family chat was set up on a different Tower. Nothing was changed."
+        case .differentTower: "Your family chat was set up on a different NStack. Nothing was changed."
         case .workspaceUnavailable: "Your account no longer has access to this space. Ask whoever runs it to add you again, or choose a different family chat."
         case .channelUnavailable: "This channel was removed or you no longer have access to it. Ask whoever runs it, or choose a different family chat."
         case .conversationUnavailable: "This conversation was deleted or moved. The app will not pick another one for you. Choose the family chat again to continue."

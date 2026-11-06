@@ -108,8 +108,58 @@ final class GrandparentChatUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["family.setup"].firstMatch.waitForExistence(timeout: 15), "change returns to setup")
     }
 
+    /// Largest text, the on-screen keyboard and (on iPad) both orientations, for review screenshots.
+    func testLargestTextWithKeyboardAndOrientations() {
+        let app = launch(reset: true, ["-family.textSize", "largest"])
+        chooseFamilyConversation(app)
+        _ = app.staticTexts["Ship it"].waitForExistence(timeout: 20)
+        shot(app, "largest-text-conversation")
+        let composer = field(app)
+        composer.tap()
+        composer.typeText("Dear everyone, the photos from Sunday are lovely. See you all soon.")
+        shot(app, "largest-text-keyboard")
+        XCTAssertTrue(app.buttons["family.send"].isHittable, "Send stays reachable above the keyboard at the largest text size")
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            XCUIDevice.shared.orientation = .landscapeLeft
+            Thread.sleep(forTimeInterval: 1)
+            shot(app, "ipad-landscape-keyboard")
+            XCTAssertTrue(app.buttons["family.send"].isHittable)
+            XCUIDevice.shared.orientation = .portrait
+        }
+    }
+
+    func testStandardTextScreens() {
+        let app = launch(reset: true)
+        chooseFamilyConversation(app)
+        _ = app.staticTexts["Ship it"].waitForExistence(timeout: 20)
+        shot(app, "standard-conversation")
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            XCUIDevice.shared.orientation = .landscapeLeft
+            Thread.sleep(forTimeInterval: 1)
+            shot(app, "ipad-landscape-conversation")
+            XCUIDevice.shared.orientation = .portrait
+        }
+    }
+
+    /// Setup offers existing conversations only: there is no create-conversation action anywhere in the flow.
+    func testSetupOffersNoCreateAction() {
+        let app = launch(reset: true)
+        chooseFamilyConversation(app)
+        app.buttons["family.settings"].tap()
+        app.swipeUp()
+        app.buttons["family.settings.change"].tap()
+        app.buttons["Choose again"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["family.setup"].firstMatch.waitForExistence(timeout: 15))
+        app.buttons.matching(NSPredicate(format: "label CONTAINS 'Studio (sample)'")).firstMatch.tap()
+        app.buttons.matching(NSPredicate(format: "label CONTAINS 'general'")).firstMatch.tap()
+        XCTAssertTrue(app.buttons["family.setup.reload"].waitForExistence(timeout: 30))
+        XCTAssertFalse(app.buttons["family.setup.new"].exists)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'new family conversation' OR label CONTAINS[c] 'start a new'")).count, 0)
+    }
+
     private func shot(_ app: XCUIApplication, _ name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        // Capture the device canvas so rotated iPad windows are not cropped to a stale app snapshot frame.
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name; attachment.lifetime = .keepAlways
         add(attachment)
     }

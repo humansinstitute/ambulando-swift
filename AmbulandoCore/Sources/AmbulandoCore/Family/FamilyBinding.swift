@@ -16,49 +16,37 @@ public struct FamilyBinding: Codable, Equatable, Sendable {
     public let workspaceLabel: String
     public let channelId: String
     public let channelName: String
-    /// Nil only while an explicitly created conversation waits for Tower to answer its first message.
-    public var threadId: String?
+    /// The existing conversation, chosen from the channel's own list. The app never creates one.
+    public let threadId: String
     public var conversationTitle: String
-    public var pendingCreation: PendingCreation?
     public let boundAt: String
 
-    /// A conversation being created by sending its first message. `requestId` is the outbox row's `client_request_id`,
-    /// fixed before anything is sent so every retry (and a relaunch) replays the same request instead of making a second.
-    public struct PendingCreation: Codable, Equatable, Sendable {
-        public let requestId: String
-        public let createdAt: String
-        public init(requestId: String, createdAt: String) { self.requestId = requestId; self.createdAt = createdAt }
-    }
-
     public init(connectionId: String, origin: String, signerNpub: String, workspaceId: String, appNpub: String, workspaceLabel: String,
-                channelId: String, channelName: String, threadId: String?, conversationTitle: String,
-                pendingCreation: PendingCreation? = nil, boundAt: String = ISO8601DateFormatter().string(from: Date())) {
+                channelId: String, channelName: String, threadId: String, conversationTitle: String,
+                boundAt: String = ISO8601DateFormatter().string(from: Date())) {
         self.version = Self.currentVersion
         self.connectionId = connectionId; self.origin = origin; self.signerNpub = signerNpub
         self.workspaceId = workspaceId.lowercased(); self.appNpub = appNpub; self.workspaceLabel = workspaceLabel
         self.channelId = channelId.lowercased(); self.channelName = channelName
-        self.threadId = threadId?.lowercased(); self.conversationTitle = conversationTitle
-        self.pendingCreation = pendingCreation; self.boundAt = boundAt
+        self.threadId = threadId.lowercased(); self.conversationTitle = conversationTitle
+        self.boundAt = boundAt
     }
 
-    /// A binding must name a thread or a creation in flight; anything else is unusable and is not restored.
+    /// Every id must be a UUID. Anything else is unusable and is not restored.
     public var isWellFormed: Bool {
-        version == Self.currentVersion && (threadId != nil || pendingCreation != nil)
-            && UUID(uuidString: workspaceId) != nil && UUID(uuidString: channelId) != nil && threadId.map { UUID(uuidString: $0) != nil } != false
+        version == Self.currentVersion && UUID(uuidString: workspaceId) != nil && UUID(uuidString: channelId) != nil && UUID(uuidString: threadId) != nil
     }
 
-    /// Where drafts and unsent messages of the bound conversation live. Nil while the conversation is still being created.
-    public var target: ChatTarget? {
-        threadId.map { ChatTarget(connectionId: connectionId, workspaceId: workspaceId, channelId: channelId, threadId: $0) }
+    /// Where drafts and unsent messages of the bound conversation live.
+    public var target: ChatTarget {
+        ChatTarget(connectionId: connectionId, workspaceId: workspaceId, channelId: channelId, threadId: threadId)
     }
 
-    /// Where the first message of a conversation being created waits.
-    public var creationTarget: ChatTarget { ChatTarget(connectionId: connectionId, workspaceId: workspaceId, channelId: channelId, threadId: nil) }
-
-    public func withThread(_ id: String, title: String) -> FamilyBinding {
-        var next = self
-        next.threadId = id.lowercased(); next.pendingCreation = nil; next.conversationTitle = title
-        return next
+    /// An unsent message may go out only if it was written for exactly this account, Tower, space, channel and conversation.
+    /// (The connection id may differ after a reconnect to the same Tower; the origin and signer are what identify it.)
+    public func admits(_ item: OutboxItem) -> Bool {
+        item.origin == origin && item.signerNpub == signerNpub && item.workspaceId == workspaceId && item.appNpub == appNpub
+            && item.channelId == channelId && item.threadId == threadId
     }
 }
 
@@ -75,10 +63,9 @@ public enum FamilyAccess: Equatable, Sendable {
     case channelUnavailable
     case conversationUnavailable
     case conversationArchived
-    case awaitingCreation
     case ready
 
-    public var canShowConversation: Bool { self == .ready || self == .conversationArchived || self == .checking || self == .awaitingCreation }
+    public var canShowConversation: Bool { self == .ready || self == .conversationArchived || self == .checking }
     /// Only a confirmed, writable target accepts a message. Archived is read-only here: Ambulando reopens a thread on reply,
     /// but a family member should not silently un-archive something someone else put away.
     public var canSend: Bool { self == .ready }
@@ -117,7 +104,6 @@ public enum FamilyAccessEvaluator {
         guard workspaces.contains(where: { $0.id == binding.workspaceId && $0.appNpub == binding.appNpub }) else { return .workspaceUnavailable }
         let channelKnown = facts.channel?.id == binding.channelId || facts.threadConfirmedLive
         if !channelKnown { return facts.channelsLoaded ? .channelUnavailable : .checking }
-        if binding.threadId == nil { return binding.pendingCreation == nil ? .conversationUnavailable : .awaitingCreation }
         guard facts.threadLoaded else { return .checking }
         guard let thread = facts.thread, thread.id == binding.threadId, thread.channelId == binding.channelId,
               thread.workspaceId == binding.workspaceId, !thread.deleted else { return .conversationUnavailable }
@@ -134,7 +120,8 @@ public enum FamilyRouting {
     }
 
     public static func resolve(_ destination: PushDestination, binding: FamilyBinding?) -> Outcome {
-        guard let binding, let threadId = binding.threadId else { return .ignore }
+        guard let binding else { return .ignore }
+        let threadId = binding.threadId
         switch destination {
         case .thread(let workspace, let channel, let thread):
             return same(workspace, binding.workspaceId) && same(channel, binding.channelId) && same(thread, threadId) ? .showConversation : .ignore
@@ -178,31 +165,5 @@ public struct FamilyConversationOption: Equatable, Identifiable, Sendable {
                                             messageCount: summary.replyCount + 1, lastActivityAt: summary.lastActivityAt, archived: summary.archived)
         }
         .sorted { $0.lastActivityAt > $1.lastActivityAt }
-    }
-}
-
-/// Creating a conversation sends its first message with `create_thread` under a `client_request_id` chosen once.
-/// Tower replays that id, so a retry or relaunch cannot make a second thread from this install. It is not a global
-/// uniqueness guarantee (another device can create its own), which is why the existing threads are fetched first and
-/// shown, and why the person must say they still want a new one.
-public enum FamilyCreationGate {
-    public enum Decision: Equatable, Sendable {
-        case allowed
-        /// The channel's threads were not fetched from Tower just now (offline, or the fetch failed).
-        case refreshRequired
-        /// Conversations already exist; the person must pick one or explicitly choose to start another.
-        case existingConversations([FamilyConversationOption])
-        case emptyMessage
-    }
-
-    public static func check(refreshedFromTower: Bool, existing: [FamilyConversationOption], acknowledgedExisting: Bool, firstMessage: String) -> Decision {
-        guard refreshedFromTower else { return .refreshRequired }
-        let live = existing.filter { !$0.archived }
-        if !live.isEmpty, !acknowledgedExisting { return .existingConversations(live) }
-        return OutboxRequest.normalizedBody(firstMessage).isEmpty ? .emptyMessage : .allowed
-    }
-
-    public static func makePending(now: Date = Date()) -> FamilyBinding.PendingCreation {
-        FamilyBinding.PendingCreation(requestId: UUID().uuidString.lowercased(), createdAt: ISO8601DateFormatter().string(from: now))
     }
 }

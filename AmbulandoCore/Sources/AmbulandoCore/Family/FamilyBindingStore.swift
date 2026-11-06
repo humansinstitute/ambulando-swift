@@ -12,15 +12,6 @@ extension StoreReader {
               binding.isWellFormed, binding.signerNpub == signerNpub else { return nil }
         return binding
     }
-
-    /// The conversation a first message with this `client_request_id` created, once Tower has accepted it.
-    public func familyCreatedThread(workspaceId: String, requestId: String) throws -> (threadId: String, body: String)? {
-        let s = try db.prepare("""
-        SELECT thread_id, body FROM messages WHERE workspace_id = ? AND client_request_id = ? AND thread_id IS NOT NULL AND deleted = 0 LIMIT 1
-        """)
-        try s.bind([.text(workspaceId), .text(requestId.lowercased())])
-        return try s.step() ? (s.text(0) ?? "", s.text(1) ?? "") : nil
-    }
 }
 
 extension StoreWriter {
@@ -51,11 +42,12 @@ public enum FamilyVerification: Equatable, Sendable {
     case unreachable(String)
 
     public var allowsSend: Bool { if case .confirmed = self { true } else { false } }
+    public var isUnreachable: Bool { if case .unreachable = self { true } else { false } }
 
     /// Checks workspace access, then the bound thread: it must exist in the bound channel and workspace and not be
     /// deleted. Never substitutes another thread.
     public static func verify(_ binding: FamilyBinding, api: TowerAPI) async -> FamilyVerification {
-        guard let threadId = binding.threadId else { return .channelOrThreadLost }
+        let threadId = binding.threadId
         let workspaces: [WorkspaceRecord]
         do { workspaces = try await api.workspaces() }
         catch TowerError.http(let status, _, _) where status == 403 { return .workspaceLost }
@@ -76,5 +68,29 @@ public enum FamilyVerification: Equatable, Sendable {
 
     private static func unreachableText(_ error: Error) -> String {
         error is CancellationError ? "Cancelled" : error.localizedDescription
+    }
+}
+
+/// The guard Grandparent Chat installs on every outbox. Per attempt it re-reads the binding (so a changed family chat
+/// stops a queued message), asks Tower whether the exact workspace, channel and conversation are still writable (so a
+/// conversation archived after the message was queued is not reopened), and reads the binding again after that wait.
+/// Without a connection it holds the message queued; it never redirects it to another conversation.
+public enum FamilySendGuard {
+    public static func make(binding: @escaping @Sendable (_ signerNpub: String) async -> FamilyBinding?) -> OutboxSendGuard {
+        { item, api in
+            guard let first = await binding(item.signerNpub), first.admits(item) else {
+                return .block("This message was written for a family chat that is no longer selected, so it was not sent.")
+            }
+            let verification = await FamilyVerification.verify(first, api: api)
+            guard let second = await binding(item.signerNpub), second == first else {
+                return .block("The family chat changed while this message was waiting, so it was not sent.")
+            }
+            switch verification {
+            case .confirmed: return .allow
+            case .unreachable: return .hold("Offline; will send when the connection returns.")
+            case .archived: return .block("This conversation was archived, so this message was not sent.")
+            case .workspaceLost, .channelOrThreadLost: return .block("This family chat is no longer available to your account, so this message was not sent.")
+            }
+        }
     }
 }

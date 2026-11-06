@@ -14,16 +14,18 @@ struct ImportIdentityView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                BrandHeader(subtitle: Product.isGrandparentChat ? "Family conversation, kept simple." : "Solvitur ambulando — it is solved by walking.")
+                BrandHeader(subtitle: Product.isGrandparentChat ? "One family conversation, kept simple." : "Solvitur ambulando — it is solved by walking.")
                     .padding(.top, 32)
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Import your identity").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
-                    Text("Paste the nsec you use with \(Product.isGrandparentChat ? "Ambulando" : Product.name). It is encrypted on this \(Device.name) with your PIN and a device-only Keychain secret, and never leaves this app.")
+                    Text(Product.isGrandparentChat ? "Sign in" : "Import your identity").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
+                    Text(Product.isGrandparentChat
+                         ? "Paste your sign-in key: the nsec1… key you already use with Ambulando. It is stored encrypted on this \(Device.name), protected by a PIN you choose, and is never sent anywhere else."
+                         : "Paste the nsec you use with Ambulando. It is encrypted on this \(Device.name) with your PIN and a device-only Keychain secret, and never leaves this app.")
                         .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
-                    SecureField("nsec1…", text: $nsec)
+                    SecureField(Product.isGrandparentChat ? "Sign-in key (nsec1…)" : "nsec1…", text: $nsec)
                         .textContentType(.password).noCapitalization().autocorrectionDisabled()
                         .font(Amb.code).padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
-                    SecureField("PIN (4–12 digits)", text: $pin).numberPadEntry()
+                    SecureField(Product.isGrandparentChat ? "Choose a PIN (4–12 digits)" : "PIN (4–12 digits)", text: $pin).numberPadEntry()
                         .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                     SecureField("Confirm PIN", text: $confirm).numberPadEntry()
                         .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
@@ -34,7 +36,7 @@ struct ImportIdentityView: View {
                             await model.importIdentity(nsec: nsec, pin: pin)
                             nsec = ""; pin = ""; confirm = ""; working = false
                         }
-                    } label: { working ? AnyView(ProgressView().tint(Amb.primaryForeground)) : AnyView(Text("Import and encrypt")) }
+                    } label: { working ? AnyView(ProgressView().tint(Amb.primaryForeground)) : AnyView(Text(Product.isGrandparentChat ? "Continue" : "Import and encrypt")) }
                         .buttonStyle(PrimaryButtonStyle())
                         .disabled(!valid || working)
                 }
@@ -115,7 +117,7 @@ struct LockScreen: View {
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(pin.count < 4 || working)
                 .accessibilityIdentifier("lock.unlock")
-                Text("Enter your PIN to open your workspaces. \(Product.name) stays unlocked on this \(Device.name) until you choose Lock now.")
+                Text("\(Product.isGrandparentChat ? "Enter your PIN to open your family chat." : "Enter your PIN to open your workspaces.") \(Product.name) stays unlocked on this \(Device.name) until you choose Lock.")
                     .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).multilineTextAlignment(.center)
             }
             .frame(maxWidth: 360)
