@@ -11,10 +11,10 @@ enum Amb {
     static let background = dynamic(0xFFFFFF, 0x1A2238)
     /// sol `--background`: the recessed grey the web keeps for a few inputs and nested cards.
     static let canvas = dynamic(0xF6F6FA, 0x10162B)
-    static let foreground = dynamic(0x10162B, 0xF5F3FC)
+    static let foreground = dynamic(ChatTextPalette.foreground(false), ChatTextPalette.foreground(true))
     static let card = dynamic(0xFFFFFF, 0x1A2238)
     static let muted = dynamic(0xEEEFF5, 0x26314A)
-    static let mutedForeground = dynamic(0x596174, 0xBDC4D6)
+    static let mutedForeground = dynamic(ChatTextPalette.muted(false), ChatTextPalette.muted(true))
     static let border = dynamic(0xD7D9E2, 0x48546D)
     static let primary = dynamic(0x2B1B3C, 0xCBB8FF)
     static let primaryForeground = dynamic(0xFFFFFF, 0x20123C)
@@ -29,7 +29,7 @@ enum Amb {
     static let warningBackground = dynamic(0xFFF3D6, 0x40331C)
     static let info = dynamic(0x215C85, 0xADD2F0)
     /// Web addresses in messages and documents: a clear blue, always underlined, so a link never reads as plain text.
-    static let link = dynamic(0x0B5CC7, 0x8CC4FF)
+    static let link = dynamic(ChatTextPalette.link(false), ChatTextPalette.link(true))
     static let infoBackground = dynamic(0xE8F1F9, 0x20384C)
     /// Selected row (sol `.sidebar-scope-channel-row.active`, `.reaction-pill-active`): muted fill, primary text.
     static let selectedFill = muted

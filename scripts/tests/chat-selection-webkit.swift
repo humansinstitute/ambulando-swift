@@ -2,6 +2,7 @@
 // See chat-selection.sh. It exercises DOM ranges and native clipboard, not a simulated mouse or iPhone touch.
 import AppKit
 import WebKit
+import SwiftUI
 
 @MainActor final class Messages: NSObject, WKScriptMessageHandler {
     var values: [[String:Any]] = []
@@ -22,6 +23,9 @@ import WebKit
         }
         app.run()
     }
+    static func rgb(_ value: UInt32) -> String {
+        "rgb(\((value >> 16) & 255), \((value >> 8) & 255), \(value & 255))"
+    }
     @MainActor static func run() async throws {
         let root = URL(fileURLWithPath: CommandLine.arguments[1])
         let fixture = try String(contentsOfFile: CommandLine.arguments[2], encoding: .utf8)
@@ -39,6 +43,47 @@ import WebKit
             if (try? await web.evaluateJavaScript("typeof chatClipboard==='function'")) as? Bool == true { break }
             try await Task.sleep(for:.milliseconds(100))
         }
+        // Compare the shipped WebKit body with the actual SwiftUI plain font and multiline rhythm.
+        for scale: CGFloat in [0.85, 1, 1.15, 1.3, 1.5, 1.75, 2] {
+            let type = NativeChatTypography(scale: scale)
+            let expected = NSFont.preferredFont(forTextStyle: .body).pointSize * scale
+            guard type.pointSize == expected else { throw NSError(domain: "Native body size mismatch", code: 4) }
+            func plainHeight(_ lines: Int) -> CGFloat {
+                NSHostingView(rootView: Text(verbatim: Array(repeating: "Matching body", count: lines).joined(separator: "\n"))
+                    .font(type.font).lineSpacing(3 * scale).fixedSize()).fittingSize.height
+            }
+            let nativeWidth = NSHostingView(rootView: Text("Matching body").font(type.font).fixedSize()).fittingSize.width
+            let step = (plainHeight(30) - plainHeight(10)) / 20
+            for dark in [false, true] {
+                for muted in [false, true] {
+                    let style = try JSONSerialization.jsonObject(with: Data(type.webStyle(dark: dark, muted: muted).utf8))
+                    let report = try await web.callAsyncJavaScript("""
+                    chatContent('<p>Matching body<br>Matching body<br>Matching body</p><p>Before <a href="https://example.com">link</a> <a><mark>Agent</mark></a> <a><mark>Document</mark></a> <a><mark>Task</mark></a> <strong>bold</strong> <em>italic</em> after.</p><h2>Heading</h2><pre><code>Code</code></pre>');
+                    chatStyle(style);
+                    const root=document.getElementById('message'), p=root.querySelector('p'), s=getComputedStyle(p);
+                    const check=(ok,msg)=>{if(!ok)throw Error(msg)};
+                    check(Math.abs(parseFloat(s.fontSize)-size)<.01,'native body size');
+                    check(Math.abs(parseFloat(s.lineHeight)-step)<.06,'native multiline rhythm: '+s.lineHeight+' vs '+step);
+                    const word=document.createRange();word.selectNodeContents(p.firstChild);
+                    check(Math.abs(word.getBoundingClientRect().width-nativeWidth)<1,'native glyph width');
+                    check(s.fontWeight==='400','regular prose');
+                    check(s.color===ink,'shared body ink: '+s.color+' vs '+ink);
+                    for(const n of root.querySelectorAll('a,mark,strong,em')) {
+                        const t=getComputedStyle(n);check(t.fontSize===s.fontSize && t.lineHeight===s.lineHeight,'inline size/rhythm');
+                    }
+                    check(getComputedStyle(root.querySelector('mark')).fontWeight==='600','tag emphasis');
+                    check(getComputedStyle(root.querySelector('strong')).fontWeight>=600,'bold emphasis');
+                    check(parseFloat(getComputedStyle(root.querySelector('h2')).fontSize)>size,'heading hierarchy');
+                    check(getComputedStyle(root.querySelector('code')).fontFamily.includes('monospace'),'code family');
+                    const r=document.createRange();r.selectNodeContents(root);getSelection().removeAllRanges();getSelection().addRange(r);
+                    const before=getSelection().toString();chatStyle(style);check(getSelection().toString()===before,'style retains range');
+                    return {size:s.fontSize,line:s.lineHeight,color:s.color,nativeStep:step};
+                    """, arguments: ["style":style,"size":expected,"nativeWidth":nativeWidth,"step":step,"ink":rgb(muted ? ChatTextPalette.muted(dark) : ChatTextPalette.foreground(dark))], contentWorld: .page)
+                    print("Matching typography scale=\(scale) dark=\(dark) muted=\(muted): \(String(describing: report))")
+                }
+            }
+        }
+        _ = try await web.callAsyncJavaScript("chatContent(html)", arguments:["html":fixture], contentWorld:.page)
         let result = try await web.callAsyncJavaScript("""
         const check=(ok,msg)=>{if(!ok) throw Error(msg)};
         const root=document.getElementById('message'), original=root.innerHTML;
@@ -62,7 +107,7 @@ import WebKit
         const before=getSelection().toString();
         chatContent(original+'<p>Streaming append.</p>');
         check(getSelection().toString()===before,'streaming append preserves active range');
-        chatStyle(24,true,false);
+        chatStyle({size:24,lineHeight:32,weight:400,dark:true,foreground:'#f5f3fc',link:'#8cc4ff'});
         check(getSelection().toString()===before,'text scale and theme preserve range');
         check(getComputedStyle(document.documentElement).colorScheme==='dark','dark mode');
         check(getComputedStyle(document.documentElement).fontSize==='24px','text scale');
@@ -108,7 +153,7 @@ import WebKit
             window.setContentSize(NSSize(width:width,height:1200))
             try await Task.sleep(for:.milliseconds(150))
             let metrics = try await web.callAsyncJavaScript("""
-            chatStyle(17,false,false);
+            chatStyle({size:17,lineHeight:23,weight:400,dark:false,foreground:'#10162b',link:'#0b5cc7'});
             const viewport=document.querySelector('.table-scroll'), table=document.querySelector('table');
             if(document.documentElement.scrollWidth>innerWidth+1) throw Error('message exceeds viewport');
             if(innerWidth===280) {viewport.scrollLeft=100; if(viewport.scrollLeft===0) throw Error('table cannot scroll horizontally')}

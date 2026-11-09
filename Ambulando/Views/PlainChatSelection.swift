@@ -19,21 +19,7 @@ struct PlainChatSelection: UIViewRepresentable {
     }
     func updateUIView(_ view: UITextView, context: Context) {
         if view.text != text { view.text = text }
-        let category: UIContentSizeCategory = switch typeSize {
-        case .xSmall: .extraSmall
-        case .small: .small
-        case .medium: .medium
-        case .large: .large
-        case .xLarge: .extraLarge
-        case .xxLarge: .extraExtraLarge
-        case .xxxLarge: .extraExtraExtraLarge
-        case .accessibility1: .accessibilityMedium
-        case .accessibility2: .accessibilityLarge
-        case .accessibility3: .accessibilityExtraLarge
-        case .accessibility4: .accessibilityExtraExtraLarge
-        default: .accessibilityExtraExtraExtraLarge
-        }
-        view.font = UIFont.preferredFont(forTextStyle: .body, compatibleWith: UITraitCollection(preferredContentSizeCategory: category))
+        view.font = NativeChatTypography(typeSize: typeSize).nativeFont
         view.textColor = UIColor(muted ? Amb.mutedForeground : Amb.foreground)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -46,8 +32,9 @@ struct PlainChatSelection: View {
     let text: String
     var muted = false
     var body: some View {
-        Text(verbatim: text).font(.amb(.body).weight(.regular)).foregroundStyle(muted ? Amb.mutedForeground : Amb.foreground)
-            .textSelection(.enabled).lineSpacing(ChatTypography.lineSpacing)
+        let typography = NativeChatTypography(scale: ChatTypography.scale)
+        Text(verbatim: text).font(typography.font).foregroundStyle(muted ? Amb.mutedForeground : Amb.foreground)
+            .textSelection(.enabled).lineSpacing(typography.lineSpacing)
             .fixedSize(horizontal: false, vertical: true)
     }
 }

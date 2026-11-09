@@ -17,17 +17,8 @@ struct ChatSelectionView: View {
     @State private var image: LightboxImage?
     @State private var height: CGFloat = 24
 
-    private var size: CGFloat {
-        #if os(macOS)
-        15 * ChatTypography.scale
-        #else
-        // Resolve the SwiftUI size, including the isolated layout fixture's override.
-        let sizes: [DynamicTypeSize: CGFloat] = [.xSmall:14,.small:15,.medium:16,.large:17,.xLarge:19,.xxLarge:21,.xxxLarge:23,.accessibility1:28,.accessibility2:33,.accessibility3:40,.accessibility4:47,.accessibility5:53]
-        return sizes[typeSize] ?? 17
-        #endif
-    }
     var body: some View {
-        ChatSelectionWeb(page: page, html: ChatSelectionHTML.blocks(blocks), size: size, dark: scheme == .dark, muted: muted,
+        ChatSelectionWeb(page: page, html: ChatSelectionHTML.blocks(blocks), typography: NativeChatTypography(scale: ChatTypography.scale, typeSize: typeSize), dark: scheme == .dark, muted: muted,
                          onHeight: { height = $0 }, onLink: open)
             .frame(height: height)
             .frame(maxWidth: ChatTypography.readableWidth, alignment: .leading)
@@ -84,7 +75,7 @@ struct ChatSelectionView: View {
     static let dataStore = WKWebsiteDataStore.nonPersistent()
     static let script = Bundle.main.url(forResource: "ChatSelection", withExtension: "js").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
     static let template = Bundle.main.url(forResource: "ChatSelection", withExtension: "html").flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
-    func update(html: String, size: CGFloat, dark: Bool, muted: Bool) {
+    func update(html: String, typography: NativeChatTypography, dark: Bool, muted: Bool) {
         if self.html != html {
             let initial = self.html == nil
             self.html = html
@@ -96,7 +87,7 @@ struct ChatSelectionView: View {
                 deliverImages()
             }
         }
-        let next = "chatStyle(\(size),\(dark),\(muted))"
+        let next = "chatStyle(\(typography.webStyle(dark: dark, muted: muted)))"
         if style != next { style = next; if ready { web?.evaluateJavaScript(next) } }
     }
     func deliverImages() {
@@ -134,7 +125,7 @@ struct ChatSelectionView: View {
 @MainActor struct ChatSelectionWeb {
     let page: ChatSelectionPage
     let html: String
-    let size: CGFloat
+    let typography: NativeChatTypography
     let dark: Bool
     let muted: Bool
     var onHeight: (CGFloat) -> Void
@@ -162,7 +153,7 @@ struct ChatSelectionView: View {
     }
     func update() {
         page.onHeight = onHeight; page.onLink = onLink
-        page.update(html: html, size: size, dark: dark, muted: muted)
+        page.update(html: html, typography: typography, dark: dark, muted: muted)
     }
 }
 #if os(iOS)

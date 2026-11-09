@@ -9,10 +9,14 @@
   };
   new ResizeObserver(measure).observe(root);
   // The host changes only styles on size/theme changes, leaving the DOM Range intact.
-  window.chatStyle = (size, dark, muted) => {
-    document.documentElement.style.fontSize = size + 'px';
-    document.documentElement.classList.toggle('dark', dark);
-    document.documentElement.classList.toggle('muted', muted);
+  window.chatStyle = style => {
+    const page = document.documentElement;
+    page.style.fontSize = style.size + 'px';
+    page.style.fontWeight = style.weight;
+    page.style.color = style.foreground;
+    page.style.setProperty('--link', style.link);
+    page.style.setProperty('--body-line-height', style.lineHeight + 'px');
+    page.classList.toggle('dark', style.dark);
   };
   window.chatImage = (id, data) => {
     for (const image of root.querySelectorAll('img[data-object]')) if (image.dataset.object === id) {

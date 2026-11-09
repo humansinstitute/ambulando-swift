@@ -24,6 +24,22 @@ final class RichContentUITests: XCTestCase {
 
     private func element(_ app: XCUIApplication, _ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
 
+    func testPlainAndRichTypographyMatchNativeAtNormalAndAccessibilitySize() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-AmbulandoUITestFixture", "-AmbulandoFixtureReset", "-AmbulandoChatTypographyFixture"]
+        app.launch()
+        let result = app.staticTexts["typography.result"]
+        let passed = NSPredicate(format: "label BEGINSWITH 'PASS '")
+        expectation(for: passed, evaluatedWith: result)
+        waitForExpectations(timeout: 30)
+        capture(app, "matching-typography-normal")
+        app.buttons["typography.scale"].tap()
+        let enlarged = NSPredicate(format: "label BEGINSWITH 'PASS 40'")
+        expectation(for: enlarged, evaluatedWith: result)
+        waitForExpectations(timeout: 20)
+        capture(app, "matching-typography-accessibility")
+    }
+
     func testRichMessageRendersHeadingListCodeTableAndMention() {
         let app = launch()
         app.section("Chat")
