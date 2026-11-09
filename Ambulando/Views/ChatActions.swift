@@ -50,7 +50,9 @@ struct MessageCell: View, Equatable {
                 Text("Inherited context · read only").font(.amb(.caption2)).foregroundStyle(Amb.mutedForeground)
                     .padding(.leading, 60).padding(.top, 6)
             }
-            Group {
+            // Keep native selection outside navigation and message-menu gestures.
+            VStack(alignment: .leading, spacing: 0) {
+                row
                 if let route {
                     ThreadRouteLink(route: route) {
                         VStack(alignment: .leading, spacing: 0) {
@@ -59,7 +61,11 @@ struct MessageCell: View, Equatable {
                                     .font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.itemHeading).lineLimit(1)
                                     .padding(.leading, 60).padding(.trailing, 16).padding(.top, 6)
                             }
-                            row
+                            if replyCount == 0 {
+                                Label("Open thread", systemImage: "bubble.left.and.text.bubble.right")
+                                    .font(.amb(.caption)).foregroundStyle(Amb.primary)
+                                    .padding(.leading, 60).padding(.vertical, 6)
+                            }
                             if replyCount > 0 {
                                 // sol `.chat-post-reply-bar.channel-thread-card-open`: a rule, then the reply count in primary.
                                 VStack(spacing: 0) {
@@ -82,8 +88,6 @@ struct MessageCell: View, Equatable {
                     .buttonStyle(.plain)
                     .accessibilityHint(replyCount > 0 ? "Opens the thread" : "")
                     .accessibilityIdentifier("thread.\(replyCount)")
-                } else {
-                    row
                 }
             }
             .overlay(alignment: .topTrailing) { messageControls }
@@ -95,7 +99,6 @@ struct MessageCell: View, Equatable {
                 WriteStatusLine(item: item, label: item.kind == .messageEdit ? "Edit" : "Delete").padding(.leading, 60).padding(.trailing, 16).padding(.bottom, 6)
             }
         }
-        .contextMenu { actions }
         .sheet(isPresented: $gettingItDone) { GetItDoneSheet(message: message, workspace: workspace) }
         .confirmationDialog("Delete this message for everyone?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -183,6 +186,7 @@ struct MessageCell: View, Equatable {
             .accessibilityIdentifier("message.actions")
             #endif
         }
+        .contextMenu { actions }
         .padding(.top, 6).padding(.trailing, 10)
     }
 

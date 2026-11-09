@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import SwiftUI
+import WebKit
 import AmbulandoCore
 
 /// Real thread presentation with synthetic long prose; never runs against an everyday account.
@@ -99,11 +100,32 @@ extension MacThreadRegression {
         The final paragraph remains reachable by scrolling, and an unsent reply should survive resizing and reopening.
         """
         fixture.tower.postAsMember(channel: channel, body: body, threadId: focus.threadId)
-        for _ in 0..<20 {
+        var richPage: WKWebView?
+        for _ in 0..<30 {
             model.openThread(focus.threadId, channelId: channel, in: workspace); await settle()
-            if containsText(window, "A clearer reading rhythm") { break }
+            for web in chatWebViews(window.contentView) {
+                if let text = try? await web.evaluateJavaScript("document.getElementById('message')?.textContent"),
+                   (text as? String)?.contains("A clearer reading rhythm") == true { richPage = web; break }
+            }
+            if richPage != nil { break }
         }
-        try require(containsText(window, "A clearer reading rhythm"), "rich reply renders through normal sync")
+        // WebKit accessibility children live in a separate process; the old in-process AX walker cannot read them.
+        guard let richPage else { throw Failure(description: "Rich reply page did not render through normal sync") }
+        let clipboard = try await richPage.callAsyncJavaScript("""
+        const ps=document.querySelectorAll('#message>p'), table=document.querySelector('table');
+        const before=[...ps].find(p=>p.textContent.startsWith('I would propose'));
+        const after=[...ps].find(p=>p.textContent.startsWith('After the table'));
+        const r=document.createRange();r.setStart(before.firstChild,2);r.setEnd(after.firstChild,15);
+        getSelection().removeAllRanges();getSelection().addRange(r);
+        return chatClipboard();
+        """, arguments: [:], contentWorld: .page) as? [String: String]
+        try require(clipboard?["text"]?.contains("Piece\tPurpose\nStart here document\t") == true, "actual message prose-table-prose selection preserves TSV boundaries")
+        try require(clipboard?["html"]?.contains("<table>") == true, "actual message selected HTML retains table")
+        window.makeFirstResponder(richPage)
+        try require(NSApp.sendAction(#selector(NSText.copy(_:)), to: richPage, from: nil), "native message copy responder")
+        await settle()
+        try require(NSPasteboard.general.string(forType: .string) == clipboard?["text"], "native actual-message clipboard matches selected fragment")
+        print("CHAT_SELECTION_PASS actualMessage=true proseTableProse=true nativeClipboard=exact")
         let rows = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: focus.threadId, limit: 500)
         try require(rows.contains { $0.body == body }, "rendering preserves the original body bytes")
         try type(window, "Unsent rich reading review")
@@ -129,6 +151,12 @@ extension MacThreadRegression {
         try require(NSPasteboard.general.string(forType: .string)?.contains("mention:chat:") == true, "message menu remains actionable")
         try await threadMenuCheck(window, model: model)
         print("RICH_FORMATTING_PASS exactBody=true normal=1100 narrow=900 expanded=1440 scale=1.3 menus=pass threadMenu=pass draft=pass")
+    }
+
+    private static func chatWebViews(_ view: NSView?) -> [WKWebView] {
+        guard let view else { return [] }
+        if let web = view as? WKWebView { return [web] }
+        return view.subviews.flatMap { chatWebViews($0) }
     }
 
     private static func captureRichPages(_ window: NSWindow, model: AppModel, name: String) async throws {
