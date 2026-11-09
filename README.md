@@ -11,6 +11,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 
+## Native chat rendering restored (Mac build 88)
+
+Chat uses native SwiftUI blocks again on Mac, iPhone and iPad. Tables, code, stored images,
+links and mentions retain their native controls; plain text and rich prose use the native body font.
+Continuous selection across rich blocks is removed. This removes the per-message selection WebView
+path after reported scrolling stalls and delayed opening; it does not establish their measured cause
+or prove resolution on Pete's MacBook. See [rendering and selection limits](docs/chat-selection.md).
+
 ## Mac resize responsiveness (Mac build 84)
 
 The workspace footer, stacked workspace options and Inbox options now use stable buttons and native menus.

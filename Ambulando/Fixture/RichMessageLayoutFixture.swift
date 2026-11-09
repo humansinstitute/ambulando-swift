@@ -1,9 +1,6 @@
 #if DEBUG
 import AmbulandoCore
 import SwiftUI
-#if os(iOS)
-import UIKit
-#endif
 
 /// Synthetic shape of a long Markdown DM, isolated from account content and production storage.
 struct RichMessageLayoutFixture: View {
@@ -36,44 +33,31 @@ struct RichMessageLayoutFixture: View {
 
     Final paragraph: the complete message remains reachable.
     """
-    static let selectionBody = """
-    First paragraph for selection.
-
-    Second paragraph before table.
-
-    | Name | Count |
-    | --- | --- |
-    | Alpha | 600 |
-    | Beta | 450 |
-
-    Final paragraph remains outside the partial selection.
-    """
-    private var selectionFixture: Bool { ProcessInfo.processInfo.arguments.contains("-AmbulandoChatSelectionFixture") }
-    @State private var copied = ""
     @State private var large = false
+    @State private var frames: [String: CGRect] = [:]
     var body: some View {
         VStack(spacing: 0) {
             Text("Synthetic rich-message layout. No live account.").font(.caption)
             Button(large ? "Use normal text" : "Use larger text") { large.toggle() }
                 .buttonStyle(.bordered).accessibilityIdentifier("rich.fixture.large")
-            #if os(iOS)
-            if selectionFixture {
-                Button("Inspect copied selection") { copied = UIPasteboard.general.string ?? "Empty" }
-                    .accessibilityIdentifier("rich.fixture.clipboard.read")
-                Text(copied).font(.caption).lineLimit(1)
-                    .accessibilityIdentifier("rich.fixture.clipboard.value")
-            }
-            #endif
+            Text(geometryReport).font(.system(size: 8)).frame(height: 12)
+                .accessibilityIdentifier("rich.fixture.geometry")
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     row("Before", "Previous ordinary message.")
-                    row("Rick", selectionFixture ? Self.selectionBody : Self.bodyText)
+                    row("Rick", Self.bodyText)
                     row("After", "Following ordinary message.")
                 }
             }.accessibilityIdentifier("rich.fixture.scroll")
         }
+        .observeRichLayout { frames = $0 }
         .dynamicTypeSize(large ? .accessibility1 : .large)
         .background(Amb.background)
+    }
+    private var geometryReport: String {
+        frames.sorted { $0.key < $1.key }.map { key, rect in
+            "\(key)=\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))"
+        }.joined(separator: ";")
     }
     private func row(_ author: String, _ body: String) -> some View {
         MessageRow(message: MessageRecord(workspaceId: FixtureTower.studio, id: author, channelId: FixtureTower.designChannel,

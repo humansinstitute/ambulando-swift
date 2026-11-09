@@ -92,15 +92,9 @@ struct RichBlocksView: View {
     @State private var actorReference: ActorMentionReference?
 
     var body: some View {
-        Group {
-            if style == .chat {
-                ChatSelectionView(blocks: blocks, muted: muted, workspace: workspace)
-            } else {
-                VStack(alignment: .leading, spacing: RichContext(style: style, muted: muted, workspace: workspace).blockSpacing) {
-                    ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                        RichBlockView(block: block, context: RichContext(style: style, muted: muted, workspace: workspace, path: [index])).id(index)
-                    }
-                }
+        VStack(alignment: .leading, spacing: RichContext(style: style, muted: muted, workspace: workspace).blockSpacing) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                RichBlockView(block: block, context: RichContext(style: style, muted: muted, workspace: workspace, path: [index])).id(index)
             }
         }
         // A horizontal table scroller can otherwise make the stack accept a compressed height,

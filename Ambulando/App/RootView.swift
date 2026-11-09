@@ -34,11 +34,6 @@ struct RootView: View {
         }
         // Images open large over the window (the web's image modal) on the Mac.
         .overlay {
-            #if DEBUG && os(iOS)
-            if model.fixture != nil, ProcessInfo.processInfo.arguments.contains("-AmbulandoChatTypographyFixture") {
-                ChatTypographyFixture()
-            }
-            #endif
             #if DEBUG
             if model.fixture != nil, ProcessInfo.processInfo.arguments.contains("-AmbulandoRichMessageLayoutFixture") {
                 RichMessageLayoutFixture()

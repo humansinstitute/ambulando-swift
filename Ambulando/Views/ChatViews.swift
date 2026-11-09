@@ -546,8 +546,9 @@ struct MessageRow: View {
 
     var body: some View {
         let display = MessageDisplayCache.shared.display(message)
-        // Native selection surfaces expose text, links and table structure to accessibility themselves.
-        // Combining the row would flatten those children and hide their selection actions.
+        // Code, tables and images keep their own controls (copy, scroll, open), so such rows contain elements instead
+        // of being read as a single combined label.
+        let interactive = !display.attachments.isEmpty || (bodyOverride == nil && (display.blocks.map(RichBlocksInfo.hasControls) ?? false))
         let sender = sender
         HStack(alignment: .top, spacing: 10) {
             PersonAvatar(person: sender)
@@ -581,7 +582,7 @@ struct MessageRow: View {
         #else
         .padding(.horizontal, 16).padding(.vertical, 8)
         #endif
-        .accessibilityElement(children: .contain)
+        .accessibilityElement(children: interactive ? .contain : .combine)
         .accessibilityIdentifier("message")
     }
 }
@@ -605,7 +606,10 @@ struct MessageBody: View {
         if let blocks {
             RichBlocksView(blocks: blocks, muted: muted, workspace: workspace)
         } else {
-            PlainChatSelection(text: plain, muted: muted)
+            Text(verbatim: plain).font(.amb(.body).weight(.regular)).foregroundStyle(muted ? Amb.mutedForeground : Amb.foreground)
+                .textSelection(.enabled)
+                .lineSpacing(ChatTypography.lineSpacing)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: ChatTypography.readableWidth, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
