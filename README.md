@@ -19,6 +19,13 @@ Continuous selection across rich blocks is removed. This removes the per-message
 path after reported scrolling stalls and delayed opening; it does not establish their measured cause
 or prove resolution on Pete's MacBook. See [rendering and selection limits](docs/chat-selection.md).
 
+## Document actions (iPhone/iPad build 93, Mac build 88)
+
+The document reader offers Markdown/PDF export, FD Ref, shared Versioning, Archive and confirmed Delete alongside Move.
+Historical versions can be previewed, compared, copied and restored as a draft; explicitly Save to publish after review.
+Existing editing, recovery and comments remain available. See [document actions and export limits](docs/document-actions.md).
+Pushed source and local validation do not establish installation or acceptance on a physical device.
+
 ## Mac resize responsiveness (Mac build 84)
 
 The workspace footer, stacked workspace options and Inbox options now use stable buttons and native menus.

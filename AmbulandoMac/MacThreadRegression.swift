@@ -74,6 +74,9 @@ enum MacThreadRegression {
         }
         defer { heartbeat.cancel() }
         do {
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDocumentExportCheck") {
+                try await documentActionsCheck(model: model); try await documentExportCheck(); fflush(stdout); exit(0)
+            }
             try require(find(window, "fixture.banner") != nil, "fixture banner")
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacPRTCheck") {
                 try await prtNavigationProbe(window, model: model)

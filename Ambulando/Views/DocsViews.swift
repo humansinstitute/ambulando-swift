@@ -1,5 +1,6 @@
 import AmbulandoCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: List
 
@@ -177,6 +178,20 @@ struct DocumentView: View {
     @State private var replyTo: CommentRecord?
     @State private var revealed: DocumentAnchor?
     @State private var revealRevision = 0
+    @Environment(\.dismiss) private var dismiss
+    @State private var actionsBusy = false
+    @State private var actionMessage: String?
+    @State private var lifecycleTarget: DocRecord?
+    @State private var confirmDelete = false
+    @State private var confirmArchive = false
+    @State private var exportData: BrowserDownloadFile?
+    @State private var exportType: UTType = .data
+    @State private var exportName = "document"
+    @State private var exporting = false
+    @State private var historyOpen = false
+    @State private var historyLoading = false
+    @State private var historyError: String?
+    @State private var history: [DocumentVersion] = []
 
     init(docId: String, workspace: WorkspaceRecord, store: LocalStore) {
         self.docId = docId; self.workspace = workspace; self.store = store
@@ -190,27 +205,10 @@ struct DocumentView: View {
         // Observe the captured anchor before presenting the sheet; its first content must use this selection.
         let commentComposer = composer
         #endif
-        readerLayout
+        actionReader
         .fixtureLabel()
         .navigationTitle("Document")
         .inlineTitle()
-        .toolbar {
-            ToolbarItem(placement: .trailingBar) {
-                HStack(spacing: 10) {
-                    Menu {
-                        Button("Move…") { Task { await wiki.refresh(); wiki.sheet = .move } }
-                            .disabled(snapshot.value.doc == nil || !model.isUnlocked)
-                            .accessibilityIdentifier("doc.move")
-                    } label: { Image(systemName: "ellipsis.circle") }
-                        .accessibilityLabel("Document actions").accessibilityIdentifier("doc.actions")
-                    if editor == nil {
-                        Button(snapshot.value.draft == nil ? "Edit" : "Continue editing") { beginEditing() }
-                            .disabled(!canEdit)
-                            .accessibilityIdentifier("doc.edit")
-                    }
-                }
-            }
-        }
         .environment(\.openWiki, OpenWikiAction { [wiki] target in wiki.activate(target) })
         .wikiSheets(wiki, workspace: workspace)
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -252,7 +250,10 @@ struct DocumentView: View {
         .onChange(of: snapshot.value.hasBody) { _, _ in openFormattedPage() }
         .onChange(of: snapshot.value.editable) { _, _ in openFormattedPage() }
         .onChange(of: snapshot.value.doc?.rowVersion) { _, _ in Task { await editor?.reconcileRemote() } }
-        .onChange(of: model.isUnlocked) { _, unlocked in if unlocked { openFormattedPage(); Task { await editor?.reconcileRemote() } } }
+        .onChange(of: model.isUnlocked) { _, unlocked in
+            if unlocked { openFormattedPage(); Task { await editor?.reconcileRemote() } }
+            else { exporting = false; exportData = nil; historyOpen = false; history = [] }
+        }
         .onChange(of: model.docEditRequest) { _, _ in takeEditRequest() }
         .onDisappear {
             // Leaving for a linked page keeps the text as a draft; coming back opens the editor on that draft.
@@ -265,6 +266,129 @@ struct DocumentView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in editor?.setActive(phase == .active) }
+    }
+
+    private var actionReader: some View {
+        readerLayout
+        .toolbar {
+            ToolbarItemGroup(placement: .trailingBar) {
+                    Menu {
+                        Button("Export as .md") { Task { await exportDocument(pdf: false) } }
+                            .disabled(!model.isUnlocked || !snapshot.value.hasBody || actionsBusy).accessibilityIdentifier("doc.export.md")
+                        Button("Export as .pdf") { Task { await exportDocument(pdf: true) } }
+                            .disabled(!model.isUnlocked || !snapshot.value.hasBody || actionsBusy).accessibilityIdentifier("doc.export.pdf")
+                        Button("FD Ref") {
+                            if let doc = snapshot.value.doc { Pasteboard.copy(DocumentActionText.reference(title: doc.title, docId: doc.id)); actionMessage = "FD Ref copied." }
+                        }.disabled(snapshot.value.doc == nil || !model.isUnlocked).accessibilityIdentifier("doc.reference")
+                        Button("Versioning") { Task { await openHistory() } }
+                            .disabled(!model.isUnlocked || actionsBusy).accessibilityIdentifier("doc.versioning")
+                        Divider()
+                        Button("Move…") { Task { await wiki.refresh(); wiki.sheet = .move } }
+                            .disabled(snapshot.value.doc == nil || !model.isUnlocked || actionsBusy)
+                            .accessibilityIdentifier("doc.move")
+                        Button("Archive document") { lifecycleTarget = snapshot.value.doc; confirmArchive = true }
+                            .disabled(!canManage).accessibilityIdentifier("doc.archive")
+                        Button("Delete document", role: .destructive) { lifecycleTarget = snapshot.value.doc; confirmDelete = true }
+                            .disabled(!canManage).accessibilityIdentifier("doc.delete")
+                    } label: { Label("Document actions", systemImage: "ellipsis.circle") }
+                        .accessibilityLabel("Document actions").accessibilityIdentifier("doc.actions")
+                    if editor == nil {
+                        Button(snapshot.value.draft == nil ? "Edit" : "Continue editing") { beginEditing() }
+                            .disabled(!canEdit || actionsBusy)
+                            .accessibilityIdentifier("doc.edit")
+                    }
+            }
+        }
+        .fileExporter(isPresented: $exporting, document: exportData, contentType: exportType, defaultFilename: exportName) { result in
+            if case .failure(let error) = result { actionMessage = "Export could not be saved: \(error.localizedDescription)" }
+        }
+        .sheet(isPresented: $historyOpen) {
+            DocumentHistorySheet(workspace: workspace, versions: history, loading: historyLoading, error: historyError, canRestore: canEdit && !actionsBusy) { version in
+                if editor == nil { beginEditing(); await openingEditor?.value }
+                guard let editor else { return false }
+                return await editor.restoreCanonical(version)
+            }
+        }
+        .confirmationDialog("Delete this document?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete document", role: .destructive) { Task { await changeLifecycle(delete: true) } }
+        } message: { Text("Delete ‘\(snapshot.value.doc?.title ?? "Document")’ from the shared workspace? This removes it for everyone with access. Unsaved work on this device is retained. This cannot be undone here.") }
+        .confirmationDialog("Archive this document?", isPresented: $confirmArchive, titleVisibility: .visible) {
+            Button("Archive document") { Task { await changeLifecycle(delete: false) } }
+        } message: { Text("The document leaves active lists. Its shared content and history remain in Tower; local drafts are retained.") }
+        .alert("Document actions", isPresented: Binding(get: { actionMessage != nil }, set: { if !$0 { actionMessage = nil } })) {
+            Button("OK") { actionMessage = nil }
+        } message: { Text(actionMessage ?? "") }
+    }
+
+    private var canManage: Bool {
+        model.isUnlocked && snapshot.value.doc?.archived == false && editor?.permissionDenied != true && !actionsBusy
+    }
+
+    private func openHistory() async {
+        guard let saver = model.saver, let connection = model.connection else { return }
+        history = []; historyError = nil; historyLoading = true; historyOpen = true
+        defer { historyLoading = false }
+        do {
+            let loaded = try await saver.versions(connection, workspace, docId: docId)
+            guard wiki.isVisible, model.isUnlocked, model.connection?.id == connection.id, model.selectedWorkspaceId == workspace.id else { historyOpen = false; return }
+            history = loaded
+        }
+        catch { historyError = "Shared version history could not load: \(error.localizedDescription). Local drafts and recoveries are unchanged." }
+    }
+
+    private func exportDocument(pdf: Bool) async {
+        guard model.isUnlocked else { return }
+        let connectionId = model.connection?.id
+        actionsBusy = true
+        defer { actionsBusy = false }
+        if let editor, !(await editor.checkpoint()) { actionMessage = "Could not capture current edits. Export cancelled; your draft is retained."; return }
+        let key = DocDraft.key(connectionId: model.connection?.id ?? "", workspaceId: workspace.id, docId: docId)
+        do {
+            let draft = editor == nil ? nil : try await store.reader.docDraft(key: key)
+            let cached = try await store.reader.docBody(workspaceId: workspace.id, docId: docId)
+            guard let bytes = draft?.body ?? cached?.bytes else { actionMessage = "Download the document before exporting."; return }
+            let title = draft?.title ?? snapshot.value.doc?.title ?? "Document"
+            let body = DocumentBody(bytes: bytes, contentType: draft?.contentType ?? cached?.contentType ?? "")
+            guard body.isEditable else { actionMessage = "This document format cannot be exported without losing content. Open it on the web to export."; return }
+            let data: Data
+            if pdf {
+                data = try await DocumentExport.pdf(title: title, body: body) { id in
+                    guard wiki.isVisible, model.isUnlocked, model.selectedWorkspaceId == workspace.id, model.connection?.id == connectionId, !Task.isCancelled else { return nil }
+                    if let file = model.fileCache?.attachment(workspaceId: workspace.id, objectId: id) { return DocumentEditorImages.dataURL(file) }
+                    model.downloadAttachment(id, in: workspace)
+                    for _ in 0..<100 {
+                        guard wiki.isVisible, model.isUnlocked, model.selectedWorkspaceId == workspace.id, model.connection?.id == connectionId, !Task.isCancelled else { return nil }
+                        try? await Task.sleep(for: .milliseconds(200))
+                        if let file = model.fileCache?.attachment(workspaceId: workspace.id, objectId: id) { return DocumentEditorImages.dataURL(file) }
+                    }
+                    return nil
+                }
+            } else { data = DocumentExport.markdown(title: title, body: body) }
+            guard wiki.isVisible, model.isUnlocked, model.connection?.id == connectionId, model.selectedWorkspaceId == workspace.id, !Task.isCancelled else { return }
+            exportData = BrowserDownloadFile(bytes: data)
+            exportType = pdf ? .pdf : (UTType(filenameExtension: "md") ?? .plainText)
+            let safe = title.replacingOccurrences(of: "[^a-zA-Z0-9_\\- ]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+            exportName = (safe.isEmpty ? "document" : String(safe.prefix(100))) + (pdf ? ".pdf" : ".md")
+            exporting = true
+        } catch { actionMessage = "Export failed: \(error.localizedDescription)" }
+    }
+
+    private func changeLifecycle(delete: Bool) async {
+        guard canManage, let doc = lifecycleTarget, let saver = model.saver, let connection = model.connection else { return }
+        actionsBusy = true
+        defer { actionsBusy = false }
+        if let editor {
+            guard await editor.pauseForLifecycle() else { actionMessage = "Your draft could not be preserved or a save is in progress; the document was not changed."; return }
+        }
+        do {
+            try await saver.setLifecycle(connection, workspace, doc: doc, delete: delete)
+            editor?.close(); editor = nil; wiki.editor = nil; automaticEditing = false
+            dismiss()
+        } catch {
+            editor?.resumeAfterLifecycle()
+            model.openDoc(docId, in: workspace, force: true)
+            actionMessage = "The operation was not confirmed: \(error.localizedDescription). Your draft is retained. Refresh and check the document before trying again; no automatic retry was queued."
+        }
     }
 
     private func openFormattedPage() {

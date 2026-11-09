@@ -406,6 +406,15 @@ public final class SampleWorkTower: @unchecked Sendable {
                   let b64 = o["bytes"] as? String else { return error(404, "doc_body_not_found") }
             return (200, ["doc": docOut(d), "body": ["object_id": objectId, "content_type": o["content_type"] ?? "", "size_bytes": Data(base64Encoded: b64)?.count ?? 0,
                                                      "sha256_hex": o["sha256_hex"] ?? NSNull(), "encoding": "base64", "base64_data": b64]])
+        case ("GET", 3, "docs") where p[2] == "versions":
+            // The sample server exposes its current canonical snapshot (not device drafts/recoveries).
+            guard let doc = table("docs")[p[1]], let id = doc["storage_object_id"] as? String,
+                  let stored = table("objects")[id], let encoded = stored["bytes"] as? String,
+                  let bytes = Data(base64Encoded: encoded) else { return error(404, "doc_not_found") }
+            var version = doc
+            version["doc_id"] = p[1]; version["operation"] = "updated"
+            version["content"] = ["raw": String(decoding: bytes, as: UTF8.self), "content_type": stored["content_type"] ?? "text/markdown"]
+            return (200, ["versions": [version], "next_cursor": NSNull()])
         case ("GET", 3, "docs") where p[2] == "recoveries":
             return (200, ["recoveries": table("recoveries").values.filter { $0["doc_id"] as? String == p[1] && $0["resolution_state"] as? String == "open" }, "next_cursor": NSNull()])
         case ("GET", 5, "docs") where p[2] == "recoveries" && p[4] == "body":

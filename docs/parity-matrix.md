@@ -158,3 +158,12 @@ and a rebuilt installed native client. Source/core fixture evidence and simulato
 builds do not establish a real Kato connection, device installation, or a live
 Autopilot restart. Preserve the exact Tower/workspace/app/signer binding on setup;
 refuse mismatched registrations or a connection switch before installing.
+
+## Document actions (iPhone/iPad 93, Mac 88)
+
+The native reader includes Markdown/PDF export, FD Ref, canonical shared Versioning, Archive and confirmed Delete
+alongside Move. Shared-history preview, source copy and previous-version comparison use Tower versions, independently
+of saved recovery drafts. Restore preserves current work as recoverable history and requires explicit guarded Save
+to publish. Comparison shows full versions rather than a line diff. PDF uses A4 pagination and the bundled renderer;
+unsupported/missing images fail explicitly. See [document actions and export limits](document-actions.md).
+Source/build checks are separate from installation and real-account acceptance; Android remains deferred.

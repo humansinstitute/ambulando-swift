@@ -20,6 +20,45 @@ final class DocumentInlineUITests: XCTestCase {
         app.buttons["doc.edit"].tap()
     }
 
+    func testReaderDocumentActionsAndDeleteCancellation() {
+        let app = launch(reset: true, edit: false)
+        func openActions() {
+            let actions = app.buttons["doc.actions"].exists ? app.buttons["doc.actions"] : app.buttons["Document actions"]
+            if actions.exists { actions.tap() }
+            else {
+                app.buttons["More"].firstMatch.tap()
+                if app.buttons["Document actions"].exists { app.buttons["Document actions"].tap() }
+            }
+        }
+        openActions()
+        let menuShot = XCTAttachment(screenshot: app.screenshot()); menuShot.name = "native-document-action-menu"; menuShot.lifetime = .keepAlways; add(menuShot)
+        for label in ["Export as .md", "Export as .pdf", "FD Ref", "Versioning", "Move…", "Archive document", "Delete document"] {
+            XCTAssertTrue(app.buttons[label].waitForExistence(timeout: 5), "Reader exposes \(label)")
+        }
+        app.buttons["Delete document"].tap()
+        XCTAssertTrue(app.sheets["Delete this document?"].waitForExistence(timeout: 5))
+        if app.buttons["Cancel"].exists { app.buttons["Cancel"].tap() }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.8)).tap() }
+        XCTAssertTrue(app.staticTexts["doc.title"].waitForExistence(timeout: 5), "cancel keeps the reader and shared record")
+        openActions(); app.buttons["Export as .md"].tap()
+        let exportCancel = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Cancel")).firstMatch
+        XCTAssertTrue(exportCancel.waitForExistence(timeout: 10), "Markdown opens native file export")
+        let exportShot = XCTAttachment(screenshot: app.screenshot()); exportShot.name = "native-document-markdown-export"; exportShot.lifetime = .keepAlways; add(exportShot)
+        exportCancel.tap()
+    }
+
+    func testReaderSharedHistoryPreview() {
+        let app = launch(reset: true, edit: false)
+        if app.buttons["doc.actions"].exists { app.buttons["doc.actions"].tap() }
+        else { app.buttons["More"].firstMatch.tap(); app.buttons["Document actions"].tap() }
+        app.buttons["Versioning"].tap()
+        XCTAssertTrue(app.staticTexts["Versioning"].waitForExistence(timeout: 10) || app.navigationBars["Versioning"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Copy source"].waitForExistence(timeout: 10), "canonical Tower snapshot loaded for history preview")
+        let historyShot = XCTAttachment(screenshot: app.screenshot()); historyShot.name = "native-document-canonical-history"; historyShot.lifetime = .keepAlways; add(historyShot)
+        app.buttons["Copy source"].tap()
+        app.buttons["Done"].tap()
+    }
+
     func testDefaultViewAndSavedOpeningPreferenceAcrossRestart() {
         var app = launch(reset: true, edit: false)
         XCTAssertTrue(app.staticTexts["doc.title"].waitForExistence(timeout: 15))

@@ -61,6 +61,7 @@ final class DocEditorModel: UploadTokenHost {
     @ObservationIgnored private var editorSessionId = UUID().uuidString.lowercased()
     @ObservationIgnored private var observedLeaseId: String?
     private var authorityLost = false
+    private var lifecyclePending = false
     @ObservationIgnored private var active = true
     @ObservationIgnored private var closed = false
     @ObservationIgnored private var autosave: Task<Void, Never>?
@@ -437,6 +438,23 @@ final class DocEditorModel: UploadTokenHost {
     }
 
     /// iOS may suspend immediately. Local durability comes first; the cloud flush is best effort.
+    /// Pause background saving while a metadata lifecycle command is in flight.
+    /// Unlike scene suspension this must never flush a new body over the command's row-version guard.
+    func pauseForLifecycle() async -> Bool {
+        guard !saving, !takingOver, !reconciling, await checkpoint(), !saving, !takingOver, !reconciling else { return false }
+        lifecyclePending = true
+        debounce?.cancel(); debounce = nil
+        autosave?.cancel(); autosave = nil
+        page?.setEditable(false)
+        guard await persistReview() else { resumeAfterLifecycle(); return false }
+        return true
+    }
+    func resumeAfterLifecycle() {
+        lifecyclePending = false
+        page?.setEditable(!followingRemote && !permissionDenied && app?.isUnlocked == true)
+        startAutosave()
+    }
+
     func setActive(_ value: Bool) {
         guard !closed else { return }
         active = value
@@ -934,6 +952,45 @@ final class DocEditorModel: UploadTokenHost {
             await reconcileRemote()
         } catch { setStatus("Preserved draft could not be restored. Current work is retained.", .warning) }
     }
+    /// Installs a historical body as a new draft against the head explicitly fetched now.
+    /// Current work is retained before any replacement; normal Save keeps lease/hash/race checks.
+    func restoreCanonical(_ version: DocumentVersion) async -> Bool {
+        guard let bytes = version.bytes, !saving, !takingOver, !reconciling, !permissionDenied,
+              let current = await workingSnapshot(), app?.isUnlocked == true, let saver = app?.saver else { return false }
+        reconciling = true
+        defer { reconciling = false }
+        let revision = editRevision
+        do {
+            let latest = try await saver.latest(connection, workspace, docId: doc.id)
+            guard revision == editRevision, app?.isUnlocked == true else { return false }
+            journal.preserve(current)
+            preserveRawPreview()
+            if let preview = try? encodedPreview() { journal.preserve(preview) }
+            journal.retainBase(snapshot(latest.body, title: latest.doc.title))
+            try await store.writer.saveDocumentReview(journal, key: draftKey)
+            let replacement = PreservedDocumentSnapshot(title: version.title, bytes: bytes, contentType: version.contentType,
+                rowVersion: latest.body.docRowVersion, sha256: latest.body.sha256, storageObjectId: latest.body.storageObjectId)
+            guard replacement.document.isEditable else { return false }
+            let draft = DocDraft(connectionId: connection.id, workspaceId: workspace.id, docId: doc.id,
+                title: version.title, body: bytes, contentType: version.contentType,
+                baseRowVersion: latest.body.docRowVersion, baseSha256: latest.body.sha256, baseStorageObjectId: latest.body.storageObjectId, state: .editing)
+            if let saved = try await store.reader.docDraft(key: draftKey) {
+                guard revision == editRevision, saved.body == current.bytes, saved.title == current.title,
+                      try await store.writer.replaceDocDraft(ifUnchanged: saved, with: draft) else { return false }
+            } else { guard try await store.writer.insertDocDraftIfAbsent(draft) else { return false } }
+            guard revision == editRevision else { _ = await checkpoint(); return false }
+            install(replacement, dirty: true)
+            journal.pendingMergedSave = true
+            remoteVersion = nil
+            journal.previewText = nil; journal.previewTitle = nil
+            mergeReady = false; mergeConflicts = []
+            showingReview = false
+            try await store.writer.saveDocumentReview(journal, key: draftKey)
+            setStatus("Historical version restored as a draft. Review it, then Save to publish a new shared version. Your previous work is retained in Review changes.", .info)
+            return true
+        } catch { setStatus("Could not restore history. Your current work is retained: \(error.localizedDescription)", .warning); return false }
+    }
+
     private func install(_ snapshot: PreservedDocumentSnapshot, dirty: Bool) {
         let decoded = snapshot.document
         loading = true
@@ -1038,6 +1095,7 @@ final class DocEditorModel: UploadTokenHost {
 
     /// Saves through Tower (lease, expected version). True when Tower made it the canonical version.
     func save() async -> Bool {
+        guard !lifecyclePending else { return false }
         guard !closed, !saving, !takingOver, !reconciling, !permissionDenied, let saver = app?.saver else { return false }
         saving = true
         defer { saving = false }
