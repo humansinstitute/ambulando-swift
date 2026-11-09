@@ -180,9 +180,7 @@ private struct RichBlockView: View {
     let block: RenderBlock
     let context: RichContext
 
-    #if os(macOS)
     @Environment(\.documentSelection) private var selection
-    #endif
 
     private var ink: Color { context.muted ? Amb.mutedForeground : context.style == .document ? Amb.paperInk : Amb.foreground }
 
@@ -190,26 +188,20 @@ private struct RichBlockView: View {
         switch block {
         case .heading(let level, let runs):
             Group {
-            #if os(macOS)
             if let selection, let span = selection.spans.first(where: { $0.path == context.path }), span.text == runs.map(\.text).joined() {
                 DocumentSelectableText(runs: runs, span: span, selection: selection, heading: level)
             } else {
                 Text(InlineText.attributed(runs)).font(headingFont(level)).foregroundStyle(ink).textSelection(.enabled)
             }
-            #else
-            Text(InlineText.attributed(runs)).font(headingFont(level)).foregroundStyle(ink).textSelection(.enabled)
-            #endif
+
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, context.desktopChat && context.path.last != 0 ? 4 * ChatTypography.scale : 0)
         case .paragraph(let runs):
-            #if os(macOS)
             if let selection, let span = selection.spans.first(where: { $0.path == context.path }), span.text == runs.map(\.text).joined() {
                 DocumentSelectableText(runs: runs, span: span, selection: selection)
             } else { ParagraphView(runs: runs, context: context) }
-            #else
-            ParagraphView(runs: runs, context: context)
-            #endif
+
         case .code(let language, let text):
             CodeBlockView(language: language, text: text, path: context.path)
         case .quote(let blocks):
@@ -351,9 +343,7 @@ private struct CodeBlockView: View {
     let language: String
     let text: String
     var path: [Int] = []
-    #if os(macOS)
     @Environment(\.documentSelection) private var selection
-    #endif
     @State private var copied = false
 
     var body: some View {
@@ -412,9 +402,7 @@ private struct CodeBlockView: View {
 private struct TableBlockView: View {
     let rows: [[[InlineRun]]]
     var path: [Int] = []
-    #if os(macOS)
     @Environment(\.documentSelection) private var selection
-    #endif
 
     /// One width per column from its longest cell, so wrapped text gets a stable measured width.
     private var widths: [CGFloat] {
@@ -458,24 +446,16 @@ private struct TableBlockView: View {
         .accessibilityHint("Scroll horizontally to read all columns.")
         .richLayoutFrame("table.viewport")
         // Read row by row ("Surface, State. Chat, Markdown.").
-        #if os(macOS)
         .accessibilityElement(children: .contain)
-        #else
-        .accessibilityElement(children: .ignore)
-        #endif
         .accessibilityLabel(Self.spoken(rows))
         .accessibilityAddTraits(.isStaticText)
         .accessibilityIdentifier("rich.table")
     }
 
     @ViewBuilder private func cellView(_ runs: [InlineRun], row: Int, column: Int) -> some View {
-        #if os(macOS)
         if let selection, let span = selection.spans.first(where: { $0.path == path + [row, column, 0] }), span.text == runs.map(\.text).joined() {
-            DocumentSelectableText(runs: runs, span: span, selection: selection).frame(minWidth: 80)
+            DocumentSelectableText(runs: runs, span: span, selection: selection)
         } else { Text(InlineText.attributed(runs)) }
-        #else
-        Text(InlineText.attributed(runs))
-        #endif
     }
 
     static func spoken(_ rows: [[[InlineRun]]]) -> String {

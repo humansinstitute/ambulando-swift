@@ -76,4 +76,42 @@ final class DocumentAnchorTests: XCTestCase {
         XCTAssertEqual(DocumentAnchors.resolve(decoded, in: spans)?.range, NSRange(location: 2, length: 9))
     }
 
+    func testMarkdownTableHeaderAndBodyKeepFormattedCellSourceLines() throws {
+        let source = "| **Header** | Other |\n| --- | --- |\n| A [linked](https://example.com) cell | B |\n\nAfter table."
+        let spans = DocumentAnchors.markdownSpans(source, blocks: DocumentRender.markdownBlocks(source))
+        let header = try XCTUnwrap(spans.first { $0.path == [0, 0, 0, 0] })
+        let cell = try XCTUnwrap(spans.first { $0.path == [0, 1, 0, 0] })
+        XCTAssertEqual(header.text, "Header"); XCTAssertEqual(header.line, 1)
+        XCTAssertEqual(cell.text, "A linked cell"); XCTAssertEqual(cell.line, 3)
+        let anchor = try XCTUnwrap(cell.anchor(NSRange(location: 2, length: 6), version: 1))
+        XCTAssertEqual(anchor.quote, "linked")
+        XCTAssertEqual(anchor.metadata["anchor_line_number"] as? Int, 3)
+        XCTAssertEqual(DocumentAnchors.resolve(anchor, in: spans)?.span.path, cell.path)
+        XCTAssertEqual(spans.last?.line, 5)
+    }
+
+    func testResolvedThreadRoundTripsWithoutLosingAnchorOrRepliesAndReopens() async throws {
+        let h = try await WorkHarness.make()
+        let body = DocumentBody.newDocument(text: "Selected sentence")
+        let doc = h.work.seedDoc(scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "Resolution", body: body.bytes, contentType: body.contentType)
+        let anchor = DocumentAnchor(quote: "Selected", from: 1, to: 9, version: 1)
+        try await h.writes.submit(WriteIntent(kind: .docComment, targetId: doc, payload: ["body": "Root", "metadata": anchor.metadata]), connection: h.connection, workspace: h.workspace)
+        await h.drainWrites()
+        let initial = try await h.store.reader.comments(workspaceId: h.workspace.id, parent: .doc, parentId: doc)
+        let root = try XCTUnwrap(initial.first)
+        try await h.writes.submit(WriteIntent(kind: .docComment, targetId: doc, payload: ["body": "Retained reply", "parent_comment_id": root.id]), connection: h.connection, workspace: h.workspace)
+        await h.drainWrites()
+        var version = root.rowVersion
+        for status in ["resolved", "open"] {
+            try await h.writes.submit(WriteIntent(kind: .docCommentStatus, targetId: root.id, payload: ["doc_id": doc, "status": status, "row_version": version]), connection: h.connection, workspace: h.workspace)
+            await h.drainWrites()
+            let records = try await h.store.reader.comments(workspaceId: h.workspace.id, parent: .doc, parentId: doc)
+            let updated = try XCTUnwrap(records.first { $0.id == root.id })
+            XCTAssertEqual(updated.status, status)
+            XCTAssertEqual(updated.documentAnchor, anchor)
+            XCTAssertTrue(records.contains { $0.parentCommentId == root.id && $0.body == "Retained reply" })
+            version = updated.rowVersion
+        }
+    }
+
 }

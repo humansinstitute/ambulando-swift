@@ -170,6 +170,7 @@ struct DocumentView: View {
     @State private var editor: DocEditorModel?
     @State private var showingComments = false
     @State private var commentsExpanded = true
+    @State private var commentFilter = "open"
     @State private var automaticEditing = true
     @State private var openingEditor: Task<Void, Never>?
     @State private var openingGeneration = UUID()
@@ -530,7 +531,7 @@ struct DocumentView: View {
         editor.commentRequest = nil
         Task {
             if let saved = await editor.commentAnchor(selected) {
-                commentsExpanded = true
+                commentsExpanded = true; commentFilter = "open"
                 anchor = saved; replyTo = nil; revealed = saved
                 #if os(iOS)
                 showingComments = true
@@ -573,18 +574,23 @@ struct DocumentView: View {
     private var documentBlocks: some View {
         RichBlocksView(blocks: snapshot.value.blocks, style: .document, workspace: workspace)
             .accessibilityElement(children: .contain).accessibilityIdentifier("doc.body")
-            #if os(macOS)
             .environment(\.documentSelection, DocumentSelectionContext(spans: snapshot.value.spans, version: snapshot.value.doc?.rowVersion, selected: revealed, begin: { selected in
-                commentsExpanded = true
+                commentsExpanded = true; commentFilter = "open"
                 anchor = selected; revealed = selected; revealRevision += 1; replyTo = nil
+                #if os(iOS)
+                showingComments = true
+                #endif
             }))
-            #endif
     }
 
     private var docComments: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Comments").font(.amb(.headline)).foregroundStyle(Amb.itemHeading)
-            ForEach(snapshot.value.comments.filter { $0.parentCommentId == nil }) { c in
+            Picker("Comment threads", selection: $commentFilter) {
+                Text("Active").tag("open")
+                Text("Resolved").tag("resolved")
+            }.pickerStyle(.segmented).accessibilityIdentifier("doc.comments.filter")
+            ForEach(snapshot.value.comments.filter { $0.parentCommentId == nil && ($0.status == "resolved" ? "resolved" : "open") == commentFilter }) { c in
                 VStack(alignment: .leading, spacing: 8) {
                     if let quote = c.anchorQuote, !quote.isEmpty {
                         Button {
@@ -615,8 +621,17 @@ struct DocumentView: View {
                     ForEach(snapshot.value.comments.filter { $0.parentCommentId == c.id }) { reply in
                         CommentRow(comment: reply, people: snapshot.value.people, workspace: workspace).padding(.leading, 14)
                     }
-                    Button("Reply") { replyTo = c; anchor = c.documentAnchor }.font(.amb(.caption))
-                        .accessibilityIdentifier("doccomment.reply.\(c.id)")
+                    HStack {
+                        if c.status != "resolved" {
+                            Button("Reply") { replyTo = c; anchor = c.documentAnchor }.font(.amb(.caption))
+                                .accessibilityIdentifier("doccomment.reply.\(c.id)")
+                        }
+                        Spacer()
+                        Button(c.status == "resolved" ? "Reopen" : "Resolve") {
+                            model.submit(WriteIntent(kind: .docCommentStatus, targetId: c.id,
+                                payload: ["doc_id": docId, "status": c.status == "resolved" ? "open" : "resolved", "row_version": c.rowVersion]), in: workspace)
+                        }.font(.amb(.caption)).accessibilityIdentifier("doccomment.status.\(c.id)")
+                    }
                 }
                 .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: 8))
             }
@@ -626,9 +641,13 @@ struct DocumentView: View {
                     WriteStatusLine(item: item, label: "Comment")
                 }
             }
-            if snapshot.value.comments.isEmpty && snapshot.value.pendingComments.isEmpty {
-                Text("No comments yet.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+            if !snapshot.value.comments.contains(where: { $0.parentCommentId == nil && ($0.status == "resolved" ? "resolved" : "open") == commentFilter }) && snapshot.value.pendingComments.isEmpty {
+                Text(commentFilter == "resolved" ? "No resolved comments." : "No active comments.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             }
+        }
+        .onChange(of: snapshot.value.comments.filter { $0.parentCommentId == nil && $0.status == "resolved" }.map(\.id)) { _, ids in
+            if let replyTo, ids.contains(replyTo.id) { self.replyTo = nil; anchor = nil }
+            if snapshot.value.comments.contains(where: { ids.contains($0.id) && $0.documentAnchor == revealed }) { revealed = nil }
         }
     }
 
@@ -654,7 +673,7 @@ struct DocumentView: View {
                 var payload: [String: any Sendable] = ["body": text, "mentions": CommentMentions.actors(in: text).map(\.requestObject)]
                 if let anchor { payload["metadata"] = anchor.metadata }
                 if let replyTo { payload["parent_comment_id"] = replyTo.id }
-                if model.submit(WriteIntent(kind: .docComment, targetId: docId, payload: payload), in: workspace) { comment = ""; anchor = nil; replyTo = nil }
+                if model.submit(WriteIntent(kind: .docComment, targetId: docId, payload: payload), in: workspace) { comment = ""; anchor = nil; replyTo = nil; commentFilter = "open" }
             } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)) }
                 .disabled(!model.isUnlocked || comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send comment").accessibilityIdentifier("doccomment.send")

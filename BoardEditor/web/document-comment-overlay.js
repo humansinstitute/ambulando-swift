@@ -21,7 +21,7 @@ export function commentOverlay({ getEditor, capture, activate }) {
   function update() {
     frame = null;
     const editor = getEditor(), selection = window.getSelection();
-    const next = editor && !editor.state.selection.empty ? capture() : null;
+    const next = editor ? capture() : null;
     const key = next && JSON.stringify(next);
     if (key !== dismissed) dismissed = null;
     anchor = null; button.hidden = true;

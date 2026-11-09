@@ -34,3 +34,13 @@ test('Markdown anchor uses original line coordinates and distinguishes duplicate
   expect(revealSelection(e, anchor, markdown).state).toBe('found');
   expect(e.commands.range).toEqual({ from: pair[1], to: pair[1] + 4 });
 });
+test('Markdown table selections capture formatted header and linked body source lines', () => {
+  const markdown = '| **Header** | Other |\n| --- | --- |\n| A [linked](https://example.com) cell | B |\n';
+  const e = editor(markdownSource(markdown).doc, 1, 1);
+  for (const [quote, line] of [['Header', 1], ['linked', 3]]) {
+    let position;
+    e.state.doc.descendants((node, pos) => { if (node.isText && node.text.includes(quote)) position = pos + node.text.indexOf(quote); });
+    e.state.selection = TextSelection.create(e.state.doc, position, position + quote.length);
+    expect(captureSelection(e, markdown)).toEqual({ anchor_quote: quote, anchor_line_number: line });
+  }
+});

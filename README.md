@@ -231,6 +231,15 @@ and new-document actions retain their editing intent, with permission checks,
 autosave and offline drafts preserved. Web and native choices are device-local
 and do not synchronize between devices. Android catch-up remains deferred.
 
+## Document comments (iPhone/iPad build 94, Mac build 89)
+
+Select paragraph or table header/body text to comment while reading or editing.
+The floating action keeps the selected quote before opening the composer. Active
+comments hides resolved threads; use Resolved to inspect their retained quotes
+and replies and reopen them. Status changes use the existing version-checked
+Tower route. Source builds and sample-data tests are separate from installation
+and real-account cross-device verification. Android remains deferred.
+
 ## Layout
 
 | Path | Contents |

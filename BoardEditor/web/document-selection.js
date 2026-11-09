@@ -7,7 +7,16 @@ function text(node) {
   return (node.content || []).map(text).join('');
 }
 export function captureSelection(editor, markdown = null) {
-  const anchor = captureRichEditorSelectionAnchor(editor);
+  let selected = editor;
+  const range = globalThis.getSelection?.();
+  if (editor?.view?.dom && range?.rangeCount && !range.isCollapsed
+    && editor.view.dom.contains(range.anchorNode) && editor.view.dom.contains(range.focusNode)) {
+    try { selected = { state: { doc: editor.state.doc, selection: {
+      from: editor.view.posAtDOM(range.anchorNode, range.anchorOffset),
+      to: editor.view.posAtDOM(range.focusNode, range.focusOffset),
+    } } }; } catch { return null; }
+  }
+  const anchor = captureRichEditorSelectionAnchor(selected);
   if (!anchor || markdown === null) return anchor;
   const parsed = markdownSource(markdown);
   if (!parsed.blocks) return null;

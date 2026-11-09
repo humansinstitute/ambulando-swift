@@ -16,8 +16,9 @@ final class DocumentInlineUITests: XCTestCase {
 
     private func enterEdit(_ app: XCUIApplication) {
         if !app.buttons["doc.edit"].exists { app.buttons["More"].firstMatch.tap() }
-        XCTAssertTrue(app.buttons["doc.edit"].waitForExistence(timeout: 10))
-        app.buttons["doc.edit"].tap()
+        let edit = app.buttons["doc.edit"].exists ? app.buttons["doc.edit"] : app.buttons["Edit"]
+        XCTAssertTrue(edit.waitForExistence(timeout: 10))
+        edit.tap()
     }
 
     func testReaderDocumentActionsAndDeleteCancellation() {
@@ -138,6 +139,37 @@ final class DocumentInlineUITests: XCTestCase {
         let reopened = again.buttons["Comment on selected text"]
         XCTAssertTrue(reopened.waitForExistence(timeout: 10))
         XCTAssertTrue(reopened.isEnabled, "reopening the comment highlights its original passage")
+    }
+
+    func testReaderTableSelectionResolveReopenAndReload() {
+        let app = launch(reset: true, edit: false)
+        let cell = app.textViews.matching(identifier: "doc.selectable.4.0.0.0").firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 10), "table header uses the native selection bridge")
+        cell.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.25)).press(forDuration: 1.2)
+        if app.menuItems["Select"].waitForExistence(timeout: 2) { app.menuItems["Select"].tap() }
+        else if app.buttons["Select"].exists { app.buttons["Select"].tap() }
+        let action = app.buttons["doc.selection.comment"].firstMatch
+        XCTAssertTrue(action.waitForExistence(timeout: 10))
+        action.tap()
+        XCTAssertTrue(app.staticTexts["Selected text"].waitForExistence(timeout: 10))
+        let field = app.textViews["doccomment.field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10)); field.tap(); for character in "Reader table selection comment" { field.typeText(String(character)) }
+        XCTAssertEqual(field.value as? String, "Reader table selection comment")
+        app.buttons["doccomment.send"].tap()
+        XCTAssertTrue(app.staticTexts["Reader table selection comment"].waitForExistence(timeout: 15))
+        app.buttons.matching(NSPredicate(format: "label == %@", "Resolve")).allElementsBoundByIndex.last!.tap()
+        XCTAssertTrue(app.staticTexts["Reader table selection comment"].waitForNonExistence(timeout: 15))
+        app.buttons["Resolved"].tap()
+        XCTAssertTrue(app.staticTexts["Reader table selection comment"].waitForExistence(timeout: 10))
+        app.buttons.matching(NSPredicate(format: "label == %@", "Reopen")).allElementsBoundByIndex.last!.tap()
+        app.buttons["Active"].tap()
+        XCTAssertTrue(app.staticTexts["Reader table selection comment"].waitForExistence(timeout: 15))
+        let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = "reader-table-comment-reopened"; shot.lifetime = .keepAlways; add(shot)
+        app.terminate()
+        let again = launch(reset: false, edit: false)
+        again.buttons["doc.comments"].tap()
+        XCTAssertTrue(again.staticTexts["Reader table selection comment"].waitForExistence(timeout: 15))
+        XCTAssertTrue(again.buttons.containing(NSPredicate(format: "label CONTAINS 'Locate text'")).firstMatch.exists)
     }
 
     func testMarkdownOpensFormattedAndSelectionAnchorSurvivesReload() {

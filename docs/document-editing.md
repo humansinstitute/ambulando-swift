@@ -1,6 +1,6 @@
 # Editing and recovering documents
 
-Mac, iPhone and iPad open existing documents in View by default; Settings can explicitly choose Edit. View does not acquire an editing lease. Archived documents and unsupported stored formats remain in the reader. Tower enforces edit permissions and leases; a denied lease makes the editor read only. Selecting text exposes a floating comment icon at the right of the editor, beside the last visible selected line. The 44-point action stays within the keyboard-visible viewport and follows scrolling and resizing; showing or clearing it adds no layout space. It works by touch on iPhone/iPad and by pointer or Option–Command–M on Mac. Escape dismisses it; a cleared, invalid or offscreen selection hides it. Mac reading mode also offers a native selection comment icon. It captures the selection before native focus changes and saves only when the person requests a comment, then binds the anchor to the saved version. Actor tagging and comment submission use the existing composer and durable write queue.
+Mac, iPhone and iPad open existing documents in View by default; Settings can explicitly choose Edit. View does not acquire an editing lease. Archived documents and unsupported stored formats remain in the reader. Tower enforces edit permissions and leases; a denied lease makes the editor read only. Selecting text exposes a floating comment icon at the right of the editor, beside the last visible selected line. The 44-point action stays within the keyboard-visible viewport and follows scrolling and resizing; showing or clearing it adds no layout space. It works by touch on iPhone/iPad and by pointer or Option–Command–M on Mac. Escape dismisses it; a cleared, invalid or offscreen selection hides it. Mac and iPhone reading modes also offer a native selection comment icon, including Markdown table headers and cells. The iPhone action floats above the page so short cells retain a full 44-point touch target. It captures the selection before native focus changes and saves only when the person requests a comment, then binds the anchor to the saved version. Actor tagging and comment submission use the existing composer and durable write queue.
 
 On Mac, editing authority, pending-save and last-sync messages, saved versions, takeover and recovery actions live
 above Comments in the right panel. The panel collapses to a thin comment rail; its status icon exposes the current
@@ -65,3 +65,16 @@ scroll visibility, window resizing, keyboard viewport bounds and snapshot/reopen
 iPhone touch selection, keyboard bounds, stable native toolbar/editor frames, anchored comments/replies and relaunch.
 The isolated Mac document workflow checks stable native toolbar/page geometry and the existing save/comment/recovery pipeline.
 These sample checks do not establish installed-device or authenticated live acceptance.
+
+
+## Active and resolved comment threads (iPhone/iPad 94, Mac 89)
+
+Comments defaults to Active. Resolve removes the root card and its replies from
+that view while retaining the quote, source anchor and reply records. Choose
+Resolved to inspect the thread and Reopen to return it to Active. The existing
+version-checked Tower status route and durable native write queue synchronize the
+change; resolution never deletes a comment. A new selection comment returns to
+Active. A status update for one thread does not clear an unrelated composer draft.
+Markdown reader table spans retain cell source lines, including formatted text
+and links. Native selection remains within a single text span; complex cells and
+cross-block selections retain the documented limitations. Android is deferred.

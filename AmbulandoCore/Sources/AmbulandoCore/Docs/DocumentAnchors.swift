@@ -103,6 +103,25 @@ public enum DocumentAnchors {
         func walk(_ block: RenderBlock, _ path: [Int]) {
             switch block {
             case .paragraph(let runs), .heading(_, let runs): if !runs.contains(where: { $0.image != nil }) { add(runs.map(\.text).joined(), path) }
+            case .table(let rows):
+                // Cells share a source row. Advance once per row, not once per cell;
+                // the delimiter row is skipped by matching the rendered cell text.
+                for (r, cells) in rows.enumerated() {
+                    let texts = cells.map { $0.map(\.text).joined() }
+                    let line = lines.indices.first { index in
+                        guard index >= cursor, lines[index].contains("|") else { return false }
+                        let rendered = DocumentRender.markdownBlocks(lines[index]).compactMap { block -> String? in
+                            if case .paragraph(let runs) = block { return runs.map(\.text).joined() }
+                            return nil
+                        }.joined()
+                        return texts.allSatisfy { $0.isEmpty || rendered.contains($0) }
+                    }
+                    guard let line else { continue }
+                    for (c, text) in texts.enumerated() where !text.isEmpty {
+                        out.append(DocumentTextSpan(path: path + [r, c, 0], start: 0, text: text, line: line + 1))
+                    }
+                    cursor = line + 1
+                }
             case .quote(let blocks): for (i, block) in blocks.enumerated() { walk(block, path + [i]) }
             case .list(_, _, let items): for (i, item) in items.enumerated() { for (j, block) in item.blocks.enumerated() { walk(block, path + [i, j]) } }
             default: break
