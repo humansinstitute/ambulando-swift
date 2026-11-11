@@ -43,6 +43,15 @@ xcodebuild -exportArchive -archivePath "$RELEASE_DIR/Ambulando.xcarchive" \
   -exportPath "$RELEASE_DIR/export" -allowProvisioningUpdates
 ```
 
+If automatic export reports a cloud-signing permission error, check whether an
+existing local Apple Distribution certificate has its private key available.
+With authorized provisioning access, create an `IOS_APP_STORE` profile for this
+exact bundle ID and that certificate, and install it in Xcode's provisioning
+profile directory. Retry export with `signingStyle=manual`,
+`signingCertificate` set to the verified certificate SHA-1 and
+`provisioningProfiles` mapping the exact bundle ID to the profile UUID. This
+avoids cloud signing; do not revoke certificates or change other apps' profiles.
+
 ## Apple setup and external sharing
 
 An explicit bundle ID registration is separate from an App Store Connect app
