@@ -999,7 +999,7 @@ struct DeckHelloCard: View {
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
         let part = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
-        return "\(part), \(name.value ?? model.connection.map { shortNpub($0.signerNpub) } ?? "there")"
+        return "\(part), \(PersonNamePolicy.usable(name.value) ?? "there")"
     }
 
     private func contextLabel(_ nav: NavigationSnapshot) -> String {

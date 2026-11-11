@@ -25,7 +25,7 @@ public struct ProfileRecord: Sendable, Equatable {
     }
 
     /// The profile's own name, `display_name` before `name` (sol `resolveProfileName`).
-    public var preferredName: String? { displayName ?? name }
+    public var preferredName: String? { PersonNamePolicy.usable(displayName) ?? PersonNamePolicy.usable(name) }
 
     /// Builds a record from a verified kind-0 event. Unknown, non-string and oversized fields are dropped.
     public static func from(event: NostrEvent, checkedAt: Date) -> ProfileRecord? {
@@ -122,8 +122,8 @@ public struct PersonDisplay: Sendable, Equatable, Hashable {
         self.npub = npub; self.name = name; self.initials = PersonInitials.of(name); self.avatarURL = avatarURL; self.nameSource = nameSource
     }
 
-    /// Someone the directory does not know: short npub and initials, no avatar.
-    public static func unknown(_ npub: String) -> PersonDisplay { PersonDisplay(npub: npub, name: shortLabel(npub), avatarURL: nil, nameSource: .npub) }
+    /// Someone the directory does not know: neutral label and initials, no avatar.
+    public static func unknown(_ npub: String) -> PersonDisplay { PersonDisplay(npub: npub, name: "Unknown person", avatarURL: nil, nameSource: .npub) }
 }
 
 /// Whether a name from Tower or a profile can be shown as a person's name. Tower fills some actors with a setup
@@ -139,7 +139,7 @@ public enum PersonNamePolicy {
         let lower = name.lowercased()
         if placeholders.contains(lower) { return nil }
         // A full or shortened npub ("npub1abc…xyz", "npub1abc...xyz") or a 64-character hex key.
-        if lower.hasPrefix("npub1"), !lower.contains(" ") { return nil }
+        if lower.range(of: "npub1[0-9a-z]+|\\b[0-9a-f]{64}\\b", options: .regularExpression) != nil { return nil }
         if lower.count == 64, lower.allSatisfy(\.isHexDigit) { return nil }
         return name
     }
@@ -165,7 +165,7 @@ public enum PersonInitials {
 /// Membership comes only from Tower (`members`, `workspace_agents`); a public profile decorates a person the client
 /// already sees, never adds one. Name order follows sol `getSenderName`: the public profile (`display_name`, then
 /// `name`), then the workspace's own name for the member (Tower `display_name`), the agent's name, the name Tower
-/// attached to the message, then the short npub. Tower names that are setup placeholders or just a key are skipped
+/// attached to the message, then a neutral unknown-person label. Tower names that are setup placeholders or just a key are skipped
 /// (`PersonNamePolicy`). Avatar: an agent's Tower `avatar_url`, then the profile picture, else initials.
 public struct PeopleDirectory: Sendable, Equatable {
     public struct AgentInfo: Sendable, Equatable {
@@ -207,7 +207,7 @@ public struct PeopleDirectory: Sendable, Equatable {
                 if let name = profile?.preferredName.flatMap(PersonNamePolicy.usable) { (name, .nostr) }
                 else if let name = memberName[npub] { (name, .workspace) }
                 else if let name = agent.flatMap({ PersonNamePolicy.usable($0.name) }) { (name, .agent) }
-                else { (shortLabel(npub), .npub) }
+                else { ("Unknown person", .npub) }
             resolved[npub] = PersonDisplay(npub: npub, name: name, avatarURL: avatar, nameSource: source)
         }
     }

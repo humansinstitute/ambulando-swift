@@ -1329,7 +1329,7 @@ struct NavigationSnapshot: Sendable, Equatable {
 
     func scope(_ id: String?) -> ScopeRecord? { groups.first { $0.scope.id == id }?.scope }
     func channel(_ id: String?) -> ChannelRecord? { groups.lazy.flatMap(\.channels).first { $0.id == id } }
-    func label(_ channel: ChannelRecord) -> String { labels[channel.id] ?? channel.name }
+    func label(_ channel: ChannelRecord) -> String { labels[channel.id] ?? SidebarNavigation.label(channel, viewerNpub: nil, names: [:]) }
     func channels(in context: WorkContext) -> [ChannelRecord] {
         guard let scopeId = context.scopeId else { return groups.flatMap(\.channels) }
         if let channelId = context.channelId { return groups.flatMap(\.channels).filter { $0.id == channelId } }

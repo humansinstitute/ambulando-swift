@@ -165,6 +165,13 @@ extension StoreReader {
 
     /// `people(connectionId:workspaceId:)` for the connection the workspace belongs to (screens that only know the
     /// workspace: task and document names, pickers, sidebar labels).
+    /// Viewer identity for display only; uses the workspace's persisted connection.
+    public func viewerNpub(workspaceId: String) throws -> String? {
+        let statement = try db.prepare("SELECT c.signer_npub FROM workspaces w JOIN connections c ON c.id = w.connection_id WHERE w.workspace_id = ?")
+        try statement.bind([.text(workspaceId)])
+        return try statement.step() ? statement.text(0) : nil
+    }
+
     public func people(workspaceId: String) throws -> PeopleDirectory {
         let s = try db.prepare("SELECT connection_id FROM workspaces WHERE workspace_id = ?")
         try s.bind([.text(workspaceId)])

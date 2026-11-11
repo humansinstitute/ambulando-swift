@@ -175,7 +175,7 @@ private struct WorkspaceAdministrationPage: View {
                         NavigationLink(group.scope.name) {
                             List {
                                 ForEach(group.channels) { channel in
-                                    NavigationLink(channel.name) { ChannelSettingsSheet(channelId: channel.id) }
+                                    NavigationLink(model.navigation.value.label(channel)) { ChannelSettingsSheet(channelId: channel.id) }
                                 }
                                 if ManagementPermissions.canCreateChannel(in: group.scope, membership: model.membership) {
                                     // This editor owns a NavigationStack and confirmation toolbar.
@@ -244,7 +244,7 @@ private struct WorkspaceAdministrationPage: View {
                 }
                 Section("Channel access") {
                     ForEach(model.navigation.value.groups.flatMap(\.channels)) { channel in
-                        NavigationLink(channel.name) {
+                        NavigationLink(model.navigation.value.label(channel)) {
                             ChannelAdministrationPage(channel: channel, workspace: workspace, connection: connection, members: members.value, groups: groups.value)
                         }
                     }
@@ -309,7 +309,7 @@ private struct WorkspaceAdministrationPage: View {
     }
     private func filterLabel(_ value: String, key: String) -> String {
         if key == "scope_ids" { return model.navigation.value.groups.first { $0.scope.id == value }?.scope.name ?? "Unavailable scope" }
-        if key == "channel_ids" { return model.navigation.value.groups.flatMap(\.channels).first { $0.id == value }?.name ?? "Unavailable channel" }
+        if key == "channel_ids" { return model.navigation.value.groups.flatMap(\.channels).first { $0.id == value }.map { model.navigation.value.label($0) } ?? "Unavailable channel" }
         return value
     }
     private func editor(_ title: String, _ operation: AdministrationEditorKind) -> some View {
@@ -418,7 +418,7 @@ private struct ChannelAdministrationPage: View {
                     }
                 }
             }
-        }.navigationTitle(channel.name)
+        }.navigationTitle(model.navigation.value.label(channel))
         .modifier(ManagementStatusInset(phase: phase))
         .task {
             if let store = model.store {
@@ -538,7 +538,7 @@ struct AdministrationEditor: View {
                     ForEach(model.navigation.value.groups) { group in
                         Text(group.scope.name).font(.caption).foregroundStyle(.secondary)
                         ForEach(group.channels) { channel in
-                            Toggle(channel.name, isOn: Binding(get: { selectedPublishingChannels.contains(channel.id) }, set: { selected in
+                            Toggle(model.navigation.value.label(channel), isOn: Binding(get: { selectedPublishingChannels.contains(channel.id) }, set: { selected in
                                 var ids = selectedPublishingChannels
                                 if selected { ids.insert(channel.id) } else { ids.remove(channel.id) }
                                 values["channels"] = ids.sorted().joined(separator: ",")
@@ -599,7 +599,7 @@ struct AdministrationEditor: View {
                     field("App identifier", "app")
                     Picker("Destination channel", selection: binding("channel")) {
                         Text("Choose a channel").tag("")
-                        ForEach(model.navigation.value.groups.flatMap(\.channels)) { Text($0.name).tag($0.id) }
+                        ForEach(model.navigation.value.groups.flatMap(\.channels)) { Text(model.navigation.value.label($0)).tag($0.id) }
                     }
                     DatePicker("Expires", selection: Binding(get: { ISO8601DateFormatter().date(from: values["expires"] ?? "") ?? Date().addingTimeInterval(86400) }, set: { values["expires"] = ISO8601DateFormatter().string(from: $0) }), in: Date()...)
                     Text("Limited to the specified app and destination, with Feed publishing. Does not grant workspace administration, people, billing, storage or arbitrary channel access.").font(.caption)

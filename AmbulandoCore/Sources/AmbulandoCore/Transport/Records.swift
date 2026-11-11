@@ -205,7 +205,7 @@ public struct MemberRecord: Sendable, Equatable, Identifiable, Hashable {
 
     /// Mention type used on the wire: agents are `agent`, everyone else `person` (sol agent-direct-chat.js).
     public var mentionType: MentionType { kind == "agent" ? .agent : .person }
-    public var label: String { (displayName?.isEmpty == false ? displayName! : shortLabel(npub)) }
+    public var label: String { PersonNamePolicy.usable(displayName) ?? "Unknown person" }
 
     struct DTO: Decodable {
         struct Actor: Decodable { let actor_id: String?; let id: String?; let npub: String; let kind: String?; let display_name: String? }

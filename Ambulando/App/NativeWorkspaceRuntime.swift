@@ -27,7 +27,7 @@ final class EnabledWorkspaceEntry: Identifiable {
     func observe(_ store: LocalStore) {
         let workspaceId = workspace.id, connection = connection
         query.start(store: store, matches: { key in
-            [.scopes, .channels, .viewStates, .tasks, .docs, .threads, .members, .appState, .access, .workspaces].contains(key.table)
+            [.scopes, .channels, .viewStates, .tasks, .docs, .threads, .members, .appState, .access, .workspaces, .profiles].contains(key.table)
         }) {
             guard try await store.reader.workspaces(connectionId: connection.id).contains(where: { $0.id == workspaceId }) else {
                 return NavigationSnapshot(workspaceId: workspaceId, loaded: true, accessLost: true)

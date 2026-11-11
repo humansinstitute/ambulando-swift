@@ -6,7 +6,11 @@ struct ScopeChoice: Sendable, Equatable {
     var scopes: [ScopeRecord] = []
     var channels: [ChannelRecord] = []
 
-    func channelName(_ id: String?) -> String? { channels.first { $0.id == id }?.name }
+    var channelLabels: [String: String] = [:]
+    func channelName(_ id: String?) -> String? {
+        guard let channel = channels.first(where: { $0.id == id }) else { return nil }
+        return channelLabels[channel.id] ?? SidebarNavigation.label(channel, viewerNpub: nil, names: [:])
+    }
     func scopeName(_ id: String?) -> String? { scopes.first { $0.id == id }?.name }
     func scope(ofChannel id: String) -> String? { channels.first { $0.id == id }?.scopeId }
 
@@ -24,7 +28,12 @@ func scopeChoice(_ store: LocalStore, _ workspaceId: String) async throws -> Sco
     async let channels = store.reader.channels(workspaceId: workspaceId)
     async let order = store.reader.state(WorkspaceSync.scopeOrderKey(workspaceId))
     let ordered = ScopeOrdering.apply(try await scopes, order: ScopeOrdering.decode(try await order), id: \.id)
-    return ScopeChoice(scopes: ordered, channels: try await channels)
+    let rows = try await channels
+    let names = try await store.reader.people(workspaceId: workspaceId).names
+    let viewer = try await store.reader.viewerNpub(workspaceId: workspaceId)
+    return ScopeChoice(scopes: ordered, channels: rows, channelLabels: Dictionary(uniqueKeysWithValues: rows.map {
+        ($0.id, SidebarNavigation.label($0, viewerNpub: viewer, names: names))
+    }))
 }
 
 struct ScopeMenu: View {
@@ -58,7 +67,7 @@ func directoryNames(_ store: LocalStore, _ workspaceId: String) async throws -> 
 func displayName(_ npub: String?, _ names: [String: String], me: String?) -> String {
     guard let npub else { return "Unknown" }
     if npub == me { return names[npub].map { "\($0)" } ?? "You" }
-    return names[npub] ?? shortNpub(npub)
+    return PersonNamePolicy.usable(names[npub]) ?? "Unknown person"
 }
 
 /// State of a queued write, shown beside the thing it changes.

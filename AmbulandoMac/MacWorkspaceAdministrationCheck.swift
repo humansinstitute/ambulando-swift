@@ -49,6 +49,21 @@ extension MacThreadRegression {
         try require(model.mode == .chat && window.attachedSheet == nil, "created conversation opens in Chat")
         for _ in 0..<20 where model.navigation.value.channel(id) == nil { await settle() }
         try require(model.navigation.value.channel(id) != nil, "sidebar refreshes immediately")
+        // Exercise real SQLite profile invalidation in both selected and stacked navigation.
+        let hex = NostrKeys.publicKeyHex(npub: FixtureTower.rick)!
+        for (offset, name) in ["Cached DM profile", "Updated DM profile"].enumerated() {
+            let profile = ProfileRecord(pubkey: hex, npub: FixtureTower.rick, displayName: name, name: "handle",
+                                        eventId: String(repeating: "1", count: 64), eventCreatedAt: Int(Date().timeIntervalSince1970) + offset + 10,
+                                        status: .found, checkedAt: Date())
+            try await store.writer.recordProfileCheck(connectionId: model.connection!.id, found: [profile], checked: [hex: FixtureTower.rick], at: Date())
+            for _ in 0..<30 where model.navigation.value.labels[id] != name { await settle() }
+            try require(model.navigation.value.labels[id] == name, "selected DM label reacts to profile change")
+            for _ in 0..<30 where model.workspaceEntries.first(where: { $0.workspace.id == workspace.id })?.navigation.labels[id] != name { await settle() }
+            try require(model.workspaceEntries.first(where: { $0.workspace.id == workspace.id })?.navigation.labels[id] == name, "stacked DM label reacts to profile change")
+            try require(containsText(window, name), "profile name is rendered in actual conversation")
+        }
+        let unchanged = try await store.reader.channels(workspaceId: workspace.id).first(where: { $0.id == id })
+        try require(unchanged?.name == dm.name, "profile rendering never rewrites channel records")
         model.selectContext(WorkContext(scopeId: FixtureTower.scopeDMs)); model.show(.deck)
         await settle(); await settle()
         try press(window, "deck.inbox.new"); await settle(); await settle()

@@ -129,11 +129,12 @@ struct AgentsView: View {
             async let channels = store.reader.channels(workspaceId: w)
             async let members = store.reader.directoryMembers(workspaceId: w)
             let names = Dictionary(try await members.map { ($0.npub, $0.label) }, uniquingKeysWith: { a, _ in a })
+            let viewer = try await store.reader.viewerNpub(workspaceId: w)
             let agentList = try await agents
             var labels = names
             for agent in agentList { labels[agent.agentNpub] = agent.displayName }
             return AgentsSnapshot(agents: agentList, activity: try await activity,
-                                  channelNames: Dictionary(try await channels.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a }),
+                                  channelNames: Dictionary(try await channels.map { ($0.id, SidebarNavigation.label($0, viewerNpub: viewer, names: names)) }, uniquingKeysWith: { a, _ in a }),
                                   names: labels)
         }
     }

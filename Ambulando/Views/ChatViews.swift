@@ -233,7 +233,7 @@ struct ChannelView: View {
             let label = model.navigation.value.label(channel)
             return SidebarNavigation.isDirectMessageChannel(channel) ? label : "#\(label)"
         }
-        return snapshot.value.title.isEmpty ? " " : "#\(snapshot.value.title)"
+        return snapshot.value.title.isEmpty ? "Conversation" : snapshot.value.title
     }
 
     private var messages: some View {
@@ -293,7 +293,7 @@ struct ChannelView: View {
     private var isUnlocked: Bool { if case .unlocked = model.identity { true } else { false } }
 
     private func start() {
-        let target = target, limit = limit, store = store
+        let target = target, limit = limit, store = store, viewer = model.connection?.signerNpub
         snapshot.start(store: store, matches: chatMatches(target.workspaceId)) {
             async let channel = store.reader.channel(workspaceId: target.workspaceId, id: target.channelId)
             async let posts = store.reader.channelFeed(workspaceId: target.workspaceId, channelId: target.channelId, limit: limit)
@@ -305,8 +305,11 @@ struct ChannelView: View {
             MessageDisplayCache.shared.prepare(rows.map(\.message))
             let extras = try await messageExtras(store, target.workspaceId, connectionId: target.connectionId, ids: rows.map(\.id))
             let days = ChatDay.breaks(rows, id: \.id, time: \.message.createdAt)
-            return ChannelSnapshot(title: try await channel?.name ?? "", posts: rows, pending: try await pending,
-                                   people: try await directory, historyComplete: try await sync?.complete ?? false, extras: extras,
+            let resolvedPeople = try await directory
+            let resolvedChannel = try await channel
+            let label = resolvedChannel.map { SidebarNavigation.label($0, viewerNpub: viewer, names: resolvedPeople.names) } ?? "Conversation"
+            return ChannelSnapshot(title: label, posts: rows, pending: try await pending,
+                                   people: resolvedPeople, historyComplete: try await sync?.complete ?? false, extras: extras,
                                    threadTitles: try await titles, dayStarts: days.starts, lastDay: days.last)
         }
     }

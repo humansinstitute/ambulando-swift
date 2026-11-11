@@ -77,7 +77,7 @@ struct DocumentsView: View {
 
     private func start() {
         let w = workspace.id, context = context, store = store, connection = model.connection?.id ?? ""
-        snapshot.start(store: store, matches: { $0.workspaceId == w && [.docs, .docDrafts, .writes, .channels, .scopes].contains($0.table) }) {
+        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.docs, .docDrafts, .writes, .channels, .scopes, .members].contains($0.table)) || $0.table == .profiles }) {
             async let docs = store.reader.docs(workspaceId: w, context: context)
             async let drafts = store.reader.docDraftIds(connectionId: connection, workspaceId: w)
             async let writes = store.reader.writes(connectionId: connection, workspaceId: w)
@@ -104,7 +104,7 @@ struct DocumentCreateSheet: View {
             Form {
                 TextField("Title", text: $title).accessibilityIdentifier("newdoc.title")
                 Picker("Channel", selection: $channelId) {
-                    ForEach(choice.channels(in: context)) { Text("#\($0.name)").tag(Optional($0.id)) }
+                    ForEach(choice.channels(in: context)) { Text("#\(choice.channelName($0.id) ?? "Channel")").tag(Optional($0.id)) }
                 }
                 Section("Text") { ContentTextEntry(text: $text, placeholder: "Document text", workspace: workspace, field: "newdoc", multilineEditor: true).frame(minHeight: 160).accessibilityIdentifier("newdoc.text") }
                 if let error { Text(error).foregroundStyle(Amb.destructive) }

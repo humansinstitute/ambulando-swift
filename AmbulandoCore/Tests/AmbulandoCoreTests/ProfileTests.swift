@@ -174,8 +174,8 @@ final class PeopleDirectoryTests: XCTestCase {
         XCTAssertEqual(directory.person(cal).name, "Cal Tower")
         XCTAssertEqual(directory.person(cal).nameSource, .workspace)
         XCTAssertEqual(directory.person(stranger, senderLabel: "Stranger K").name, "Stranger K")
-        XCTAssertEqual(directory.person(stranger).name, shortLabel(stranger))
-        XCTAssertEqual(directory.person(stranger).initials, "NP")
+        XCTAssertEqual(directory.person(stranger).name, "Unknown person")
+        XCTAssertEqual(directory.person(stranger).initials, "UP")
         XCTAssertNil(directory.person(stranger).avatarURL)
         XCTAssertEqual(directory.person(nil, senderLabel: "System").name, "System")
     }
@@ -186,11 +186,11 @@ final class PeopleDirectoryTests: XCTestCase {
                        MemberRecord(workspaceId: w, actorId: "b", npub: bea, kind: "human", displayName: shortLabel(bea)),
                        MemberRecord(workspaceId: w, actorId: "c", npub: cal, kind: "human", displayName: cal)]
         let directory = PeopleDirectory(members: members, agents: [:], profiles: [profile(bea, display: "Bea")])
-        XCTAssertEqual(directory.person(ana).name, shortLabel(ana))
+        XCTAssertEqual(directory.person(ana).name, "Unknown person")
         XCTAssertEqual(directory.person(ana).nameSource, .npub)
         XCTAssertEqual(directory.person(bea).name, "Bea")
-        XCTAssertEqual(directory.person(cal).name, shortLabel(cal))
-        XCTAssertEqual(directory.person(cal, senderLabel: String(repeating: "ab", count: 32)).name, shortLabel(cal))
+        XCTAssertEqual(directory.person(cal).name, "Unknown person")
+        XCTAssertEqual(directory.person(cal, senderLabel: String(repeating: "ab", count: 32)).name, "Unknown person")
         XCTAssertEqual(directory.person(cal, senderLabel: "Cal").name, "Cal")
         XCTAssertNil(PersonNamePolicy.usable("Flight Deck PG Creator"))
         XCTAssertNil(PersonNamePolicy.usable("npub1abcd…wxyz"))

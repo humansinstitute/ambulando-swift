@@ -46,3 +46,23 @@ These checks use the in-process sample Tower. They do not establish authenticate
 Tower behavior or installation on a physical device. See [test apps](test-apps.md)
 for building and launching isolated apps. Keep run logs/screenshots in ignored
 `tmp/docs/handoffs/`, not in reusable documentation.
+
+## Profile names and display boundaries
+
+Mac build 90 / iPhone build 95 use cached kind-0 `display_name`, then `name`,
+with existing workspace/agent names as fallbacks. Unknown people display
+"Unknown person", including while profiles load. Normal identity labels reject
+full and shortened npubs and hex keys; explicit technical key views retain them.
+The existing SQLite profile-change events refresh selected and stacked workspace
+navigation, chat headers/composers, and related channel pickers and context labels.
+A generated `DM:` title is rendered through exact participants rather than shown
+verbatim; absent participants have a neutral unavailable label. Custom readable
+channel titles remain intact. No records or recipients are renamed or inferred.
+
+Core `WorkContextTests` and `PeopleDirectoryTests` cover missing and cached names,
+updates, legacy titles and custom names. The sample Mac DM interaction check
+writes two synthetic profile versions through the real SQLite writer and asserts
+that selected and stacked labels change without rewriting the channel. The
+existing simulator DM creation/reuse checks exercise iPhone navigation. These are
+isolated fixtures, not physical-device or authenticated real-account acceptance.
+Android needs the same display-boundary and reactive-profile audit separately.

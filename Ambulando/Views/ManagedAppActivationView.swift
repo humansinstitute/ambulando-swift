@@ -35,7 +35,7 @@ struct ManagedAppActivationView: View {
                 }
                 Picker("Destination channel", selection: value("channel")) {
                     Text("Choose a channel").tag("")
-                    ForEach(model.navigation.value.groups.flatMap(\.channels)) { Text($0.name).tag($0.id) }
+                    ForEach(model.navigation.value.groups.flatMap(\.channels)) { Text(model.navigation.value.label($0)).tag($0.id) }
                 }
                 Picker("Authority", selection: value("delegation")) {
                     if model.membership?.isAdmin == true { Text("Workspace administrator").tag("") }

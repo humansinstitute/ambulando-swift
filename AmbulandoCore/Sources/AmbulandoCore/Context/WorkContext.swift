@@ -117,11 +117,11 @@ public enum SidebarNavigation {
     public static func label(_ channel: ChannelRecord, viewerNpub: String?, names: [String: String]) -> String {
         let title = channel.name.trimmingCharacters(in: .whitespaces)
         let direct = isDirectMessageChannel(channel)
-        if !title.isEmpty && !direct { return title }
+        if !title.isEmpty && (!direct || (title.lowercased() != "dm" && !title.lowercased().hasPrefix("dm:") && PersonNamePolicy.usable(title) != nil)) { return title }
         let participants = participants(channel)
         if direct, participants.count == 1, participants.first == viewerNpub { return "Note to self" }
         let others = participants.filter { $0 != viewerNpub }
-        if !others.isEmpty { return others.map { npub in names[npub] ?? compact(npub) }.joined(separator: ", ") }
+        if !others.isEmpty { return others.map { npub in PersonNamePolicy.usable(names[npub]) ?? "Unknown person" }.joined(separator: ", ") }
         if direct {
             return "Direct message · identity unavailable"
         }

@@ -49,7 +49,7 @@ struct FilesView: View {
                 }
             }
             ForEach(snapshot.value.groups) { group in
-                Section("#\(group.channel.name)") {
+                Section("#\(snapshot.value.choice.channelName(group.channel.id) ?? "Channel")") {
                     ForEach(group.folders, id: \.folder.id) { entry in
                         DisclosureGroup {
                             ForEach(entry.files) { fileRow($0) }
@@ -100,7 +100,7 @@ struct FilesView: View {
 
     private func start() {
         let w = workspace.id, context = context, store = store, connection = model.connection?.id ?? ""
-        snapshot.start(store: store, matches: { $0.workspaceId == w && [.files, .folders, .writes, .channels, .scopes].contains($0.table) }) {
+        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.files, .folders, .writes, .channels, .scopes, .members].contains($0.table)) || $0.table == .profiles }) {
             let choice = try await scopeChoice(store, w)
             let files = try await store.reader.files(workspaceId: w, context: context)
             let byChannel = Dictionary(grouping: files, by: \.channelId)
@@ -287,7 +287,7 @@ struct UploadSheet: View {
         NavigationStack {
             Form {
                 Picker("Channel", selection: $channelId) {
-                    ForEach(choice.channels(in: context)) { Text("#\($0.name)").tag(Optional($0.id)) }
+                    ForEach(choice.channels(in: context)) { Text("#\(choice.channelName($0.id) ?? "Channel")").tag(Optional($0.id)) }
                 }
                 .accessibilityIdentifier("upload.channel")
                 Section {

@@ -122,6 +122,20 @@ final class WorkContextTests: XCTestCase {
         XCTAssertEqual(SidebarNavigation.label(plain, viewerNpub: TestKeys.npub, names: [:]), "general")
     }
 
+    func testDMIdentityLabelsNeverExposeKeysAndPreserveCustomTitles() throws {
+        let dm = try channel(Self.dmChannel, scope: Self.dmScope, "DM: \(Self.other)", kind: "dm", participants: [TestKeys.npub, Self.other])
+        XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [:]), "Unknown person")
+        XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [Self.other: "npub1old…key"]), "Unknown person")
+        XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [Self.other: "Cached name"]), "Cached name")
+        XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [Self.other: "Updated name"]), "Updated name")
+        XCTAssertEqual(dm.name, "DM: \(Self.other)")
+        XCTAssertEqual(SidebarNavigation.participants(dm), [TestKeys.npub, Self.other].sorted())
+        let custom = try channel(Self.dmChannel, scope: Self.dmScope, "Release planning", kind: "dm", participants: [TestKeys.npub, Self.other])
+        XCTAssertEqual(SidebarNavigation.label(custom, viewerNpub: TestKeys.npub, names: [Self.other: "Cached name"]), "Release planning")
+        let missing = try channel(Self.dmChannel, scope: Self.dmScope, "DM: npub1old…key", kind: "dm")
+        XCTAssertEqual(SidebarNavigation.label(missing, viewerNpub: TestKeys.npub, names: [:]), "Direct message · identity unavailable")
+    }
+
     // MARK: Threads in a channel
 
     /// The thread list shows every conversation with replies, including one with no stored source message or thread
