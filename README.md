@@ -10,6 +10,7 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - Work packages and commands: [docs/work-packages.md](docs/work-packages.md)
 - **iPad layout and layout checks**: [docs/ipad.md](docs/ipad.md)
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
+- **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
 ## Native chat rendering restored (Mac build 88)
 
