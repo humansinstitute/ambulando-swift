@@ -206,7 +206,10 @@ public struct TowerClient: Sendable {
         var rows: [Data] = []
         var cursor: String?
         var seen = Set<String>()
+        var pages = 0
         repeat {
+            pages += 1
+            guard pages <= 500 else { throw TowerError.listLimitReached(key) }
             var query = [URLQueryItem(name: "limit", value: "200")]
             if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
             let data = try await request(path: path, query: query, appNpub: appNpub)
@@ -216,7 +219,7 @@ public struct TowerClient: Sendable {
             cursor = object["next_cursor"] as? String
             if let cursor {
                 guard !cursor.isEmpty, seen.insert(cursor).inserted else { throw TowerError.malformed("\(key) cursor") }
-            } else if object["has_more"] as? Bool == true || page.count >= 200 {
+            } else if object["has_more"] as? Bool == true || object["partial"] as? Bool == true || (page.count >= 200 && object["has_more"] as? Bool != false) {
                 throw TowerError.listLimitReached(key)
             }
         } while cursor != nil

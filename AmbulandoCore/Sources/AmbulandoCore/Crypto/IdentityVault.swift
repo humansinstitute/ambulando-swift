@@ -485,6 +485,27 @@ public actor IdentityService: EventSigner {
         return try reader.sign(template)
     }
 
+    /// Relay self-index crypto is available only while the user's vault is unlocked.
+    private func workspaceIndexKey() throws -> Data {
+        guard vault.isUnlocked else { throw IdentityError.locked }
+        var secret = try vault.secretCopy()
+        defer { secret.resetBytes(in: 0..<secret.count) }
+        let key = try P256K.KeyAgreement.PrivateKey(dataRepresentation: secret)
+        let peer = try P256K.KeyAgreement.PublicKey(dataRepresentation: Data([2]) + Data(hex: try publicKeyHex())!, format: .compressed)
+        let shared = key.sharedSecretFromKeyAgreement(with: peer)
+        return NIP44.hmac(Data("nip44-v2".utf8), Data(shared.bytes).suffix(32))
+    }
+    public func decryptWorkspaceIndex(_ ciphertext: String) throws -> Data {
+        var key = try workspaceIndexKey()
+        defer { key.resetBytes(in: 0..<key.count) }
+        return try NIP44.decrypt(ciphertext, key: key)
+    }
+    public func encryptWorkspaceIndex(_ plaintext: Data) throws -> String {
+        var key = try workspaceIndexKey()
+        defer { key.resetBytes(in: 0..<key.count) }
+        return try NIP44.encrypt(plaintext, key: key)
+    }
+
     public func publicKeyHex() throws -> String {
         if vault.isUnlocked, let hex = vault.publicKeyHex { return hex }
         if let reader, !revoked { return reader.credential.publicKeyHex }

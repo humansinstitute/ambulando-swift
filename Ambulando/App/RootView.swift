@@ -26,9 +26,9 @@ struct RootView: View {
                     // An identity exists but cannot be read yet (started while the device was locked). Never an import.
                     IdentityUnavailableView().onboardingWidth()
                 case .unlocked:
-                    if model.connection != nil { workspaceShell } else { ConnectView().onboardingWidth() }
+                    if model.connection != nil && model.pendingTowerWorkspaceChoice == nil { workspaceShell } else { ConnectView().onboardingWidth() }
                 case .none:
-                    if model.connection != nil { workspaceShell } else { ImportIdentityView().onboardingWidth() }
+                    if model.connection != nil && model.pendingTowerWorkspaceChoice == nil { workspaceShell } else { ImportIdentityView().onboardingWidth() }
                 }
             }
         }

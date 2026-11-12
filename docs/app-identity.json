@@ -1,0 +1,8 @@
+{
+  "label": "org.wingman.nstack.app:studio.otherstuff.ambulando.native:v1",
+  "counter": 1,
+  "derivation": "First counter from zero where SHA256(UTF8(label + ':' + counter)) lifts to an even-y secp256k1 x-only public point",
+  "app_pubkey": "5494fba97efec3d5d9c66047b17d2172bc6a8bd02e6d539b93d9353d7dcaf553",
+  "app_npub": "npub12j20h2t7lmpatkwxvprmzlfpw27x4z7s9ek48xunmy6n6lw274fs40dp7t",
+  "purpose": "Public-only shared Ambulando native self-index namespace. No private scalar, signer, or certificate identity. Locator app remains separate."
+}

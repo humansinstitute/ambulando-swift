@@ -56,6 +56,28 @@ final class AppModel {
     enum Phase: Equatable { case starting, failed(String), ready }
 
     private(set) var phase: Phase = .starting
+    private(set) var workspaceIndexMessage: String?
+    private(set) var workspaceIndexPending = false
+    private(set) var pendingTowerWorkspaceChoice: String?
+    private(set) var discoveredTowers = [String]()
+    private(set) var towerDiscoveryBusy = false
+    private(set) var towerDiscoveryError: String?
+    @ObservationIgnored private var towerDiscoveryAccount: String?
+
+    func discoverTowers() async {
+        guard !towerDiscoveryBusy, case .unlocked(let npub) = identity,
+              let sync = catalogSync ?? sync else { return }
+        towerDiscoveryBusy = true; towerDiscoveryError = nil
+        defer { towerDiscoveryBusy = false }
+        do {
+            let found = try await sync.discoverTowerIndexes()
+            guard identity.npub == npub, isUnlocked else { return }
+            discoveredTowers = found
+        } catch {
+            guard identity.npub == npub else { return }
+            towerDiscoveryError = "Tower discovery failed. Retry or enter an HTTPS address manually."
+        }
+    }
     private(set) var identity: IdentityState = .none {
         didSet {
             guard identity != oldValue else { return }
@@ -63,6 +85,12 @@ final class AppModel {
             // window.nostr follows the identity: locking cancels and refuses every request; removing it forgets sites.
             browser.setLocked(!isUnlocked)
             if identity == .none, oldValue != .none { browser.reset() }
+            if case .unlocked(let npub) = identity, towerDiscoveryAccount != npub {
+                towerDiscoveryAccount = npub
+                Task { await discoverTowers() }
+            } else if identity.npub != oldValue.npub {
+                discoveredTowers = []; towerDiscoveryAccount = nil; towerDiscoveryError = nil
+            }
         }
     }
     /// Grandparent Chat's per-attempt send guard, shared by the outbox of every workspace runtime. Ambulando has none.
@@ -667,6 +695,17 @@ final class AppModel {
         return try await sync.checkDescriptor(origin: try TowerOrigin(origin))
     }
 
+    func connectDiscoveredTower(_ origin: String) async {
+        guard let canonical = try? TowerOrigin(origin).description else {
+            notice = "Enter an HTTPS Tower origin without a path."; return
+        }
+        pendingTowerWorkspaceChoice = canonical
+        // New installations have no durable choice. Do not enable the first returned workspace.
+        if preferences == nil { preferences = WorkspacePreferences() }
+        await connect(canonical)
+        if notice != nil { pendingTowerWorkspaceChoice = nil }
+    }
+
     func connect(_ origin: String) async {
         guard let sync = catalogSync ?? sync, let store = catalogStore ?? store else { return }
         do {
@@ -717,6 +756,34 @@ final class AppModel {
         guard let entry = workspaceEntries.first(where: { $0.connection.id == connection?.id && $0.workspace.id == id }) else { return }
         if !entry.enabled { setWorkspaceEnabled(entry, true) }
         openWorkspace(entry)
+        pendingTowerWorkspaceChoice = nil
+        Task { await announceWorkspace(entry) }
+    }
+
+    private func indexPendingKey(_ entry: EnabledWorkspaceEntry) -> String {
+        "workspace.index.pending." + WorkspaceBoundary.digest([entry.connection.signerNpub, entry.connection.origin, entry.workspace.appNpub, entry.workspace.id])
+    }
+    private func announceWorkspace(_ entry: EnabledWorkspaceEntry) async {
+        guard let sync = catalogSync ?? sync else { return }
+        let account = currentSigner
+        let pendingKey = indexPendingKey(entry)
+        try? await catalogStore?.writer.setState(pendingKey, "1")
+        workspaceIndexPending = true
+        workspaceIndexMessage = "Publishing encrypted Tower recovery index…"
+        do {
+            try await sync.publishWorkspaceIndex(connection:entry.connection,workspace:entry.workspace)
+            try? await catalogStore?.writer.setState(pendingKey, nil)
+            guard currentSigner == account, connection?.id == entry.connection.id, selectedWorkspaceId == entry.workspace.id else { return }
+            workspaceIndexPending = false
+            workspaceIndexMessage = "Tower recovery index published and read back."
+        } catch {
+            guard currentSigner == account, connection?.id == entry.connection.id, selectedWorkspaceId == entry.workspace.id else { return }
+            workspaceIndexMessage = "Recovery index pending. Your connection is retained; retry when online."
+        }
+    }
+    func retryWorkspaceIndex() {
+        guard let entry = workspaceEntries.first(where: { $0.connection.id == connection?.id && $0.workspace.id == selectedWorkspaceId }) else { return }
+        Task { await announceWorkspace(entry) }
     }
 
     /// Switches every mode to `id`, starting at Home. `persist` is false for a default the user did not choose.
@@ -1589,6 +1656,10 @@ extension AppModel {
             mode = modeMemories[entry.id] ?? mode
         }
         guard entry.enabled, selectedWorkspaceBoundary == entry.boundary else { return }
+        let pendingIndex = (try? await catalogStore?.reader.state(indexPendingKey(entry))) == "1"
+        guard entry.enabled, selectedWorkspaceBoundary == entry.boundary else { return }
+        workspaceIndexPending = pendingIndex
+        workspaceIndexMessage = pendingIndex ? "Recovery index pending. Your connection is retained; retry when online." : nil
         try? await catalogStore?.writer.setState("selected.connection", entry.connection.id)
         try? await catalogStore?.writer.setState("selected.workspace:\(entry.connection.id)", entry.workspace.id)
         Task { await resumeWorkspace(entry) }

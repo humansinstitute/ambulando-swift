@@ -20,6 +20,27 @@ struct ConnectView: View {
                          ? "Enter the web address (https://…) of your family's NStack. \(Product.name) checks it, then shows the spaces your account can open."
                          : "Enter the HTTPS address of your Tower. \(Product.name) reads its public service descriptor first, then lists the workspaces your identity can access.")
                         .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+                    if let tower = model.pendingTowerWorkspaceChoice {
+                        Text("Choose a workspace on " + tower).font(.headline)
+                        ForEach(model.workspaceEntries.filter { $0.connection.origin == tower }) { entry in
+                            Button(entry.workspace.label) { model.selectWorkspace(entry.workspace.id) }
+                                .buttonStyle(PrimaryButtonStyle())
+                        }
+                        if model.workspaceEntries.filter({ $0.connection.origin == tower }).isEmpty {
+                            Text("No accessible workspaces yet. Refresh or check this Tower's membership.")
+                            Button("Refresh workspaces") { model.refresh(force: true) }
+                        }
+                    }
+                    if model.towerDiscoveryBusy { ProgressView("Discovering your Towers…") }
+                    if let error = model.towerDiscoveryError { Notice(tone: .error, text: error) }
+                    ForEach(model.discoveredTowers, id: \.self) { tower in
+                        Button("Choose Tower: " + tower) {
+                            working = true
+                            Task { await model.connectDiscoveredTower(tower); working = false }
+                        }.buttonStyle(PrimaryButtonStyle()).disabled(working)
+                    }
+                    Button("Retry Tower discovery") { Task { await model.discoverTowers() } }
+                        .disabled(working || model.towerDiscoveryBusy)
                     TextField(Product.isGrandparentChat ? "https://your-nstack.example" : "https://your-tower.example", text: $origin)
                         .urlEntry().autocorrectionDisabled()
                         .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
@@ -33,7 +54,7 @@ struct ConnectView: View {
                     } else {
                         Button {
                             working = true
-                            Task { await model.connect(origin); working = false }
+                            Task { await model.connectDiscoveredTower(origin); working = false }
                         } label: { label(Product.isGrandparentChat ? "Continue" : "Connect and discover workspaces") }
                             .buttonStyle(PrimaryButtonStyle()).disabled(working)
                     }

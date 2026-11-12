@@ -35,6 +35,8 @@ struct WorkspaceSelectionView: View {
         NavigationStack {
             List {
                 Section {
+                    if let status = model.workspaceIndexMessage { Text(status).font(.footnote) }
+                    if model.workspaceIndexPending { Button("Retry discovery announcement") { model.retryWorkspaceIndex() } }
                     Text("Checked workspaces appear together and keep syncing. Uncheck a workspace to pause its network activity; its saved content and drafts stay on this device.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
