@@ -494,9 +494,28 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     }
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        try await Task.sleep(for: .milliseconds(40))   // a little latency so states are observable
+        let delayedSecondDescriptor = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMultiWorkspaceCheck")
+            && request.url?.host == "fixture-second.ambulando.invalid" && request.url?.path == "/.well-known/nstack.json"
+        try await Task.sleep(for: .milliseconds(delayedSecondDescriptor ? 300 : 40))
         let (status, body) = try route(request)
-        let data = try (body as? Data) ?? JSONSerialization.data(withJSONObject: body)
+        var result = body
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMultiWorkspaceCheck"),
+           request.url?.host == "fixture-second.ambulando.invalid" {
+            func rewrite(_ value: Any) -> Any {
+                if var object = value as? [String:Any] {
+                    for (key,child) in object { object[key] = rewrite(child) }
+                    if object["tower_base_url"] != nil { object["tower_base_url"] = "https://fixture-second.ambulando.invalid" }
+                    if object["tower_service_npub"] != nil { object["tower_service_npub"] = Self.rick }
+                    if object["tower_npub"] != nil { object["tower_npub"] = Self.rick }
+                    if object["endpoint"] as? String == FixtureEnvironment.origin { object["endpoint"] = "https://fixture-second.ambulando.invalid" }
+                    return object
+                }
+                if let array = value as? [Any] { return array.map(rewrite) }
+                return value
+            }
+            result = rewrite(body)
+        }
+        let data = try (result as? Data) ?? JSONSerialization.data(withJSONObject: result)
         return (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!)
     }
 

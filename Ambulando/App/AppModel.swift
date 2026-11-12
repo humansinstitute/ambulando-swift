@@ -63,8 +63,16 @@ final class AppModel {
     private(set) var towerDiscoveryBusy = false
     private(set) var towerDiscoveryError: String?
     @ObservationIgnored private var towerDiscoveryAccount: String?
+    @ObservationIgnored private var pendingTowerConnection: ConnectionRecord?
+    @ObservationIgnored private var pendingTowerEpoch = 0
 
     func discoverTowers() async {
+        guard !Product.isGrandparentChat else { return } // Preserve the separate restricted family setup.
+        if fixture != nil {
+            discoveredTowers = [FixtureEnvironment.origin]
+            towerDiscoveryError = nil
+            return // Test/sample identities must never contact public relays.
+        }
         guard !towerDiscoveryBusy, case .unlocked(let npub) = identity,
               let sync = catalogSync ?? sync else { return }
         towerDiscoveryBusy = true; towerDiscoveryError = nil
@@ -81,6 +89,7 @@ final class AppModel {
     private(set) var identity: IdentityState = .none {
         didSet {
             guard identity != oldValue else { return }
+            if !isUnlocked || identity.npub != oldValue.npub { cancelPendingTowerSelection() }
             wikiContextEpoch &+= 1
             // window.nostr follows the identity: locking cancels and refuses every request; removing it forgets sites.
             browser.setLocked(!isUnlocked)
@@ -696,14 +705,49 @@ final class AppModel {
     }
 
     func connectDiscoveredTower(_ origin: String) async {
-        guard let canonical = try? TowerOrigin(origin).description else {
-            notice = "Enter an HTTPS Tower origin without a path."; return
+        guard let sync = catalogSync ?? sync, isUnlocked, let account = currentSigner,
+              let canonical = try? TowerOrigin(origin).description else {
+            notice = "Unlock your identity and enter an HTTPS Tower origin without a path."; return
         }
+        pendingTowerEpoch += 1
+        let epoch = pendingTowerEpoch
         pendingTowerWorkspaceChoice = canonical
-        // New installations have no durable choice. Do not enable the first returned workspace.
+        pendingTowerConnection = nil
         if preferences == nil { preferences = WorkspacePreferences() }
-        await connect(canonical)
-        if notice != nil { pendingTowerWorkspaceChoice = nil }
+        do {
+            let record = try await sync.connect(origin:try TowerOrigin(canonical))
+            guard pendingTowerEpoch == epoch, currentSigner == account, isUnlocked else { return }
+            pendingTowerConnection = record
+            // Keep the active connection and its durable choice intact until a workspace is explicitly chosen.
+            await refreshPendingTowerWorkspaces()
+            if pendingTowerEpoch == epoch { notice = nil }
+        } catch {
+            guard pendingTowerEpoch == epoch, currentSigner == account else { return }
+            notice = error.localizedDescription
+            pendingTowerWorkspaceChoice = nil
+            pendingTowerConnection = nil
+        }
+    }
+
+    func cancelPendingTowerSelection() {
+        pendingTowerEpoch += 1
+        pendingTowerWorkspaceChoice = nil
+        pendingTowerConnection = nil
+    }
+
+    func refreshPendingTowerWorkspaces() async {
+        guard isUnlocked, let record = pendingTowerConnection,
+              pendingTowerWorkspaceChoice == record.origin, record.signerNpub == currentSigner,
+              let discovery = connectionDiscovery(record) else { return }
+        await discovery.discover(record,priority:.visible,force:true)
+    }
+
+    func choosePendingWorkspace(_ entry: EnabledWorkspaceEntry) {
+        guard isUnlocked, let record = pendingTowerConnection,
+              record.signerNpub == currentSigner, pendingTowerWorkspaceChoice == record.origin,
+              entry.connection.id == record.id,
+              workspaceEntries.contains(where:{ $0.id == entry.id && $0.boundary == entry.boundary }) else { return }
+        selectWorkspaceEntry(entry)
     }
 
     func connect(_ origin: String) async {
@@ -754,9 +798,13 @@ final class AppModel {
     /// The user chose a workspace in the switcher; the choice is remembered for this connection.
     func selectWorkspace(_ id: String) {
         guard let entry = workspaceEntries.first(where: { $0.connection.id == connection?.id && $0.workspace.id == id }) else { return }
+        selectWorkspaceEntry(entry)
+    }
+
+    private func selectWorkspaceEntry(_ entry: EnabledWorkspaceEntry) {
         if !entry.enabled { setWorkspaceEnabled(entry, true) }
         openWorkspace(entry)
-        pendingTowerWorkspaceChoice = nil
+        cancelPendingTowerSelection()
         Task { await announceWorkspace(entry) }
     }
 
@@ -764,6 +812,12 @@ final class AppModel {
         "workspace.index.pending." + WorkspaceBoundary.digest([entry.connection.signerNpub, entry.connection.origin, entry.workspace.appNpub, entry.workspace.id])
     }
     private func announceWorkspace(_ entry: EnabledWorkspaceEntry) async {
+        guard !Product.isGrandparentChat else { return }
+        if fixture != nil {
+            workspaceIndexPending = false
+            workspaceIndexMessage = "Sample mode: public relay publication is disabled."
+            return
+        }
         guard let sync = catalogSync ?? sync else { return }
         let account = currentSigner
         let pendingKey = indexPendingKey(entry)
@@ -1533,6 +1587,10 @@ extension AppModel {
             if entry.enabled { try await ensureRuntime(entry) }
         }
         if preferences != nil { await persistWorkspacePreferences() }
+        if selectedWorkspaceBoundary == nil, pendingTowerWorkspaceChoice != nil {
+            clearWorkspaceContent()
+            return // Do not auto-activate a different connection behind the pending Tower picker.
+        }
         if selectedWorkspaceBoundary == nil {
             // Initial discovery must not overwrite the durable choice with the first enabled entry before
             // restoreConnectionView reads it. This also chooses a safe fallback after access revocation.

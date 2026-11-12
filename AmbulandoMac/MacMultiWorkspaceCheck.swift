@@ -125,6 +125,37 @@ extension MacThreadRegression {
             return rows?.contains(where: { $0.body == pausedUpdate }) == true
         }
         checks.append("re-enable restores local navigation, validates access, catches up paused events and preserves draft")
+        let activeA = lab.boundary
+        let secondOrigin = "https://fixture-second.ambulando.invalid"
+        await model.connectDiscoveredTower(secondOrigin)
+        try await multiWait("second Tower workspace listing") { model.workspaceEntries.contains { $0.connection.origin == secondOrigin } }
+        try require(model.selectedWorkspaceBoundary == activeA, "pending Tower B never retargets active Tower A")
+        try require(model.pendingTowerWorkspaceChoice == secondOrigin, "pending Tower B stays explicit")
+        model.cancelPendingTowerSelection()
+        try require(model.pendingTowerWorkspaceChoice == nil && model.selectedWorkspaceBoundary == activeA, "cancel preserves active A")
+        await model.connectDiscoveredTower("https://unknown.fixture.invalid")
+        try require(model.pendingTowerWorkspaceChoice == nil && model.selectedWorkspaceBoundary == activeA, "failed descriptor preserves active A")
+        let late = Task { @MainActor in await model.connectDiscoveredTower(secondOrigin) }
+        try await multiWait("delayed pending Tower request") { model.pendingTowerWorkspaceChoice == secondOrigin }
+        model.cancelPendingTowerSelection()
+        await late.value
+        try require(model.pendingTowerWorkspaceChoice == nil && model.selectedWorkspaceBoundary == activeA, "late descriptor cannot revive cancelled B")
+        checks.append("cancel, descriptor failure and a late pending epoch preserve active A")
+        await model.connectDiscoveredTower(secondOrigin)
+        guard let second = model.workspaceEntries.first(where: { $0.connection.origin == secondOrigin && $0.workspace.id == studio.workspace.id }) else {
+            throw Failure(description:"Missing second Tower workspace with duplicate UUID")
+        }
+        await model.refreshPendingTowerWorkspaces()
+        model.choosePendingWorkspace(second)
+        try await multiWait("captured second Tower workspace selection") { model.selectedWorkspaceBoundary == second.boundary }
+        try require(model.pendingTowerWorkspaceChoice == nil, "explicit B choice completes pending step")
+        try require(second.runtime?.store.path != labRuntime.store.path, "two Tower stores remain isolated even with repeated workspace UUIDs")
+        try require((try await labRuntime.store.reader.draft(labTarget))?.text == "Lab retained sample draft", "Tower B selection preserves Tower A draft")
+        try await multiWait("durable second Tower selection") {
+            let selected = try? await catalog.reader.state("selected.connection")
+            return selected == second.connection.id
+        }
+        checks.append("Tower-first discovery keeps A active while B is pending, refreshes B, selects captured B with duplicate workspace UUIDs and preserves A draft")
         let elapsed = Double(started.duration(to: .now).components.attoseconds) / 1e18 + Double(started.duration(to: .now).components.seconds)
         let report: [String: Any] = ["result": "passed", "scope": "Mac Test app with in-process Tower fixtures; no live multi-Tower or device verification",
                                      "checks": checks, "elapsedSeconds": elapsed,

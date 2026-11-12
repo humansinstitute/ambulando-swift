@@ -77,7 +77,7 @@ struct WorkspaceSelectionView: View {
             NavigationStack {
                 ConnectView()
                     .navigationTitle("Add Tower")
-                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { connecting = false } } }
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { model.cancelPendingTowerSelection(); connecting = false } } }
             }
             .frame(idealWidth: 560, idealHeight: 620)
         }
