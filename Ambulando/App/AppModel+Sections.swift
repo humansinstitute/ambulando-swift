@@ -17,7 +17,7 @@ enum AppMode: String, CaseIterable, Codable {
         case .deck: "Deck"
         case .chat: "Chat"
         case .tasks: "Tasks"
-        case .docs: "Docs"
+        case .docs: "Artefacts"
         case .files: "Files"
         case .agents: "Agents"
         case .context: "Context"

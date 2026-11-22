@@ -233,7 +233,7 @@ public struct FileRecord: Sendable, Equatable, Identifiable {
         folderId = lowerUUID(o["folder_id"] as? String); storageObjectId = lowerUUID(o["storage_object_id"] as? String)
         displayName = (o["display_name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? (storage?["file_name"] as? String) ?? "Untitled file"
         description = o["description"] as? String
-        contentType = (version?["content_type"] as? String) ?? (storage?["content_type"] as? String)
+        contentType = (o["content_type"] as? String) ?? (version?["content_type"] as? String) ?? (storage?["content_type"] as? String)
         sizeBytes = flexibleInt(version?["size_bytes"]) ?? flexibleInt(storage?["size_bytes"])
         sha256 = ((version?["sha256_hex"] as? String) ?? (storage?["sha256_hex"] as? String))?.lowercased()
         archived = o["record_state"] as? String == "archived" || (o["archived_at"] as? String) != nil

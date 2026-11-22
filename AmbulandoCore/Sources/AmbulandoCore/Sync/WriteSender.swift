@@ -396,6 +396,7 @@ public struct WriteSender: Sendable {
                 }
                 var body: [String: Any] = ["storage_object_id": objectId, "display_name": p["display_name"] ?? name]
                 if let folder = p["folder_id"] as? String { body["folder_id"] = folder }
+                if let metadata = p["metadata"] as? [String: Any] { body["metadata"] = metadata }
                 let r = try await send("POST", base + "/channels/" + TowerAPI.uuid(channel) + "/files", body)
                 if (200..<300).contains(r.status), let f = record(r.body, "file", FileRecord.init(raw:)) { return .done(ack(files: [f])) }
                 if r.status == 409, let found = try await api.channelFiles(workspaceId: w, appNpub: app, channelId: channel).files.first(where: { $0.storageObjectId == objectId }) {

@@ -72,7 +72,7 @@ extension TowerAPI {
         let o = try object(try await client.request(path: path, appNpub: appNpub), "HTML naplet")
         guard lowerUUID(o["workspace_id"] as? String) == workspaceId, lowerUUID(o["naplet_id"] as? String) == napletId.lowercased(),
               let content = o["content"] as? [String: Any], let html = content["html"] as? String else { throw TowerError.malformed("HTML naplet") }
-        return ((o["title"] as? String) ?? "HTML", html)
+        return ((o["title"] as? String) ?? "HTML", try await hydratedArtefactHTML(html, content: content, workspaceId: workspaceId, appNpub: appNpub))
     }
 
     /// The exact bytes of one board version, verified against the sha256 Tower projected for the naplet.

@@ -155,6 +155,18 @@ struct FileDetailView: View {
     @State private var exporting = false
 
     var body: some View {
+        Group {
+            if let file = snapshot.value.file, let type = ArtefactType.file(file) {
+                FileArtefactView(file: file, type: type, workspace: workspace)
+            } else { detail }
+        }
+        .task {
+            start()
+            if let sync = model.sync, let c = model.connection { await sync.refreshArtefactFile(c, workspace, fileId: fileId) }
+        }
+    }
+
+    private var detail: some View {
         List {
             if let file = snapshot.value.file {
                 Section {
@@ -340,5 +352,180 @@ struct UploadSheet: View {
         catch { message = error.localizedDescription; return }
         let payload: [String: any Sendable] = ["channel_id": channelId, "staged": staged, "content_type": type, "file_name": name, "display_name": name]
         if model.submit(WriteIntent(kind: .fileUpload, targetId: channelId, payload: payload), in: workspace) { dismiss() }
+    }
+}
+
+/// Every channel, chat and personal pin File route opens the same saved artefact.
+struct FileArtefactView: View {
+    @Environment(AppModel.self) private var model
+    let file: FileRecord
+    let type: ArtefactType
+    let workspace: WorkspaceRecord
+    @State private var session: BoardSession?
+    @State private var html: String?
+    @State private var editing = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let session {
+                BoardNotices(session: session).padding(8)
+                BoardEditorPanel(session: session)
+            } else if let html {
+                Label("Sandboxed HTML", systemImage: "lock.shield").font(.amb(.caption)).padding(6)
+                SandboxedHTMLView(html: html).id(html)
+            } else if let error { EmptyNote(title: "Artefact unavailable", systemImage: "lock", detail: error) }
+            else { ProgressView("Loading artefact…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+        }
+        .navigationTitle(file.displayName)
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                if let session { BoardStatusPill(state: session.state); BoardMenu(session: session) }
+                if type == .html { Button("Source & history") { editing = true }.disabled(!model.isUnlocked) }
+                Button {
+                    model.setPinned(!model.pins.value.isPinned(.file, file.id), type: .file, id: file.id, in: workspace)
+                } label: { Image(systemName: model.pins.value.isPinned(.file, file.id) ? "pin.fill" : "pin") }
+                .accessibilityLabel("Pin artefact").disabled(!model.isUnlocked)
+            }
+        }
+        .sheet(isPresented: $editing, onDismiss: { Task { await reloadHTML() } }) {
+            HTMLSourceSheet(file: file, workspace: workspace)
+        }
+        .task(id: file.id) {
+            guard let sync = model.sync, let connection = model.connection, model.canRead else { error = "Unlock to open this artefact."; return }
+            let boundary = model.selectedWorkspaceBoundary
+            do {
+                if type == .whiteboard {
+                    let reference = try await sync.artefactBoard(connection, workspace, fileId: file.id)
+                    guard boundary == model.selectedWorkspaceBoundary, model.canRead else { return }
+                    session = model.boardSession(reference, title: file.displayName, in: workspace)
+                } else {
+                    let content = try await sync.artefactHTML(connection, workspace, fileId: file.id)
+                    guard boundary == model.selectedWorkspaceBoundary, model.canRead else { return }
+                    html = content
+                }
+            } catch { self.error = error.localizedDescription }
+        }
+        .onChange(of: model.canRead) { _, canRead in if !canRead { html = nil; session = nil; error = "Unlock to open this artefact." } }
+    }
+    private func reloadHTML() async {
+        html = nil
+        guard let sync = model.sync, let c = model.connection, model.canRead, model.selectedWorkspaceId == workspace.id else { return }
+        let boundary = model.selectedWorkspaceBoundary
+        do {
+            let content = try await sync.artefactHTML(c, workspace, fileId: file.id)
+            guard boundary == model.selectedWorkspaceBoundary, model.canRead else { return }
+            html = content; error = nil
+        } catch { if boundary == model.selectedWorkspaceBoundary { self.error = error.localizedDescription } }
+    }
+}
+
+struct HTMLSourceSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let file: FileRecord
+    let workspace: WorkspaceRecord
+    @State private var versions: [BoardVersion] = []
+    @State private var base = ""
+    @State private var selected = ""
+    @State private var source = ""
+    @State private var message: String?
+    @State private var busy = false
+    @State private var ready = false
+    @State private var loadedSource = ""
+    @State private var draftConnectionId: String?
+    private var canWrite: Bool {
+        let row = (try? JSONSerialization.jsonObject(with: file.raw)) as? [String: Any]
+        return model.isUnlocked && row?["can_write"] as? Bool == true
+    }
+    private var draftURL: URL? {
+        guard let id = draftConnectionId else { return nil }
+        return BoardRegistry.draftsDirectory(id).appendingPathComponent("html-" + workspace.id + "-" + file.id + ".json")
+    }
+    private func keepDraft() {
+        guard ready, let url = draftURL, model.isUnlocked, model.connection?.id == draftConnectionId, model.selectedWorkspaceId == workspace.id else { return }
+        if source == loadedSource { try? FileManager.default.removeItem(at: url); return }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let data = try JSONSerialization.data(withJSONObject: ["base": base, "source": source])
+            try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } catch { message = "Could not keep a recovery draft: \(error.localizedDescription)" }
+    }
+    var body: some View {
+        NavigationStack {
+            VStack {
+                Picker("Version", selection: $selected) {
+                    ForEach(versions) { Text("Version \($0.number)").tag($0.id) }
+                }.disabled(busy || (ready && source != loadedSource))
+                Text("Viewing an older version loads its source as a draft. Save publishes a new revision.")
+                    .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                TextEditor(text: $source).font(.system(.body, design: .monospaced)).disabled(!ready || busy || !canWrite)
+                if let message { Text(message).foregroundStyle(Amb.warning).padding(8) }
+                if ready && source != loadedSource {
+                    Text("Your draft is kept on close. Save before browsing another revision.").font(.amb(.caption))
+                    Button("Keep draft on latest revision…") { Task { await rebase() } }.disabled(busy)
+                }
+            }.padding()
+            .navigationTitle("HTML source & history")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Save revision") { Task { await save() } }.disabled(!ready || busy || !canWrite) }
+            }
+            .task { await load() }
+            .onChange(of: selected) { _, id in if ready { Task { await read(id) } } }
+            .onChange(of: source) { _, _ in keepDraft() }
+            .onDisappear { keepDraft() }
+        }
+        .frame(minWidth: 300, minHeight: 400)
+        .interactiveDismissDisabled(busy)
+    }
+    private func load() async {
+        guard let sync = model.sync, let c = model.connection, model.selectedWorkspaceId == workspace.id else { return }
+        draftConnectionId = c.id
+        do {
+            let recovery = draftURL.flatMap { try? Data(contentsOf: $0) }
+            let history = try await sync.htmlHistory(c, workspace, fileId: file.id)
+            guard model.connection?.id == c.id, model.selectedWorkspaceId == workspace.id else { return }
+            versions = history.versions; base = history.currentVersionId ?? ""; selected = base
+            await read(base)
+            if let bytes = recovery,
+               let draft = try? JSONSerialization.jsonObject(with: bytes) as? [String: String],
+               let text = draft["source"], let oldBase = draft["base"] {
+                base = oldBase; source = text; ready = true; message = "Recovered your unsaved source. Save checks its original revision."
+            }
+        } catch { message = error.localizedDescription }
+    }
+    private func read(_ id: String) async {
+        guard let sync = model.sync, let c = model.connection, let version = versions.first(where: { $0.id == id }) else { return }
+        busy = true; ready = false
+        defer { busy = false }
+        do {
+            let text = try await sync.htmlSource(c, workspace, fileId: file.id, version: version)
+            guard model.connection?.id == c.id, model.selectedWorkspaceId == workspace.id else { return }
+            source = text; loadedSource = source; ready = true; message = nil
+        }
+        catch { message = error.localizedDescription }
+    }
+    private func rebase() async {
+        guard let sync = model.sync, let c = model.connection else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let history = try await sync.htmlHistory(c, workspace, fileId: file.id)
+            guard let current = history.currentVersionId else { return }
+            base = current; versions = history.versions; keepDraft()
+            message = "Your source is retained against the latest revision. Review it, then Save revision to publish."
+        } catch { message = error.localizedDescription }
+    }
+    private func save() async {
+        guard let sync = model.sync, let c = model.connection, !base.isEmpty else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            try await sync.saveHTML(c, workspace, fileId: file.id, base: base, source: source, title: file.displayName)
+            if let url = draftURL { try? FileManager.default.removeItem(at: url) }
+            ready = false
+            dismiss()
+        } catch { keepDraft(); message = "Save failed; your source remains here. \(error.localizedDescription)" }
     }
 }

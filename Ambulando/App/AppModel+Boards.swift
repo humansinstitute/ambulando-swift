@@ -101,7 +101,7 @@ final class BoardRegistry {
 extension AppModel {
     /// The shared session for a board shown on a canvas, bound to the selected workspace and this connection. Nil when
     /// no workspace is open (locked devices still get a read-only session if the identity can read).
-    func boardSession(_ reference: BoardReference, title: String, in workspace: WorkspaceRecord, canvasId: String) -> BoardSession? {
+    func boardSession(_ reference: BoardReference, title: String, in workspace: WorkspaceRecord, canvasId: String? = nil) -> BoardSession? {
         guard let sync, let connection, let boundary = selectedWorkspaceBoundary,
               workspace.id == selectedWorkspace?.id, workspace.appNpub == selectedWorkspace?.appNpub else { return nil }
         let key = [boundary.id, reference.fileId].joined(separator: ":")
@@ -120,7 +120,7 @@ extension AppModel {
             }
             return session
         }
-        session.canvasIds.insert(canvasId)
+        if let canvasId { session.canvasIds.insert(canvasId) }
         session.sync(reference, title: title)
         return session
     }

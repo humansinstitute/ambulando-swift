@@ -431,7 +431,7 @@ public enum WebContentPolicy {
 /// One of the viewer's personal pins (`flightdeck_pg_thread_pins` row, record family `personal_pin`). An unpinned row is a
 /// tombstone that Tower keeps; it is stored so a stale device can never resurrect the pin.
 public struct PinRecord: Sendable, Equatable, Identifiable {
-    public enum ResourceType: String, Sendable, CaseIterable { case thread, task, document, channel }
+    public enum ResourceType: String, Sendable, CaseIterable { case thread, task, document, channel, file }
 
     public let workspaceId: String
     public let id: String

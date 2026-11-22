@@ -742,9 +742,10 @@ struct DeckPinnedCard: View {
         model.movePin(item, before: before, in: workspace)
     }
 
-    @ViewBuilder private func open<Label: View>(_ item: PinnedItem, @ViewBuilder label: () -> Label) -> some View {
+    @ViewBuilder private func open<Label: View>(_ item: PinnedItem, @ViewBuilder label: @escaping () -> Label) -> some View {
         let w = workspace.id, id = item.pin.resourceId
         switch item.pin.resourceType {
+        case .file: WorkRecordLink(route: WorkRoute.file(workspaceId: w, fileId: id)) { label() }.buttonStyle(.plain)
         case .channel: Button { model.openInChat(channelId: id) } label: { label() }.buttonStyle(.plain)
         case .thread: ThreadRouteLink(route: WorkRoute.threadById(workspaceId: w, threadId: id)) { label() }.buttonStyle(.plain)
         case .task: NavigationLink(value: WorkRoute.task(workspaceId: w, taskId: id)) { label() }.buttonStyle(.plain)
@@ -758,6 +759,7 @@ struct DeckPinnedCard: View {
         case .task: "checklist"
         case .document: "doc.text"
         case .channel: "number"
+        case .file: "doc.richtext"
         }
     }
 
@@ -767,6 +769,7 @@ struct DeckPinnedCard: View {
         case .task: "Task"
         case .document: "Document"
         case .channel: "Channel"
+        case .file: "Artefact"
         }
     }
 
@@ -776,6 +779,7 @@ struct DeckPinnedCard: View {
         case .task: "Task not on this \(Device.name)"
         case .document: "Document not on this \(Device.name)"
         case .channel: "Channel not available"
+        case .file: "Artefact not on this \(Device.name)"
         }
     }
 }

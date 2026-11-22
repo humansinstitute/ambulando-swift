@@ -149,7 +149,7 @@ extension AppModel {
         guard let store else { return }
         let connectionId = connection.id
         pins.start(store: store, matches: { key in
-            key.workspaceId == workspaceId && [.pins, .writes, .tasks, .docs, .threads, .channels, .messages].contains(key.table)
+            key.workspaceId == workspaceId && [.pins, .writes, .files, .tasks, .docs, .threads, .channels, .messages].contains(key.table)
         }) {
             async let items = store.reader.pinnedItems(connectionId: connectionId, workspaceId: workspaceId)
             async let writes = store.reader.writes(connectionId: connectionId, workspaceId: workspaceId)

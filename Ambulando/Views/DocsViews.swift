@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 
 struct DocsSnapshot: Sendable, Equatable {
     var docs: [DocRecord] = []
+    var files: [FileRecord] = []
     var drafts: Set<String> = []
     var creating: [WriteItem] = []
     var choice = ScopeChoice()
@@ -21,9 +22,12 @@ struct DocumentsView: View {
     @State private var filter = ""
     @State private var snapshot = LiveQuery<DocsSnapshot>(initial: DocsSnapshot())
     @State private var creating = false
+    @State private var type: ArtefactType?
+    @State private var newType: ArtefactType?
 
     private var visible: [DocRecord] {
         let q = filter.trimmingCharacters(in: .whitespaces).lowercased()
+        guard type == nil || type == .document else { return [] }
         return q.isEmpty ? snapshot.value.docs : snapshot.value.docs.filter { $0.title.lowercased().contains(q) }
     }
 
@@ -31,9 +35,18 @@ struct DocumentsView: View {
         List {
             ForEach(snapshot.value.creating) { item in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(item.string("title") ?? "Document").font(.amb(.subheadline).weight(.semibold))
-                    WriteStatusLine(item: item, label: "New document")
+                    Text(item.string("title") ?? item.string("display_name") ?? "Artefact").font(.amb(.subheadline).weight(.semibold))
+                    WriteStatusLine(item: item, label: "New artefact")
                 }
+            }
+            ForEach(snapshot.value.files.filter { file in
+                let kind = ArtefactType.file(file)
+                return kind != nil && (type == nil || kind == type) && (filter.isEmpty || file.displayName.localizedCaseInsensitiveContains(filter))
+            }) { file in
+                WorkRecordLink(route: WorkRoute.file(workspaceId: workspace.id, fileId: file.id)) {
+                    Label(file.displayName, systemImage: ArtefactType.file(file)?.icon ?? "doc")
+                }
+                .accessibilityIdentifier("artefact.\(file.id)")
             }
             ForEach(visible) { doc in
                 WorkRecordLink(route: WorkRoute.doc(workspaceId: workspace.id, docId: doc.id)) {
@@ -55,34 +68,45 @@ struct DocumentsView: View {
         }
         .groupedList()
         .scrollContentBackground(.hidden)
-        .searchable(text: $filter, placement: .drawer, prompt: "Filter documents")
+        .searchable(text: $filter, placement: .drawer, prompt: "Filter artefacts")
         .overlay {
-            if snapshot.loaded && snapshot.value.docs.isEmpty && snapshot.value.creating.isEmpty {
-                EmptyNote(title: "No documents", systemImage: "doc.text", detail: model.isUnlocked ? "Documents in this scope appear here." : "Unlock to load documents.")
+            if snapshot.loaded && snapshot.value.docs.isEmpty && snapshot.value.files.isEmpty && snapshot.value.creating.isEmpty {
+                EmptyNote(title: "No artefacts", systemImage: "doc.text", detail: model.isUnlocked ? "Documents, whiteboards and HTML in this scope appear here." : "Unlock to load documents.")
             }
         }
-        .navigationTitle("Docs")
+        .navigationTitle("Artefacts")
         .safeAreaInset(edge: .top, spacing: 0) {
             ListHeaderBar {
+                Picker("Type", selection: $type) {
+                    Text("All types").tag(Optional<ArtefactType>.none)
+                    ForEach(ArtefactType.allCases) { Text($0.label).tag(Optional($0)) }
+                }
+                .accessibilityIdentifier("artefacts.type")
                 Spacer()
-                Button { creating = true } label: { Image(systemName: "plus.circle.fill").font(.amb(.title2)) }
-                    .accessibilityLabel("New document").accessibilityIdentifier("docs.new")
+                Menu {
+                    Button("Document") { creating = true }
+                    Button("Whiteboard") { newType = .whiteboard }
+                    Button("HTML") { newType = .html }
+                } label: { Image(systemName: "plus.circle.fill").font(.amb(.title2)) }
+                    .accessibilityLabel("New artefact").accessibilityIdentifier("docs.new")
             }
         }
+        .sheet(item: $newType) { kind in ArtefactCreateSheet(type: kind, workspace: workspace, choice: snapshot.value.choice, context: context) }
         .sheet(isPresented: $creating) { DocumentCreateSheet(workspace: workspace, choice: snapshot.value.choice, context: context) }
-        .refreshable { model.openDocs(workspace, scopeId: scopeId, force: true) }
-        .task(id: model.context) { start(); model.openDocs(workspace, scopeId: scopeId) }
+        .refreshable { model.openDocs(workspace, scopeId: scopeId, force: true); model.openFiles(workspace, scopeId: scopeId, force: true) }
+        .task(id: model.context) { start(); model.openDocs(workspace, scopeId: scopeId); model.openFiles(workspace, scopeId: scopeId) }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openDocs(workspace, scopeId: scopeId) } }
     }
 
     private func start() {
         let w = workspace.id, context = context, store = store, connection = model.connection?.id ?? ""
-        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.docs, .docDrafts, .writes, .channels, .scopes, .members].contains($0.table)) || $0.table == .profiles }) {
+        snapshot.start(store: store, matches: { ($0.workspaceId == w && [.files, .docs, .docDrafts, .writes, .channels, .scopes, .members].contains($0.table)) || $0.table == .profiles }) {
             async let docs = store.reader.docs(workspaceId: w, context: context)
+            async let files = store.reader.files(workspaceId: w, context: context)
             async let drafts = store.reader.docDraftIds(connectionId: connection, workspaceId: w)
             async let writes = store.reader.writes(connectionId: connection, workspaceId: w)
             async let choice = scopeChoice(store, w)
-            return DocsSnapshot(docs: try await docs, drafts: try await drafts, creating: try await writes.filter { $0.kind == .docCreate },
+            return DocsSnapshot(docs: try await docs, files: try await files.filter { ArtefactType.file($0) != nil }, drafts: try await drafts, creating: try await writes.filter { $0.kind == .docCreate || ($0.kind == .fileUpload && $0.payloadObject["metadata"] != nil) },
                                 choice: try await choice)
         }
     }
@@ -1387,5 +1411,51 @@ struct DocumentRemoteReview: View {
                 }
             }
         }
+    }
+}
+
+struct ArtefactCreateSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let type: ArtefactType
+    let workspace: WorkspaceRecord
+    let choice: ScopeChoice
+    let context: WorkContext
+    @State private var title = ""
+    @State private var source = "<!doctype html><html><body><h1>New artefact</h1></body></html>"
+    @State private var channel: String?
+    @State private var error: String?
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Title", text: $title)
+                Picker("Channel", selection: $channel) {
+                    ForEach(choice.channels(in: context)) { Text(choice.channelName($0.id) ?? "Channel").tag(Optional($0.id)) }
+                }
+                if type == .html { TextEditor(text: $source).font(.system(.body, design: .monospaced)).frame(minHeight: 240) }
+                if let error { Text(error).foregroundStyle(Amb.destructive) }
+            }
+            .navigationTitle(type == .whiteboard ? "New whiteboard" : "New HTML")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Create") { create() }.disabled(channel == nil || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.isUnlocked) }
+            }
+            .onAppear { channel = context.channelId ?? choice.channels(in: context).first?.id }
+        }
+    }
+    private func create() {
+        guard let channel, let staging = model.staging else { return }
+        do {
+            let name = title.trimmingCharacters(in: .whitespacesAndNewlines) + (type == .whiteboard ? ".excalidraw" : ".html")
+            let token = UUID().uuidString.lowercased()
+            let bytes = type == .whiteboard ? try JSONSerialization.data(withJSONObject: BoardScene.empty()) : Data(source.utf8)
+            try bytes.write(to: staging.appendingPathComponent(token), options: .atomic)
+            let descriptor: [String: any Sendable] = ["schema_version": 1, "format_version": 1, "type": type == .whiteboard ? "excalidraw" : "html", "editor_id": type == .whiteboard ? "builtin.excalidraw" : "builtin.html"]
+            let metadata: [String: any Sendable] = ["artefact": descriptor]
+            let payload: [String: any Sendable] = ["channel_id": channel, "display_name": name, "file_name": name, "staged": token,
+                "content_type": type == .whiteboard ? BoardScene.contentType : "text/html",
+                "metadata": metadata]
+            if model.submit(WriteIntent(kind: .fileUpload, targetId: channel, payload: payload), in: workspace) { dismiss() }
+        } catch { self.error = error.localizedDescription }
     }
 }

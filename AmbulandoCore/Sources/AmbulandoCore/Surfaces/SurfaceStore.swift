@@ -436,6 +436,9 @@ extension StoreReader {
             .sorted(by: PinRecord.displayOrder)
         return try pins.map { pin in
             switch pin.resourceType {
+            case .file:
+                let f = try file(workspaceId: workspaceId, id: pin.resourceId)
+                return PinnedItem(pin: pin, title: f?.displayName, channelId: f?.channelId ?? pin.channelId, scopeId: pin.scopeId)
             case .task:
                 let t = try task(workspaceId: workspaceId, id: pin.resourceId)
                 return PinnedItem(pin: pin, title: t?.title, channelId: t?.channelId ?? pin.channelId, scopeId: t?.scopeId ?? pin.scopeId)

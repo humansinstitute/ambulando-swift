@@ -12,6 +12,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Channel artefacts (Mac build 100, iPhone/iPad build 102)
+
+The channel Artefacts section combines documents, whiteboards and HTML with type filters,
+creation and direct saved-File opening. Whiteboards reuse the bundled Excalidraw editor;
+HTML runs in a sandbox with verified private images, source revision history and recovery drafts.
+File pins use the existing private version-checked pin pipeline. See [channel artefacts](docs/channel-artefacts.md).
+Source/build versions do not establish installation or acceptance on Pete’s devices.
+
 ## Native chat rendering restored (Mac build 88)
 
 Chat uses native SwiftUI blocks again on Mac, iPhone and iPad. Tables, code, stored images,
