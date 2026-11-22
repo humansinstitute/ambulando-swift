@@ -12,6 +12,10 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Workspace Report (Mac build 106, iPhone/iPad build 107)
+
+Workspace Report is available in Apps and Toolbox. It reuses or explicitly sets up a private HTML code File and opens a separate read-only host for authorized activity and current inventory totals. The shared dashboard offers 7/30/90-day and all-time ranges, top channels, coverage and server freshness. Device-local approval is remembered for the exact code and workspace capability. See [Workspace Report](docs/workspace-report.md). Source delivery and local fixture checks are separate from backend activation and installation on Pete's devices.
+
 ## Daily Metrics app update (Mac build 105, iPhone/iPad build 106)
 
 Daily Metrics has larger Yes/No controls, clearer date navigation and a persistent explicit Save area. Existing original trackers offer **Update app** in the native host: confirm the code replacement, then approve the changed code once. This keeps the same tracker Files, answers and history. Customized or unrecognized source is left alone. Pending saves block updates and unsaved work requires confirmation. The shared template and schema remain aligned across hosts; see [File napplets](docs/file-napplets.md). Source delivery and local synthetic checks remain separate from installation or real-account acceptance on Pete's devices.

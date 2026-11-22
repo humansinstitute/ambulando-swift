@@ -21,6 +21,8 @@ struct ToolboxView: View {
         let nappletKey = WorkspaceSync.nappletsKey(model.connection?.id ?? "", workspace.id)
         List {
             Section("Built-in apps") {
+                NavigationLink(value: WorkRoute.webContent(workspaceId: workspace.id, source: .workspaceReport)) { Label("Workspace Report", systemImage: "chart.bar.doc.horizontal") }
+                    .accessibilityIdentifier("apps.workspace-report")
                 NavigationLink(value: WorkRoute.webContent(workspaceId: workspace.id, source: .dailyMetrics)) { Label("Daily Metrics", systemImage: "chart.bar.xaxis") }
                     .accessibilityIdentifier("apps.daily-tracker")
                 Toggle("Show Daily Metrics in Apps", isOn: Binding(get: { model.dailyMetricsVisible(workspace) }, set: { model.setDailyMetricsVisible($0, in: workspace) }))
@@ -102,7 +104,9 @@ struct WebContentView: View {
 
     var body: some View {
         Group {
-            if case .dailyMetrics = source {
+            if case .workspaceReport = source {
+                WorkspaceReportAppView(workspace: workspace)
+            } else if case .dailyMetrics = source {
                 DailyMetricsAppView(workspace: workspace)
             } else if case .installedNapplet(let key, let title) = source {
                 InstalledNappletView(key: key, title: title, workspace: workspace)
@@ -123,7 +127,7 @@ struct WebContentView: View {
 
     private func resolve() async {
         switch source {
-        case .installedNapplet, .dailyMetrics: return
+        case .installedNapplet, .dailyMetrics, .workspaceReport: return
         case .htmlNaplet(let canvas, let naplet, let title):
             guard let sync = model.sync, let connection = model.connection, model.canRead else { failure = "Unlock to open this HTML artefact."; return }
             do {

@@ -972,6 +972,9 @@ struct DeckHelloCard: View {
             }
             .padding(.horizontal, 4).padding(.bottom, 6)
             Text("Apps").font(.amb(.footnote).weight(.heavy)).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 4)
+            Button { model.openWorkspaceReport(in: workspace) } label: {
+                AppLauncherCard(title: "Workspace Report", subtitle: "Read-only napplet", sources: [], workspace: workspace)
+            }.buttonStyle(.plain).accessibilityIdentifier("deck.napplet.workspace-report")
             if model.dailyMetricsVisible(workspace) && !model.dailyMetricsLast(workspace) { dailyMetrics }
             ForEach(wapps.value) { wapp in
                 // A browser tab over Deck (signing through `window.nostr`); **Ambulando** returns to this card.
@@ -1142,6 +1145,7 @@ private struct MacDeckWelcome: View {
             MacLauncherItem(id: "napplet:" + n.key, title: n.title, subtitle: "Workspace napplet", url: nil,
                             logo: .app([], initials: PersonInitials.of(n.title)), identifier: "deck.napplet.\(n.key)", nappletKey: n.key)
         }
+        items.insert(MacLauncherItem(id: "napplet:workspace-report", title: "Workspace Report", subtitle: "Read-only napplet", url: nil, logo: .app([], initials: "WR"), identifier: "deck.napplet.workspace-report", nappletKey: "workspace-report", workspaceReport: true), at: 0)
         if model.dailyMetricsVisible(workspace) {
             let daily = MacLauncherItem(id: "napplet:daily-tracker", title: "Daily Metrics", subtitle: "Personal napplet", url: nil, logo: .app([], initials: "DM"), identifier: "deck.napplet.daily-tracker", nappletKey: "daily-tracker", dailyMetrics: true)
             items.insert(daily, at: model.dailyMetricsLast(workspace) ? items.count : 0)
@@ -1212,6 +1216,7 @@ private struct MacLauncherItem: Identifiable {
     let identifier: String
     var nappletKey: String? = nil
     var dailyMetrics = false
+    var workspaceReport = false
 }
 
 /// sol `.launcher-stack-panel`: collapsed, only the first launcher is a real card, with up to two card edges behind
@@ -1277,7 +1282,9 @@ private struct MacLauncherStack<Footer: View>: View {
 
     private func launch(_ item: MacLauncherItem) {
         expanded = nil
-        if item.dailyMetrics {
+        if item.workspaceReport {
+            model.openWorkspaceReport(in: workspace)
+        } else if item.dailyMetrics {
             model.openDailyMetrics(in: workspace)
         } else if let key = item.nappletKey {
             model.toolboxPath.append(.webContent(workspaceId: workspace.id, source: .installedNapplet(key: key, title: item.title)))

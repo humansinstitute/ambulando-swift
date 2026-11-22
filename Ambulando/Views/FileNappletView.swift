@@ -103,6 +103,20 @@ final class FileNappletHost {
 }
 
 struct DirectHTMLFileView: View {
+    let file: FileRecord
+    let workspace: WorkspaceRecord
+    var appMode = false
+    var trustStore = FileNappletTrustStore.local
+    var body: some View {
+        if let object = try? JSONSerialization.jsonObject(with: file.raw) as? [String: Any],
+           let metadata = object["metadata"] as? [String: Any], let napplet = metadata["napplet"] as? [String: Any],
+           napplet["app_id"] as? String == "workspace-report" {
+            WorkspaceReportFileView(file: file, workspace: workspace)
+        } else { TrackerHTMLFileView(file: file, workspace: workspace, appMode: appMode, trustStore: trustStore) }
+    }
+}
+
+struct TrackerHTMLFileView: View {
     #if os(macOS)
     @Environment(\.macArtefactSession) private var macSession
     #endif

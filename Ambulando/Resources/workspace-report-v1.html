@@ -1,0 +1,93 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace Report</title><style>:root{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#22352f;background:#f4f6f1;color-scheme:light}*{box-sizing:border-box}body{margin:0}main{max-width:1280px;margin:auto;padding:clamp(16px,4vw,48px)}header,.section-heading,.actions{display:flex;justify-content:space-between;align-items:center;gap:16px}header{align-items:flex-start;margin-bottom:28px}.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:#526c60;font-weight:750;margin:0 0 9px}h1{font-size:clamp(28px,4vw,42px);letter-spacing:-.045em;margin:0;line-height:1.15}h2{font-size:20px;letter-spacing:-.025em;margin:0}h3{font-size:14px;margin-top:28px}.intro,.muted,small,footer{color:#5a6d63}.intro{margin:10px 0 0;font-size:14px}.controls label{display:block;font-size:12px;margin-bottom:8px}.actions{gap:8px}button,select{font:inherit;border:1px solid #c6d2c8;background:#fff;color:#22352f;border-radius:9px;min-height:44px;padding:9px 12px;font-size:13px}button{cursor:pointer;font-weight:650}button:disabled,select:disabled{opacity:.6;cursor:wait}button:hover{background:#eaf0e7}:focus-visible{outline:3px solid #277353;outline-offset:3px}#status{font-size:14px;border-radius:10px;background:#e5ece2;padding:14px}#status:empty{display:none}.section-heading{margin-bottom:16px;flex-wrap:wrap}.section-heading span{font-size:12px;color:#5a6d63}.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:28px}.cards article{border:1px solid #d6dfd4;border-radius:14px;padding:22px;background:#fff;min-width:0}.cards article:first-child{background:#244e3e;color:#fff;border-color:#244e3e}.cards article:first-child small{color:#d2e4d7}.cards p{margin:0 0 12px;font-size:13px}.cards strong{font-size:clamp(28px,4vw,44px);font-weight:650;letter-spacing:-.04em;display:block;overflow-wrap:anywhere}.cards small{display:block;margin-top:8px;font-size:11px}.columns{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:20px}.panel{background:#fff;border:1px solid #d6dfd4;border-radius:14px;padding:24px;min-width:0}.muted{font-size:12px;line-height:1.6}.table-wrap{width:100%}table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:13px}th{text-align:right;color:#607268;font-size:11px;font-weight:550;padding:14px 6px}th:first-child{text-align:left;width:50%}td{border-top:1px solid #e7ece4;padding:16px 6px;text-align:right;font-variant-numeric:tabular-nums;vertical-align:top;overflow-wrap:anywhere}td:first-child{text-align:left}td small{display:block;margin-top:5px;font-size:11px}.bar{height:4px;border-radius:4px;background:#e9eee6;margin-top:10px}.bar i{display:block;height:100%;background:#75997e;border-radius:4px}.inventory>div{display:flex;justify-content:space-between;gap:12px;padding:15px 0;border-bottom:1px solid #e7ece4;font-size:13px}.inventory strong{font-size:20px;font-weight:600}.states{display:flex;flex-wrap:wrap;gap:8px}.states span{background:#eff3eb;border-radius:6px;padding:7px 9px;font-size:11px}footer{font-size:11px;line-height:1.7;margin:24px 0 0;max-width:850px}footer p{margin:6px 0}#more{margin-top:14px}[hidden]{display:none!important}#empty{font-size:13px;line-height:1.6}@media(max-width:720px){header{flex-direction:column;gap:22px}.controls{width:100%}.actions select{flex:1;min-width:0}.columns{grid-template-columns:minmax(0,1fr)}.cards{gap:8px}.cards article{padding:14px 10px}.cards p{font-size:11px}.cards small{font-size:10px}.panel{padding:16px}th:first-child{width:44%}th,td{padding-left:3px;padding-right:3px}th{font-size:10px}table{font-size:12px}.cards strong{font-size:28px}}@media(prefers-reduced-motion:no-preference){button{transition:background .15s}}
+</style><script id="wingman-napplet-manifest" type="application/json">{"version":1,"app_id":"workspace-report","bindings":{"report":{"format":"workspace-report-v1","operations":["read"],"privacy":"viewer"}}}</script></head><body>
+<main><header><div><p class="eyebrow">Your workspace, at a glance</p><h1>Workspace Report</h1><p class="intro">Channel activity and current workspace totals.</p></div><div class="controls"><label for="range">Activity period</label><div class="actions"><select id="range"><option value="7d">Last 7 days</option><option value="30d" selected>Last 30 days</option><option value="90d">Last 90 days</option><option value="all">All time</option></select><button id="refresh" type="button">Refresh</button></div></div></header>
+<p id="status" role="status" aria-live="polite">Connecting to your workspace…</p><section id="report" hidden>
+<section aria-labelledby="activity-heading"><div class="section-heading"><h2 id="activity-heading">Conversation activity</h2><span id="period"></span></div><div class="cards activity"><article><p>Messages</p><strong id="messages"></strong><small>In the selected period</small></article><article><p>Active conversations</p><strong id="conversations"></strong><small>Threads with messages in this period</small></article><article><p>Channels</p><strong id="channels"></strong><small>Active and readable · DMs excluded</small></article></div></section>
+<div class="columns"><section class="panel" aria-labelledby="ranking-heading"><div class="section-heading"><div><p class="eyebrow">The conversation map</p><h2 id="ranking-heading">Busiest channels</h2></div></div><p class="muted">Ranked by messages in this period.</p><p id="empty" hidden>No message activity in this period. Accessible channels appear below.</p><div class="table-wrap"><table><thead><tr><th scope="col">Channel</th><th scope="col">Messages</th><th scope="col">Conversations</th></tr></thead><tbody id="ranking"></tbody></table></div><button id="more" type="button" hidden>Show more channels</button><p id="shown" class="muted"></p></section>
+<section class="panel" aria-labelledby="inventory-heading"><p class="eyebrow">Current inventory</p><h2 id="inventory-heading">Work in view</h2><p class="muted">Current totals, independent of the activity period.</p><div class="inventory"><div><span>Open tasks</span><strong id="open"></strong></div><div><span>Completed tasks</span><strong id="completed"></strong></div><div><span>Archived tasks</span><strong id="archived"></strong></div><div><span>All tasks</span><strong id="tasks"></strong></div><div><span>Current conversations</span><strong id="current-conversations"></strong></div><div><span>Documents</span><strong id="documents"></strong></div><div><span>Files</span><strong id="files"></strong></div></div><p id="coverage" class="muted"></p><h3>Tasks by state</h3><div id="states" class="states"></div></section></div>
+<footer><p id="freshness"></p><p>Only your accessible, active project channels are included. Direct messages, archived channels and deleted records are excluded. Current conversations, documents and Files exclude archived records; archived task states are shown separately. Completed tasks means their current state is Done.</p><p>Counts are a server snapshot. Refresh to check again.</p></footer></section></main><script>(() => {
+  'use strict';
+  const ranges = ['7d', '30d', '90d', 'all'];
+  const states = ['new', 'ready', 'in_progress', 'review', 'done', 'backlog', 'blocked', 'archive', 'archived'];
+  const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+  const exact = (o, keys) => o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).sort().join(',') === [...keys].sort().join(',');
+  const fail = () => { throw new Error('A complete, valid workspace report is required.'); };
+  const count = n => { if (!Number.isSafeInteger(n) || n < 0) fail(); return n; };
+  const sum = values => count(values.reduce((a, b) => a + count(b), 0));
+  const date = v => { if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(v) || !Number.isFinite(Date.parse(v)) || new Date(v).toISOString() !== v) fail(); return Date.parse(v); };
+  function validate(v) {
+    if (!exact(v, ['format','workspace_id','range','from','to','as_of','timezone','complete','channel_policy','channels','activity','inventory','ranking','coverage']) || v.format !== 'workspace-report-v1' || !uuid.test(v.workspace_id) || !ranges.includes(v.range) || v.timezone !== 'UTC' || v.complete !== true || v.channel_policy !== 'active-project-channels') fail();
+    const end = date(v.as_of); if (v.to !== v.as_of) fail();
+    if (v.range === 'all' ? v.from !== null : date(v.from) !== end - Number.parseInt(v.range,10)*86400000) fail();
+    if (!Array.isArray(v.channels) || v.channels.length > 50) fail();
+    const ids = new Set();
+    for (const c of v.channels) {
+      if (!exact(c,['channel_id','scope_id','name','scope_name','messages','conversations']) || !uuid.test(c.channel_id) || !uuid.test(c.scope_id) || ids.has(c.channel_id)) fail();
+      ids.add(c.channel_id);
+      for (const label of [c.name,c.scope_name]) if (typeof label !== 'string' || label.length > 300) fail();
+      count(c.messages); count(c.conversations); if (c.conversations > c.messages) fail();
+    }
+    const r=v.ranking;
+    if (!exact(r,['total_channels','returned_channels','has_more','other_messages','other_conversations']) || count(r.total_channels)>2000 || count(r.returned_channels)!==v.channels.length || r.returned_channels>r.total_channels || typeof r.has_more!=='boolean' || r.has_more!==(r.returned_channels<r.total_channels)) fail();
+    if(r.has_more && r.returned_channels===0)fail();
+    for(let i=1;i<v.channels.length;i++){const a=v.channels[i-1],b=v.channels[i];if(a.messages<b.messages || (a.messages===b.messages && a.channel_id>=b.channel_id))fail();}
+    count(r.other_messages);count(r.other_conversations);
+    if(r.other_conversations>r.other_messages || (!r.has_more && (r.other_messages!==0 || r.other_conversations!==0))) fail();
+    if (!exact(v.activity,['messages','conversations']) || v.activity.messages !== sum([...v.channels.map(c=>c.messages),r.other_messages]) || v.activity.conversations !== sum([...v.channels.map(c=>c.conversations),r.other_conversations])) fail();
+    if(!exact(v.coverage,['tasks_channels','documents_channels','files_channels']))fail();
+    for(const n of Object.values(v.coverage))if(count(n)>r.total_channels)fail();
+    const i = v.inventory, t = i?.tasks;
+    if (!exact(i,['channels','conversations','tasks','documents','files']) || count(i.channels) !== r.total_channels || !exact(t,['total','open','completed','archived','by_state']) || !exact(t.by_state,states)) fail();
+    count(i.conversations); count(i.documents); count(i.files);
+    if (count(t.total) !== sum(Object.values(t.by_state)) || count(t.completed) !== t.by_state.done || count(t.archived) !== sum([t.by_state.archive,t.by_state.archived]) || count(t.open) !== t.total - t.completed - t.archived) fail();
+    return JSON.parse(JSON.stringify(v));
+  }
+  function ranking(value) { return [...value.channels].sort((a,b)=>b.messages-a.messages || (a.channel_id < b.channel_id ? -1 : a.channel_id > b.channel_id ? 1 : 0)); }
+  globalThis.WorkspaceReportModel = Object.freeze({ validate, ranking, ranges, states });
+})();
+</script><script>(() => {
+  'use strict';
+  const model = globalThis.WorkspaceReportModel, session = window.nappletSession;
+  const $ = id => document.getElementById(id), number = n => n.toLocaleString();
+  function displayCount(el,n){el.textContent=n>=1000000?new Intl.NumberFormat(undefined,{notation:'compact',maximumFractionDigits:1}).format(n):number(n);el.title=number(n);el.setAttribute('aria-label',number(n));}
+  let pending = '', lastRequest = '', timer, value = null, shown = 20;
+  function clear(message) { value = null; $('report').hidden = true; $('ranking').replaceChildren(); $('states').replaceChildren(); for(const id of ['messages','conversations','channels','open','completed','tasks','documents','files','archived','current-conversations','coverage','period','freshness','shown']) $(id).textContent=''; $('status').textContent = message; }
+  function busy(on) { $('range').disabled = on; $('refresh').disabled = on; }
+  function read() {
+    if (pending) return;
+    clear('Refreshing authorized counts…'); busy(true); shown = 20;
+    if (!session) { clear('Open Workspace Report from Ambulando Apps to read your authorized counts.'); busy(false); return; }
+    pending = crypto.randomUUID();
+    parent.postMessage({type:'wingman-napplet-data',version:1,session,requestId:pending,operation:'read',binding:'report',range:$('range').value}, '*');
+    timer = setTimeout(()=>{pending='';busy(false);clear('Counts could not be refreshed. Check your connection and try again.');},45000);
+  }
+  function rows() {
+    const ranked = model.ranking(value); $('ranking').replaceChildren();
+    for (const c of ranked.slice(0,shown)) {
+      const tr=document.createElement('tr'), name=document.createElement('td'), label=document.createElement('span'), scope=document.createElement('small'), bar=document.createElement('div'), fill=document.createElement('i');
+      label.textContent=c.name || 'Project channel';scope.textContent=c.scope_name || 'Scope';bar.className='bar';bar.setAttribute('aria-hidden','true');fill.style.width=`${ranked[0]?.messages ? c.messages/ranked[0].messages*100 : 0}%`;bar.append(fill);name.append(label,scope,bar);tr.append(name);
+      for(const n of [c.messages,c.conversations]){const td=document.createElement('td');displayCount(td,n);tr.append(td);}$('ranking').append(tr);
+    }
+    $('more').hidden=shown>=ranked.length;$('shown').textContent=`Top ${ranked.length} of ${value.ranking.total_channels} accessible channels. Other channels: ${number(value.ranking.other_messages)} messages · ${number(value.ranking.other_conversations)} active conversations. Totals include all channels.`;
+  }
+  function render(v) {
+    value=v;const t=v.inventory.tasks;
+    for(const [id,n] of Object.entries({messages:v.activity.messages,conversations:v.activity.conversations,channels:v.inventory.channels,open:t.open,completed:t.completed,tasks:t.total,archived:t.archived,'current-conversations':v.inventory.conversations,documents:v.inventory.documents,files:v.inventory.files}))displayCount($(id),n);
+    const fmt=s=>new Date(s).toLocaleString(undefined,{timeZone:'UTC',dateStyle:'medium',timeStyle:'short'});
+    $('period').textContent=`${v.from ? fmt(v.from) : 'All time'} → ${fmt(v.as_of)} UTC`;
+    $('freshness').textContent=`Server snapshot · ${fmt(v.as_of)} UTC · Complete for your access`;
+    $('coverage').textContent=`Inventory access: tasks in ${v.coverage.tasks_channels}, documents in ${v.coverage.documents_channels}, Files in ${v.coverage.files_channels} of ${v.inventory.channels} channels. Each total covers only records you can read.`;
+    $('states').replaceChildren();for(const state of model.states){const el=document.createElement('span');el.textContent=`${state.replaceAll('_',' ')} · ${number(t.by_state[state])}`;$('states').append(el);}
+    $('empty').hidden=v.activity.messages!==0;$('status').textContent='';rows();$('report').hidden=false;
+  }
+  addEventListener('message',event=>{
+    const d=event.data;if(event.source!==parent||(!pending&&!lastRequest)||d?.type!=='wingman-napplet-result'||d.version!==1||d.session!==session||d.requestId!==(pending||lastRequest))return;
+    clearTimeout(timer);lastRequest=d.requestId;pending='';busy(false);
+    if(d.status!=='ready'||d.canWrite!==false||d.privacy!=='viewer-channels'){clear('Counts are unavailable. Refresh to check your current access.');return;}
+    try{const v=model.validate(d.value);if(v.range!==$('range').value)throw Error();render(v);}catch{clear('The report was incomplete or invalid. Refresh to try again.');}
+  });
+  $('range').onchange=read;$('refresh').onclick=read;$('more').onclick=()=>{if(value){shown+=20;rows();}};
+  addEventListener('pagehide',()=>{clearTimeout(timer);pending='';clear('Report closed.');});
+  read();
+})();
+</script></body></html>

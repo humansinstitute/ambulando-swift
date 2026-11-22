@@ -246,6 +246,8 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
     let capabilities: [String]
     private let html: String
     private let receive: (NappletIntent) -> Void
+    private var reportReceive: ((WorkspaceReportRequest) -> Void)?
+    private var reportIDs = Set<String>()
     private var fileReceive: ((FileNappletRequest) -> Void)?
     private var initialMain = false
     private var initialFrame = false
@@ -261,6 +263,9 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
     }
     init(html: String, fileReceive: @escaping (FileNappletRequest) -> Void) {
         self.html = html; self.capabilities = []; self.receive = { _ in }; self.fileReceive = fileReceive
+    }
+    init(html: String, reportReceive: @escaping (WorkspaceReportRequest) -> Void) {
+        self.html = html; self.capabilities = []; self.receive = { _ in }; self.reportReceive = reportReceive
     }
     static func json(_ value: Any) -> String {
         let bytes = try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys])
@@ -293,7 +298,7 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
                   return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
                 }});
                 """
-                let lifecycle = self.fileReceive == nil ? "" : "addEventListener('pagehide',()=>parent.postMessage({type:'wingman-napplet-lifecycle',session:window.nappletSession},'*'),{once:true});"
+                let lifecycle = (self.fileReceive == nil && self.reportReceive == nil) ? "" : "addEventListener('pagehide',()=>parent.postMessage({type:'wingman-napplet-lifecycle',session:window.nappletSession},'*'),{once:true});"
                 let code = "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"\(csp)\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><script>\(bootstrap)\(lifecycle)</script>" + self.html
                 let parent = """
                 <!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:100%;overflow:hidden}iframe{border:0;width:100%;height:100%}</style><iframe id="napplet" sandbox="allow-scripts" title="Workspace napplet"></iframe><script>
@@ -323,6 +328,17 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
         webView = nil
     }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let reportReceive {
+            guard let view = webView, message.webView === view, message.frameInfo.isMainFrame,
+                  message.frameInfo.request.url?.absoluteString == "about:blank",
+                  JSONSerialization.isValidJSONObject(message.body), let data = try? JSONSerialization.data(withJSONObject: message.body) else { return }
+            if let body = message.body as? [String: Any], Set(body.keys) == ["type", "session"], body["type"] as? String == "wingman-napplet-lifecycle", body["session"] as? String == session {
+                didFail("The report document closed."); return
+            }
+            guard let request = try? WorkspaceReportRequest.parse(data, session: session), reportIDs.count < 10000,
+                  reportIDs.insert(request.id).inserted else { return }
+            ready = true; reportReceive(request); return
+        }
         if let fileReceive {
             guard let view = webView, message.webView === view, message.frameInfo.isMainFrame,
                   message.frameInfo.request.url?.absoluteString == "about:blank",
@@ -343,7 +359,7 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         let url = navigationAction.request.url?.absoluteString
-        if fileReceive != nil {
+        if fileReceive != nil || reportReceive != nil {
             if navigationAction.navigationType == .other, url == "about:blank", navigationAction.targetFrame?.isMainFrame == true, !initialMain {
                 initialMain = true; return .allow
             }

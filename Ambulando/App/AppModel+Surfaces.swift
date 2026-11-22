@@ -8,6 +8,7 @@ enum WebContentSource: Hashable, Codable {
     case htmlNaplet(canvasId: String, napletId: String, title: String)
     case installedNapplet(key: String, title: String)
     case dailyMetrics
+    case workspaceReport
 }
 
 /// The viewer's pins with the state of any pin or unpin still waiting in the write queue.
@@ -244,14 +245,25 @@ extension AppModel {
     /// Existing internal link handling only; this does not register an OS universal-link domain.
     func handleAppLink(_ url: URL) -> OpenURLAction.Result {
         if url.path == "/flight-deck", let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
-           parts.queryItems?.filter({ $0.name == "napplet" }) == [URLQueryItem(name: "napplet", value: "daily-tracker")] {
+           let napplets = parts.queryItems?.filter({ $0.name == "napplet" }), napplets.count == 1, let napplet = napplets[0].value, ["daily-tracker", "workspace-report"].contains(napplet) {
             if url.host != nil && (url.scheme != "https" || url.user != nil || url.password != nil || url.host?.lowercased() != URL(string: connection?.origin ?? "")?.host?.lowercased() || url.port != URL(string: connection?.origin ?? "")?.port) { return browser.handleLink(url) }
             let workspaces = parts.queryItems?.filter { $0.name == "workspaceid" } ?? []
             guard workspaces.count == 1, let workspace = selectedWorkspace, workspaces[0].value == workspace.id else {
                 notice = "This app link belongs to another workspace or server."; return .handled
             }
-            openDailyMetrics(in: workspace); return .handled
+            if napplet == "workspace-report" { openWorkspaceReport(in: workspace) } else { openDailyMetrics(in: workspace) }; return .handled
         }
         return browser.handleLink(url)
+    }
+}
+
+// Uses the same current-origin link and guarded native navigation policy as Daily Metrics.
+extension AppModel {
+    func openWorkspaceReport(in workspace: WorkspaceRecord) {
+        guard selectedWorkspaceId == workspace.id else { return }
+        let open = { [self] in
+            toolboxPath.append(.webContent(workspaceId: workspace.id, source: .workspaceReport)); show(.toolbox)
+        }
+        if fileNappletNavigation?(open) == true { return }; open()
     }
 }

@@ -1271,7 +1271,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     }
 
     private func workspace(_ id: String, _ label: String) -> [String: Any] {
-        ["identity": ["workspace_id": id, "app_npub": Self.appNpub, "workspace_owner_npub": Self.ana], "label": label, "slug": label.lowercased(),
+        ["identity": WorkspaceReportFixture.enabled && id == Self.studio ? WorkspaceReportFixture.identity : ["workspace_id": id, "app_npub": Self.appNpub, "workspace_owner_npub": Self.ana], "label": label, "slug": label.lowercased(),
          "tower_base_url": FixtureEnvironment.origin, "membership": ["role": "member"]]
     }
     private func scope(_ id: String, _ w: String, _ name: String) -> [String: Any] {

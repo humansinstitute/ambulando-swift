@@ -179,7 +179,7 @@ struct WorkDestination: View {
             case .contextComponent(_, let scope, let component): ContextComponentView(scopeId: scope, componentId: component, workspace: workspace, store: store)
             case .webContent(_, let source):
                 #if os(macOS)
-                if case .dailyMetrics = source {
+                if source == .dailyMetrics || source == .workspaceReport {
                     WebContentView(source: source, workspace: workspace, store: store)
                 } else {
                     MacArtefactSurface(route: route, workspace: workspace, store: store) {

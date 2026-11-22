@@ -82,6 +82,9 @@ final class FileNappletFixture: @unchecked Sendable {
     var bytes = Data("{\"format\":\"daily-tracker-v1\",\"metrics\":[],\"days\":{}}".utf8)
     var revision = 1
     var participants = [TestKeys.npub]
+    var reportMode = false
+    var reportPayload: [String: Any] = [:]
+    var reportRequests: [URLRequest] = []
     var denied = false
     var writable = true
     var topLevelWritable: Any?
@@ -109,7 +112,8 @@ final class FileNappletFixture: @unchecked Sendable {
     var discoveryInvalid = false
     var createdFiles: [(String, Data, [String: Any])] = []
     var metadata: [String: Any] {
-        ["html_artifact": true, "artefact": ["schema_version": 1, "type": "html", "format_version": 1, "editor_id": "builtin.html"],
+        if reportMode { return ["html_artifact": true, "artefact": ["schema_version": 1, "type": "html", "format_version": 1, "editor_id": "builtin.html"], "napplet": ["version": 1, "app_id": "workspace-report", "bindings": ["report": ["workspace_id": bindingOverride ?? Fixtures.workspaceId]]]] }
+        return ["html_artifact": true, "artefact": ["schema_version": 1, "type": "html", "format_version": 1, "editor_id": "builtin.html"],
          "napplet": ["version": 1, "app_id": "daily-tracker", "bindings": ["tracker": ["file_id": bindingOverride ?? dataId]]]]
     }
     var html: String { codeOverride ?? (codePrefix + "<script type=\"application/json\" id=\"wingman-napplet-manifest\">{\"version\":1,\"app_id\":\"daily-tracker\",\"bindings\":{\"tracker\":{\"format\":\"daily-tracker-v1\",\"operations\":[\"read\",\"save\"],\"privacy\":\"self\"}}}</script>" + codeSuffix) }
@@ -119,6 +123,8 @@ final class FileNappletFixture: @unchecked Sendable {
             _ = try decodeAuthorization(request)
             let path = request.url!.path, method = request.httpMethod ?? "GET"
             if denied { return (403, ["code": "permission_denied"]) }
+            if reportMode, path.hasSuffix("/me") { return (200, ["identity": ["workspace_id": Fixtures.workspaceId, "app_npub": Fixtures.appNpub]]) }
+            if reportMode, path.hasSuffix("/workspace-report") { reportRequests.append(request); return (200, reportPayload) }
             if path.hasSuffix("/scopes") {
                 return (200, ["scopes": [["id": Fixtures.scopeA, "workspace_id": Fixtures.workspaceId, "name": "DMs", "kind": "dm"]]])
             }
@@ -283,6 +289,25 @@ final class FileNappletFixture: @unchecked Sendable {
         let f = FileNappletFixture(), api = try await api(f)
         f.discoveryCount = 1
         #expect(try await api.dailyTrackers(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, viewer: Bech32.encode(hrp: "npub", data: Data(repeating: 0x42, count: 32))).isEmpty)
+    }
+    @Test func workspaceReportSetupCreatesOnlyCodeAndDiscoveryIsComplete() async throws {
+        let f = FileNappletFixture(), work = try await WorkHarness.make()
+        f.reportMode = true
+        f.codeOverride = "<script type=\"application/json\" id=\"wingman-napplet-manifest\">{\"version\":1,\"app_id\":\"workspace-report\",\"bindings\":{\"report\":{\"format\":\"workspace-report-v1\",\"operations\":[\"read\"],\"privacy\":\"viewer\"}}}</script>"
+        let sync = WorkspaceSync(store: work.store, engine: work.engine, identity: work.chat.identity, transport: NappletFixtureTransport(fixture: f))
+        #expect(try await sync.workspaceReports(work.connection, work.workspace).isEmpty)
+        let file = try await sync.createWorkspaceReport(work.connection, work.workspace, template: Data(f.html.utf8))
+        #expect(f.createdFiles.count == 1)
+        #expect(f.createdFiles[0].0 == "Workspace Report.html")
+        #expect(f.createdFiles[0].1 == Data(f.html.utf8))
+        #expect(try WorkspaceReportBinding.parse(html: f.html, metadata: rawJSON(f.createdFiles[0].2)).workspaceId == work.workspace.id)
+        #expect(try await sync.workspaceReports(work.connection, work.workspace).map(\.id) == [file.id])
+        f.discoveryCount = 2
+        #expect(try await sync.workspaceReports(work.connection, work.workspace).count == 2)
+        f.discoveryPartial = true
+        await #expect(throws: (any Error).self) { try await sync.workspaceReports(work.connection, work.workspace) }
+        #expect(f.createdFiles.count == 1)
+        #expect(try await work.store.reader.file(workspaceId: work.workspace.id, id: f.dataId) == nil)
     }
     @Test func explicitCreationUploadsOnlyEmptyDataToSelfDM() async throws {
         let f = FileNappletFixture(), work = try await WorkHarness.make()

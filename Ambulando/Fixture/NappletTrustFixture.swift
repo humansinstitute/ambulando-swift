@@ -3,7 +3,7 @@ import Foundation
 
 /// Opt-in synthetic boundary for the production File host. Never reads or writes a human backend.
 final class NappletTrustFixture: @unchecked Sendable {
-    static var enabled: Bool { ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureNappletTrust") }
+    static var enabled: Bool { ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureNappletTrust") || WorkspaceReportFixture.enabled }
     static let codeId = "f1c70000-0000-4000-8000-00000000aa10"
     static let dataId = "f1c70000-0000-4000-8000-00000000aa11"
     static let channelId = "f1c70000-0000-4000-8000-00000000aa12"
@@ -33,12 +33,14 @@ final class NappletTrustFixture: @unchecked Sendable {
     var writable: Bool { scenario != "access" && !ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureTrustReadOnly") }
     var html: Data {
         if let updatedHTML { return updatedHTML }
-        let name = updateMode ? "daily-tracker-original-v1" : "daily-tracker-v1"
+        let name = WorkspaceReportFixture.enabled ? "workspace-report-v1" : updateMode ? "daily-tracker-original-v1" : "daily-tracker-v1"
         let template = (try? Data(contentsOf: Bundle.main.url(forResource: name, withExtension: "html")!)) ?? Data()
         return template + ((scenario == "code" || ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureTrustCodeChanged")) ? Data("<!-- changed synthetic code -->".utf8) : Data())
     }
     var metadata: [String: Any] {
-        ["html_artifact": true, "artefact": ["schema_version": 1, "type": "html", "format_version": 1, "editor_id": "builtin.html"],
+        if WorkspaceReportFixture.enabled { return ["html_artifact": true, "artefact": ["schema_version": 1, "type": "html", "format_version": 1, "editor_id": "builtin.html"],
+            "napplet": ["version": 1, "app_id": "workspace-report", "bindings": ["report": ["workspace_id": FixtureTower.studio]]]] }
+        return ["html_artifact": true, "artefact": ["schema_version": 1, "type": "html", "format_version": 1, "editor_id": "builtin.html"],
          "napplet": ["version": 1, "app_id": "daily-tracker", "bindings": ["tracker": ["file_id": dataId]]]]
     }
     func handle(_ request: URLRequest, actor: String) throws -> (Int, Any)? {
@@ -47,6 +49,18 @@ final class NappletTrustFixture: @unchecked Sendable {
         guard path.hasPrefix(base) || (updateMode && path.hasPrefix("/api/v4/storage")) else { return nil }
         return try lock.withLock {
             let method = request.httpMethod ?? "GET"
+            if WorkspaceReportFixture.enabled, path == base + "/me" {
+                if scenario == "denied" { return (403, ["code": "denied"]) }
+                return (200, ["identity": WorkspaceReportFixture.identity, "membership": ["role": "member"]])
+            }
+            if WorkspaceReportFixture.enabled, path == base + "/workspace-report" {
+                guard method == "GET", let parts = URLComponents(url: request.url!, resolvingAgainstBaseURL: false),
+                      parts.queryItems?.first(where: { $0.name == "top_n" })?.value == "10",
+                      let range = parts.queryItems?.first(where: { $0.name == "range" })?.value else { return (400, [:]) }
+                var report = WorkspaceReportFixture.report(range: range)
+                if scenario == "partial" { report["complete"] = false }
+                return (200, report)
+            }
             if updateMode, path.hasSuffix("/storage/prepare") { uploaded = nil; completed = false; return (200, ["object_id": objectId, "upload_url": "https://fixture.ambulando.invalid/api/v4/storage/" + objectId]) }
             if updateMode, path.hasSuffix("/storage/" + objectId), method == "PUT" {
                 let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
