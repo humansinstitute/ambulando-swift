@@ -62,7 +62,7 @@ struct WorkspaceShell: View {
         }
         // HTTPS links anywhere in the app open as in-app browser tabs; the browser covers the app without changing it,
         // so returning finds the same section, channel and draft.
-        .environment(\.openURL, OpenURLAction { model.browser.handleLink($0) })
+        .environment(\.openURL, OpenURLAction { model.handleAppLink($0) })
         // While a thread is focused, its own cover presents the browser above it.
         .fullScreenCover(isPresented: Binding(get: { model.browser.presented && model.focusedThread == nil }, set: { model.browser.presented = $0 })) {
             BrowserView().environment(model)

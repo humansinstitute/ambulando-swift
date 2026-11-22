@@ -279,3 +279,41 @@ extension TowerAPI {
         return file
     }
 }
+
+
+extension TowerAPI {
+    /// Complete remote discovery only. Names and local caches are never instance identity.
+    public func dailyTrackers(workspace: String, app: String, viewer: String) async throws -> [FileRecord] {
+        let scopes = try await scopes(workspaceId: workspace, appNpub: app)
+        guard scopes.allSatisfy({ $0.workspaceId == workspace }), scopes.contains(where: { $0.kind == "dm" }) else { throw FileNappletError.unavailable }
+        var found: [FileRecord] = []
+        for scope in scopes where scope.kind == "dm" {
+            let channels = try await channels(workspaceId: workspace, scopeId: scope.id, appNpub: app)
+            guard channels.allSatisfy({ $0.workspaceId == workspace && $0.scopeId == scope.id }) else { throw FileNappletError.unavailable }
+            for channel in channels where DirectMessagePlanner.existing(in: [channel], participants: [viewer]) != nil {
+                let rows = try await client.list(path: try Self.base(workspace) + "/channels/" + Self.uuid(channel.id) + "/files", appNpub: app, key: "files")
+                for raw in rows {
+                    let row = try object(raw, "tracker discovery")
+                    let file = try FileRecord(raw: raw)
+                    guard file.workspaceId == workspace, file.channelId == channel.id else { throw FileNappletError.unavailable }
+                    if row["record_state"] as? String == "archived" || (row["deleted_at"] != nil && !(row["deleted_at"] is NSNull)) { continue }
+                    let metadata = row["metadata"] as? [String: Any] ?? [:]
+                    guard (metadata["napplet"] as? [String: Any])?["app_id"] as? String == "daily-tracker" else { continue }
+                    let code = try await fileNappletCode(workspace: workspace, app: app, fileId: file.id)
+                    guard code.binding != nil else { throw FileNappletError.invalid }
+                    _ = try await readFileNapplet(workspace: workspace, app: app, viewer: viewer, codeFile: file.id, expected: code)
+                    found.append(file)
+                }
+            }
+        }
+        guard Set(found.map(\.id)).count == found.count else { throw FileNappletError.invalid }
+        return found.sorted { $0.id < $1.id }
+    }
+}
+
+extension WorkspaceSync {
+    public func dailyTrackers(_ c: ConnectionRecord, _ w: WorkspaceRecord) async throws -> [FileRecord] {
+        try await identity.requireReader(npub: c.signerNpub)
+        return try await api(origin: TowerOrigin(c.origin)).dailyTrackers(workspace: w.id, app: w.appNpub, viewer: c.signerNpub)
+    }
+}

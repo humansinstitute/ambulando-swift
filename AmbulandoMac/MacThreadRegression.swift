@@ -74,6 +74,9 @@ enum MacThreadRegression {
         }
         defer { heartbeat.cancel() }
         do {
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDailyMetricsAppsCheck") {
+                try await dailyMetricsAppsCheck(model: model); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacFileNappletCloseCheck") {
                 try await fileNappletCloseCheck(window, model: model); fflush(stdout); exit(0)
             }

@@ -108,6 +108,7 @@ struct DirectHTMLFileView: View {
     @Environment(\.dismiss) private var dismiss
     let file: FileRecord
     let workspace: WorkspaceRecord
+    var appMode = false
     @State private var code: FileNappletCode?
     @State private var host: FileNappletHost?
     @State private var failure: String?
@@ -149,7 +150,7 @@ struct DirectHTMLFileView: View {
             } else { ProgressView("Loading artefact…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
         .toolbar { ToolbarItem(placement: .primaryAction) {
-            Button("Source & history") { confirm("source") }.disabled(!model.isUnlocked || host?.writing == true)
+            if !appMode { Button("Source & history") { confirm("source") }.disabled(!model.isUnlocked || host?.writing == true) }
         } }
         .navigationBarBackButtonHidden(host?.dirty == true || host?.writing == true)
         .interactiveDismissDisabled(host?.dirty == true || host?.writing == true)
@@ -180,6 +181,7 @@ struct DirectHTMLFileView: View {
         do {
             let result = try await sync.fileNappletCode(connection, workspace, fileId: file.id)
             guard !Task.isCancelled, model.wikiContextEpoch == epoch, model.canRead else { return }
+            if appMode && result.binding == nil { throw FileNappletError.invalid }
             code = result
             if let store = model.store {
                 invalidations.onLoad = { _ in host?.reauthorize() }
@@ -253,48 +255,87 @@ private struct FileNappletWebView: NSViewRepresentable {
 #endif
 
 
-struct DailyTrackerCreateSheet: View {
+/// Apps resolve private instances before mounting the unchanged File host.
+struct DailyMetricsAppView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
     let workspace: WorkspaceRecord
-    let onCreated: (FileRecord) -> Void
+    @State private var instances: [FileRecord] = []
+    @State private var selected: FileRecord?
+    @State private var loaded = false
     @State private var working = false
-    @State private var creation: Task<Void, Never>?
     @State private var failure: String?
-    var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Create a personal daily tracker").font(.headline)
-                Text("Choose your own yes/no and number metrics after opening. The code and an empty data File will be saved in your personal channel in NStack. Authorized administrators and storage operators may access them.")
-                if let failure { Text(failure).foregroundStyle(Amb.destructive) }
-                if working { ProgressView("Creating empty tracker…") }
-            }.padding().frame(minWidth: 280, idealWidth: 480)
-            .navigationTitle("Daily tracker")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(working) }
-                ToolbarItem(placement: .confirmationAction) { Button("Create") { create() }.disabled(working || !model.isUnlocked) }
-            }
-            .interactiveDismissDisabled(working)
-            .onDisappear { creation?.cancel() }
-            .onChange(of: model.wikiContextEpoch) { _, _ in creation?.cancel(); working = false }
+    @State private var setupTask: Task<Void, Never>?
+    @State private var setupOwner = UUID()
+    @State private var uncertain = false
+    @State private var refresh = 0
 
+    private var attemptKey: String { "daily-metrics.setup:" + [model.connection?.id ?? "", model.connection?.origin ?? "", model.connection?.signerNpub ?? "", workspace.id].joined(separator: "|") }
+    private var context: [String] { [model.connection?.id ?? "", model.connection?.origin ?? "", model.connection?.signerNpub ?? "", model.selectedWorkspaceId ?? "", String(model.wikiContextEpoch), String(model.canRead), String(refresh)] }
+    var body: some View {
+        Group {
+            if let selected, model.canRead, model.selectedWorkspaceId == workspace.id {
+                DirectHTMLFileView(file: selected, workspace: workspace, appMode: true).id(selected.id)
+            } else if working { ProgressView("Checking Daily Metrics…") }
+            else if let failure {
+                VStack(spacing: 16) { EmptyNote(title: "Daily Metrics unavailable", systemImage: "lock", detail: failure); Button("Check again") { refresh += 1 } }
+            } else if loaded && instances.isEmpty {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Set up Daily Metrics").font(.headline)
+                    Text("Choose your own yes/no and number metrics. Setup saves empty private tracker Files in your personal channel. Authorized administrators and storage operators may access them.")
+                    Button("Set up Daily Metrics") { setupTask = Task { await setup() } }.disabled(!model.isUnlocked || uncertain)
+                }.padding().frame(maxWidth: 480).accessibilityIdentifier("daily-metrics.setup")
+            } else if loaded {
+                List(instances) { file in
+                    Button { selected = file } label: { VStack(alignment: .leading) { Text(file.displayName); Text(file.id).font(.caption) } }
+                }.accessibilityIdentifier("daily-metrics.choose")
+            } else if !model.canRead { EmptyNote(title: "Daily Metrics locked", systemImage: "lock", detail: "Unlock to open your private tracker.") }
+            else { ProgressView("Opening Daily Metrics…") }
         }
+        .navigationTitle("Daily Metrics")
+        .task(id: context) { await discover() }
+        .onDisappear { setupTask?.cancel() }
+        .onChange(of: model.wikiContextEpoch) { _, _ in setupTask?.cancel(); selected = nil; instances = []; loaded = false }
     }
-    private func create() {
-        guard let sync = model.sync, let connection = model.connection,
-              let url = Bundle.main.url(forResource: "daily-tracker-v1", withExtension: "html"),
-              let template = try? Data(contentsOf: url) else { failure = "The reviewed tracker template is unavailable."; return }
-        let epoch = model.wikiContextEpoch
-        working = true; failure = nil
-        creation = Task {
-            do {
-                let file = try await sync.createDailyTracker(connection, workspace, template: template)
-                guard model.wikiContextEpoch == epoch, model.isUnlocked else { working = false; return }
-                working = false; dismiss(); onCreated(file)
-            } catch {
-                working = false
-                failure = "Creation could not be confirmed. Check your personal channel for a tracker before creating another. No existing data was imported."
+    private func discover() async {
+        selected = nil; instances = []; loaded = false; failure = nil; working = false
+        guard model.canRead, model.selectedWorkspaceId == workspace.id, let c = model.connection, let sync = model.sync else { return }
+        let boundary = context
+        working = true
+        uncertain = UserDefaults.standard.bool(forKey: attemptKey)
+        do {
+            let rows = try await sync.dailyTrackers(c, workspace)
+            guard !Task.isCancelled, context == boundary else { return }
+            instances = rows; loaded = true
+            if !rows.isEmpty { uncertain = false; UserDefaults.standard.removeObject(forKey: attemptKey) }
+            if rows.count == 1 { selected = rows[0] }
+            if rows.isEmpty && uncertain { failure = "An earlier setup could not be confirmed. Inspect your personal Files before attempting another setup." }
+        } catch { if !Task.isCancelled && context == boundary { failure = "Existing trackers could not be fully verified. No new tracker has been created." } }
+        if context == boundary { working = false }
+    }
+    private func setup() async {
+        guard !working, !uncertain, loaded, instances.isEmpty, model.isUnlocked, let c = model.connection, let sync = model.sync,
+              let url = Bundle.main.url(forResource: "daily-tracker-v1", withExtension: "html"), let template = try? Data(contentsOf: url) else { return }
+        let boundary = context
+        working = true
+        model.fileNappletNavigationOwner = setupOwner
+        model.fileNappletNavigation = { _ in model.notice = "Wait for tracker setup to finish."; return true }
+        model.fileNappletContextLost = { setupTask?.cancel() }
+        defer {
+            if model.fileNappletNavigationOwner == setupOwner {
+                model.fileNappletNavigation = nil; model.fileNappletNavigationOwner = nil; model.fileNappletContextLost = nil
             }
         }
+        do {
+            // Recheck immediately before provisioning; another device may already have set it up.
+            let rows = try await sync.dailyTrackers(c, workspace)
+            guard !Task.isCancelled, context == boundary, model.isUnlocked else { return }
+            if !rows.isEmpty { instances = rows; selected = rows.count == 1 ? rows[0] : nil; working = false; return }
+            uncertain = true
+            UserDefaults.standard.set(true, forKey: attemptKey)
+            let file = try await sync.createDailyTracker(c, workspace, template: template)
+            guard !Task.isCancelled, context == boundary, model.isUnlocked else { return }
+            uncertain = false; UserDefaults.standard.removeObject(forKey: attemptKey); instances = [file]; selected = file
+        } catch { if context == boundary { failure = "Setup could not be confirmed. Check again to adopt any tracker already created. Existing data has not been replaced." } }
+        if context == boundary { working = false }
     }
 }

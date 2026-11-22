@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import AmbulandoCore
+import SwiftUI
 
 @MainActor
 private final class CloseLifecycleProbe: NSObject, NSWindowDelegate {
@@ -11,6 +12,40 @@ private final class CloseLifecycleProbe: NSObject, NSWindowDelegate {
 }
 
 extension MacThreadRegression {
+    static func dailyMetricsAppsCheck(model: AppModel) async throws {
+        try require(Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test", "isolated Test app")
+        guard let workspace = model.selectedWorkspace, let store = model.store else { throw Failure(description: "fixture workspace") }
+        model.setDailyMetricsVisible(true, in: workspace)
+        model.setDailyMetricsLast(false, in: workspace)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 390, height: 760), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: DeckHelloCard(workspace: workspace, store: store).environment(model))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); model.setDailyMetricsVisible(true, in: workspace); model.setDailyMetricsLast(false, in: workspace) }
+        try await settle()
+        try require(find(window, "deck.napplet.daily-tracker") != nil, "phone-width Apps entry before tracker provisioning")
+        try press(window, "deck.napplet.daily-tracker")
+        try require(model.toolboxPath.last == .webContent(workspaceId: workspace.id, source: .dailyMetrics), "Apps opens direct app route")
+        model.toolboxPath = []
+        model.setDailyMetricsVisible(false, in: workspace)
+        try await settle()
+        try require(find(window, "deck.napplet.daily-tracker") == nil, "hide placement")
+        _ = model.handleAppLink(URL(string: "/flight-deck?workspaceid=\(workspace.id)&napplet=daily-tracker")!)
+        try require(model.toolboxPath.last == .webContent(workspaceId: workspace.id, source: .dailyMetrics), "hidden placement retains explicit app route")
+        model.toolboxPath = []
+        _ = model.handleAppLink(URL(string: "/flight-deck?workspaceid=00000000-0000-4000-8000-000000000099&napplet=daily-tracker")!)
+        try require(model.toolboxPath.isEmpty, "wrong workspace route rejected")
+        model.fileNappletNavigation = { _ in true }
+        model.openDailyMetrics(in: workspace)
+        try require(model.toolboxPath.isEmpty, "Apps launch respects current navigation close guard")
+        model.fileNappletNavigation = nil
+        model.setDailyMetricsVisible(true, in: workspace)
+        model.setDailyMetricsLast(true, in: workspace)
+        try require(model.dailyMetricsVisible(workspace) && model.dailyMetricsLast(workspace), "show and order placement")
+        print("PASS: Daily Metrics Apps at 390px, default entry, hide/show/order, direct route, hidden route, wrong workspace and navigation gate")
+        try await fileNappletCheck(model: model)
+    }
+
     static func fileNappletCloseCheck(_ main: NSWindow, model: AppModel) async throws {
         try require(Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test", "isolated Test app")
         try require(main.delegate is MacMainWindowCloseDelegate, "SwiftUI main scene installs production close delegate")

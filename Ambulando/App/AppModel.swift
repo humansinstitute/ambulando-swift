@@ -109,6 +109,7 @@ final class AppModel {
     /// Grandparent Chat's per-attempt send guard, shared by the outbox of every workspace runtime. Ambulando has none.
     @ObservationIgnored let outboxGuard: OutboxGuardSlot? = Product.isGrandparentChat ? OutboxGuardSlot(failClosed: true) : nil
     /// The in-app browser (full-screen tabs with `window.nostr`); see `BrowserModel`.
+    var dailyMetricsPlacementRevision = 0
     @ObservationIgnored let browser = BrowserModel()
     /// Why an existing identity cannot be opened (sealed while the iPhone is locked, or a damaged file).
     private(set) var vaultProblem: VaultReadProblem?

@@ -20,6 +20,12 @@ struct ToolboxView: View {
         let key = WorkspaceSync.toolboxKey(workspace.id)
         let nappletKey = WorkspaceSync.nappletsKey(model.connection?.id ?? "", workspace.id)
         List {
+            Section("Built-in apps") {
+                NavigationLink(value: WorkRoute.webContent(workspaceId: workspace.id, source: .dailyMetrics)) { Label("Daily Metrics", systemImage: "chart.bar.xaxis") }
+                    .accessibilityIdentifier("apps.daily-tracker")
+                Toggle("Show Daily Metrics in Apps", isOn: Binding(get: { model.dailyMetricsVisible(workspace) }, set: { model.setDailyMetricsVisible($0, in: workspace) }))
+                Toggle("Place Daily Metrics last", isOn: Binding(get: { model.dailyMetricsLast(workspace) }, set: { model.setDailyMetricsLast($0, in: workspace) }))
+            }
             Section("Workspace napplets") {
                 if let error = model.syncError(forKey: nappletKey) {
                     Label(error, systemImage: "exclamationmark.icloud").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
@@ -32,6 +38,11 @@ struct ToolboxView: View {
                 }
             }
             Section {
+                if let error = model.syncError(forKey: key) {
+                    Label(error, systemImage: "exclamationmark.icloud").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                } else if wapps.loaded && wapps.value.isEmpty {
+                    Text(model.canRead ? "WApps you add in the web app appear here." : "Unlock to load your Toolbox.").font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                }
                 ForEach(wapps.value) { wapp in
                     if let url = wapp.safeLaunchURL {
                         Button { model.browser.launch(url) } label: { row(wapp, origin: WebContentPolicy.origin(of: url)) }
@@ -52,12 +63,6 @@ struct ToolboxView: View {
         .groupedList()
         .scrollContentBackground(.hidden)
         .navigationTitle("Toolbox")
-        .overlay {
-            if wapps.loaded && wapps.value.isEmpty && napplets.value.isEmpty && model.syncError(forKey: nappletKey) == nil {
-                if let error = model.syncError(forKey: key) { EmptyNote(title: "Toolbox unavailable", systemImage: "exclamationmark.icloud", detail: error) }
-                else { EmptyNote(title: "No WApps", systemImage: "wrench.and.screwdriver", detail: model.canRead ? "WApps you add in the web app appear here." : "Unlock to load your Toolbox.") }
-            }
-        }
         .refreshable { model.openToolbox(workspace, force: true) }
         .task {
             let w = workspace.id, store = store, connection = model.connection?.id ?? ""
@@ -97,7 +102,9 @@ struct WebContentView: View {
 
     var body: some View {
         Group {
-            if case .installedNapplet(let key, let title) = source {
+            if case .dailyMetrics = source {
+                DailyMetricsAppView(workspace: workspace)
+            } else if case .installedNapplet(let key, let title) = source {
                 InstalledNappletView(key: key, title: title, workspace: workspace)
             } else if let resolved {
                 switch resolved {
@@ -116,7 +123,7 @@ struct WebContentView: View {
 
     private func resolve() async {
         switch source {
-        case .installedNapplet: return
+        case .installedNapplet, .dailyMetrics: return
         case .htmlNaplet(let canvas, let naplet, let title):
             guard let sync = model.sync, let connection = model.connection, model.canRead else { failure = "Unlock to open this HTML artefact."; return }
             do {

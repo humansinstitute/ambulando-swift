@@ -116,6 +116,7 @@ struct RichBlocksView: View {
                 } else { model.notice = "This canvas link belongs to another workspace or is invalid." }
                 return .handled
             }
+            if url.path == "/flight-deck" { return model.handleAppLink(url) }
             guard RichLinks.isSafeWeb(url) else { return .discarded }
             parentOpenURL(url)
             return .handled

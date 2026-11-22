@@ -972,6 +972,7 @@ struct DeckHelloCard: View {
             }
             .padding(.horizontal, 4).padding(.bottom, 6)
             Text("Apps").font(.amb(.footnote).weight(.heavy)).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 4)
+            if model.dailyMetricsVisible(workspace) && !model.dailyMetricsLast(workspace) { dailyMetrics }
             ForEach(wapps.value) { wapp in
                 // A browser tab over Deck (signing through `window.nostr`); **Ambulando** returns to this card.
                 if let url = wapp.safeLaunchURL {
@@ -990,6 +991,7 @@ struct DeckHelloCard: View {
                     AppLauncherCard(title: napplet.title, subtitle: "Workspace napplet", sources: [], workspace: workspace)
                 }.buttonStyle(.plain).accessibilityIdentifier("deck.napplet.\(napplet.key)")
             }
+            if model.dailyMetricsVisible(workspace) && model.dailyMetricsLast(workspace) { dailyMetrics }
             if wapps.loaded && wapps.value.isEmpty && napplets.value.isEmpty { DeckNote(text: "WApps you add in the web app appear here and in Toolbox.") }
         }
         .task {
@@ -1001,6 +1003,12 @@ struct DeckHelloCard: View {
             }
             model.openToolbox(workspace)
         }
+    }
+
+    private var dailyMetrics: some View {
+        Button { model.openDailyMetrics(in: workspace) } label: {
+            AppLauncherCard(title: "Daily Metrics", subtitle: "Personal napplet", sources: [], workspace: workspace)
+        }.buttonStyle(.plain).accessibilityIdentifier("deck.napplet.daily-tracker")
     }
 
     private var greeting: String {
@@ -1125,7 +1133,7 @@ private struct MacDeckWelcome: View {
         }.accessibilityIdentifier("deck.welcome")
     }
     private var apps: some View {
-        let items = snapshot.value.apps.compactMap { app -> MacLauncherItem? in
+        var items = snapshot.value.apps.compactMap { app -> MacLauncherItem? in
             guard let url = app.safeLaunchURL else { return nil }
             return MacLauncherItem(id: app.id, title: app.title, subtitle: app.description ?? "WApp", url: url,
                                    logo: .app(app.logoCandidates, initials: PersonInitials.of(app.title)), identifier: "deck.app.\(app.title)")
@@ -1133,6 +1141,10 @@ private struct MacDeckWelcome: View {
         + snapshot.value.napplets.map { n in
             MacLauncherItem(id: "napplet:" + n.key, title: n.title, subtitle: "Workspace napplet", url: nil,
                             logo: .app([], initials: PersonInitials.of(n.title)), identifier: "deck.napplet.\(n.key)", nappletKey: n.key)
+        }
+        if model.dailyMetricsVisible(workspace) {
+            let daily = MacLauncherItem(id: "napplet:daily-tracker", title: "Daily Metrics", subtitle: "Personal napplet", url: nil, logo: .app([], initials: "DM"), identifier: "deck.napplet.daily-tracker", nappletKey: "daily-tracker", dailyMetrics: true)
+            items.insert(daily, at: model.dailyMetricsLast(workspace) ? items.count : 0)
         }
         return launcherPanel("Apps") {
             if !items.isEmpty {
@@ -1199,6 +1211,7 @@ private struct MacLauncherItem: Identifiable {
     let logo: Logo
     let identifier: String
     var nappletKey: String? = nil
+    var dailyMetrics = false
 }
 
 /// sol `.launcher-stack-panel`: collapsed, only the first launcher is a real card, with up to two card edges behind
@@ -1264,7 +1277,9 @@ private struct MacLauncherStack<Footer: View>: View {
 
     private func launch(_ item: MacLauncherItem) {
         expanded = nil
-        if let key = item.nappletKey {
+        if item.dailyMetrics {
+            model.openDailyMetrics(in: workspace)
+        } else if let key = item.nappletKey {
             model.toolboxPath.append(.webContent(workspaceId: workspace.id, source: .installedNapplet(key: key, title: item.title)))
             model.show(.toolbox)
         } else if let url = item.url { model.browser.launch(url) }

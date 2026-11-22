@@ -1,11 +1,13 @@
 import AmbulandoCore
 import Foundation
+import SwiftUI
 
 /// What the labelled, sandboxed web view shows: an HTML naplet. WApps and Context Tree artifact pages have HTTPS
 /// addresses of their own and open as in-app browser tabs instead (`BrowserModel.launch`).
 enum WebContentSource: Hashable, Codable {
     case htmlNaplet(canvasId: String, napletId: String, title: String)
     case installedNapplet(key: String, title: String)
+    case dailyMetrics
 }
 
 /// The viewer's pins with the state of any pin or unpin still waiting in the write queue.
@@ -206,5 +208,50 @@ extension AppModel {
                                                                        "expected_row_version": stored?.rowVersion ?? 0,
                                                                        "mutation_id": UUID().uuidString.lowercased()]), in: workspace)
         }
+    }
+}
+
+
+extension AppModel {
+    private func dailyMetricsPlacementKey(_ workspace: WorkspaceRecord) -> String {
+        "apps.daily-tracker:" + [connection?.id ?? "", connection?.origin ?? "", connection?.signerNpub ?? "", workspace.id].joined(separator: "|")
+    }
+    func dailyMetricsVisible(_ workspace: WorkspaceRecord) -> Bool {
+        _ = dailyMetricsPlacementRevision
+        return UserDefaults.standard.object(forKey: dailyMetricsPlacementKey(workspace) + ":hidden") as? Bool != true
+    }
+    func setDailyMetricsVisible(_ visible: Bool, in workspace: WorkspaceRecord) {
+        UserDefaults.standard.set(!visible, forKey: dailyMetricsPlacementKey(workspace) + ":hidden")
+        dailyMetricsPlacementRevision += 1
+    }
+    func dailyMetricsLast(_ workspace: WorkspaceRecord) -> Bool {
+        _ = dailyMetricsPlacementRevision
+        return UserDefaults.standard.bool(forKey: dailyMetricsPlacementKey(workspace) + ":last")
+    }
+    func setDailyMetricsLast(_ last: Bool, in workspace: WorkspaceRecord) {
+        UserDefaults.standard.set(last, forKey: dailyMetricsPlacementKey(workspace) + ":last")
+        dailyMetricsPlacementRevision += 1
+    }
+    func openDailyMetrics(in workspace: WorkspaceRecord) {
+        guard selectedWorkspaceId == workspace.id else { return }
+        let open = { [self] in
+            toolboxPath.append(.webContent(workspaceId: workspace.id, source: .dailyMetrics))
+            show(.toolbox)
+        }
+        if fileNappletNavigation?(open) == true { return }
+        open()
+    }
+    /// Existing internal link handling only; this does not register an OS universal-link domain.
+    func handleAppLink(_ url: URL) -> OpenURLAction.Result {
+        if url.path == "/flight-deck", let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           parts.queryItems?.filter({ $0.name == "napplet" }) == [URLQueryItem(name: "napplet", value: "daily-tracker")] {
+            if url.host != nil && (url.scheme != "https" || url.user != nil || url.password != nil || url.host?.lowercased() != URL(string: connection?.origin ?? "")?.host?.lowercased() || url.port != URL(string: connection?.origin ?? "")?.port) { return browser.handleLink(url) }
+            let workspaces = parts.queryItems?.filter { $0.name == "workspaceid" } ?? []
+            guard workspaces.count == 1, let workspace = selectedWorkspace, workspaces[0].value == workspace.id else {
+                notice = "This app link belongs to another workspace or server."; return .handled
+            }
+            openDailyMetrics(in: workspace); return .handled
+        }
+        return browser.handleLink(url)
     }
 }

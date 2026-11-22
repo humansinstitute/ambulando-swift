@@ -95,6 +95,9 @@ final class FileNappletFixture: @unchecked Sendable {
     var race = false
     var lostResponse = false
     var posts = 0
+    var discoveryCount = 0
+    var discoveryPartial = false
+    var discoveryInvalid = false
     var createdFiles: [(String, Data, [String: Any])] = []
     var metadata: [String: Any] {
         ["html_artifact": true, "artefact": ["schema_version": 1, "type": "html", "format_version": 1, "editor_id": "builtin.html"],
@@ -103,7 +106,7 @@ final class FileNappletFixture: @unchecked Sendable {
     var html: String { "<script type=\"application/json\" id=\"wingman-napplet-manifest\">{\"version\":1,\"app_id\":\"daily-tracker\",\"bindings\":{\"tracker\":{\"format\":\"daily-tracker-v1\",\"operations\":[\"read\",\"save\"],\"privacy\":\"self\"}}}</script>" + codeSuffix }
     var version: String { "00000000-0000-4000-8000-" + String(format: "%012d", revision) }
     func route(_ request: URLRequest) throws -> (Int, Any) {
-        try lock.withLock {
+        try lock.withLock { () throws -> (Int, Any) in
             _ = try decodeAuthorization(request)
             let path = request.url!.path, method = request.httpMethod ?? "GET"
             if denied { return (403, ["code": "permission_denied"]) }
@@ -114,26 +117,37 @@ final class FileNappletFixture: @unchecked Sendable {
                 return (200, ["channels": [["id": channelId, "workspace_id": Fixtures.workspaceId, "scope_id": Fixtures.scopeA,
                     "name": "Self", "kind": "dm", "participant_npubs": participants]], "next_cursor": NSNull()])
             }
+            if path.hasSuffix("/files"), method == "GET" {
+                let candidateMetadata: [String: Any] = discoveryInvalid ? ["napplet": ["app_id": "daily-tracker"]] : metadata
+                let rows: [[String: Any]] = (0..<discoveryCount).map { index -> [String: Any] in
+                    ["id": index == 0 ? codeId : "00000000-0000-4000-8000-000000000099", "workspace_id": Fixtures.workspaceId,
+                     "channel_id": channelId, "display_name": "Renamed private tracker", "record_state": "active",
+                     "metadata": candidateMetadata]
+                }
+                return (200, ["files": rows, "partial": discoveryPartial])
+            }
             if path.hasSuffix("/files"), method == "POST" {
                 let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
                 let name = body["display_name"] as! String, metadata = body["metadata"] as! [String: Any]
                 createdFiles.append((name, uploaded!, metadata))
+                if name.hasSuffix(".html") { discoveryCount = 1 }
                 return (200, ["file": ["id": name.hasSuffix(".html") ? codeId : dataId, "workspace_id": Fixtures.workspaceId,
                     "channel_id": channelId, "scope_id": Fixtures.scopeA, "display_name": name, "metadata": metadata]])
             }
-            if path.hasSuffix("/files/" + codeId) || path.hasSuffix("/files/" + dataId) {
-                let isCode = path.hasSuffix(codeId)
-                return (200, ["file": ["id": isCode ? codeId : dataId, "workspace_id": Fixtures.workspaceId,
-                    "channel_id": channelId, "can_write": writable, "record_state": "active", "metadata": isCode ? metadata : [:],
+            if path.hasSuffix("/files/" + codeId) || path.hasSuffix("/files/" + dataId) || path.hasSuffix("/files/00000000-0000-4000-8000-000000000099") {
+                let isCode = !path.hasSuffix(dataId)
+                let codeMetadata: [String: Any] = discoveryInvalid ? ["napplet": ["app_id": "daily-tracker"]] : metadata
+                return (200, ["file": ["id": path.components(separatedBy: "/").last!, "workspace_id": Fixtures.workspaceId,
+                    "channel_id": channelId, "can_write": writable, "record_state": "active", "metadata": isCode ? codeMetadata : [:],
                     "current_version_id": isCode ? codeVersion : version, "current_version": NSNull()]])
             }
             if path.hasSuffix("/versions"), method == "GET" {
-                let isCode = path.contains(codeId), data = isCode ? Data(html.utf8) : bytes
+                let isCode = !path.contains(dataId), data = isCode ? Data(html.utf8) : bytes
                 let current = isCode ? codeVersion : version
-                return (200, ["file_id": isCode ? codeId : dataId, "current_version_id": current,
+                return (200, ["file_id": path.components(separatedBy: "/").dropLast().last!, "current_version_id": current,
                     "versions": [["id": wrongHead ? objectId : current, "content_type": isCode ? "text/html" : "application/json", "size_bytes": data.count, "sha256_hex": SHA256Hex.of(data)]]])
             }
-            if path.hasSuffix("/object") { return (200, path.contains(codeId) ? Data(html.utf8) : corrupt ? Data("corrupt".utf8) : bytes) }
+            if path.hasSuffix("/object") { return (200, !path.contains(dataId) ? Data(html.utf8) : corrupt ? Data("corrupt".utf8) : bytes) }
             if path.hasSuffix("/channels/" + channelId) {
                 return (200, ["channel": ["id": channelId, "workspace_id": channelWorkspace, "kind": channelKind, "participant_npubs": participants]])
             }
@@ -166,6 +180,35 @@ final class FileNappletFixture: @unchecked Sendable {
     func api(_ fixture: FileNappletFixture) async throws -> TowerAPI {
         TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: NappletFixtureTransport(fixture: fixture), signer: try await makeIdentity()))
     }
+    @Test func appsDiscoveryReusesMetadataAndNeverCreatesFiles() async throws {
+        let f = FileNappletFixture(), api = try await api(f)
+        #expect(try await api.dailyTrackers(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, viewer: TestKeys.npub).isEmpty)
+        f.discoveryCount = 1
+        for _ in 0..<2 {
+            let rows = try await api.dailyTrackers(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, viewer: TestKeys.npub)
+            #expect(rows.map(\.id) == [f.codeId])
+        }
+        f.discoveryCount = 2
+        #expect(try await api.dailyTrackers(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, viewer: TestKeys.npub).count == 2)
+        #expect(f.createdFiles.isEmpty)
+    }
+    @Test func appsDiscoveryRejectsPartialInvalidDeniedAndWrongViewer() async throws {
+        for mode in 0..<6 {
+            let f = FileNappletFixture(), api = try await api(f)
+            f.discoveryCount = 1
+            if mode == 0 { f.discoveryPartial = true }
+            if mode == 1 { f.discoveryInvalid = true }
+            if mode == 2 { f.denied = true }
+            if mode == 3 { f.corrupt = true }
+            if mode == 4 { f.channelWorkspace = Fixtures.scopeA }
+            if mode == 5 { f.discoveryCount = 200 }
+            await #expect(throws: (any Error).self) { try await api.dailyTrackers(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, viewer: TestKeys.npub) }
+            #expect(f.createdFiles.isEmpty)
+        }
+        let f = FileNappletFixture(), api = try await api(f)
+        f.discoveryCount = 1
+        #expect(try await api.dailyTrackers(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, viewer: Bech32.encode(hrp: "npub", data: Data(repeating: 0x42, count: 32))).isEmpty)
+    }
     @Test func explicitCreationUploadsOnlyEmptyDataToSelfDM() async throws {
         let f = FileNappletFixture(), work = try await WorkHarness.make()
         let sync = WorkspaceSync(store: work.store, engine: work.engine, identity: work.chat.identity, transport: NappletFixtureTransport(fixture: f))
@@ -180,6 +223,19 @@ final class FileNappletFixture: @unchecked Sendable {
         let localCode = try await work.store.reader.file(workspaceId: work.workspace.id, id: file.id)
         #expect(localCode != nil)
         #expect(try await work.store.reader.file(workspaceId: work.workspace.id, id: f.dataId) == nil)
+    }
+    @Test func firstSetupIsAdoptedAcrossFreshResolversWithoutMoreFiles() async throws {
+        let f = FileNappletFixture(), work = try await WorkHarness.make()
+        let sync = WorkspaceSync(store: work.store, engine: work.engine, identity: work.chat.identity, transport: NappletFixtureTransport(fixture: f))
+        #expect(try await sync.dailyTrackers(work.connection, work.workspace).isEmpty)
+        let file = try await sync.createDailyTracker(work.connection, work.workspace, template: Data(f.html.utf8))
+        let originalBytes = f.bytes
+        for _ in 0..<3 {
+            let fresh = try await api(f)
+            #expect(try await fresh.dailyTrackers(workspace: work.workspace.id, app: work.workspace.appNpub, viewer: work.connection.signerNpub).map(\.id) == [file.id])
+        }
+        #expect(f.createdFiles.count == 2)
+        #expect(f.bytes == originalBytes)
     }
     @Test func reopenReadsSameVerifiedFileWithoutLocalStore() async throws {
         let f = FileNappletFixture(), api = try await api(f)
@@ -234,7 +290,7 @@ private struct NappletFixtureTransport: HTTPTransport {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (status, body) = try fixture.route(request)
         let bytes = try (body as? Data) ?? JSONSerialization.data(withJSONObject: body)
-        let type = fixture.wrongMIME ? "text/plain" : request.url!.path.hasSuffix("/object") && request.url!.path.contains(fixture.codeId) ? "text/html" : "application/json"
+        let type = fixture.wrongMIME ? "text/plain" : request.url!.path.hasSuffix("/object") && !request.url!.path.contains(fixture.dataId) ? "text/html" : "application/json"
         return (bytes, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": type])!)
     }
 }

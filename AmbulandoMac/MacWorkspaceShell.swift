@@ -44,7 +44,7 @@ struct MacWorkspaceShell: View {
             .environment(\.openMention, OpenMentionAction { kind, id in model.openRecord(kind: kind, id: id) })
         }
         // HTTPS links open as tabs in the browser window; record mentions open the record in its section.
-        .environment(\.openURL, OpenURLAction { model.browser.handleLink($0) })
+        .environment(\.openURL, OpenURLAction { model.handleAppLink($0) })
         .environment(\.openMention, OpenMentionAction { kind, id in model.openRecord(kind: kind, id: id) })
         .onChange(of: model.browser.presentationRequest) { _, _ in openWindow(id: MacWindow.browser) }
         .onChange(of: model.canvasWindowRequest) { _, request in

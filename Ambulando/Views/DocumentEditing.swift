@@ -253,6 +253,7 @@ final class DocEditorModel: UploadTokenHost {
                 return
             }
             guard let link, let url = URL(string: link) else { return }
+            if url.path == "/flight-deck" { _ = app?.handleAppLink(url); return }
             if let target = DocumentRecordLink.canvas(url, workspaceId: workspace.id) {
                 guard (try? await store.reader.canvas(workspaceId: workspace.id, id: target)) != nil else {
                     pageError("This canvas is unavailable or is not saved on this device. Your link and draft are unchanged."); return

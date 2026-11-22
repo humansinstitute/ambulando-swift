@@ -24,7 +24,6 @@ struct DocumentsView: View {
     @State private var creating = false
     @State private var type: ArtefactType?
     @State private var newType: ArtefactType?
-    @State private var createTracker = false
 
     private var visible: [DocRecord] {
         let q = filter.trimmingCharacters(in: .whitespaces).lowercased()
@@ -88,14 +87,8 @@ struct DocumentsView: View {
                     Button("Document") { creating = true }
                     Button("Whiteboard") { newType = .whiteboard }
                     Button("HTML") { newType = .html }
-                    Button("Daily tracker") { createTracker = true }.disabled(!model.isUnlocked)
                 } label: { Image(systemName: "plus.circle.fill").font(.amb(.title2)) }
                     .accessibilityLabel("New artefact").accessibilityIdentifier("docs.new")
-            }
-        }
-        .sheet(isPresented: $createTracker) {
-            DailyTrackerCreateSheet(workspace: workspace) { file in
-                model.docsPath.append(.file(workspaceId: workspace.id, fileId: file.id))
             }
         }
         .sheet(item: $newType) { kind in ArtefactCreateSheet(type: kind, workspace: workspace, choice: snapshot.value.choice, context: context) }

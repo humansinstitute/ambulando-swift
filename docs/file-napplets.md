@@ -1,6 +1,6 @@
 # File-backed daily tracker
 
-Artefacts → New → Daily tracker explicitly creates an empty personal tracker for the signed-in viewer. The app reuses or creates that viewer's self-DM and privately uploads a JSON data File and the reviewed HTML template as a separate File. Opening executes the exact saved HTML version, after a trust and data-use confirmation. No data is imported and no sample health records are created. Code and entries remain NStack Files with normal channel ACLs; authorized administrators and storage operators may access them.
+Apps → Daily Metrics opens a private tracker directly, without Artefacts navigation or source/history controls. A complete remote metadata search in the signed-in viewer’s self-DM adopts the existing tracker, offers a chooser for multiple instances, or offers explicit first-run setup when none exists. Failed, denied, invalid or incomplete discovery never enables replacement setup. Setup rechecks discovery before provisioning; an uncertain attempt is recorded on the device and requires reconciliation before another attempt. No cross-device atomic singleton is claimed. The app reuses or creates that viewer's self-DM and privately uploads a JSON data File and the reviewed HTML template as a separate File. Opening executes the exact saved HTML version, after a trust and data-use confirmation. No data is imported and no sample health records are created. Code and entries remain NStack Files with normal channel ACLs; authorized administrators and storage operators may access them.
 
 Existing Artefacts, chat File references and personal File pins open the same saved File. Ordinary HTML stays bridge-free. Installed org-data napplets retain their separate contract; canvas HTML does not gain data access.
 
@@ -16,4 +16,8 @@ Local validation includes core model/transport tests and the isolated Mac Test a
 
 The focused Mac `-AmbulandoMacThreadRegression -AmbulandoMacFileNappletCloseCheck` regression exercises AppKit close actions, exact DOM draft retention, a suspended bridge save, explicit discard and forced context-loss teardown. It targets a native Cmd-W menu at the test window so it can run without global keyboard focus; physical-keyboard routing and installation on another Mac remain device acceptance checks.
 
-Source versions: Mac 0.1.0 (102), iPhone/iPad 0.1.0 (103).
+The canonical logical app link is `/flight-deck?workspaceid=<workspace UUID>&napplet=daily-tracker`. Supported relative in-app links and links on the connected Tower origin resolve only within the selected workspace; other HTTPS origins retain browser handling. Native does not add an OS universal-link association or assume a separate frontend domain. The route contains no private File IDs or data. Toolbox keeps Daily Metrics available even when its device-local Apps placement is hidden; show/hide and first/last order are partitioned by connection, server, viewer and workspace. Existing WApp ordering and management remain unchanged.
+
+The isolated Mac `-AmbulandoMacDailyMetricsAppsCheck` check exercises the visible phone-width launcher, placement, direct routing and navigation gate, then runs the existing real WebKit synthetic tracker check. Core discovery tests cover metadata adoption, repeated reads without provisioning, multiple candidates, incomplete listing, invalid metadata, denied access, wrong viewer and corrupted data.
+
+Source versions: Mac 0.1.0 (103), iPhone/iPad 0.1.0 (104).
