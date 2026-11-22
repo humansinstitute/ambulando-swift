@@ -120,6 +120,10 @@ final class InstalledNappletHost {
 }
 
 struct InstalledNappletView: View {
+    #if os(macOS)
+    @Environment(\.macArtefactSession) private var macSession
+    @State private var deferredClose: (() -> Void)?
+    #endif
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -163,7 +167,23 @@ struct InstalledNappletView: View {
             else { host?.page?.visible = false }
         }
         .onDisappear { host?.close() }
+        #if os(macOS)
+        .onChange(of: host?.dirty, initial: true) { _, _ in updateWindowGuard() }
+        .onChange(of: host?.writing) { _, _ in updateWindowGuard() }
+        .onChange(of: host?.page?.session) { _, _ in updateWindowGuard() }
+        #endif
     }
+    #if os(macOS)
+    private func updateWindowGuard() {
+        macSession?.canDetach = host?.dirty != true && host?.writing != true
+        macSession?.checkpoint = { host?.writing != true }
+        macSession?.requestClose = { action in
+            if host?.writing == true { return true }
+            if host?.dirty == true { deferredClose = action; confirmation = "window"; return true }
+            return false
+        }
+    }
+    #endif
     private var hostContext: [String] {
         let connection = model.connection
         let selected = model.selectedWorkspace
@@ -205,7 +225,16 @@ struct InstalledNappletView: View {
         if host?.dirty == true { confirmation = action } else { perform(action) }
     }
     private func perform(_ action: String) {
-        if action == "refresh" { host?.refresh() } else { host?.close(); dismiss() }
+        if action == "refresh" { host?.refresh() } else {
+            host?.close()
+            #if os(macOS)
+            if action == "window" { let next = deferredClose; deferredClose = nil; next?() }
+            else if let macSession, macSession.detached { macSession.window?.performClose(nil) }
+            else { dismiss() }
+            #else
+            dismiss()
+            #endif
+        }
     }
 }
 

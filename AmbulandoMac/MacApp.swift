@@ -83,9 +83,20 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if model.fileNappletNavigation?({ sender.terminate(nil) }) == true { return .terminateCancel }
+        let artefacts = Array(MacArtefactSession.sessions.values).filter { $0.window != nil }
+        if artefacts.contains(where: { session in
+            session.requestClose?({ sender.terminate(nil) }) == true
+        }) { return .terminateCancel }
         let sessions = Array(MacDocumentWindows.shared.sessions.values)
-        guard !sessions.isEmpty else { return .terminateNow }
+        guard !sessions.isEmpty || !artefacts.isEmpty else { return .terminateNow }
         Task { @MainActor in
+            for artefact in artefacts where artefact.window != nil {
+                let allowed = artefact.busy ? false : await artefact.checkpoint?() ?? true
+                if !allowed {
+                    sender.reply(toApplicationShouldTerminate: false)
+                    return
+                }
+            }
             for session in sessions {
                 if let beforeClose = session.beforeClose, !(await beforeClose()) {
                     sender.reply(toApplicationShouldTerminate: false)

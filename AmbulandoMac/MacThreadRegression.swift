@@ -74,6 +74,9 @@ enum MacThreadRegression {
         }
         defer { heartbeat.cancel() }
         do {
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacNappletTrustCheck") {
+                try await nappletTrustCheck(model: model); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDailyMetricsAppsCheck") {
                 try await dailyMetricsAppsCheck(model: model); fflush(stdout); exit(0)
             }
@@ -94,6 +97,9 @@ enum MacThreadRegression {
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacNIP44Check") {
                 try await nip44Check(model: model)
                 print("PASS: native NIP44 bridge, synthetic private list and frame/document boundaries"); fflush(stdout); exit(0)
+            }
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacArtefactWindowCheck") {
+                try await artefactWindowCheck(window, model: model); fflush(stdout); exit(0)
             }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDocumentWindowCheck") {
                 try await documentWindowCheck(window, model: model)

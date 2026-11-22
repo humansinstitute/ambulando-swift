@@ -12,6 +12,88 @@ private final class CloseLifecycleProbe: NSObject, NSWindowDelegate {
 }
 
 extension MacThreadRegression {
+    static func nappletTrustCheck(model: AppModel) async throws {
+        try require(Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test" && NappletTrustFixture.enabled, "isolated trust fixture")
+        guard let workspace = model.selectedWorkspace, let tower = model.fixture?.tower else { throw Failure(description: "fixture context") }
+        guard let sync = model.sync, let connection = model.connection else { throw Failure(description: "fixture sync") }
+        let reviewed = try await sync.fileNappletCode(connection, workspace, fileId: NappletTrustFixture.codeId)
+        let expectedReceipt = try FileNappletTrustReceipt(connection: connection, workspace: workspace, codeFile: NappletTrustFixture.codeId, code: reviewed, canWrite: true)
+        let file = try FileRecord(raw: JSONSerialization.data(withJSONObject: ["id": NappletTrustFixture.codeId, "workspace_id": workspace.id, "channel_id": NappletTrustFixture.channelId, "display_name": "Synthetic tracker.html"]))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 780), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil) }
+        func mount(store: FileNappletTrustStore = .local) async {
+            window.contentView = NSHostingView(rootView: DirectHTMLFileView(file: file, workspace: workspace, appMode: true, trustStore: store).environment(model).environment(\.scenePhase, .active).id(UUID()))
+            window.makeKeyAndOrderFront(nil)
+            await settle()
+        }
+        func wait(_ id: String) async throws {
+            for _ in 0..<100 { if find(window, id) != nil { return }; try await Task.sleep(for: .milliseconds(50)) }
+            dump(window)
+            throw Failure(description: "Missing trust UI: " + id)
+        }
+        func act(_ id: String) async throws {
+            window.makeKeyAndOrderFront(nil)
+            for _ in 0..<100 {
+                if let node = find(window, id) {
+                    var enabled = value(node, "AXEnabled") as? Bool
+                    for getter in ["isAccessibilityEnabled", "accessibilityEnabled"] {
+                        let selector = NSSelectorFromString(getter)
+                        if node.responds(to: selector) {
+                            typealias Getter = @convention(c) (AnyObject, Selector) -> Bool
+                            enabled = unsafeBitCast(node.method(for: selector), to: Getter.self)(node, selector)
+                            break
+                        }
+                    }
+                    if enabled == true {
+                        print("TRUST_CONTROL_ENABLED " + id)
+                        do { try press(window, id) } catch { try click(window, id) }
+                        return
+                    }
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            dump(window)
+            throw Failure(description: "Trust control stayed disabled: " + id)
+        }
+        await mount(); try await wait("napplet.approve")
+        try require(find(window, "napplet.forget") == nil, "no bridge before first consent")
+        try await act("napplet.approve"); try await wait("napplet.forget")
+        try await act("napplet.reload"); await settle(); try await wait("napplet.forget")
+        try require(find(window, "napplet.approve") == nil, "reload remembered approval")
+        await mount(); try await wait("napplet.forget")
+        try require(find(window, "napplet.approve") == nil, "close/reopen remembered approval")
+        tower.trustNapplet.change("data")
+        try await act("napplet.reload"); await settle(); try await wait("napplet.forget")
+        try require(find(window, "napplet.approve") == nil, "ordinary data edits retain trust")
+        try require(FileNappletTrustStore.local.contains(expectedReceipt), "native approval receipt persisted before revoke")
+        try await act("napplet.forget")
+        await settle()
+        print("TRUST_REVOKE_STILL_REMEMBERED \(FileNappletTrustStore.local.contains(expectedReceipt))")
+        try await wait("napplet.approve")
+        try await act("napplet.approve"); try await wait("napplet.forget")
+        for scenario in ["code", "binding", "access"] {
+            tower.trustNapplet.change(scenario)
+            await mount(); try await wait("napplet.approve")
+            try require(find(window, "napplet.forget") == nil, "changed " + scenario + " needs consent")
+            tower.trustNapplet.change("")
+            await mount(); try await wait("napplet.forget")
+        }
+        tower.trustNapplet.change("denied")
+        await mount(); try await Task.sleep(for: .milliseconds(300))
+        try require(find(window, "napplet.forget") == nil && find(window, "napplet.approve") == nil, "denied access cannot use receipt")
+        tower.trustNapplet.change("")
+        let blocked = model.fixture!.directory.appendingPathComponent("blocked-trust-file")
+        try Data().write(to: blocked)
+        await mount(store: FileNappletTrustStore(directory: blocked))
+        try await wait("napplet.approve"); try await act("napplet.approve")
+        try await wait("napplet.remember-notice"); try await wait("napplet.forget")
+        await mount(store: FileNappletTrustStore(directory: blocked))
+        try await wait("napplet.approve")
+        print("PASS: native consent UI first approval, reload, close/reopen, revoke, code/binding/access changes, denied access; synthetic signed Tower boundary")
+        try await fileNappletCheck(model: model)
+    }
+
     static func dailyMetricsAppsCheck(model: AppModel) async throws {
         try require(Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test", "isolated Test app")
         guard let workspace = model.selectedWorkspace, let store = model.store else { throw Failure(description: "fixture workspace") }

@@ -28,6 +28,7 @@ struct MacWorkspaceShell: View {
                 .allowsHitTesting(ui.sidebarVisible)
                 .accessibilityHidden(!ui.sidebarVisible)
             VStack(spacing: 0) {
+                if !model.macFocusedArtefact {
                 HStack(spacing: 0) {
                     Button { ui.sidebarVisible.toggle() } label: { Image(systemName: "sidebar.left") }
                         .buttonStyle(.plain).padding(10)
@@ -37,6 +38,7 @@ struct MacWorkspaceShell: View {
                     MacRefreshDataButton()
                 }.background(Amb.card)
                 Divider()
+                }
                 sectionView(model.mode)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

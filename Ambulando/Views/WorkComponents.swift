@@ -153,7 +153,14 @@ struct WorkDestination: View {
                 #else
                 DocumentView(docId: id, workspace: workspace, store: store)
                 #endif
-            case .file(_, let id): FileDetailView(fileId: id, workspace: workspace, store: store)
+            case .file(_, let id):
+                #if os(macOS)
+                MacArtefactSurface(route: route, workspace: workspace, store: store) {
+                    FileDetailView(fileId: id, workspace: workspace, store: store)
+                }.id("file:\(connection.id):\(workspace.id):\(id)")
+                #else
+                FileDetailView(fileId: id, workspace: workspace, store: store)
+                #endif
             case .thread(_, let channel, let thread):
                 ThreadView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channel, threadId: thread), workspace: workspace, store: store)
             case .channel(_, let channel):
@@ -161,9 +168,27 @@ struct WorkDestination: View {
             case .threadById(_, let thread):
                 ThreadByIdView(threadId: thread, workspace: workspace, store: store, connectionId: connection.id)
             case .canvas(_, let canvas): CanvasBoardView(canvasId: canvas, workspace: workspace, store: store)
-            case .board(_, let canvas, let naplet): BoardSceneView(canvasId: canvas, napletId: naplet, workspace: workspace, store: store)
+            case .board(_, let canvas, let naplet):
+                #if os(macOS)
+                MacArtefactSurface(route: route, workspace: workspace, store: store) {
+                    BoardSceneView(canvasId: canvas, napletId: naplet, workspace: workspace, store: store)
+                }.id(route)
+                #else
+                BoardSceneView(canvasId: canvas, napletId: naplet, workspace: workspace, store: store)
+                #endif
             case .contextComponent(_, let scope, let component): ContextComponentView(scopeId: scope, componentId: component, workspace: workspace, store: store)
-            case .webContent(_, let source): WebContentView(source: source, workspace: workspace, store: store)
+            case .webContent(_, let source):
+                #if os(macOS)
+                if case .dailyMetrics = source {
+                    WebContentView(source: source, workspace: workspace, store: store)
+                } else {
+                    MacArtefactSurface(route: route, workspace: workspace, store: store) {
+                        WebContentView(source: source, workspace: workspace, store: store)
+                    }.id(route)
+                }
+                #else
+                WebContentView(source: source, workspace: workspace, store: store)
+                #endif
             }
         } else {
             ContentUnavailableView("Not in this workspace", systemImage: "arrow.uturn.backward", description: Text("This item belongs to another workspace."))

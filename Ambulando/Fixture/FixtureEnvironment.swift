@@ -367,6 +367,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     let surfaces: SampleSurfaceTower
     let labSurfaces: SampleSurfaceTower
     /// Board File versions (list, read, save with a stale-base check) and their canvas projection.
+    let trustNapplet = NappletTrustFixture()
     let boards: SampleBoardTower
     /// The Studio workspace's notification inbox (the Lab workspace has none: Tower answers 404, "backend not supported").
     let notifications: SampleNotificationTower
@@ -516,7 +517,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             result = rewrite(body)
         }
         let data = try (result as? Data) ?? JSONSerialization.data(withJSONObject: result)
-        return (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!)
+        let mime: String? = NappletTrustFixture.enabled && result is Data && request.url!.path.hasSuffix("/object")
+            ? (request.url!.path.contains(NappletTrustFixture.codeId) ? "text/html" : "application/json") : nil
+        return (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: mime.map { ["Content-Type": $0] })!)
     }
 
     private func route(_ request: URLRequest) throws -> (Int, Any) {
@@ -547,6 +550,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             }
             if let handled = try administration.handle(request) { return handled }
         }
+        if NappletTrustFixture.enabled, let handled = try trustNapplet.handle(request, actor: actorNpub) { return handled }
         // Surface routes first: their ownership is exact (board versions live under `/files/:f/versions/:v/object`).
         if let handled = try notifications.handle(request) {
             if request.httpMethod == "PATCH" || request.httpMethod == "POST" { lock.withLock { emitLocked(workspace: Self.studio, channel: nil, type: "notification_item", id: nil, rowVersion: nil, operation: "state"); persist() } }
@@ -660,7 +664,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         var base = w == Self.studio ? [scope(Self.scopeAmbulando, w, "Ambulando"), scope(Self.scopeOps, w, "Operations")]
                                     : [scope(Self.scopeResearch, w, "Research")]
         // Direct messages live in their own scope (kind dm) on a Tower that provisions one; opt-in so other checks keep their layout.
-        if w == Self.studio, ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDMs") {
+        if w == Self.studio, ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDMs") || NappletTrustFixture.enabled {
             var dm = scope(Self.scopeDMs, w, "DMs"); dm["kind"] = "dm"; base.append(dm)
         }
         let edits = manageMap("scopeEdits")

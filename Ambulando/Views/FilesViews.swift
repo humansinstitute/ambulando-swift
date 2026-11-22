@@ -357,6 +357,9 @@ struct UploadSheet: View {
 
 /// Every channel, chat and personal pin File route opens the same saved artefact.
 struct FileArtefactView: View {
+    #if os(macOS)
+    @Environment(\.macArtefactSession) private var macSession
+    #endif
     @Environment(AppModel.self) private var model
     let file: FileRecord
     let type: ArtefactType
@@ -374,6 +377,11 @@ struct FileArtefactView: View {
             } else if let error { EmptyNote(title: "Artefact unavailable", systemImage: "lock", detail: error) }
             else { ProgressView("Loading artefact…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
+        #if os(macOS)
+        .onChange(of: session?.key, initial: true) { _, _ in
+            macSession?.checkpoint = { [weak session] in await session?.controller.checkpoint() ?? true }
+        }
+        #endif
         .navigationTitle(file.displayName)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {

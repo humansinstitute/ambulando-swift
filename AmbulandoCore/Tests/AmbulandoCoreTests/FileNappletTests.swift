@@ -84,11 +84,13 @@ final class FileNappletFixture: @unchecked Sendable {
     var participants = [TestKeys.npub]
     var denied = false
     var writable = true
+    var topLevelWritable: Bool?
     var corrupt = false
     var wrongMIME = false
     var wrongHead = false
     var channelKind = "dm"
     var channelWorkspace = Fixtures.workspaceId
+    var codePrefix = ""
     var codeSuffix = ""
     var uploaded: Data?
     var completed = false
@@ -103,7 +105,7 @@ final class FileNappletFixture: @unchecked Sendable {
         ["html_artifact": true, "artefact": ["schema_version": 1, "type": "html", "format_version": 1, "editor_id": "builtin.html"],
          "napplet": ["version": 1, "app_id": "daily-tracker", "bindings": ["tracker": ["file_id": dataId]]]]
     }
-    var html: String { "<script type=\"application/json\" id=\"wingman-napplet-manifest\">{\"version\":1,\"app_id\":\"daily-tracker\",\"bindings\":{\"tracker\":{\"format\":\"daily-tracker-v1\",\"operations\":[\"read\",\"save\"],\"privacy\":\"self\"}}}</script>" + codeSuffix }
+    var html: String { codePrefix + "<script type=\"application/json\" id=\"wingman-napplet-manifest\">{\"version\":1,\"app_id\":\"daily-tracker\",\"bindings\":{\"tracker\":{\"format\":\"daily-tracker-v1\",\"operations\":[\"read\",\"save\"],\"privacy\":\"self\"}}}</script>" + codeSuffix }
     var version: String { "00000000-0000-4000-8000-" + String(format: "%012d", revision) }
     func route(_ request: URLRequest) throws -> (Int, Any) {
         try lock.withLock { () throws -> (Int, Any) in
@@ -137,9 +139,11 @@ final class FileNappletFixture: @unchecked Sendable {
             if path.hasSuffix("/files/" + codeId) || path.hasSuffix("/files/" + dataId) || path.hasSuffix("/files/00000000-0000-4000-8000-000000000099") {
                 let isCode = !path.hasSuffix(dataId)
                 let codeMetadata: [String: Any] = discoveryInvalid ? ["napplet": ["app_id": "daily-tracker"]] : metadata
-                return (200, ["file": ["id": path.components(separatedBy: "/").last!, "workspace_id": Fixtures.workspaceId,
+                var response: [String: Any] = ["file": ["id": path.components(separatedBy: "/").last!, "workspace_id": Fixtures.workspaceId,
                     "channel_id": channelId, "can_write": writable, "record_state": "active", "metadata": isCode ? codeMetadata : [:],
-                    "current_version_id": isCode ? codeVersion : version, "current_version": NSNull()]])
+                    "current_version_id": isCode ? codeVersion : version, "current_version": NSNull()]]
+                if let topLevelWritable { response["can_write"] = topLevelWritable }
+                return (200, response)
             }
             if path.hasSuffix("/versions"), method == "GET" {
                 let isCode = !path.contains(dataId), data = isCode ? Data(html.utf8) : bytes
@@ -236,6 +240,25 @@ final class FileNappletFixture: @unchecked Sendable {
         }
         #expect(f.createdFiles.count == 2)
         #expect(f.bytes == originalBytes)
+    }
+    @Test func explicitCurrentWriteDenialOverridesEmbeddedFileFlag() async throws {
+        let f = FileNappletFixture(), api = try await api(f)
+        let code = try await api.fileNappletCode(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, fileId: f.codeId)
+        f.topLevelWritable = false
+        let access = try await api.readFileNapplet(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, viewer: TestKeys.npub, codeFile: f.codeId, expected: code)
+        #expect(!access.canWrite)
+        await #expect(throws: (any Error).self) { try await api.saveFileNapplet(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, viewer: TestKeys.npub, codeFile: f.codeId, expected: code, base: access.versionId, bytes: access.bytes) }
+        #expect(f.posts == 0)
+    }
+    @Test func consentDigestUsesExactVerifiedBytesIncludingUTF8BOM() async throws {
+        let f = FileNappletFixture(), api = try await api(f)
+        f.codePrefix = "\u{FEFF}"
+        let code = try await api.fileNappletCode(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, fileId: f.codeId)
+        #expect(code.sha256 == SHA256Hex.of(Data(f.html.utf8)))
+        let connection = try ConnectionRecord(origin: TowerOrigin("https://tower.example"), signerNpub: TestKeys.npub, towerNpub: nil)
+        let workspace = try WorkspaceRecord(raw: Fixtures.json(Fixtures.workspace(Fixtures.workspaceId, label: "Studio")))
+        let receipt = try FileNappletTrustReceipt(connection: connection, workspace: workspace, codeFile: f.codeId, code: code, canWrite: true)
+        #expect(receipt.codeSHA256 == code.sha256)
     }
     @Test func reopenReadsSameVerifiedFileWithoutLocalStore() async throws {
         let f = FileNappletFixture(), api = try await api(f)

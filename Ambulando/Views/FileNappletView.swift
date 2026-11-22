@@ -103,6 +103,9 @@ final class FileNappletHost {
 }
 
 struct DirectHTMLFileView: View {
+    #if os(macOS)
+    @Environment(\.macArtefactSession) private var macSession
+    #endif
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
@@ -113,6 +116,12 @@ struct DirectHTMLFileView: View {
     @State private var host: FileNappletHost?
     @State private var failure: String?
     @State private var trusted = false
+    @State private var receipt: FileNappletTrustReceipt?
+    @State private var rememberNotice: String?
+    @State private var approving = false
+    @State private var active = false
+    @State private var suppressRemembered = false
+    var trustStore = FileNappletTrustStore.local
     @State private var editing = false
     @State private var confirmation: String?
     @State private var reopen = 0
@@ -123,12 +132,17 @@ struct DirectHTMLFileView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let host, let page = host.page {
-                HStack {
+                VStack(alignment: .leading, spacing: 8) {
                     Label("Napplet · personal channel data", systemImage: "lock.shield").font(.amb(.caption))
-                    Spacer()
-                    Button("Reload") { confirm("reload") }.disabled(host.writing)
-                    Button("Close") { confirm("close") }.disabled(host.writing)
+                    HStack {
+                        Button("Forget approval") { confirm("forget") }.disabled(host.writing || host.pending)
+                            .accessibilityIdentifier("napplet.forget")
+                        Spacer()
+                        Button("Reload") { confirm("reload") }.disabled(host.writing).accessibilityIdentifier("napplet.reload")
+                        Button("Close") { confirm("close") }.disabled(host.writing).accessibilityIdentifier("napplet.close")
+                    }
                 }.padding(8)
+                if let rememberNotice { Text(rememberNotice).font(.caption).padding(8).accessibilityIdentifier("napplet.remember-notice") }
                 FileNappletWebView(page: page).id(page.session)
                     .opacity(!host.pending && scenePhase == .active ? 1 : 0)
                     .allowsHitTesting(!host.pending && scenePhase == .active)
@@ -141,7 +155,9 @@ struct DirectHTMLFileView: View {
                     VStack(spacing: 16) {
                         Label("Allow this napplet to use your tracker data?", systemImage: "lock.shield").font(.headline)
                         Text("This code can read and save its bound JSON File in your personal channel. Authorized NStack administrators and storage operators may still access it. Only enable code you trust.")
-                        Button("Trust and open") { trusted = true; start(code) }
+                        if receipt?.canWrite == false { Text("Your current data access is read-only.").font(.caption) }
+                        Text("Approval is remembered on this device for this code and data access. You can forget it in the app controls.").font(.caption)
+                        Button("Trust and open") { Task { await approve(code) } }.disabled(approving).accessibilityIdentifier("napplet.approve")
                     }.padding().frame(maxWidth: 480)
                 } else {
                     Label("Sandboxed HTML", systemImage: "lock.shield").font(.amb(.caption)).padding(6)
@@ -163,26 +179,57 @@ struct DirectHTMLFileView: View {
 
         .onChange(of: model.canRead) { _, readable in if !readable { host?.destroy(); code = nil } }
         .onChange(of: model.wikiContextEpoch) { _, _ in host?.destroy(); code = nil }
-        .onChange(of: scenePhase) { _, phase in if phase == .active { host?.reauthorize() } }
-        .onDisappear { host?.destroy(); clearNavigation(); invalidations.stop(); code = nil; trusted = false }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                if host == nil, code?.binding != nil { reopen += 1 }
+                else { host?.reauthorize() }
+            }
+        }
+        .onDisappear { active = false; host?.destroy(); clearNavigation(); invalidations.stop(); code = nil; trusted = false }
         #if os(macOS)
         .onExitCommand { confirm("close") }
+        .onChange(of: host?.dirty, initial: true) { _, _ in updateWindowGuard() }
+        .onChange(of: host?.writing) { _, _ in updateWindowGuard() }
+        .onChange(of: editing) { _, _ in updateWindowGuard() }
+        .onChange(of: host?.page?.session) { _, _ in updateWindowGuard() }
         #endif
     }
+    #if os(macOS)
+    private func updateWindowGuard() {
+        macSession?.canDetach = host?.dirty != true && host?.writing != true && !editing
+        macSession?.checkpoint = { !editing && host?.writing != true }
+        if macSession?.detached == true {
+            clearNavigation()
+            macSession?.requestClose = { action in
+                guard let host else { return editing }
+                return host.interceptNavigation(action) { next in deferredNavigation = next; confirmation = "navigate" }
+            }
+        }
+    }
+    #endif
     private var context: [String] {
         [String(model.wikiContextEpoch), String(model.canRead), String(model.isUnlocked), String(reopen), file.id,
          model.connection?.id ?? "", model.connection?.origin ?? "", model.connection?.signerNpub ?? "",
          model.selectedWorkspaceId ?? "", model.selectedWorkspace?.appNpub ?? ""]
     }
     private func run() async {
-        host?.destroy(); host = nil; code = nil; trusted = false; failure = nil
+        host?.destroy(); host = nil; code = nil; trusted = false; receipt = nil; rememberNotice = nil; failure = nil
+        active = true
         guard model.canRead, model.selectedWorkspaceId == workspace.id, let sync = model.sync, let connection = model.connection else { return }
         let epoch = model.wikiContextEpoch
         do {
             let result = try await sync.fileNappletCode(connection, workspace, fileId: file.id)
             guard !Task.isCancelled, model.wikiContextEpoch == epoch, model.canRead else { return }
             if appMode && result.binding == nil { throw FileNappletError.invalid }
-            code = result
+            // Verify current access before consulting remembered consent or mounting any bridge.
+            if result.binding != nil {
+                let access = try await sync.readFileNapplet(connection, workspace, fileId: file.id, code: result)
+                guard !Task.isCancelled, model.wikiContextEpoch == epoch, model.canRead, model.selectedWorkspaceId == workspace.id else { return }
+                let candidate = try FileNappletTrustReceipt(connection: connection, workspace: workspace, codeFile: file.id, code: result, canWrite: access.canWrite)
+                receipt = candidate
+                code = result
+                if !suppressRemembered && trustStore.contains(candidate) { trusted = true; start(result) }
+            } else { code = result }
             if let store = model.store {
                 invalidations.onLoad = { _ in host?.reauthorize() }
                 invalidations.start(store: store, matches: { [.files, .channels, .appState, .access].contains($0.table) }) {
@@ -201,18 +248,37 @@ struct DirectHTMLFileView: View {
         } catch is CancellationError {} catch { failure = "The HTML File could not be verified." }
         host?.destroy()
     }
+    private func approve(_ code: FileNappletCode) async {
+        guard !approving, let receipt, let sync = model.sync, let connection = model.connection else { return }
+        let boundary = context
+        approving = true
+        defer { approving = false }
+        do {
+            // Consent can sit on screen while ACLs or code change. Check again before saving it.
+            let access = try await sync.readFileNapplet(connection, workspace, fileId: file.id, code: code)
+            guard active, scenePhase == .active, !Task.isCancelled, context == boundary, model.canRead else { return }
+            let current = try FileNappletTrustReceipt(connection: connection, workspace: workspace, codeFile: file.id, code: code, canWrite: access.canWrite)
+            guard current == receipt else { throw FileNappletError.unavailable }
+            do { try trustStore.remember(receipt); suppressRemembered = false; rememberNotice = nil }
+            catch { rememberNotice = "Approval could not be remembered on this device. It applies only to this open session." }
+            trusted = true; start(code)
+        } catch {
+            if context == boundary { failure = "Code or data access changed. Reopen to review current access." }
+        }
+    }
     private func start(_ code: FileNappletCode) {
-        guard trusted, let sync = model.sync, let connection = model.connection else { return }
+        guard active, scenePhase == .active, trusted, let sync = model.sync, let connection = model.connection else { return }
+        let approvedWrite = receipt?.canWrite
         let epoch = model.wikiContextEpoch
         let current: () -> Bool = { model.canRead && model.wikiContextEpoch == epoch && model.selectedWorkspaceId == workspace.id }
         let host = FileNappletHost(read: {
             guard current() else { throw CancellationError() }
             let value = try await sync.readFileNapplet(connection, workspace, fileId: file.id, code: code)
-            guard current() else { throw CancellationError() }; return value
+            guard current(), value.canWrite == approvedWrite else { throw FileNappletError.unavailable }; return value
         }, save: { base, bytes in
-            guard current(), model.isUnlocked else { throw CancellationError() }
+            guard current(), model.isUnlocked, approvedWrite == true else { throw FileNappletError.unavailable }
             let value = try await sync.saveFileNapplet(connection, workspace, fileId: file.id, code: code, base: base, bytes: bytes)
-            guard current() else { throw CancellationError() }; return value
+            guard current(), value.canWrite == approvedWrite else { throw FileNappletError.unavailable }; return value
         })
         self.host = host
         model.fileNappletNavigationOwner = navigationId
@@ -223,6 +289,9 @@ struct DirectHTMLFileView: View {
         }
         model.fileNappletContextLost = { [weak host] in host?.destroy(); deferredNavigation = nil; confirmation = nil }
         host.open(html: code.html)
+        #if os(macOS)
+        updateWindowGuard()
+        #endif
     }
     private func confirm(_ action: String) {
         guard host?.writing != true else { return }
@@ -232,11 +301,26 @@ struct DirectHTMLFileView: View {
         if model.fileNappletNavigationOwner == navigationId { model.fileNappletNavigation = nil; model.fileNappletNavigationOwner = nil; model.fileNappletContextLost = nil }
     }
     private func perform(_ action: String) {
+        if action == "forget", let receipt {
+            suppressRemembered = true
+            do { try trustStore.forget(receipt) }
+            catch {
+                host?.destroy(); clearNavigation(); code = nil
+                failure = "Approval could not be forgotten on this device. Try again after storage is available."
+                return
+            }
+        }
         host?.destroy(); host = nil; trusted = false; clearNavigation()
         if action == "navigate" { let next = deferredNavigation; deferredNavigation = nil; next?(); return }
         if action == "source" { code = nil; editing = true }
-        else if action == "reload" { reopen += 1 }
-        else { dismiss() }
+        else if action == "reload" || action == "forget" { reopen += 1 }
+        else {
+            #if os(macOS)
+            if let macSession, macSession.detached { macSession.window?.performClose(nil) } else { dismiss() }
+            #else
+            dismiss()
+            #endif
+        }
     }
 }
 
@@ -274,7 +358,15 @@ struct DailyMetricsAppView: View {
     var body: some View {
         Group {
             if let selected, model.canRead, model.selectedWorkspaceId == workspace.id {
+                #if os(macOS)
+                if let store = model.store {
+                    MacArtefactSurface(route: .file(workspaceId: workspace.id, fileId: selected.id), workspace: workspace, store: store) {
+                        DirectHTMLFileView(file: selected, workspace: workspace, appMode: true)
+                    }.id(selected.id)
+                }
+                #else
                 DirectHTMLFileView(file: selected, workspace: workspace, appMode: true).id(selected.id)
+                #endif
             } else if working { ProgressView("Checking Daily Metrics…") }
             else if let failure {
                 VStack(spacing: 16) { EmptyNote(title: "Daily Metrics unavailable", systemImage: "lock", detail: failure); Button("Check again") { refresh += 1 } }

@@ -64,6 +64,22 @@ import Testing
         BoardController.message(["type": "change", "scene": ["type": "excalidraw", "version": 2, "elements": elements, "appState": [:], "files": [:]]])
     }
 
+    @Test func windowCheckpointFlushesFinalInputAndKeepsOriginalDraft() async throws {
+        let store = Store(Self.sceneJSON([Self.element("a", version: 1)]))
+        let outbox = Outbox(), local = drafts()
+        let board = controller(store, drafts: local, outbox: outbox)
+        await board.attach("window", send: outbox.send)
+        await board.sync(reference(store), title: "Synthetic board")
+        async let checkpoint = board.checkpoint()
+        while outbox.last("flush") == nil { try await Task.sleep(for: .milliseconds(5)) }
+        await board.receive("window", change([Self.element("a", version: 1), Self.element("last-input", version: 1)]))
+        await board.receive("window", BoardController.message(["type": "flushed", "token": outbox.last("flush")!["token"]!]))
+        #expect(await checkpoint)
+        #expect(store.head.number == 1, "closing preserves a draft without publishing a revision")
+        #expect(local.load("a1b2c3d4-0000-4000-8000-000000000001") != nil)
+        #expect(await board.current.dirty)
+    }
+
     @Test func savePublishesAVersionKeepingUnknownFieldsAndReopens() async throws {
         let png = "data:image/png;base64,iVBORw0KGgo="
         let first = Self.sceneJSON([Self.element("a", version: 1, extra: ["customData": ["keep": true], "futureField": 42]),

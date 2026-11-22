@@ -121,6 +121,11 @@ public struct FileNappletCode: Sendable, Equatable {
     public let html: String
     public let binding: FileNappletBinding?
     public let versionId: String
+    public let sha256: String
+    init(html: String, binding: FileNappletBinding?, versionId: String, sha256: String? = nil) {
+        self.html = html; self.binding = binding; self.versionId = versionId
+        self.sha256 = sha256 ?? SHA256Hex.of(Data(html.utf8))
+    }
 }
 public struct FileNappletData: Sendable {
     public let bytes: Data
@@ -136,7 +141,7 @@ extension TowerAPI {
               lowerUUID(row["workspace_id"] as? String) == workspace,
               row["record_state"] as? String != "archived", row["deleted_at"] == nil || row["deleted_at"] is NSNull else { throw FileNappletError.unavailable }
         var result = row
-        if o["can_write"] as? Bool == true { result["can_write"] = true }
+        if let canWrite = o["can_write"] as? Bool { result["can_write"] = canWrite }
         return result
     }
     func nappletBytes(workspace: String, app: String, file: [String: Any], mime: String, limit: Int) async throws -> (Data, String) {
@@ -168,7 +173,7 @@ extension TowerAPI {
               let file = try? FileRecord(raw: rawJSON(row)), ArtefactType.file(file) == .html else { throw FileNappletError.invalid }
         let (bytes, version) = try await nappletBytes(workspace: workspace, app: app, file: row, mime: "text/html", limit: 4 * 1024 * 1024)
         guard let html = String(data: bytes, encoding: .utf8) else { throw FileNappletError.invalid }
-        return FileNappletCode(html: html, binding: try FileNappletBinding.parse(html: html, metadata: rawJSON(metadata)), versionId: version)
+        return FileNappletCode(html: html, binding: try FileNappletBinding.parse(html: html, metadata: rawJSON(metadata)), versionId: version, sha256: SHA256Hex.of(bytes))
     }
     func authorizeNappletData(workspace: String, app: String, viewer: String, codeFile: String, expected: FileNappletCode) async throws -> [String: Any] {
         guard let binding = expected.binding, try await fileNappletCode(workspace: workspace, app: app, fileId: codeFile) == expected else { throw FileNappletError.unavailable }

@@ -56,3 +56,25 @@ It exercises native refresh in an open conversation, duplicate requests, retaine
 remote replies and continuing live updates, error/retry, workspace selection and access-generation changes, minimum
 window widths, browser form/history preservation and unsaved document editing. It uses synthetic fixture data;
 it does not establish real-account acceptance on a user's Mac.
+
+The focused Mac artefact regression uses synthetic records and the existing native window/editor hosts:
+
+```sh
+'build/test-mac/Build/Products/Test/Ambulando Test.app/Contents/MacOS/Ambulando Test' \
+  -AmbulandoMacThreadRegression -AmbulandoFixtureNappletTrust -AmbulandoMacArtefactWindowCheck
+```
+
+It checks the focused whiteboard toolbar, native mouse opening and Back, source-editor release,
+repeat focus, draft checkpoint/close/reopen, independent main navigation, separate record windows,
+and sandboxed HTML/registered napplet/private File entry paths. Registered iframe content is
+verified through its loaded opaque sandbox and a native screenshot; this host’s in-process
+accessibility tree does not expose that iframe text. The opt-in private File fixture
+uses only synthetic tracker code/data. Window snapshots include the native toolbar and verify a
+useful viewport. Capture the output in ignored handoff storage; it contains base64 screenshots.
+Run `-AmbulandoMacDocumentWindowCheck` separately to validate the existing document popouts.
+
+Popouts keep the original record and access boundary. Finish private napplet edits/saves or an
+HTML source sheet before transferring it to a window. Native close/quit checkpoints board drafts,
+blocks in-flight napplet saves, and asks before discarding an unsaved napplet. Selecting another
+workspace hides an inactive window; normal access invalidation still destroys private web sessions.
+Sample checks do not establish installation or real-account acceptance on a user's MacBook.

@@ -458,6 +458,22 @@ public actor BoardController {
         catch { emit { $0.error = "Your draft could not be stored on this \(Self.deviceName): \(error.localizedDescription)" } }
     }
 
+    /// Preserve the final debounced input before a native window relinquishes its editor.
+    /// Closing is vetoed during a save or if flushing/draft persistence cannot be confirmed.
+    public func checkpoint() async -> Bool {
+        guard !saving, state.save != .saving, await flushEditors() else { return false }
+        guard let base, let working else { return true }
+        do {
+            if BoardScene.fingerprint(working) != base.fingerprint {
+                try drafts.save(fileId, baseVersionId: base.versionId, baseVersionNumber: base.number, scene: working)
+            }
+            return true
+        } catch {
+            emit { $0.error = "Your draft could not be stored. Keep this window open and try again." }
+            return false
+        }
+    }
+
     /// Asks every editor to deliver its debounced change and waits for it (sol `flushEditors`).
     private func flushEditors(timeout: Duration = .seconds(3)) async -> Bool {
         var results: [Bool] = []

@@ -1211,6 +1211,9 @@ struct NapletCard: View {
 /// with the board's save status and version history in the navigation bar. Read-only when Tower does not grant
 /// `file.write`, while viewing an older version, or while the identity is locked.
 struct BoardSceneView: View {
+    #if os(macOS)
+    @Environment(\.macArtefactSession) private var macSession
+    #endif
     @Environment(AppModel.self) private var model
     let canvasId: String
     let napletId: String
@@ -1238,6 +1241,11 @@ struct BoardSceneView: View {
                 ProgressView("Loading board…").frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        #if os(macOS)
+        .onChange(of: session?.key, initial: true) { _, _ in
+            macSession?.checkpoint = { [weak session] in await session?.controller.checkpoint() ?? true }
+        }
+        #endif
         .navigationTitle(value.title)
         .inlineTitle()
         .toolbar {
