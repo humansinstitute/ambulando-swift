@@ -119,6 +119,10 @@ struct DirectHTMLFileView: View {
     @State private var receipt: FileNappletTrustReceipt?
     @State private var rememberNotice: String?
     @State private var approving = false
+    @State private var updateAvailable = false
+    @State private var updateConfirmation = false
+    @State private var updating = false
+    @State private var updateTask: Task<Void, Never>?
     @State private var active = false
     @State private var suppressRemembered = false
     var trustStore = FileNappletTrustStore.local
@@ -131,9 +135,16 @@ struct DirectHTMLFileView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let host, let page = host.page {
+            if updating {
+                ProgressView("Updating app code…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let host, let page = host.page {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Napplet · personal channel data", systemImage: "lock.shield").font(.amb(.caption))
+                    if updateAvailable {
+                        Button("Update app") { confirm("update") }
+                            .disabled(host.writing || host.pending || !model.isUnlocked)
+                            .accessibilityIdentifier("napplet.update")
+                    }
                     HStack {
                         Button("Forget approval") { confirm("forget") }.disabled(host.writing || host.pending)
                             .accessibilityIdentifier("napplet.forget")
@@ -141,7 +152,7 @@ struct DirectHTMLFileView: View {
                         Button("Reload") { confirm("reload") }.disabled(host.writing).accessibilityIdentifier("napplet.reload")
                         Button("Close") { confirm("close") }.disabled(host.writing).accessibilityIdentifier("napplet.close")
                     }
-                }.padding(8)
+                }.padding(8).disabled(updating)
                 if let rememberNotice { Text(rememberNotice).font(.caption).padding(8).accessibilityIdentifier("napplet.remember-notice") }
                 FileNappletWebView(page: page).id(page.session)
                     .opacity(!host.pending && scenePhase == .active ? 1 : 0)
@@ -166,13 +177,19 @@ struct DirectHTMLFileView: View {
             } else { ProgressView("Loading artefact…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
         .toolbar { ToolbarItem(placement: .primaryAction) {
-            if !appMode { Button("Source & history") { confirm("source") }.disabled(!model.isUnlocked || host?.writing == true) }
+            if !appMode { Button("Source & history") { confirm("source") }.disabled(updating || !model.isUnlocked || host?.writing == true) }
         } }
-        .navigationBarBackButtonHidden(host?.dirty == true || host?.writing == true)
-        .interactiveDismissDisabled(host?.dirty == true || host?.writing == true)
+        .navigationBarBackButtonHidden(updating || host?.dirty == true || host?.writing == true)
+        .interactiveDismissDisabled(updating || host?.dirty == true || host?.writing == true)
         .confirmationDialog("Discard unsaved changes?", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
             Button("Discard changes", role: .destructive) { let action = confirmation ?? "close"; confirmation = nil; perform(action) }
             Button("Keep editing", role: .cancel) { confirmation = nil }
+        }
+        .confirmationDialog("Update Daily Metrics app?", isPresented: $updateConfirmation, titleVisibility: .visible) {
+            Button("Update app") { updateTask = Task { await updateApp() } }.accessibilityIdentifier("napplet.update.confirm")
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Replace the original app code with the bundled version. Your tracker data and history stay in the same File. You will be asked to approve the changed code.")
         }
         .sheet(isPresented: $editing, onDismiss: { reopen += 1 }) { HTMLSourceSheet(file: file, workspace: workspace) }
         .task(id: context) { await run() }
@@ -185,23 +202,24 @@ struct DirectHTMLFileView: View {
                 else { host?.reauthorize() }
             }
         }
-        .onDisappear { active = false; host?.destroy(); clearNavigation(); invalidations.stop(); code = nil; trusted = false }
+        .onDisappear { updateTask?.cancel(); active = false; host?.destroy(); clearNavigation(); invalidations.stop(); code = nil; trusted = false }
         #if os(macOS)
         .onExitCommand { confirm("close") }
         .onChange(of: host?.dirty, initial: true) { _, _ in updateWindowGuard() }
         .onChange(of: host?.writing) { _, _ in updateWindowGuard() }
         .onChange(of: editing) { _, _ in updateWindowGuard() }
+        .onChange(of: updating) { _, _ in updateWindowGuard() }
         .onChange(of: host?.page?.session) { _, _ in updateWindowGuard() }
         #endif
     }
     #if os(macOS)
     private func updateWindowGuard() {
-        macSession?.canDetach = host?.dirty != true && host?.writing != true && !editing
-        macSession?.checkpoint = { !editing && host?.writing != true }
+        macSession?.canDetach = !updating && host?.dirty != true && host?.writing != true && !editing
+        macSession?.checkpoint = { !updating && !editing && host?.writing != true }
         if macSession?.detached == true {
             clearNavigation()
             macSession?.requestClose = { action in
-                guard let host else { return editing }
+                if updating { return true }; guard let host else { return editing }
                 return host.interceptNavigation(action) { next in deferredNavigation = next; confirmation = "navigate" }
             }
         }
@@ -214,6 +232,7 @@ struct DirectHTMLFileView: View {
     }
     private func run() async {
         host?.destroy(); host = nil; code = nil; trusted = false; receipt = nil; rememberNotice = nil; failure = nil
+        updateTask?.cancel(); updateAvailable = false
         active = true
         guard model.canRead, model.selectedWorkspaceId == workspace.id, let sync = model.sync, let connection = model.connection else { return }
         let epoch = model.wikiContextEpoch
@@ -226,6 +245,11 @@ struct DirectHTMLFileView: View {
                 let access = try await sync.readFileNapplet(connection, workspace, fileId: file.id, code: result)
                 guard !Task.isCancelled, model.wikiContextEpoch == epoch, model.canRead, model.selectedWorkspaceId == workspace.id else { return }
                 let candidate = try FileNappletTrustReceipt(connection: connection, workspace: workspace, codeFile: file.id, code: result, canWrite: access.canWrite)
+                if let url = Bundle.main.url(forResource: "daily-tracker-v1", withExtension: "html"),
+                   let template = try? Data(contentsOf: url), SHA256Hex.of(template) != result.sha256 {
+                    updateAvailable = (try? await sync.canUpdateDailyTracker(connection, workspace, fileId: file.id, code: result)) == true
+                }
+                guard !Task.isCancelled, model.wikiContextEpoch == epoch, model.canRead else { return }
                 receipt = candidate
                 code = result
                 if !suppressRemembered && trustStore.contains(candidate) { trusted = true; start(result) }
@@ -283,24 +307,44 @@ struct DirectHTMLFileView: View {
         self.host = host
         model.fileNappletNavigationOwner = navigationId
         model.fileNappletNavigation = { [weak host] action in
-            guard let host, host.page != nil else { return false }
+            if updating { return true }; guard let host, host.page != nil else { return false }
             if host.writing { model.notice = "Wait for the tracker save to finish." }
             return host.interceptNavigation(action) { next in deferredNavigation = next; confirmation = "navigate" }
         }
-        model.fileNappletContextLost = { [weak host] in host?.destroy(); deferredNavigation = nil; confirmation = nil }
+        model.fileNappletContextLost = { [weak host] in updateTask?.cancel(); host?.destroy(); deferredNavigation = nil; confirmation = nil; updateConfirmation = false }
         host.open(html: code.html)
         #if os(macOS)
         updateWindowGuard()
         #endif
     }
     private func confirm(_ action: String) {
-        guard host?.writing != true else { return }
+        guard !updating, host?.writing != true, action != "update" || host?.pending != true else { return }
         if host?.dirty == true { confirmation = action } else { perform(action) }
     }
     private func clearNavigation() {
         if model.fileNappletNavigationOwner == navigationId { model.fileNappletNavigation = nil; model.fileNappletNavigationOwner = nil; model.fileNappletContextLost = nil }
     }
+    private func updateApp() async {
+        guard !updating, updateAvailable, host?.writing != true, host?.pending != true,
+              active, scenePhase == .active, model.isUnlocked, let code, let sync = model.sync,
+              let connection = model.connection,
+              let url = Bundle.main.url(forResource: "daily-tracker-v1", withExtension: "html"),
+              let template = try? Data(contentsOf: url) else { return }
+        let boundary = context
+        updating = true
+        host?.destroy(); host = nil; trusted = false
+        defer { updating = false }
+        do {
+            _ = try await sync.updateDailyTracker(connection, workspace, fileId: file.id, code: code, template: template)
+            guard !Task.isCancelled, active, context == boundary, model.canRead else { return }
+            suppressRemembered = true; reopen += 1
+        } catch {
+            guard !Task.isCancelled, active, context == boundary else { return }
+            failure = "The app update could not be confirmed. Reopen to inspect the current code; no automatic retry was made."
+        }
+    }
     private func perform(_ action: String) {
+        if action == "update" { updateConfirmation = true; return }
         if action == "forget", let receipt {
             suppressRemembered = true
             do { try trustStore.forget(receipt) }

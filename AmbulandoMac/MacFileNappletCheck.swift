@@ -2,6 +2,7 @@
 import AppKit
 import AmbulandoCore
 import SwiftUI
+import WebKit
 
 @MainActor
 private final class CloseLifecycleProbe: NSObject, NSWindowDelegate {
@@ -23,7 +24,7 @@ extension MacThreadRegression {
         window.isReleasedWhenClosed = false
         defer { window.orderOut(nil) }
         func mount(store: FileNappletTrustStore = .local) async {
-            window.contentView = NSHostingView(rootView: DirectHTMLFileView(file: file, workspace: workspace, appMode: true, trustStore: store).environment(model).environment(\.scenePhase, .active).id(UUID()))
+            window.contentView = NSHostingView(rootView: DirectHTMLFileView(file: file, workspace: workspace, appMode: true, trustStore: store).environment(model).environment(\.scenePhase, .active).frame(width: 500, height: 780).id(UUID()))
             window.makeKeyAndOrderFront(nil)
             await settle()
         }
@@ -47,7 +48,13 @@ extension MacThreadRegression {
                     }
                     if enabled == true {
                         print("TRUST_CONTROL_ENABLED " + id)
-                        do { try press(window, id) } catch { try click(window, id) }
+                        do { try press(window, id) }
+                        catch {
+                            // Native confirmation can perform the action while reporting false.
+                            // Observe disappearance and let the next state assertion prove completion.
+                            await settle()
+                            if find(window, id) != nil { try click(window, id) }
+                        }
                         return
                     }
                 }
@@ -59,6 +66,38 @@ extension MacThreadRegression {
         await mount(); try await wait("napplet.approve")
         try require(find(window, "napplet.forget") == nil, "no bridge before first consent")
         try await act("napplet.approve"); try await wait("napplet.forget")
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureTrackerUpdate") {
+            let before = tower.trustNapplet.snapshot
+            try require(DailyTrackerUpdate.recognizes(reviewed), "historical immutable template recognized")
+            try await wait("napplet.update")
+            try await Task.sleep(for: .milliseconds(500))
+            if let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("tmp/docs/handoffs/tracker-native-mac-before.png"))
+            }
+            try await act("napplet.update"); try await wait("napplet.update.confirm")
+            try await act("napplet.update.confirm"); try await wait("napplet.approve")
+            try require(find(window, "napplet.forget") == nil, "changed code awaits new approval")
+            let updated = try await sync.fileNappletCode(connection, workspace, fileId: file.id)
+            let bundled = try Data(contentsOf: Bundle.main.url(forResource: "daily-tracker-v1", withExtension: "html")!)
+            try require(updated.sha256 == SHA256Hex.of(bundled) && updated.binding == reviewed.binding, "exact replacement code and binding")
+            let after = tower.trustNapplet.snapshot
+            try require(before.0 == after.0 && before.1 == after.1 && before.2 != after.2, "JSON bytes/data ID unchanged, only code revision advanced")
+            try await act("napplet.approve"); try await wait("napplet.forget")
+            try require(find(window, "napplet.update") == nil, "replacement is not eligible for repeated update")
+            try await act("napplet.reload"); await settle(); try await wait("napplet.forget")
+            try require(find(window, "napplet.approve") == nil, "replacement consent remembered")
+            await mount(); try await wait("napplet.forget")
+            try require(find(window, "napplet.approve") == nil, "replacement reopen remembers consent")
+            try await Task.sleep(for: .milliseconds(500))
+            if let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("tmp/docs/handoffs/tracker-native-mac-after.png"))
+            }
+            print("TRACKER_UPDATE_NATIVE_PASS exact bundled HTML; same code/data IDs and JSON bytes; fresh consent once then reload/reopen remembered")
+            try await fileNappletCheck(model: model)
+            return
+        }
         try await act("napplet.reload"); await settle(); try await wait("napplet.forget")
         try require(find(window, "napplet.approve") == nil, "reload remembered approval")
         await mount(); try await wait("napplet.forget")
@@ -262,16 +301,19 @@ extension MacThreadRegression {
           document.getElementById('manage').click();
           const add=(label,type)=>{const input=document.querySelector('input[placeholder]');input.value=label;document.querySelector('select').value=type;click('Add metric');};
           add('Synthetic boolean','boolean');add('Synthetic number','number');
+          const managed=document.querySelector('.metric input:not([placeholder])');managed.value='Synthetic boolean typed';managed.dispatchEvent(new Event('input'));if(!managed.isConnected||document.querySelector('.metric input:not([placeholder])')!==managed)throw Error('label input replaced');
           document.getElementById('checkin').click();click('No');
-          const number=document.querySelector('input[type=number]');number.value='0';number.dispatchEvent(new Event('input'));
+          const number=document.querySelector('input[type=number]');number.value='0';number.dispatchEvent(new Event('input'));if(!number.isConnected||document.querySelector('input[type=number]')!==number)throw Error('number input replaced');
+          if(document.documentElement.scrollWidth>document.documentElement.clientWidth)throw Error('phone overflow');
           document.getElementById('save').click();
           await wait(()=>document.getElementById('status').textContent.includes('Saved in NStack'));
           document.getElementById('date').value='2024-02-29';document.getElementById('date').dispatchEvent(new Event('change'));
           click('Yes');document.getElementById('save').click();
-        })().catch(()=>parent.postMessage({type:'wingman-napplet-data',version:1,session:window.nappletSession,requestId:'probe_error',operation:'dirty',dirty:true},'*'));
+        })().catch(e=>{parent.postMessage({probeError:String(e)},'*');parent.postMessage({type:'wingman-napplet-data',version:1,session:window.nappletSession,requestId:'probe_error',operation:'dirty',dirty:true},'*');});
         </script>
         """
         host.open(html: template + script)
+        host.page?.webView?.configuration.userContentController.addUserScript(WKUserScript(source: "addEventListener('message',e=>{if(e.data?.probeError)window.probeError=e.data.probeError})", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 390, height: 780), styleMask: [.titled], backing: .buffered, defer: false)
         window.contentView = host.page?.webView; window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
@@ -279,7 +321,12 @@ extension MacThreadRegression {
             if saves == 2 || host.failure != nil { break }
             try await Task.sleep(for: .milliseconds(50))
         }
-        try require(host.failure == nil && saves == 2, "packaged UI reads and saves through real opaque WebKit frame: \(host.failure ?? "saves=\(saves)")")
+        let probeError = (try? await host.page?.webView?.evaluateJavaScript("window.probeError || ''")) as? String ?? ""
+        try require(host.failure == nil && saves == 2, "packaged UI reads and saves through real opaque WebKit frame: \(host.failure ?? "saves=\(saves)") \(probeError)")
+        if let view = window.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("tmp/docs/handoffs/tracker-native-mac-form.png"))
+        }
         let root = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
         let days = root["days"] as! [String: [String: Any]]
         try require(days.count == 2 && days["2024-02-29"]?.count == 1, "earlier local-calendar day preserves unanswered field")

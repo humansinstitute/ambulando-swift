@@ -141,7 +141,10 @@ extension TowerAPI {
               lowerUUID(row["workspace_id"] as? String) == workspace,
               row["record_state"] as? String != "archived", row["deleted_at"] == nil || row["deleted_at"] is NSNull else { throw FileNappletError.unavailable }
         var result = row
-        if let canWrite = o["can_write"] as? Bool { result["can_write"] = canWrite }
+        if let raw = o["can_write"] {
+            guard let canWrite = TrackerDocument.boolean(raw) else { throw FileNappletError.invalid }
+            result["can_write"] = canWrite
+        }
         return result
     }
     func nappletBytes(workspace: String, app: String, file: [String: Any], mime: String, limit: Int) async throws -> (Data, String) {
@@ -221,6 +224,57 @@ extension TowerAPI {
     }
 }
 
+/// Only the immutable original shipped template is eligible. Customized or unknown code is never replaced.
+public enum DailyTrackerUpdate {
+    public static let originalSHA256 = "192779e50335a83d90076fb17954059e466ccfecea25c5eb5b14d68e8dfa91cd"
+    public static func recognizes(_ code: FileNappletCode) -> Bool {
+        code.binding != nil && code.sha256 == originalSHA256 && Data(code.html.utf8).count == 14824
+    }
+}
+
+extension TowerAPI {
+    private func authorizeTrackerUpdate(workspace: String, app: String, viewer: String, codeFile: String, expected: FileNappletCode) async throws {
+        guard DailyTrackerUpdate.recognizes(expected) else { throw FileNappletError.invalid }
+        _ = try await readFileNapplet(workspace: workspace, app: app, viewer: viewer, codeFile: codeFile, expected: expected)
+        let row = try await nappletFile(workspace: workspace, app: app, id: codeFile)
+        guard TrackerDocument.boolean(row["can_write"]) == true,
+              try await fileNappletCode(workspace: workspace, app: app, fileId: codeFile) == expected else { throw FileNappletError.unavailable }
+        try Task.checkCancellation()
+    }
+    public func canUpdateDailyTracker(workspace: String, app: String, viewer: String, codeFile: String, expected: FileNappletCode) async throws -> Bool {
+        guard DailyTrackerUpdate.recognizes(expected) else { return false }
+        try await authorizeTrackerUpdate(workspace: workspace, app: app, viewer: viewer, codeFile: codeFile, expected: expected)
+        return true
+    }
+    /// Host action only: one new HTML version on the same File. No metadata or JSON mutation.
+    public func updateDailyTracker(workspace: String, app: String, viewer: String, codeFile: String, expected: FileNappletCode, template: Data) async throws -> FileNappletCode {
+        guard let binding = expected.binding, let html = String(data: template, encoding: .utf8),
+              SHA256Hex.of(template) != expected.sha256 else { throw FileNappletError.invalid }
+        let metadata: [String: Any] = ["napplet": ["version": 1, "app_id": "daily-tracker", "bindings": ["tracker": ["file_id": binding.dataFileId]]]]
+        guard try FileNappletBinding.parse(html: html, metadata: rawJSON(metadata)) == binding else { throw FileNappletError.invalid }
+        try await authorizeTrackerUpdate(workspace: workspace, app: app, viewer: viewer, codeFile: codeFile, expected: expected)
+        let object = try await store(workspaceId: workspace, appNpub: app, bytes: template, contentType: "text/html", fileName: "Daily tracker.html", prepared: nil, onPrepared: { _ in })
+        try await authorizeTrackerUpdate(workspace: workspace, app: app, viewer: viewer, codeFile: codeFile, expected: expected)
+        let body = try rawJSON(["base_version_id": Self.uuid(expected.versionId), "storage_object_id": object, "client_mutation_id": UUID().uuidString.lowercased()])
+        let committed: String?
+        do {
+            let response = try self.object(try await client.request(method: "POST", path: try Self.base(workspace) + "/files/" + Self.uuid(codeFile) + "/versions", appNpub: app, jsonBody: body), "tracker update")
+            guard let row = response["version"] as? [String: Any], let id = lowerUUID(row["id"] as? String) else { throw FileNappletError.unavailable }
+            committed = id
+        } catch {
+            if case TowerError.http(let status, _, _) = error, status == 409 { throw FileNappletError.conflict }
+            try Task.checkCancellation()
+            // A lost acknowledgement permits only exact readback, never a retry or a new base.
+            committed = nil
+        }
+        let saved = try await fileNappletCode(workspace: workspace, app: app, fileId: codeFile)
+        guard saved.versionId != expected.versionId, committed == nil || saved.versionId == committed,
+              saved.binding == binding, saved.sha256 == SHA256Hex.of(template), saved.html == html else { throw FileNappletError.conflict }
+        _ = try await readFileNapplet(workspace: workspace, app: app, viewer: viewer, codeFile: codeFile, expected: saved)
+        return saved
+    }
+}
+
 extension WorkspaceSync {
     public func fileNappletCode(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String) async throws -> FileNappletCode {
         try await identity.requireReader(npub: c.signerNpub)
@@ -229,6 +283,14 @@ extension WorkspaceSync {
     public func readFileNapplet(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String, code: FileNappletCode) async throws -> FileNappletData {
         try await identity.requireReader(npub: c.signerNpub)
         return try await api(origin: TowerOrigin(c.origin)).readFileNapplet(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, codeFile: fileId, expected: code)
+    }
+    public func canUpdateDailyTracker(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String, code: FileNappletCode) async throws -> Bool {
+        try await identity.requireReader(npub: c.signerNpub)
+        return try await api(origin: TowerOrigin(c.origin)).canUpdateDailyTracker(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, codeFile: fileId, expected: code)
+    }
+    public func updateDailyTracker(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String, code: FileNappletCode, template: Data) async throws -> FileNappletCode {
+        try await identity.requireSigner(npub: c.signerNpub)
+        return try await api(origin: TowerOrigin(c.origin)).updateDailyTracker(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, codeFile: fileId, expected: code, template: template)
     }
     public func saveFileNapplet(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String, code: FileNappletCode, base: String, bytes: Data) async throws -> FileNappletData {
         try await identity.requireSigner(npub: c.signerNpub)

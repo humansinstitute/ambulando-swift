@@ -26,4 +26,10 @@ Receipts stay in the native app container's Application Support/<bundle-id>/Napp
 
 The opt-in `-AmbulandoFixtureNappletTrust` signed synthetic Tower boundary supports production iPhone/Mac consent UI checks. `-AmbulandoMacThreadRegression -AmbulandoMacNappletTrustCheck` exercises initial consent, reload/reopen, revoke, code/binding/access changes, denied access and unavailable receipt storage, then runs the existing packaged WebKit tracker regression. `NappletTrustUITests` covers the iPhone consent path, process restart and guarded revoke. These are synthetic local checks, separate from physical-device acceptance.
 
-Source versions: Mac 0.1.0 (104), iPhone/iPad 0.1.0 (105).
+Update app is an explicit native host action for existing original trackers. It appears only after fresh code-write and bound-data/self-DM checks for the exact original 14,824-byte template (SHA-256 `192779e50335a83d90076fb17954059e466ccfecea25c5eb5b14d68e8dfa91cd`). Unknown, customized and already updated code is left alone. Pending saves/access checks block update; unsaved work requires discard confirmation, followed by explicit code-update confirmation. Canceling retains the mounted draft.
+
+The host privately uploads the bundled HTML, rechecks current authority/code/binding, and publishes one new version on the original code File using its original `base_version_id`. It never writes JSON, changes binding metadata or creates replacement Files. Success requires exact current-byte/digest/binding readback and, when acknowledged, the exact acknowledged version. Conflicts and uncertain outcomes never automatically retry. Reopening verifies current access and asks once for changed-code consent, then remembers that approval normally. Pulling/building native source alone does not update an existing saved tracker: choose Update app inside that tracker.
+
+The native template is the coordinated 18,002-byte shared bundle, SHA-256 `d9e57b3156a3a1bd9c20ac20c223ceec69cb0f4dfe5934876c99947bc6b26054`; schema and bridge remain v1. The historical original under Fixture is immutable test input only. Present top-level `can_write` must be a strict JSON boolean; malformed values fail closed, and only absence allows the embedded fallback.
+
+Source versions: Mac 0.1.0 (105), iPhone/iPad 0.1.0 (106).

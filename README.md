@@ -12,6 +12,10 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Daily Metrics app update (Mac build 105, iPhone/iPad build 106)
+
+Daily Metrics has larger Yes/No controls, clearer date navigation and a persistent explicit Save area. Existing original trackers offer **Update app** in the native host: confirm the code replacement, then approve the changed code once. This keeps the same tracker Files, answers and history. Customized or unrecognized source is left alone. Pending saves block updates and unsaved work requires confirmation. The shared template and schema remain aligned across hosts; see [File napplets](docs/file-napplets.md). Source delivery and local synthetic checks remain separate from installation or real-account acceptance on Pete's devices.
+
 ## Daily Metrics in Apps (Mac build 103, iPhone/iPad build 104)
 
 Daily Metrics is visible in Apps and Toolbox before setup. Opening adopts an existing private tracker, offers a chooser for multiple trackers, or explicitly sets up an empty tracker in the signed-in person's self-DM. Its saved HTML runs inside an isolated native host, with a narrow read/save bridge to its separate NStack JSON File. Metrics and daily entries use immutable File versions and guarded saves; ordinary HTML remains bridge-free. See [File napplets](docs/file-napplets.md). Source builds and synthetic validation are separate from device installation and live-account acceptance.
