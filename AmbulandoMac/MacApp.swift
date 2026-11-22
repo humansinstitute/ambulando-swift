@@ -15,6 +15,7 @@ struct AmbulandoMacApp: App {
     var body: some Scene {
         Window(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Ambulando", id: MacWindow.main) {
             RootView()
+                .background(MacMainWindowCloseGuard(model: delegate.model))
                 .appTextSize()
                 .environment(delegate.model)
                 .environment(delegate.ui)
@@ -122,5 +123,50 @@ struct MacBrowserWindow: View {
             .onDisappear { model.browser.presented = false }
             .onChange(of: model.browser.presented) { _, shown in if !shown { dismissWindow(id: MacWindow.browser) } }
             .environment(\.openMention, OpenMentionAction { kind, id in model.openRecord(kind: kind, id: id) })
+    }
+}
+
+/// Intercept voluntary main-window closes without replacing SwiftUI's scene lifecycle delegate.
+struct MacMainWindowCloseGuard: NSViewRepresentable {
+    let model: AppModel
+    func makeNSView(context: Context) -> WindowView { WindowView(model: model) }
+    func updateNSView(_ view: WindowView, context: Context) {}
+
+    final class WindowView: NSView {
+        let closeDelegate: MacMainWindowCloseDelegate
+        init(model: AppModel) { closeDelegate = MacMainWindowCloseDelegate(model: model); super.init(frame: .zero) }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            closeDelegate.attach(to: window)
+        }
+    }
+}
+
+@MainActor
+final class MacMainWindowCloseDelegate: NSObject, NSWindowDelegate {
+    private let model: AppModel
+    private weak var window: NSWindow?
+    private weak var sceneDelegate: NSWindowDelegate?
+    init(model: AppModel) { self.model = model }
+
+    func attach(to next: NSWindow?) {
+        guard window !== next else { return }
+        if let window, window.delegate === self { window.delegate = sceneDelegate }
+        window = next
+        sceneDelegate = next?.delegate
+        next?.delegate = self
+    }
+
+    override func responds(to selector: Selector!) -> Bool {
+        super.responds(to: selector) || sceneDelegate?.responds(to: selector) == true
+    }
+    override func forwardingTarget(for selector: Selector!) -> Any? {
+        if sceneDelegate?.responds(to: selector) == true { return sceneDelegate }
+        return super.forwardingTarget(for: selector)
+    }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if model.fileNappletNavigation?({ [weak sender] in sender?.performClose(nil) }) == true { return false }
+        return sceneDelegate?.windowShouldClose?(sender) ?? true
     }
 }
