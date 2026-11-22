@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// Built-in renderers for channel artefacts. Documents retain their existing Doc identity;
 /// rich content uses the original File identity and immutable File versions.
@@ -15,8 +16,21 @@ public enum ArtefactType: String, Sendable, CaseIterable, Identifiable {
     public static func file(_ file: FileRecord) -> Self? {
         if let row = try? JSONSerialization.jsonObject(with: file.raw) as? [String: Any] {
             let metadata = row["metadata"] as? [String: Any]
-            let descriptor = metadata?["artefact"] as? [String: Any]
-            let kind = row["artefact_type"] as? String ?? descriptor?["type"] as? String
+            if let value = metadata?["artefact"] {
+                guard let descriptor = value as? [String: Any],
+                      let schema = descriptor["schema_version"] as? NSNumber, schema == 1,
+                      CFGetTypeID(schema) != CFBooleanGetTypeID(),
+                      let format = descriptor["format_version"] as? NSNumber, format == 1,
+                      CFGetTypeID(format) != CFBooleanGetTypeID(),
+                      let kind = descriptor["type"] as? String,
+                      descriptor["editor_id"] as? String == "builtin.\(kind)" else { return nil }
+                switch kind {
+                case "excalidraw": return .whiteboard
+                case "html": return .html
+                default: return nil
+                }
+            }
+            let kind = row["artefact_type"] as? String
             if kind == "excalidraw" { return .whiteboard }
             if kind == "html" { return .html }
         }
@@ -40,7 +54,10 @@ extension TowerAPI {
     }
     public func artefactHTML(workspaceId: String, appNpub: String, fileId: String) async throws -> String {
         let o = try object(try await client.request(path: try Self.base(workspaceId) + "/files/" + Self.uuid(fileId) + "/html", appNpub: appNpub), "HTML artefact")
-        guard let content = o["content"] as? [String: Any], let html = content["html"] as? String else { throw TowerError.malformed("HTML artefact") }
+        guard o["workspace_id"] as? String == workspaceId,
+              let source = o["source"] as? [String: Any], source["id"] as? String == fileId,
+              source["type"] as? String == "html",
+              let content = o["content"] as? [String: Any], let html = content["html"] as? String else { throw TowerError.malformed("HTML artefact") }
         return try await hydratedArtefactHTML(html, content: content, workspaceId: workspaceId, appNpub: appNpub)
     }
 }

@@ -14,9 +14,22 @@ import Testing
         #expect(ArtefactType.file(try file("Sketch.EXCALIDRAW")) == .whiteboard)
         #expect(ArtefactType.file(try file("Preview", mime: "text/html; charset=utf-8")) == .html)
         #expect(ArtefactType.file(try file("Saved scene", fields: ["artefact_type": "excalidraw"])) == .whiteboard)
-        #expect(ArtefactType.file(try file("Package", fields: ["metadata": ["artefact": ["schema_version": 1, "type": "html"]]])) == .html)
+        #expect(ArtefactType.file(try file("Package", fields: ["metadata": ["artefact": ["schema_version": 1, "format_version": 1, "type": "html", "editor_id": "builtin.html"]]])) == .html)
         #expect(ArtefactType.file(try file("Notes.pdf", mime: "application/pdf")) == nil)
         #expect(ArtefactType.file(try file("Future", fields: ["artefact_type": "spreadsheet"])) == nil)
+    }
+    @Test func unsupportedDescriptorsNeverFallBackToMIMEOrProjection() throws {
+        let supported: [String: Any] = ["schema_version": 1, "format_version": 1, "type": "html", "editor_id": "builtin.html"]
+        for (key, value) in [("schema_version", 2 as Any), ("format_version", 2 as Any),
+                             ("editor_id", "future.html" as Any), ("type", "spreadsheet" as Any),
+                             ("schema_version", true as Any)] {
+            var descriptor = supported; descriptor[key] = value
+            #expect(ArtefactType.file(try file("Future.html", mime: "text/html", fields: [
+                "artefact_type": "html", "metadata": ["artefact": descriptor]])) == nil)
+        }
+        for value: Any in [[:], "unknown"] {
+            #expect(ArtefactType.file(try file("Future.html", mime: "text/html", fields: ["metadata": ["artefact": value]])) == nil)
+        }
     }
     @Test func filePinDecodesThroughExistingRecord() throws {
         let row: [String: Any] = ["id": "00000000-0000-4000-8000-000000000001", "workspace_id": "00000000-0000-4000-8000-000000000002",
@@ -30,6 +43,24 @@ import Testing
 import XCTest
 
 final class ArtefactAssetTests: XCTestCase {
+    func testDirectHTMLRejectsForeignIdentityBeforeAssetHydration() async throws {
+        let identity = try await makeIdentity()
+        let file = "00000000-0000-4000-8000-000000000001"
+        for (workspace, source) in [(Fixtures.workspaceId, "00000000-0000-4000-8000-000000000099"),
+                                    ("00000000-0000-4000-8000-000000000099", file)] {
+            let response: [String: Any] = ["workspace_id": workspace, "source": ["type": "html", "id": source],
+                "content": ["html": "<p>foreign</p>", "assets": [["name": "image", "status": "ready", "file_id": file,
+                    "version_id": file, "sha256": String(repeating: "0", count: 64), "size_bytes": 3, "content_type": "image/png"]]]]
+            let data = try JSONSerialization.data(withJSONObject: response)
+            let transport = StubTransport { _ in (200, data) }
+            let api = TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: transport, signer: identity))
+            do {
+                _ = try await api.artefactHTML(workspaceId: Fixtures.workspaceId, appNpub: Fixtures.appNpub, fileId: file)
+                XCTFail("Foreign projection must be rejected")
+            } catch TowerError.malformed { }
+            XCTAssertEqual(transport.recorded.count, 1, "foreign projection must not hydrate assets")
+        }
+    }
     func testOnlyAuthorizedVerifiedImageBytesEnterSandbox() async throws {
         let identity = try await makeIdentity()
         let bytes = Data([1, 2, 3])
