@@ -213,10 +213,14 @@ struct InstalledNappletView: View {
 /// native signer, Tower URL or arbitrary request API. Native validates the main-frame sender and exact message again.
 @MainActor @Observable
 final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
-    let session = UUID().uuidString
+    let session = UUID().uuidString + UUID().uuidString
     let capabilities: [String]
     private let html: String
     private let receive: (NappletIntent) -> Void
+    private var fileReceive: ((FileNappletRequest) -> Void)?
+    private var initialMain = false
+    private var initialFrame = false
+    private var initialEmptyFrame = false
     private(set) var webView: WKWebView?
     var ready = false
     var visible = false
@@ -225,6 +229,9 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
 
     init(html: String, capabilities: [String], receive: @escaping (NappletIntent) -> Void) {
         self.html = html; self.capabilities = capabilities; self.receive = receive
+    }
+    init(html: String, fileReceive: @escaping (FileNappletRequest) -> Void) {
+        self.html = html; self.capabilities = []; self.receive = { _ in }; self.fileReceive = fileReceive
     }
     static func json(_ value: Any) -> String {
         let bytes = try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys])
@@ -250,14 +257,15 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
                 // Local opaque WK documents do not expose the secure-context-only randomUUID API. Published
                 // bundles use it for durable mutation IDs. Supply RFC 4122 v4 from WebCrypto's CSPRNG, never Math.random.
                 let bootstrap = """
-                window.nappletSession=\(Self.json(self.session));
+                Object.defineProperty(window,'nappletSession',{value:\(Self.json(self.session)),writable:false});
                 if(typeof crypto.randomUUID!=='function')Object.defineProperty(crypto,'randomUUID',{value:()=>{
                   const b=crypto.getRandomValues(new Uint8Array(16));b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;
                   const h=Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
                   return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
                 }});
                 """
-                let code = "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"\(csp)\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><script>\(bootstrap)</script>" + self.html
+                let lifecycle = self.fileReceive == nil ? "" : "addEventListener('pagehide',()=>parent.postMessage({type:'wingman-napplet-lifecycle',session:window.nappletSession},'*'),{once:true});"
+                let code = "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"\(csp)\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><script>\(bootstrap)\(lifecycle)</script>" + self.html
                 let parent = """
                 <!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:100%;overflow:hidden}iframe{border:0;width:100%;height:100%}</style><iframe id="napplet" sandbox="allow-scripts" title="Workspace napplet"></iframe><script>
                 const frame=document.getElementById('napplet');
@@ -286,6 +294,18 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
         webView = nil
     }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let fileReceive {
+            guard let view = webView, message.webView === view, message.frameInfo.isMainFrame,
+                  message.frameInfo.request.url?.absoluteString == "about:blank",
+                  JSONSerialization.isValidJSONObject(message.body),
+                  let data = try? JSONSerialization.data(withJSONObject: message.body) else { return }
+            if let body = message.body as? [String: Any], Set(body.keys) == ["type", "session"], body["type"] as? String == "wingman-napplet-lifecycle", body["session"] as? String == session {
+                didFail("The napplet document closed."); return
+            }
+            guard let intent = try? FileNappletRequest.parse(data, session: session) else { return }
+            if intent.operation == "read" { ready = true }
+            fileReceive(intent); return
+        }
         guard let view = webView, message.webView === view, message.frameInfo.isMainFrame,
               message.frameInfo.request.url?.absoluteString == "about:blank",
               JSONSerialization.isValidJSONObject(message.body), let data = try? JSONSerialization.data(withJSONObject: message.body),
@@ -294,9 +314,22 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         let url = navigationAction.request.url?.absoluteString
+        if fileReceive != nil {
+            if navigationAction.navigationType == .other, url == "about:blank", navigationAction.targetFrame?.isMainFrame == true, !initialMain {
+                initialMain = true; return .allow
+            }
+            if navigationAction.navigationType == .other, url == "about:blank", navigationAction.targetFrame?.isMainFrame == false, !initialEmptyFrame, !initialFrame, !ready {
+                initialEmptyFrame = true; return .allow
+            }
+            if navigationAction.navigationType == .other, url == "about:srcdoc", navigationAction.targetFrame?.isMainFrame == false, !initialFrame {
+                initialFrame = true; return .allow
+            }
+            didFail("Navigation ended the napplet session."); return .cancel
+        }
         return navigationAction.navigationType == .other && (url == "about:blank" || url == "about:srcdoc") ? .allow : .cancel
     }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { didFail("The napplet process stopped.") }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { didFail(error.localizedDescription) }
 }
 

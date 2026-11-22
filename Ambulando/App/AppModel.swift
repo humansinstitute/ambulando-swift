@@ -93,6 +93,7 @@ final class AppModel {
         didSet {
             guard identity != oldValue else { return }
             if !isUnlocked || identity.npub != oldValue.npub { cancelPendingTowerSelection() }
+            clearFileNappletForContextLoss()
             wikiContextEpoch &+= 1
             // window.nostr follows the identity: locking cancels and refuses every request; removing it forgets sites.
             browser.setLocked(!isUnlocked)
@@ -112,10 +113,10 @@ final class AppModel {
     /// Why an existing identity cannot be opened (sealed while the iPhone is locked, or a damaged file).
     private(set) var vaultProblem: VaultReadProblem?
     private(set) var connection: ConnectionRecord? {
-        didSet { if connection != oldValue { wikiContextEpoch &+= 1 } }
+        didSet { if connection != oldValue { clearFileNappletForContextLoss(); wikiContextEpoch &+= 1 } }
     }
     private(set) var selectedWorkspaceId: String? {
-        didSet { if selectedWorkspaceId != oldValue { wikiContextEpoch &+= 1 } }
+        didSet { if selectedWorkspaceId != oldValue { clearFileNappletForContextLoss(); wikiContextEpoch &+= 1 } }
     }
     /// Invalidates delayed wiki navigation even when an account/workspace switches away and back during a wait.
     @ObservationIgnored private(set) var wikiContextEpoch = 0
@@ -193,6 +194,15 @@ final class AppModel {
     @ObservationIgnored var canvasViewports: [String: CanvasViewport] = [:]
     /// Excalidraw board sessions (drafts, saves) shared by the inline and full-screen editors.
     @ObservationIgnored let boards = BoardRegistry()
+    /// Transient File napplet navigation gate. Never persisted; access/context loss always destroys the host.
+    @ObservationIgnored var fileNappletNavigation: ((@escaping () -> Void) -> Bool)?
+    @ObservationIgnored var fileNappletNavigationOwner: UUID?
+    @ObservationIgnored var fileNappletContextLost: (() -> Void)?
+    func clearFileNappletForContextLoss() {
+        let cancel = fileNappletContextLost
+        fileNappletNavigation = nil; fileNappletNavigationOwner = nil; fileNappletContextLost = nil
+        cancel?()
+    }
     /// The current section (bottom bar). Opening a record from Search or a mention may switch it.
     var mode: AppMode = .chat {
         didSet { if mode != oldValue, lockedView != mode { lockedView = nil } }
@@ -1357,6 +1367,7 @@ final class AppModel {
     /// Chooses the context from the sidebar. Chat follows it (a channel's conversation becomes the Chat root); tasks,
     /// documents and files filter to it. Persisted for relaunch.
     func selectContext(_ next: WorkContext) {
+        if fileNappletNavigation?({ self.selectContext(next) }) == true { return }
         sidebarOpen = false
         guard next != context else { return }
         contextSelections &+= 1

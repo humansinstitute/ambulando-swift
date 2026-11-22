@@ -83,12 +83,14 @@ extension AppModel {
     }
 
     func push(_ route: WorkRoute, in mode: AppMode) {
+        if fileNappletNavigation?({ self.push(route, in: mode) }) == true { return }
         guard let key = Self.pathKey(mode) else { return }
         self[keyPath: key].append(route)
     }
 
     /// Back to a section's first screen (tapping the current section again, as on a tab bar).
     func popToRoot(_ mode: AppMode) {
+        if fileNappletNavigation?({ self.popToRoot(mode) }) == true { return }
         if let key = Self.pathKey(mode) { self[keyPath: key] = [] } else { chatPath = [] }
     }
 
@@ -111,6 +113,7 @@ extension AppModel {
     /// Deck then shows its Inbox card for the new context at its first screen, as the web resets its card track; ordinary
     /// section switches keep Deck's card and open screen.
     func chooseInSidebar(_ next: WorkContext) {
+        if fileNappletNavigation?({ self.chooseInSidebar(next) }) == true { return }
         let destination: AppMode = isCurrentViewLocked ? mode : .deck
         selectContext(next)
         if destination == .deck { deckPath = []; deckInboxRequests &+= 1 }
@@ -119,6 +122,7 @@ extension AppModel {
 
     /// Shows a section; the sidebar closes so the section is visible.
     func show(_ next: AppMode) {
+        if fileNappletNavigation?({ self.show(next) }) == true { return }
         sidebarOpen = false
         mode = next
     }
@@ -126,6 +130,7 @@ extension AppModel {
     /// Opens a record in its own section and follows its context (mentions, Search, sidebar). Channels and
     /// conversations open in Chat.
     func openRecord(kind: String, id: String) {
+        if fileNappletNavigation?({ self.openRecord(kind: kind, id: id) }) == true { return }
         guard let workspace = selectedWorkspace?.id else { return }
         let record = id.lowercased()
         sidebarOpen = false

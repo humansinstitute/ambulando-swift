@@ -81,6 +81,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate {
     #endif
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if model.fileNappletNavigation?({ sender.terminate(nil) }) == true { return .terminateCancel }
         let sessions = Array(MacDocumentWindows.shared.sessions.values)
         guard !sessions.isEmpty else { return .terminateNow }
         Task { @MainActor in

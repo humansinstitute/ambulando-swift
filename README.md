@@ -12,6 +12,10 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## File-backed daily tracker (Mac build 101, iPhone/iPad build 103)
+
+Artefacts → New → Daily tracker creates an empty tracker in the signed-in person's self-DM. Its saved HTML runs inside an isolated native host, with a narrow read/save bridge to its separate NStack JSON File. Metrics and daily entries use immutable File versions and guarded saves; ordinary HTML remains bridge-free. See [File napplets](docs/file-napplets.md). Source builds and synthetic validation are separate from device installation and live-account acceptance.
+
 ## Channel artefacts (Mac build 100, iPhone/iPad build 102)
 
 The channel Artefacts section combines documents, whiteboards and HTML with type filters,

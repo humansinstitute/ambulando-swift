@@ -362,8 +362,6 @@ struct FileArtefactView: View {
     let type: ArtefactType
     let workspace: WorkspaceRecord
     @State private var session: BoardSession?
-    @State private var html: String?
-    @State private var editing = false
     @State private var error: String?
 
     var body: some View {
@@ -371,9 +369,8 @@ struct FileArtefactView: View {
             if let session {
                 BoardNotices(session: session).padding(8)
                 BoardEditorPanel(session: session)
-            } else if let html {
-                Label("Sandboxed HTML", systemImage: "lock.shield").font(.amb(.caption)).padding(6)
-                SandboxedHTMLView(html: html).id(html)
+            } else if type == .html {
+                DirectHTMLFileView(file: file, workspace: workspace)
             } else if let error { EmptyNote(title: "Artefact unavailable", systemImage: "lock", detail: error) }
             else { ProgressView("Loading artefact…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
@@ -381,15 +378,11 @@ struct FileArtefactView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 if let session { BoardStatusPill(state: session.state); BoardMenu(session: session) }
-                if type == .html { Button("Source & history") { editing = true }.disabled(!model.isUnlocked) }
                 Button {
                     model.setPinned(!model.pins.value.isPinned(.file, file.id), type: .file, id: file.id, in: workspace)
                 } label: { Image(systemName: model.pins.value.isPinned(.file, file.id) ? "pin.fill" : "pin") }
                 .accessibilityLabel("Pin artefact").disabled(!model.isUnlocked)
             }
-        }
-        .sheet(isPresented: $editing, onDismiss: { Task { await reloadHTML() } }) {
-            HTMLSourceSheet(file: file, workspace: workspace)
         }
         .task(id: file.id) {
             guard let sync = model.sync, let connection = model.connection, model.canRead else { error = "Unlock to open this artefact."; return }
@@ -399,24 +392,10 @@ struct FileArtefactView: View {
                     let reference = try await sync.artefactBoard(connection, workspace, fileId: file.id)
                     guard boundary == model.selectedWorkspaceBoundary, model.canRead else { return }
                     session = model.boardSession(reference, title: file.displayName, in: workspace)
-                } else {
-                    let content = try await sync.artefactHTML(connection, workspace, fileId: file.id)
-                    guard boundary == model.selectedWorkspaceBoundary, model.canRead else { return }
-                    html = content
                 }
             } catch { self.error = error.localizedDescription }
         }
-        .onChange(of: model.canRead) { _, canRead in if !canRead { html = nil; session = nil; error = "Unlock to open this artefact." } }
-    }
-    private func reloadHTML() async {
-        html = nil
-        guard let sync = model.sync, let c = model.connection, model.canRead, model.selectedWorkspaceId == workspace.id else { return }
-        let boundary = model.selectedWorkspaceBoundary
-        do {
-            let content = try await sync.artefactHTML(c, workspace, fileId: file.id)
-            guard boundary == model.selectedWorkspaceBoundary, model.canRead else { return }
-            html = content; error = nil
-        } catch { if boundary == model.selectedWorkspaceBoundary { self.error = error.localizedDescription } }
+        .onChange(of: model.canRead) { _, canRead in if !canRead { session = nil; error = "Unlock to open this artefact." } }
     }
 }
 
