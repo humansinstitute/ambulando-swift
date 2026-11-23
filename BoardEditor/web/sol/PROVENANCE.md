@@ -1,6 +1,6 @@
 # Vendored from sol
 
-These files are unchanged copies from the Ambulando web client (`sol`, MIT licence, see `../../LICENSES.md`), taken at
+These files originate from the Ambulando web client (`sol`, MIT licence, see `../../LICENSES.md`), taken at
 commit `c7fafcb34a7a35578e55e5f121dfa4c4ee75af3f` ("feat(canvas): add spatial board comments and threaded replies"):
 
 | Here | sol |
@@ -25,3 +25,13 @@ web's document editor schema and Markdown conversion. They own no network or sto
 same paths from a newer sol commit, update the commit above and check that the message protocol in `../main.js` and
 `Ambulando/Views/BoardEditorView.swift` still matches (`load`, `patch`, `flush`, `action-ui`, `comments`, `clear` in;
 `ready`, `change`, `flushed`, `action`, `comment-op`, `error` out).
+
+## Board author-name bridge
+
+The scoped `author-identities` / `author-names` presentation bridge in
+`board-editor/editor.js`, `comments.js` and `person-labels.js` follows sol commit
+`c05108c260550270f056159f959296e472ddf300`. Native retains its existing drawing
+and image-hydration adapter; this update does not import unrelated editor/scene
+changes. Name maps are transient React display state, keyed to the current load,
+and never become board comments, drafts or history. Host validation and local
+profile observation remain native responsibilities (see `BoardEditorView.swift`).
