@@ -3,6 +3,10 @@ import Foundation
 extension TowerAPI {
     /// Normal File ACL for code; private resource authority is verified separately below.
     public func genericNappletCode(workspace: String, app: String, fileId: String) async throws -> GenericNappletCode {
+        try await genericAppDescriptor(workspace: workspace, app: app, fileId: fileId).code
+    }
+    /// Verify once and return the same File row used to verify its immutable code.
+    public func genericAppDescriptor(workspace: String, app: String, fileId: String) async throws -> (file: FileRecord, code: GenericNappletCode) {
         guard GenericJSON.uuid(fileId) else { throw FileNappletError.invalid }
         let row = try await nappletFile(workspace: workspace, app: app, id: fileId, requireTopLevelWrite: true)
         try await genericChannel(workspace: workspace, app: app, file: row, viewer: nil)
@@ -11,7 +15,7 @@ extension TowerAPI {
         let (bytes, version) = try await nappletBytes(workspace: workspace, app: app, file: row, mime: "text/html", limit: 4 * 1024 * 1024)
         guard let html = String(data: bytes, encoding: .utf8), let binding = try GenericNappletBinding.parse(html: html, metadata: rawJSON(meta)) else { throw FileNappletError.invalid }
         if binding.capability == "workspace-aggregate", binding.resourceId != workspace { throw FileNappletError.invalid }
-        return GenericNappletCode(html: html, binding: binding, versionId: version, sha256: SHA256Hex.of(bytes))
+        return (file, GenericNappletCode(html: html, binding: binding, versionId: version, sha256: SHA256Hex.of(bytes)))
     }
     private func genericChannel(workspace: String, app: String, file: [String: Any], viewer: String?) async throws {
         guard let channel = file["channel_id"] as? String, GenericJSON.uuid(channel) else { throw FileNappletError.unavailable }
@@ -85,6 +89,16 @@ extension TowerAPI {
 }
 
 extension WorkspaceSync {
+    public func genericAppDescriptor(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String) async throws -> (file: FileRecord, code: GenericNappletCode) {
+        let sync = self
+        return try await engine.perform("generic-app:\(w.id):\(fileId)", priority: .visible) {
+            try await sync.identity.requireReader(npub: c.signerNpub)
+            let result = try await sync.api(origin: TowerOrigin(c.origin)).genericAppDescriptor(workspace: w.id, app: w.appNpub, fileId: fileId)
+            try Task.checkCancellation()
+            _ = try await sync.store.writer.upsertFiles(workspaceId: w.id, [result.file])
+            return result
+        }
+    }
     public func genericNappletCode(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String) async throws -> GenericNappletCode {
         try await identity.requireReader(npub: c.signerNpub)
         return try await api(origin: TowerOrigin(c.origin)).genericNappletCode(workspace: w.id, app: w.appNpub, fileId: fileId)

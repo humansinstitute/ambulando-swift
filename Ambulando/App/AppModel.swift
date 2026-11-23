@@ -1663,6 +1663,8 @@ extension AppModel {
         })
         try await partition.writer.setState(ProfileSync.preferenceKey, publicProfilesEnabled ? nil : "off")
         await partition.writer.bindWorkspaceActivity(runtime.activity)
+        let recoveryRoot = BoardRegistry.draftsDirectory(entry.connection.id, dataDirectory: fixture?.directory)
+        await partition.writer.bindFileCache(runtime.fileCache, recoveryDirectories: [recoveryRoot.appendingPathComponent(entry.id, isDirectory: true), recoveryRoot])
         entry.runtime = runtime
         entry.query.onLoad = { [weak self, weak entry] snapshot in
             guard snapshot.accessLost, let entry else { return }

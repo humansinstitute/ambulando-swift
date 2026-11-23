@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct DocsSnapshot: Sendable, Equatable {
     var docs: [DocRecord] = []
     var files: [FileRecord] = []
+    var fileTypes: [String: ArtefactType] = [:]
     var drafts: Set<String> = []
     var creating: [WriteItem] = []
     var choice = ScopeChoice()
@@ -31,6 +32,25 @@ struct DocumentsView: View {
         return q.isEmpty ? snapshot.value.docs : snapshot.value.docs.filter { $0.title.lowercased().contains(q) }
     }
 
+    private var visibleFiles: [FileRecord] {
+        let q = filter.trimmingCharacters(in: .whitespacesAndNewlines)
+        return snapshot.value.files.filter { file in
+            let kind = snapshot.value.fileTypes[file.id]
+            return kind != nil && (type == nil || kind == type) && (q.isEmpty || file.displayName.localizedCaseInsensitiveContains(q))
+        }
+    }
+
+    private enum Row: Identifiable {
+        case document(DocRecord), file(FileRecord)
+        var id: String { switch self { case .document(let d): "doc:" + d.id; case .file(let f): "file:" + f.id } }
+        var updatedAt: String { switch self { case .document(let d): d.updatedAt; case .file(let f): f.updatedAt } }
+    }
+    private var rows: [Row] {
+        (visible.map(Row.document) + visibleFiles.map(Row.file)).sorted {
+            $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt
+        }
+    }
+
     var body: some View {
         List {
             ForEach(snapshot.value.creating) { item in
@@ -39,16 +59,20 @@ struct DocumentsView: View {
                     WriteStatusLine(item: item, label: "New artefact")
                 }
             }
-            ForEach(snapshot.value.files.filter { file in
-                let kind = ArtefactType.file(file)
-                return kind != nil && (type == nil || kind == type) && (filter.isEmpty || file.displayName.localizedCaseInsensitiveContains(filter))
-            }) { file in
+            ForEach(rows) { row in
+                switch row {
+                case .file(let file):
                 WorkRecordLink(route: WorkRoute.file(workspaceId: workspace.id, fileId: file.id)) {
-                    Label(file.displayName, systemImage: ArtefactType.file(file)?.icon ?? "doc")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Label(file.displayName, systemImage: snapshot.value.fileTypes[file.id]?.icon ?? "doc")
+                        HStack(spacing: 6) {
+                            if let channel = snapshot.value.choice.channelName(file.channelId) { Text("#\(channel)") }
+                            Text(ChatTime.label(file.updatedAt))
+                        }.font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                    }
                 }
                 .accessibilityIdentifier("artefact.\(file.id)")
-            }
-            ForEach(visible) { doc in
+                case .document(let doc):
                 WorkRecordLink(route: WorkRoute.doc(workspaceId: workspace.id, docId: doc.id)) {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
@@ -64,14 +88,15 @@ struct DocumentsView: View {
                     }
                 }
                 .accessibilityIdentifier("doc.\(doc.title)")
+                }
             }
         }
         .groupedList()
         .scrollContentBackground(.hidden)
         .searchable(text: $filter, placement: .drawer, prompt: "Filter artefacts")
         .overlay {
-            if snapshot.loaded && snapshot.value.docs.isEmpty && snapshot.value.files.isEmpty && snapshot.value.creating.isEmpty {
-                EmptyNote(title: "No artefacts", systemImage: "doc.text", detail: model.isUnlocked ? "Documents, whiteboards and HTML in this scope appear here." : "Unlock to load documents.")
+            if snapshot.loaded && visible.isEmpty && visibleFiles.isEmpty && snapshot.value.creating.isEmpty {
+                EmptyNote(title: filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && type == nil ? "No artefacts" : "No matching artefacts", systemImage: "doc.text", detail: model.isUnlocked ? "Documents, whiteboards and HTML in this scope appear here." : "Unlock to load documents.")
             }
         }
         .navigationTitle("Artefacts")
@@ -95,7 +120,7 @@ struct DocumentsView: View {
         .sheet(isPresented: $creating) { DocumentCreateSheet(workspace: workspace, choice: snapshot.value.choice, context: context) }
         .refreshable { model.openDocs(workspace, scopeId: scopeId, force: true); model.openFiles(workspace, scopeId: scopeId, force: true) }
         .task(id: model.context) { start(); model.openDocs(workspace, scopeId: scopeId); model.openFiles(workspace, scopeId: scopeId) }
-        .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openDocs(workspace, scopeId: scopeId) } }
+        .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openDocs(workspace, scopeId: scopeId); model.openFiles(workspace, scopeId: scopeId) } }
     }
 
     private func start() {
@@ -106,7 +131,8 @@ struct DocumentsView: View {
             async let drafts = store.reader.docDraftIds(connectionId: connection, workspaceId: w)
             async let writes = store.reader.writes(connectionId: connection, workspaceId: w)
             async let choice = scopeChoice(store, w)
-            return DocsSnapshot(docs: try await docs, files: try await files.filter { ArtefactType.file($0) != nil }, drafts: try await drafts, creating: try await writes.filter { $0.kind == .docCreate || ($0.kind == .fileUpload && $0.payloadObject["metadata"] != nil) },
+            let classified = try await files.compactMap { file in ArtefactType.file(file).map { (file, $0) } }
+            return DocsSnapshot(docs: try await docs, files: classified.map { $0.0 }, fileTypes: Dictionary(uniqueKeysWithValues: classified.map { ($0.0.id, $0.1) }), drafts: try await drafts, creating: try await writes.filter { $0.kind == .docCreate || ($0.kind == .fileUpload && $0.payloadObject["metadata"] != nil) },
                                 choice: try await choice)
         }
     }

@@ -133,6 +133,24 @@ extension TowerAPI {
         }
         guard !assets.isEmpty else { return html }
         let json = String(data: try rawJSON(urls), encoding: .utf8) ?? "{}"
-        return "<script>(()=>{const urls=\(json);Object.defineProperty(window,'wingmanAssets',{value:Object.freeze({url:n=>Object.hasOwn(urls,String(n))?urls[String(n)]:null,names:()=>Object.keys(urls)})});const apply=()=>{document.querySelectorAll('[data-asset],[data-asset-background]').forEach(el=>{const n=el.getAttribute('data-asset'),b=el.getAttribute('data-asset-background');if(n){const u=urls[n];if(u){if(el.namespaceURI==='http://www.w3.org/2000/svg')el.setAttribute('href',u);else el.setAttribute('src',u)}el.setAttribute('data-asset-state',u?'ready':'missing')}if(b){const u=urls[b];if(u)el.style.backgroundImage='url(\"'+u+'\")';el.setAttribute('data-asset-state',u?'ready':'missing')}})};apply();new MutationObserver(apply).observe(document.documentElement,{childList:true,subtree:true});addEventListener('DOMContentLoaded',()=>document.dispatchEvent(new CustomEvent('wingman:assets-ready',{detail:{names:Object.keys(urls)}})),{once:true})})();</script>" + html
+        let bootstrap = "<script>(()=>{const urls=\(json);Object.defineProperty(window,'wingmanAssets',{value:Object.freeze({url:n=>Object.hasOwn(urls,String(n))?urls[String(n)]:null,names:()=>Object.keys(urls)})});const apply=()=>{document.querySelectorAll('[data-asset],[data-asset-background]').forEach(el=>{const n=el.getAttribute('data-asset'),b=el.getAttribute('data-asset-background');if(n){const u=urls[n];if(u){if(el.namespaceURI==='http://www.w3.org/2000/svg')el.setAttribute('href',u);else el.setAttribute('src',u)}el.setAttribute('data-asset-state',u?'ready':'missing')}if(b){const u=urls[b];if(u)el.style.backgroundImage='url(\"'+u+'\")';el.setAttribute('data-asset-state',u?'ready':'missing')}})};apply();new MutationObserver(apply).observe(document.documentElement,{childList:true,subtree:true});addEventListener('DOMContentLoaded',()=>document.dispatchEvent(new CustomEvent('wingman:assets-ready',{detail:{names:Object.keys(urls)}})),{once:true})})();</script>"
+        return ArtefactHTMLDocument.insertingHeadContent(bootstrap, into: html)
+    }
+}
+
+/// Inserts trusted host markup without moving a document's doctype into its body.
+/// Fragments receive a standards-mode document; existing documents retain their original markup.
+public enum ArtefactHTMLDocument {
+    public static func insertingHeadContent(_ content: String, into html: String) -> String {
+        let pattern = #"\A(\x{FEFF}?\s*(?:<!--[\s\S]*?-->\s*)*(?:<!doctype\s[^>]*>\s*)?)(<html\b[^>]*>\s*)?(<head\b[^>]*>)?"#
+        let expression = try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        let range = NSRange(html.startIndex..., in: html)
+        guard let match = expression.firstMatch(in: html, range: range),
+              let prefix = Range(match.range, in: html) else { return html }
+        let before = String(html[..<prefix.upperBound]), rest = String(html[prefix.upperBound...])
+        let doctype = before.range(of: "<!doctype", options: .caseInsensitive) == nil ? "<!doctype html>" : ""
+        if match.range(at: 3).location != NSNotFound { return doctype + before + content + rest }
+        if match.range(at: 2).location != NSNotFound { return doctype + before + "<head>" + content + "</head>" + rest }
+        return doctype + before + "<html><head>" + content + "</head><body>" + rest + "</body></html>"
     }
 }

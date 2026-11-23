@@ -88,10 +88,14 @@ final class MacDataRefresh {
                         case .docs:
                             keys.formUnion(channels.map { WorkspaceSync.docsKey(workspace.id, $0.id) })
                             await sync.refreshDocs(connection, workspace, scopeId: context.scopeId, force: true)
+                            keys.formUnion(channels.map { WorkspaceSync.filesKey(workspace.id, $0.id) })
+                            await sync.refreshFiles(connection, workspace, scopeId: context.scopeId, force: true)
                         case .files:
                             keys.formUnion(channels.map { WorkspaceSync.filesKey(workspace.id, $0.id) })
                             await sync.refreshFiles(connection, workspace, scopeId: context.scopeId, force: true)
                         case .deck:
+                            keys.insert(WorkspaceSync.runtimeAppsKey(workspace.id))
+                            await sync.scheduleRuntimeApps(connection, workspace, force: true)
                             keys.insert(WorkspaceSync.canvasesKey(workspace.id))
                             await sync.refreshCanvases(connection, workspace, force: true)
                         case .agents:
@@ -103,6 +107,8 @@ final class MacDataRefresh {
                                 await sync.refreshContextTree(connection, workspace, scopeId: scope, force: true)
                             }
                         case .toolbox:
+                            keys.insert(WorkspaceSync.runtimeAppsKey(workspace.id))
+                            await sync.scheduleRuntimeApps(connection, workspace, force: true)
                             keys.insert(WorkspaceSync.toolboxKey(workspace.id))
                             await sync.refreshToolbox(connection, workspace, force: true)
                         default: break

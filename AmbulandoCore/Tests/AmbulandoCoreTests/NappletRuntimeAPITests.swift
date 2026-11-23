@@ -73,6 +73,38 @@ struct RuntimeAPITransport: HTTPTransport {
         if ["create","update"].contains(op) { o["base_revision"] = revision; o["value"] = ["zero":0,"false":false,"nested":["arbitrary":true]] }
         return try .parse(JSONSerialization.data(withJSONObject:o),session:String(repeating:"a",count:32),manifest:manifest)
     }
+    @Test func launcherRefreshUsesSharedBoundedKeyAndCoalescesQueuedRequests() async throws {
+        let f = try RuntimeAPIFixture(), store = try LocalStore(directory: temporaryDirectory())
+        let identity = try await makeIdentity(), engine = SyncEngine(maxConcurrent: 1, reservedForeground: 0)
+        let connection = ConnectionRecord(origin: try TowerOrigin(f.context.origin), signerNpub: TestKeys.npub, towerNpub: TestKeys.npub)
+        var row = Fixtures.workspace(Fixtures.workspaceId, label: "Runtime")
+        var fields = row["identity"] as! [String: String]
+        fields["tower_service_npub"] = TestKeys.npub; fields["workspace_service_npub"] = TestKeys.npub
+        row["identity"] = fields
+        let workspace = try WorkspaceRecord(raw: Fixtures.json(row))
+        let sync = WorkspaceSync(store: store, engine: engine, identity: identity, transport: RuntimeAPITransport(fixture: f))
+        await engine.enqueue("occupy-slot", priority: .user) { try await Task.sleep(for: .milliseconds(150)) }
+        await sync.scheduleRuntimeApps(connection, workspace)
+        await sync.scheduleRuntimeApps(connection, workspace)
+        let queued = await engine.snapshot
+        #expect(queued.queued.contains(WorkspaceSync.runtimeAppsKey(workspace.id)))
+        await engine.waitUntilIdle()
+        #expect(f.lock.withLock { f.requests.filter { $0.url?.path.hasSuffix("/napplets") == true }.count } == 1)
+        let apps = try await store.reader.runtimeApps(connection: connection, workspace: workspace, context: f.context)
+        #expect(apps.count == 1)
+        #expect(await engine.snapshot.isIdle)
+    }
+    @Test func legacyWorkspaceRefreshDoesNotScheduleUnsupportedRuntimeReads() async throws {
+        let f = try RuntimeAPIFixture(), store = try LocalStore(directory: temporaryDirectory())
+        let engine = SyncEngine(), identity = try await makeIdentity()
+        let connection = ConnectionRecord(origin: try TowerOrigin(f.context.origin), signerNpub: TestKeys.npub, towerNpub: TestKeys.npub)
+        let workspace = try WorkspaceRecord(raw: Fixtures.json(Fixtures.workspace(Fixtures.workspaceId, label: "Legacy")))
+        let sync = WorkspaceSync(store: store, engine: engine, identity: identity, transport: RuntimeAPITransport(fixture: f))
+        await sync.scheduleRuntimeApps(connection, workspace, force: true)
+        await engine.waitUntilIdle()
+        #expect(f.lock.withLock { f.requests.isEmpty })
+        #expect(await engine.snapshot.errors.isEmpty)
+    }
     @Test func authenticatedImmutableCodeAndBoundedRecordCAS() async throws {
         let f = try RuntimeAPIFixture(), api = try await api(f)
         let installs = try await api.runtimeInstallations(f.context); #expect(installs.count == 1)

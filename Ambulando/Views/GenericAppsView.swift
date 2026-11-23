@@ -6,6 +6,10 @@ struct GenericAppsSection: View {
     @Environment(AppModel.self) private var model
     let workspace: WorkspaceRecord
     let store: LocalStore
+    var active = true
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var verifiedEntries: [String: Entry] = [:]
+    @State private var verifiedContext: [String] = []
     @State private var pins = LiveQuery<Int>(initial:0)
     @State private var apps: [Entry] = []
     @State private var adding = false
@@ -13,9 +17,11 @@ struct GenericAppsSection: View {
     struct Entry: Identifiable {
         let file: FileRecord
         let binding: GenericNappletBinding
+        let code: GenericNappletCode
+        var cacheKey: GenericAppDescriptorKey? { GenericAppDescriptorKey(file: file) }
         var id: String { file.id }
     }
-    private var context: [String] { [model.connection?.id ?? "", workspace.id, String(model.wikiContextEpoch), String(model.canRead), String(refreshing),String(pins.value)] }
+    private var context: [String] { [model.connection?.id ?? "", workspace.id, String(model.wikiContextEpoch), String(model.canRead), String(refreshing),String(pins.value), String(active), String(scenePhase == .active)] }
     var body: some View {
         VStack(alignment:.leading, spacing:8) {
             HStack {
@@ -31,16 +37,20 @@ struct GenericAppsSection: View {
             Text("Install an existing NStack HTML File. Apps use personal File pins; removing an app keeps its Files and history.").font(.caption).foregroundStyle(.secondary)
         }
         .sheet(isPresented:$adding, onDismiss:{ refreshing += 1 }) { AddGenericNappletView(workspace:workspace,store:store) }
-        .task {
+        .task(id: context.prefix(4).map { $0 } + [String(active), String(scenePhase == .active)]) {
+            pins.stop()
+            guard active, scenePhase == .active, model.canRead else { return }
             let c = model.connection?.id ?? ""
             pins.start(store:store,matches:{ $0.workspaceId == workspace.id && [.pins,.access].contains($0.table) }) {
                 try await store.reader.genericFilePinsRevision(connectionId:c,workspaceId:workspace.id)
             }
         }
         .task(id:context) {
-            apps = []; guard let c = model.connection, let sync = model.sync, model.canRead else { return }
+            apps = []; guard active, scenePhase == .active, let c = model.connection, let sync = model.sync, model.canRead else { return }
+            let cacheContext = [c.id, c.origin, c.signerNpub, workspace.id, model.selectedWorkspaceBoundary?.id ?? "", String(model.wikiContextEpoch), String(refreshing)]
+            if cacheContext != verifiedContext { verifiedEntries = [:]; verifiedContext = cacheContext }
             let boundary = context
-            await sync.refreshPins(c,workspace,force:true)
+            await sync.refreshPins(c,workspace)
             var verified: [Entry] = []
             var all:[PinRecord] = [], cursor = ""
             do {
@@ -54,9 +64,18 @@ struct GenericAppsSection: View {
             for pin in all.sorted(by:PinRecord.displayOrder) {
                 guard !Task.isCancelled, context == boundary else { return }
                 do {
-                    let code = try await sync.genericNappletCode(c,workspace,fileId:pin.resourceId)
-                    let file = try await sync.genericNappletFile(c,workspace,fileId:pin.resourceId)
-                    verified.append(Entry(file:file,binding:code.binding))
+                    let entry: Entry
+                    if let cached = verifiedEntries[pin.resourceId],
+                       let current = try await store.reader.file(workspaceId: workspace.id, id: pin.resourceId),
+                       let key = GenericAppDescriptorKey(file: current), key == cached.cacheKey, key.matches(cached.code) {
+                        entry = cached
+                    } else {
+                        let result = try await sync.genericAppDescriptor(c, workspace, fileId: pin.resourceId)
+                        entry = Entry(file: result.file, binding: result.code.binding, code: result.code)
+                    }
+                    guard !Task.isCancelled, context == boundary else { return }
+                    verifiedEntries[pin.resourceId] = entry
+                    verified.append(entry)
                     guard !Task.isCancelled, context == boundary else { return }; apps = verified
                 } catch { /* Inaccessible or non-v2 pins never become trusted Apps entries. */ }
             }

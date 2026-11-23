@@ -145,6 +145,7 @@ struct FileDetailView: View {
     let fileId: String
     let workspace: WorkspaceRecord
     let store: LocalStore
+    var renderArtefact = true
     @State private var snapshot = LiveQuery<FileDetailSnapshot>(initial: FileDetailSnapshot())
     @State private var preview: URL?
     @State private var downloadTask: Task<Void, Never>?
@@ -156,7 +157,7 @@ struct FileDetailView: View {
 
     var body: some View {
         Group {
-            if let file = snapshot.value.file, let type = ArtefactType.file(file) {
+            if renderArtefact, let file = snapshot.value.file, let type = ArtefactType.file(file) {
                 FileArtefactView(file: file, type: type, workspace: workspace)
             } else { detail }
         }
@@ -367,6 +368,7 @@ struct FileArtefactView: View {
     @State private var session: BoardSession?
     @State private var error: String?
 
+    @State private var exportingOriginal = false
     var body: some View {
         VStack(spacing: 0) {
             if let session {
@@ -382,9 +384,19 @@ struct FileArtefactView: View {
             macSession?.checkpoint = { [weak session] in await session?.controller.checkpoint() ?? true }
         }
         #endif
+        .sheet(isPresented: $exportingOriginal) {
+            if let store = model.store {
+                NavigationStack {
+                    FileDetailView(fileId: file.id, workspace: workspace, store: store, renderArtefact: false)
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { exportingOriginal = false } } }
+                }.frame(minWidth: 320, minHeight: 400)
+            }
+        }
         .navigationTitle(file.displayName)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Button("Download or share original", systemImage: "square.and.arrow.up") { exportingOriginal = true }
+                    .disabled(!model.canRead).accessibilityIdentifier("artefact.export")
                 if let session { BoardStatusPill(state: session.state); BoardMenu(session: session) }
                 Button {
                     model.setPinned(!model.pins.value.isPinned(.file, file.id), type: .file, id: file.id, in: workspace)
@@ -392,7 +404,8 @@ struct FileArtefactView: View {
                 .accessibilityLabel("Pin artefact").disabled(!model.isUnlocked)
             }
         }
-        .task(id: file.id) {
+        .task(id: [file.id, String(model.canRead), model.selectedWorkspaceBoundary?.id ?? ""]) {
+            session = nil; error = nil
             guard let sync = model.sync, let connection = model.connection, model.canRead else { error = "Unlock to open this artefact."; return }
             let boundary = model.selectedWorkspaceBoundary
             do {
@@ -421,21 +434,24 @@ struct HTMLSourceSheet: View {
     @State private var ready = false
     @State private var loadedSource = ""
     @State private var draftConnectionId: String?
+    @State private var draftBoundary: WorkspaceBoundary?
+    @State private var legacyRecovery: HTMLSourceDraftStore.Draft?
+    @State private var confirmLegacy = false
     private var canWrite: Bool {
         let row = (try? JSONSerialization.jsonObject(with: file.raw)) as? [String: Any]
         return model.isUnlocked && row?["can_write"] as? Bool == true
     }
-    private var draftURL: URL? {
-        guard let id = draftConnectionId else { return nil }
-        return BoardRegistry.draftsDirectory(id).appendingPathComponent("html-" + workspace.id + "-" + file.id + ".json")
+    private var draftStore: HTMLSourceDraftStore? {
+        guard let id = draftConnectionId, let boundary = draftBoundary else { return nil }
+        return HTMLSourceDraftStore(directory: BoardRegistry.draftsDirectory(id, dataDirectory: model.fixture?.directory),
+                                    boundary: boundary, fileId: file.id, allowLegacy: model.fixture == nil)
     }
+    private var draftURL: URL? { draftStore?.url }
     private func keepDraft() {
-        guard ready, let url = draftURL, model.isUnlocked, model.connection?.id == draftConnectionId, model.selectedWorkspaceId == workspace.id else { return }
+        guard ready, let url = draftURL, model.isUnlocked, model.connection?.id == draftConnectionId, model.selectedWorkspaceBoundary == draftBoundary, model.selectedWorkspaceId == workspace.id else { return }
         if source == loadedSource { try? FileManager.default.removeItem(at: url); return }
         do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try JSONSerialization.data(withJSONObject: ["base": base, "source": source])
-            try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try draftStore?.save(.init(base: base, source: source))
         } catch { message = "Could not keep a recovery draft: \(error.localizedDescription)" }
     }
     var body: some View {
@@ -448,6 +464,10 @@ struct HTMLSourceSheet: View {
                     .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
                 TextEditor(text: $source).font(.system(.body, design: .monospaced)).disabled(!ready || busy || !canWrite)
                 if let message { Text(message).foregroundStyle(Amb.warning).padding(8) }
+                if legacyRecovery != nil {
+                    Button("Review older recovery draft…") { confirmLegacy = true }.disabled(!ready || busy)
+                    Text("An older draft for this connection and File has no saved application boundary. Review it before saving; its original copy is kept.").font(.amb(.caption))
+                }
                 if ready && source != loadedSource {
                     Text("Your draft is kept on close. Save before browsing another revision.").font(.amb(.caption))
                     Button("Keep draft on latest revision…") { Task { await rebase() } }.disabled(busy)
@@ -465,20 +485,30 @@ struct HTMLSourceSheet: View {
         }
         .frame(minWidth: 300, minHeight: 400)
         .interactiveDismissDisabled(busy)
+        .confirmationDialog("Load the older draft for review?", isPresented: $confirmLegacy, titleVisibility: .visible) {
+            Button("Load draft for review") {
+                guard let recovery = legacyRecovery, model.selectedWorkspaceBoundary == draftBoundary, model.isUnlocked else { return }
+                base = recovery.base; source = recovery.source; legacyRecovery = nil
+                keepDraft()
+                message = "Older source loaded for review. Nothing is published until Save revision. The original recovery copy is kept."
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text("This replaces the source currently in the editor. The older file did not record which application owned it. Verify its content before publishing.") }
     }
     private func load() async {
         guard let sync = model.sync, let c = model.connection, model.selectedWorkspaceId == workspace.id else { return }
         draftConnectionId = c.id
+        draftBoundary = model.selectedWorkspaceBoundary
         do {
-            let recovery = draftURL.flatMap { try? Data(contentsOf: $0) }
+            let recovery = draftStore?.load()
+            legacyRecovery = draftStore?.legacyForReview()
             let history = try await sync.htmlHistory(c, workspace, fileId: file.id)
-            guard model.connection?.id == c.id, model.selectedWorkspaceId == workspace.id else { return }
+            guard model.connection?.id == c.id, model.selectedWorkspaceId == workspace.id, model.selectedWorkspaceBoundary == draftBoundary else { return }
             versions = history.versions; base = history.currentVersionId ?? ""; selected = base
             await read(base)
-            if let bytes = recovery,
-               let draft = try? JSONSerialization.jsonObject(with: bytes) as? [String: String],
-               let text = draft["source"], let oldBase = draft["base"] {
-                base = oldBase; source = text; ready = true; message = "Recovered your unsaved source. Save checks its original revision."
+            guard model.selectedWorkspaceBoundary == draftBoundary, model.canRead else { return }
+            if let recovery {
+                base = recovery.base; source = recovery.source; ready = true; message = "Recovered your unsaved source. Save checks its original revision."
             }
         } catch { message = error.localizedDescription }
     }
@@ -488,28 +518,29 @@ struct HTMLSourceSheet: View {
         defer { busy = false }
         do {
             let text = try await sync.htmlSource(c, workspace, fileId: file.id, version: version)
-            guard model.connection?.id == c.id, model.selectedWorkspaceId == workspace.id else { return }
+            guard model.connection?.id == c.id, model.selectedWorkspaceId == workspace.id, model.selectedWorkspaceBoundary == draftBoundary else { return }
             source = text; loadedSource = source; ready = true; message = nil
         }
         catch { message = error.localizedDescription }
     }
     private func rebase() async {
-        guard let sync = model.sync, let c = model.connection else { return }
+        guard let sync = model.sync, let c = model.connection, model.selectedWorkspaceBoundary == draftBoundary, model.isUnlocked else { return }
         busy = true
         defer { busy = false }
         do {
             let history = try await sync.htmlHistory(c, workspace, fileId: file.id)
-            guard let current = history.currentVersionId else { return }
+            guard model.selectedWorkspaceBoundary == draftBoundary, let current = history.currentVersionId else { return }
             base = current; versions = history.versions; keepDraft()
             message = "Your source is retained against the latest revision. Review it, then Save revision to publish."
         } catch { message = error.localizedDescription }
     }
     private func save() async {
-        guard let sync = model.sync, let c = model.connection, !base.isEmpty else { return }
+        guard let sync = model.sync, let c = model.connection, !base.isEmpty, model.selectedWorkspaceBoundary == draftBoundary, model.isUnlocked else { return }
         busy = true
         defer { busy = false }
         do {
             try await sync.saveHTML(c, workspace, fileId: file.id, base: base, source: source, title: file.displayName)
+            guard model.selectedWorkspaceBoundary == draftBoundary else { return }
             if let url = draftURL { try? FileManager.default.removeItem(at: url) }
             ready = false
             dismiss()

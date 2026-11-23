@@ -592,7 +592,10 @@ means row version 0 (the whole history), so the client never opens without one.
   no periodic network work survives backgrounding, lock or workspace switch.
 - **Access loss.** A complete scope or channel list that no longer contains a channel deletes the channel's stored
   messages, threads, tasks, docs and bodies, files, folders, comments, reactions and view states. Drafts and unsent
-  rows stay. Cached downloaded file bytes of that channel remain in Caches until disconnect or system purge (gap).
+  rows stay. Mac build 112 removes unshared cached File/attachment bytes after the authoritative transaction commits,
+  preserving shared accessible references, pending commands and exact board/HTML recovery originals. Cleanup failures
+  cannot suppress access-loss notification. Cache writes use the writer's revocation generation to reject older
+  in-flight downloads. See [native review fixes](native-review-fixes.md) for retention and validation boundaries.
 - **Foreground stream** (`LiveStream`). Only while the scene is active and reads can be signed: a bounded catch-up,
   then the stream at the stored cursor with a fresh NIP-98 header (the header form; no query token). Frames are parsed
   incrementally (`SSEParser`), queued on the workspace's `LiveFeed` and applied in ≤ 250 ms batches by the same job.

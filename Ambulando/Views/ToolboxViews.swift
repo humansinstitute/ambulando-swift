@@ -20,8 +20,8 @@ struct ToolboxView: View {
         let key = WorkspaceSync.toolboxKey(workspace.id)
         let nappletKey = WorkspaceSync.nappletsKey(model.connection?.id ?? "", workspace.id)
         List {
-            Section("Workspace apps") { RuntimeAppsSection(workspace: workspace, store: store) }
-            Section("File apps") { GenericAppsSection(workspace: workspace, store: store) }
+            Section("Workspace apps") { RuntimeAppsSection(workspace: workspace, store: store, active: model.mode == .toolbox && model.toolboxPath.isEmpty) }
+            Section("File apps") { GenericAppsSection(workspace: workspace, store: store, active: model.mode == .toolbox && model.toolboxPath.isEmpty) }
             Section("Built-in apps") {
                 NavigationLink(value: WorkRoute.webContent(workspaceId: workspace.id, source: .workspaceReport)) { Label("Workspace Report", systemImage: "chart.bar.doc.horizontal") }
                     .accessibilityIdentifier("apps.workspace-report")

@@ -225,6 +225,23 @@ public struct FileCache: Sendable {
         return url
     }
 
+    /// Deletes only exact revoked File versions and unshared attachments within this cache's boundary.
+    /// User-owned drafts and upload staging are outside the cache and are never traversed.
+    public func purge(workspaceId: String, fileIds: Set<String>, attachmentIds: Set<String>) throws {
+        guard UUID(uuidString: workspaceId) != nil else { return }
+        let workspace = root.appendingPathComponent(workspaceId, isDirectory: true)
+        let ids = fileIds.filter { UUID(uuidString: $0) != nil }
+        guard FileManager.default.fileExists(atPath: workspace.path) else { return }
+        let entries = try FileManager.default.contentsOfDirectory(at: workspace, includingPropertiesForKeys: nil)
+        for entry in entries where ids.contains(where: { entry.lastPathComponent.hasPrefix($0 + "-") }) {
+            try FileManager.default.removeItem(at: entry)
+        }
+        for id in attachmentIds where UUID(uuidString: id) != nil {
+            let target = workspace.appendingPathComponent("attachments", isDirectory: true).appendingPathComponent(id)
+            if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+        }
+    }
+
     /// Removes cached content of one workspace (disconnect, workspace removal).
     public func purge(workspaceId: String) { try? FileManager.default.removeItem(at: root.appendingPathComponent(workspaceId, isDirectory: true)) }
 }
@@ -236,6 +253,7 @@ extension WorkspaceSync {
     public func download(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, file: FileRecord, cache: FileCache) async {
         let sync = self
         await engine.enqueue(Self.downloadKey(workspace.id, file.id), priority: .user, force: true) {
+            let cacheLease = await sync.store.writer.fileCacheLease()
             try await sync.identity.requireReader(npub: connection.signerNpub)
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             if let transfers = sync.transfers, let objectId = file.storageObjectId, let sha = file.sha256,
@@ -245,7 +263,7 @@ extension WorkspaceSync {
                 let downloaded = try await transfers.download(key: key, url: presigned.url, towerHost: api.client.origin.url.host)
                 defer { Task { await transfers.forget(key) } }
                 guard try SHA256Hex.ofFile(downloaded) == sha else { throw TowerError.malformed("file checksum") }
-                _ = try cache.store(fileAt: downloaded, for: file)
+                _ = try await sync.store.writer.cacheFile(at: downloaded, for: file, cache: cache, lease: cacheLease)
                 await sync.store.writer.touch([ChangeKey(.files, workspace.id)])
                 return
             }
@@ -255,7 +273,7 @@ extension WorkspaceSync {
                                      storageObjectId: file.storageObjectId, displayName: file.displayName, description: file.description,
                                      contentType: object.contentType ?? file.contentType, sizeBytes: object.bytes.count, sha256: object.sha256,
                                      archived: file.archived, rowVersion: file.rowVersion, createdAt: file.createdAt, updatedAt: file.updatedAt, raw: file.raw)
-            _ = try cache.store(object.bytes, for: current)
+            _ = try await sync.store.writer.cacheFile(object.bytes, for: current, cache: cache, lease: cacheLease)
             await sync.store.writer.touch([ChangeKey(.files, workspace.id)])
         }
     }
@@ -265,13 +283,14 @@ extension WorkspaceSync {
     public func fileForExport(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, file: FileRecord, cache: FileCache) async throws -> URL {
         let sync = self
         return try await engine.perform(Self.downloadKey(workspace.id, file.id)) {
+            let cacheLease = await sync.store.writer.fileCacheLease()
             try await sync.identity.requireReader(npub: connection.signerNpub)
             if let cached = cache.cached(file) { return cached }
             let api = sync.api(origin: try TowerOrigin(connection.origin))
             let object = try await api.fileObject(workspaceId: workspace.id, appNpub: workspace.appNpub, fileId: file.id)
             try Task.checkCancellation()
             if let expected = file.sha256, expected != object.sha256 { throw TowerError.malformed("file changed; refresh Files and retry") }
-            let url = try cache.store(object.bytes, for: file)
+            let url = try await sync.store.writer.cacheFile(object.bytes, for: file, cache: cache, lease: cacheLease)
             await sync.store.writer.touch([ChangeKey(.files, workspace.id)])
             return url
         }
@@ -284,11 +303,11 @@ extension WorkspaceSync {
             let target = cache.root.appendingPathComponent(workspace.id, isDirectory: true).appendingPathComponent("attachments", isDirectory: true)
                 .appendingPathComponent(objectId)
             guard !FileManager.default.fileExists(atPath: target.path) else { return }
+            let cacheLease = await sync.store.writer.fileCacheLease()
             try await sync.identity.requireSigner(npub: connection.signerNpub)
             let bytes = try await sync.api(origin: try TowerOrigin(connection.origin)).storageContent(objectId: objectId)
             try Task.checkCancellation()
-            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try bytes.write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try await sync.store.writer.cacheAttachment(bytes, at: target, lease: cacheLease)
             await sync.store.writer.touch([ChangeKey(.messages, workspace.id)])
         }
     }

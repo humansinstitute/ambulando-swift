@@ -5,15 +5,22 @@ struct RuntimeAppsSection: View {
     @Environment(AppModel.self) private var model
     let workspace: WorkspaceRecord
     let store: LocalStore
+    var active = true
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var refresh = 0
     @State private var apps = LiveQuery<[RuntimeInstallation]>(initial:[])
     @State private var selection: RuntimeInstallation?
     @State private var reconnectID = ""
     @State private var reconnecting = false
     @State private var failure: String?
-    private var context: [String] { [model.connection?.id ?? "",model.connection?.signerNpub ?? "",workspace.id,String(model.wikiContextEpoch),String(model.canRead)] }
+    private var context: [String] { [model.connection?.id ?? "",model.connection?.signerNpub ?? "",workspace.id,String(model.wikiContextEpoch),String(model.canRead), String(active), String(scenePhase == .active), String(refresh)] }
     var body: some View {
         VStack(alignment:.leading,spacing:8) {
-            Text("Workspace apps").font(.headline)
+            HStack {
+                Text("Workspace apps").font(.headline)
+                Spacer()
+                Button("Refresh apps", systemImage: "arrow.clockwise") { refresh += 1 }.labelStyle(.iconOnly).buttonStyle(.borderless)
+            }
             ForEach(apps.value) { app in
                 Button { selection = app } label: { Label(app.manifest.title,systemImage:"app").badge(app.pendingManifest == nil ? 0 : 1) }.buttonStyle(.borderless).accessibilityIdentifier("runtime.app.\(app.id)")
             }
@@ -24,21 +31,18 @@ struct RuntimeAppsSection: View {
                 Button("Reconnect retained app") { reconnect() }.buttonStyle(.borderless).disabled(reconnecting || !model.isUnlocked || !NappletRuntimeManifest.name(reconnectID))
             }
             if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
+            if let error = model.syncError(forKey: WorkspaceSync.runtimeAppsKey(workspace.id)) { Text(error).font(.caption).foregroundStyle(.secondary) }
         }
         .sheet(item:$selection) { item in NavigationStack { NappletRuntimeView(workspace:workspace,id:item.id) }.frame(minWidth:320,minHeight:460) }
         .task(id:context) {
-            apps.stop(); selection = nil
-            guard model.canRead, let c = model.connection, let sync = model.sync, let runtime = try? sync.runtimeContext(c,workspace) else { return }
-            let boundary = context
+            apps.stop()
+            guard active, scenePhase == .active, model.canRead, let c = model.connection, let sync = model.sync, let runtime = try? sync.runtimeContext(c,workspace) else { return }
             apps.start(store:store,matches:{ $0.table == .appState || $0.table == .access }) {
                 try await store.reader.runtimeApps(connection:c,workspace:workspace,context:runtime)
             }
-            repeat {
-                do { try await sync.refreshRuntimeApps(c,workspace); if boundary == context { failure = nil } }
-                catch { if boundary == context { failure = "Workspace apps could not be verified online." } }
-                do { try await Task.sleep(for:.seconds(30)) } catch { break }
-            } while !Task.isCancelled && boundary == context
+            await sync.scheduleRuntimeApps(c, workspace, force: refresh > 0)
         }
+        .onChange(of: Array(context.prefix(5))) { _, _ in selection = nil }
         .onDisappear { apps.stop() }
     }
     private func reconnect() {
@@ -154,7 +158,8 @@ struct NappletRuntimeView: View {
     }
     private func run() async {
         cleanup(); host = nil; code = nil; failure = nil
-        guard model.canRead, model.selectedWorkspaceId == workspace.id, let c = model.connection, let sync = model.sync else { return }
+        guard model.canRead else { failure = "Unlock to open this app."; return }
+        guard model.selectedWorkspaceId == workspace.id, let c = model.connection, let sync = model.sync else { failure = "Reopen this app in its workspace."; return }
         let boundary = context
         do {
             let result = try await sync.runtimeCode(c,workspace,id:id)

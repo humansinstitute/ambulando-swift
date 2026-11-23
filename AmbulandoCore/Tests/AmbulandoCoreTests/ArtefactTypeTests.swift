@@ -69,8 +69,9 @@ final class ArtefactAssetTests: XCTestCase {
         let file = "00000000-0000-4000-8000-000000000001", version = "00000000-0000-4000-8000-000000000002"
         let asset: [String: Any] = ["name": "image", "status": "ready", "file_id": file, "version_id": version,
             "sha256": SHA256Hex.of(bytes), "size_bytes": bytes.count, "content_type": "image/png"]
-        let result = try await api.hydratedArtefactHTML("<img data-asset='image'>", content: ["assets": [asset]], workspaceId: Fixtures.workspaceId, appNpub: Fixtures.appNpub)
+        let result = try await api.hydratedArtefactHTML("<!DOCTYPE html><html><head></head><body><img data-asset='image'></body></html>", content: ["assets": [asset]], workspaceId: Fixtures.workspaceId, appNpub: Fixtures.appNpub)
         XCTAssertTrue(result.contains("base64,AQID"))
+        XCTAssertTrue(result.hasPrefix("<!DOCTYPE html><html><head><script>"))
         XCTAssertEqual(transport.recorded.count, 1)
         var denied = asset; denied["status"] = "unavailable"
         let unavailable = try await api.hydratedArtefactHTML("<img>", content: ["assets": [denied]], workspaceId: Fixtures.workspaceId, appNpub: Fixtures.appNpub)

@@ -566,3 +566,13 @@ Core profile/pin/context tests validate the local resolution and unchanged recor
 App build and this native window smoke remain required when Xcode's dependency
 plugin or module-cache failures prevent execution. Source build numbers do not
 establish an installed app or live relay/Tower acceptance on a physical device.
+
+
+## Reviewed artefact and app fixes (Mac source build 112)
+
+Artefacts expose saved-original export controls and boundary-isolated HTML recovery, including explicit review
+of older drafts. Mac Deck includes Workspace and File app launchers. Launcher lists refresh only when visible
+and foregrounded or explicitly requested; online runtime authorization remains required. Search adds artefact
+and current-channel filters, and Tasks lets Escape pass through when there is no selection to cancel.
+See [full native finding disposition](native-review-fixes.md). Build/source delivery and MacBook installation
+remain separate; no physical-device acceptance is inferred from local tests.

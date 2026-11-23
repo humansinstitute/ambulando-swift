@@ -171,6 +171,28 @@ func newerGuard(_ table: String) -> String {
 public actor StoreWriter {
     let db: SQLiteConnection
     let changes: ChangeCoalescer
+    private var fileCache: FileCache?
+    private var cacheAccessGeneration: UInt64 = 0
+    private var recoveryDirectories: [URL] = []
+    public func bindFileCache(_ cache: FileCache, recoveryDirectories: [URL] = []) {
+        fileCache = cache; self.recoveryDirectories = recoveryDirectories
+    }
+
+    public func fileCacheLease() -> UInt64 { cacheAccessGeneration }
+    /// Serialize cache writes with revocation: an in-flight download cannot recreate removed bytes after cleanup.
+    public func cacheFile(_ bytes: Data, for file: FileRecord, cache: FileCache, lease: UInt64) throws -> URL {
+        guard lease == cacheAccessGeneration else { throw CancellationError() }
+        return try cache.store(bytes, for: file)
+    }
+    public func cacheFile(at url: URL, for file: FileRecord, cache: FileCache, lease: UInt64) throws -> URL {
+        guard lease == cacheAccessGeneration else { throw CancellationError() }
+        return try cache.store(fileAt: url, for: file)
+    }
+    public func cacheAttachment(_ bytes: Data, at url: URL, lease: UInt64) throws {
+        guard lease == cacheAccessGeneration else { throw CancellationError() }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try bytes.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
 
     init(path: String, changes: ChangeCoalescer) throws {
         db = try SQLiteConnection(path: path, readOnly: false)
@@ -277,6 +299,7 @@ public actor StoreWriter {
     /// Upserts scopes. When `complete`, rows the actor can no longer see are removed with their channels.
     @discardableResult
     public func upsertScopes(workspaceId: String, _ records: [ScopeRecord], complete: Bool) async throws -> Int {
+        var cacheRemovals: [ChannelCacheRemoval] = []
         let (changed, purged): (Int, Bool) = try db.transaction {
             var changed = 0, purged = false
             let s = try db.prepare("""
@@ -302,7 +325,7 @@ public actor StoreWriter {
                     try channels.bind([.text(workspaceId), .text(id)])
                     var channelIds: [String] = []
                     while try channels.step() { if let c = channels.text(0) { channelIds.append(c) } }
-                    for c in channelIds { try purgeChannelContent(workspaceId: workspaceId, channelId: c); purged = true }
+                    for c in channelIds { cacheRemovals.append(try purgeChannelContent(workspaceId: workspaceId, channelId: c)); purged = true }
                     try purgeScopeSurfaces(workspaceId: workspaceId, scopeId: id); purged = true
                     try db.prepare("DELETE FROM scopes WHERE workspace_id = ? AND id = ?").run([.text(workspaceId), .text(id)])
                     try db.prepare("DELETE FROM channels WHERE workspace_id = ? AND scope_id = ?").run([.text(workspaceId), .text(id)])
@@ -311,12 +334,20 @@ public actor StoreWriter {
             }
             return (changed, purged)
         }
+        if purged { cacheAccessGeneration &+= 1 }
+        do { try finishCacheRemovals(cacheRemovals, workspaceId: workspaceId) }
+        catch {
+            // The authoritative transaction already committed. Cleanup failure must never hide access loss.
+            try? db.prepare("INSERT OR REPLACE INTO app_state(key,value) VALUES(?,?)")
+                .run([.text("cache-cleanup-failed:" + workspaceId), .text("Cached file cleanup could not complete.")])
+        }
         if changed > 0 { await emit(purged ? Self.channelContentKeys(workspaceId).union([ChangeKey(.scopes, workspaceId), ChangeKey(.access, workspaceId)]) : [ChangeKey(.scopes, workspaceId), ChangeKey(.channels, workspaceId)]) }
         return changed
     }
 
     @discardableResult
     public func upsertChannels(workspaceId: String, scopeId: String, _ records: [ChannelRecord], complete: Bool) async throws -> Int {
+        var cacheRemovals: [ChannelCacheRemoval] = []
         let (changed, purged): (Int, Bool) = try db.transaction {
             var changed = 0, purged = false
             let s = try db.prepare("""
@@ -339,13 +370,20 @@ public actor StoreWriter {
                 var gone: [String] = []
                 while try existing.step() { if let id = existing.text(0), !keep.contains(id) { gone.append(id) } }
                 for id in gone {
-                    try purgeChannelContent(workspaceId: workspaceId, channelId: id)
+                    cacheRemovals.append(try purgeChannelContent(workspaceId: workspaceId, channelId: id))
                     purged = true
                     try db.prepare("DELETE FROM channels WHERE workspace_id = ? AND id = ?").run([.text(workspaceId), .text(id)])
                     changed += 1
                 }
             }
             return (changed, purged)
+        }
+        if purged { cacheAccessGeneration &+= 1 }
+        do { try finishCacheRemovals(cacheRemovals, workspaceId: workspaceId) }
+        catch {
+            // The authoritative transaction already committed. Cleanup failure must never hide access loss.
+            try? db.prepare("INSERT OR REPLACE INTO app_state(key,value) VALUES(?,?)")
+                .run([.text("cache-cleanup-failed:" + workspaceId), .text("Cached file cleanup could not complete.")])
         }
         if changed > 0 { await emit(purged ? Self.channelContentKeys(workspaceId).union([ChangeKey(.access, workspaceId)]) : Self.channelContentKeys(workspaceId)) }
         return changed
@@ -385,7 +423,93 @@ public actor StoreWriter {
 
     /// Removes everything stored for a channel the actor can no longer see (access loss or archive). Drafts and unsent
     /// rows stay: they belong to the user and show as failed if Tower refuses them.
-    func purgeChannelContent(workspaceId: String, channelId: String) throws {
+    struct ChannelCacheRemoval {
+        var files = Set<String>()
+        var attachments = Set<String>()
+    }
+
+    /// After commit, preserve storage objects still referenced by accessible records or user recovery work.
+    private func finishCacheRemovals(_ removals: [ChannelCacheRemoval], workspaceId: String) throws {
+        guard let fileCache, !removals.isEmpty else { return }
+        var files = Set(removals.flatMap { $0.files }), attachments = Set(removals.flatMap { $0.attachments })
+        let remaining = try db.prepare("SELECT id, storage_object_id FROM files WHERE workspace_id = ?")
+        try remaining.bind([.text(workspaceId)])
+        while try remaining.step() {
+            if let id = remaining.text(0) { files.remove(id) }
+            if let id = remaining.text(1) { attachments.remove(id) }
+        }
+        let messages = try db.prepare("SELECT body, raw FROM messages WHERE workspace_id = ?")
+        try messages.bind([.text(workspaceId)])
+        while try messages.step() {
+            attachments.subtract(StorageMarkdown.references(in: messages.text(0) ?? "").map(\.storageObjectId))
+            attachments.subtract(MessageAttachment.from(messageRaw: messages.blob(1)).map(\.storageObjectId))
+        }
+        // Drafts/outbox are deliberately retained on access loss. Preserve their downloaded references too.
+        for (table, column) in [("drafts", "text"), ("outbox", "body")] {
+            let drafts = try db.prepare("SELECT \(column), attachments FROM \(table) WHERE workspace_id = ?")
+            try drafts.bind([.text(workspaceId)])
+            while try drafts.step() {
+                attachments.subtract(StorageMarkdown.references(in: drafts.text(0) ?? "").map(\.storageObjectId))
+                attachments.subtract(JSONText.attachments(drafts.text(1)).compactMap(\.objectId))
+            }
+        }
+        let docs = try db.prepare("SELECT body, base_storage_object_id FROM doc_drafts WHERE workspace_id = ?")
+        try docs.bind([.text(workspaceId)])
+        while try docs.step() {
+            // Recovery documents can embed storage references in structured JSON. Conservative retention is intentional.
+            let body = String(decoding: docs.blob(0), as: UTF8.self)
+            attachments = attachments.filter { !body.contains($0) && docs.text(1) != $0 }
+        }
+        // Rich document images, comments and task descriptions reuse the same attachment cache.
+        // Ask only whether each candidate is referenced; do not materialize other documents' bytes.
+        for id in attachments {
+            let shared = try db.prepare("""
+            SELECT 1 FROM doc_bodies WHERE workspace_id = ? AND instr(CAST(bytes AS TEXT), ?) > 0
+            UNION ALL SELECT 1 FROM comments WHERE workspace_id = ? AND instr(body || CAST(raw AS TEXT), ?) > 0
+            UNION ALL SELECT 1 FROM tasks WHERE workspace_id = ? AND instr(coalesce(description,'') || CAST(raw AS TEXT), ?) > 0
+            LIMIT 1
+            """)
+            try shared.bind([.text(workspaceId), .text(id), .text(workspaceId), .text(id), .text(workspaceId), .text(id)])
+            if try shared.step() { attachments.remove(id) }
+        }
+        let writes = try db.prepare("SELECT target_id, payload FROM writes WHERE workspace_id = ?")
+        try writes.bind([.text(workspaceId)])
+        while try writes.step() {
+            if let id = writes.text(0) { files.remove(id) }
+            // Pending commands may name a File or storage object in their structured payload.
+            let payload = String(decoding: writes.blob(1), as: UTF8.self)
+            files = files.filter { !payload.contains($0) }
+            attachments = attachments.filter { !payload.contains($0) }
+        }
+        // Exact affected File names only: no traversal of unrelated recovery data.
+        for id in removals.flatMap({ $0.files }) {
+            for directory in recoveryDirectories {
+                for name in [id + ".json", "html-" + workspaceId + "-" + id + ".json"] {
+                    let url = directory.appendingPathComponent(name)
+                    guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                    files.remove(id)
+                    if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 32 * 1024 * 1024,
+                       let bytes = try? Data(contentsOf: url) {
+                        let recovery = String(decoding: bytes, as: UTF8.self)
+                        attachments = attachments.filter { !recovery.contains($0) }
+                    } else { attachments.removeAll() } // Unreadable recovery cannot safely be classified.
+                }
+            }
+        }
+        try fileCache.purge(workspaceId: workspaceId, fileIds: files, attachmentIds: attachments)
+    }
+
+    func purgeChannelContent(workspaceId: String, channelId: String) throws -> ChannelCacheRemoval {
+        var removal = ChannelCacheRemoval()
+        let cachedFiles = try db.prepare("SELECT id FROM files WHERE workspace_id = ? AND channel_id = ?")
+        try cachedFiles.bind([.text(workspaceId), .text(channelId)])
+        while try cachedFiles.step() { if let id = cachedFiles.text(0) { removal.files.insert(id) } }
+        let cachedMessages = try db.prepare("SELECT body, raw FROM messages WHERE workspace_id = ? AND channel_id = ?")
+        try cachedMessages.bind([.text(workspaceId), .text(channelId)])
+        while try cachedMessages.step() {
+            removal.attachments.formUnion(StorageMarkdown.references(in: cachedMessages.text(0) ?? "").map(\.storageObjectId))
+            removal.attachments.formUnion(MessageAttachment.from(messageRaw: cachedMessages.blob(1)).map(\.storageObjectId))
+        }
         let w = SQLValue.text(workspaceId), c = SQLValue.text(channelId)
         try db.prepare("DELETE FROM reactions WHERE workspace_id = ? AND target_id IN (SELECT id FROM messages WHERE workspace_id = ? AND channel_id = ?)").run([w, w, c])
         try db.prepare("DELETE FROM comments WHERE workspace_id = ? AND parent = 'task' AND parent_id IN (SELECT id FROM tasks WHERE workspace_id = ? AND channel_id = ?)").run([w, w, c])
@@ -395,6 +519,7 @@ public actor StoreWriter {
             try db.prepare("DELETE FROM \(table) WHERE workspace_id = ? AND channel_id = ?").run([w, c])
         }
         try purgeChannelSurfaces(workspaceId: workspaceId, channelId: channelId)
+        return removal
     }
 
     /// Upserts one batch of messages in a single transaction. Callers keep batches ≤ 500 rows

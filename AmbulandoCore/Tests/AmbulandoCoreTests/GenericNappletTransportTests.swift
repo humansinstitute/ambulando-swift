@@ -13,6 +13,26 @@ import Testing
         f.genericMetadata = meta; f.bytes = Data("{\"zero\":0,\"answered\":false,\"unanswered\":null}".utf8); f.topLevelWritable = true
         return (f,TowerAPI(client:TowerClient(origin:try TowerOrigin("https://tower.example"),transport:NappletFixtureTransport(fixture:f),signer:try await makeIdentity())))
     }
+    @Test func launcherDescriptorKeepsExactVerifiedFileAndInvalidatesChangedVersionOrDigest() async throws {
+        let (f, api) = try await fixture()
+        let descriptor = try await api.genericAppDescriptor(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, fileId: f.codeId)
+        #expect(descriptor.file.id == f.codeId)
+        #expect(descriptor.code.versionId == f.codeVersion)
+        var row = try JSONSerialization.jsonObject(with: descriptor.file.raw) as! [String: Any]
+        row["current_version"] = ["id": descriptor.code.versionId, "sha256_hex": descriptor.code.sha256]
+        let file = try FileRecord(raw: rawJSON(row))
+        let key = try #require(GenericAppDescriptorKey(file: file))
+        #expect(key.matches(descriptor.code))
+        row["current_version_id"] = UUID().uuidString.lowercased()
+        let moved = try #require(GenericAppDescriptorKey(file: FileRecord(raw: rawJSON(row))))
+        #expect(key != moved); #expect(!moved.matches(descriptor.code))
+        row["current_version_id"] = descriptor.code.versionId
+        row["current_version"] = ["sha256_hex": String(repeating: "0", count: 64)]
+        let changed = try #require(GenericAppDescriptorKey(file: FileRecord(raw: rawJSON(row))))
+        #expect(key != changed); #expect(!changed.matches(descriptor.code))
+        row.removeValue(forKey: "current_version_id"); row["current_version"] = NSNull()
+        #expect(GenericAppDescriptorKey(file: try FileRecord(raw: rawJSON(row))) == nil)
+    }
     @Test func arbitraryDomainCASAndExactUncertainReadback() async throws {
         for lost in [false,true] {
             let (f,api) = try await fixture(); f.lostResponse = lost

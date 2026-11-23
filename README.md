@@ -12,6 +12,16 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Reviewed artefact and app fixes (Mac build 112, iPhone/iPad source build 113)
+
+Artefacts retain standards-mode HTML, report locked and filtered-empty states, refresh on unlock, and keep
+HTML recovery drafts within their workspace boundary with explicit review of older drafts. Saved originals
+retain Download/Share/Save As. Mac Deck includes Workspace and File apps; hidden launcher lists stop refreshing.
+Channel revocation cleans unshared cache bytes while preserving drafts, pending work and shared assets.
+Search adds artefact labels/type/channel filters; Tasks Escape and shared Deck touch targets are corrected.
+See [review disposition and validation](docs/native-review-fixes.md) for remaining offline, host and workflow work.
+Source delivery does not establish installation or live testing on Pete's MacBook.
+
 ## Profile names in boards and canvas (Mac 111, iPhone/iPad 112)
 
 Board discussions use available local profile names and update when cached names

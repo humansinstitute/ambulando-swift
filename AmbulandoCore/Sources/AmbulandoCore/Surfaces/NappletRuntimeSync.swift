@@ -17,6 +17,16 @@ extension WorkspaceSync {
               let service = i["workspace_service_npub"], NostrKeys.isValidNpub(service), let tower = c.towerNpub, NostrKeys.isValidNpub(tower) else { throw FileNappletError.unavailable }
         return .init(origin:c.origin,tower:tower,service:service,workspace:w.id,app:w.appNpub,viewer:c.signerNpub)
     }
+    public static func runtimeAppsKey(_ w: String) -> String { "runtime-apps:\(w)" }
+    /// Shared launcher metadata uses the normal keyed refresh job and read backoff.
+    public func scheduleRuntimeApps(_ c: ConnectionRecord, _ w: WorkspaceRecord, force: Bool = false) async {
+        // Older workspace projections do not advertise the runtime identity. They have no list to refresh.
+        guard (try? runtimeContext(c, w)) != nil else { return }
+        let sync = self
+        await engine.enqueue(Self.runtimeAppsKey(w.id), priority: .visible, force: force, retries: SyncBackoff.readRetries) {
+            try await sync.refreshRuntimeApps(c, w)
+        }
+    }
     public func refreshRuntimeApps(_ c: ConnectionRecord, _ w: WorkspaceRecord) async throws {
         let context = try runtimeContext(c,w), key = Self.runtimeKey(c,w)
         try await identity.requireReader(npub:c.signerNpub)

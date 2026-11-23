@@ -75,7 +75,7 @@ struct DeckView: View {
 
     @ViewBuilder private func page(_ card: DeckCard) -> some View {
         switch card {
-        case .hello: DeckHelloCard(workspace: workspace, store: store)
+        case .hello: DeckHelloCard(workspace: workspace, store: store, active: model.mode == .deck && self.card == .hello)
         case .inbox:
             #if os(iOS)
             DeckInboxCard(workspace: workspace, store: store, active: model.mode == .deck && self.card == .inbox, onNewThread: { startConversation() })
@@ -146,7 +146,7 @@ private struct DeckPagination: View {
                 Button { withAnimation(.snappy) { selection = card } } label: {
                     Circle().fill(selection == card ? Amb.primary : Amb.muted)
                         .frame(width: 8, height: 8)
-                        .frame(width: 22, height: 26)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -958,6 +958,7 @@ struct DeckHelloCard: View {
     @Environment(AppModel.self) private var model
     let workspace: WorkspaceRecord
     let store: LocalStore
+    var active = true
     @State private var name = LiveQuery<String?>(initial: nil)
     @State private var wapps = LiveQuery<[PersonalWappRecord]>(initial: [])
     @State private var napplets = LiveQuery<[InstalledNapplet]>(initial: [])
@@ -970,8 +971,8 @@ struct DeckHelloCard: View {
                 Text(contextLabel(nav)).font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground)
             }
             .padding(.horizontal, 4).padding(.bottom, 6)
-            RuntimeAppsSection(workspace: workspace, store: store)
-            GenericAppsSection(workspace: workspace, store: store)
+            RuntimeAppsSection(workspace: workspace, store: store, active: active)
+            GenericAppsSection(workspace: workspace, store: store, active: active)
             Text("Apps").font(.amb(.footnote).weight(.heavy)).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 4)
             Button { model.openWorkspaceReport(in: workspace) } label: {
                 AppLauncherCard(title: "Workspace Report", subtitle: "Read-only napplet", sources: [], workspace: workspace)
@@ -1152,6 +1153,8 @@ private struct MacDeckWelcome: View {
             items.insert(daily, at: model.dailyMetricsLast(workspace) ? items.count : 0)
         }
         return launcherPanel("Apps") {
+            RuntimeAppsSection(workspace: workspace, store: store, active: model.mode == .deck && model.deckPath.isEmpty)
+            GenericAppsSection(workspace: workspace, store: store, active: model.mode == .deck && model.deckPath.isEmpty)
             if !items.isEmpty {
                 MacLauncherStack(kind: "apps", noun: "apps", items: items, workspace: workspace, expanded: $expanded) {
                     // As on the web: the expanded list ends with the way to choose apps.

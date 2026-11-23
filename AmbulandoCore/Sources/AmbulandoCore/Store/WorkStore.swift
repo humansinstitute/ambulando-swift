@@ -129,6 +129,7 @@ public struct SearchHit: Sendable, Equatable, Identifiable {
     public let recordId: String
     public let title: String
     public let snippet: String
+    public var artefactType: ArtefactType? = nil
     public let channelId: String?
     /// Thread of a message hit (for navigation).
     public let threadId: String?
@@ -785,7 +786,7 @@ extension StoreReader {
                 }
             case "file":
                 if let f = try file(workspaceId: workspaceId, id: hit.id) {
-                    out.append(SearchHit(kind: .file, recordId: f.id, title: f.displayName, snippet: f.contentType ?? "", channelId: f.channelId, threadId: nil))
+                    out.append(SearchHit(kind: .file, recordId: f.id, title: f.displayName, snippet: ArtefactType.file(f).map { $0 == .html ? "HTML artefact" : "Whiteboard" } ?? f.contentType ?? "", artefactType: ArtefactType.file(f), channelId: f.channelId, threadId: nil))
                 }
             default:
                 if let m = try message(workspaceId: workspaceId, id: hit.id), !m.deleted {

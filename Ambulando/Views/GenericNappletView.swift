@@ -187,7 +187,8 @@ struct GenericNappletFileView: View {
     }
     private func run() async {
         cleanup(); host = nil; code = nil; receipt = nil; failure = nil
-        guard model.canRead, model.selectedWorkspaceId == workspace.id, let c = model.connection, let sync = model.sync else { return }
+        guard model.canRead else { failure = "Unlock to open this app."; return }
+        guard model.selectedWorkspaceId == workspace.id, let c = model.connection, let sync = model.sync else { failure = "Reopen this app in its workspace."; return }
         let boundary = context
         do {
             let result = try await sync.genericNappletCode(c, workspace, fileId:file.id)
@@ -197,7 +198,7 @@ struct GenericNappletFileView: View {
             let r = try makeReceipt(c,result,writable); code = result; canWrite = writable; receipt = r
             if !suppressRemembered, trust.contains(r) { start(result) }
             if let store = model.store {
-                invalidations.onLoad = { _ in host?.reauthorize() }
+                invalidations.onLoad = { _ in if scenePhase == .active { host?.reauthorize() } }
                 invalidations.start(store:store,matches:{ [.files,.channels,.access,.appState].contains($0.table) }) {
                     let f = try await store.reader.file(workspaceId:workspace.id,id:file.id)
                     return f?.rowVersion ?? 0

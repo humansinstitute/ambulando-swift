@@ -13,6 +13,14 @@ struct SearchView: View {
     @State private var searched = ""
     @State private var path: [WorkRoute] = []
     @State private var generation = 0
+    @State private var artefactType: ArtefactType?
+    @State private var currentChannelOnly = false
+    private var visibleHits: [SearchHit] {
+        hits.filter { hit in
+            (!currentChannelOnly || hit.channelId == model.context.channelId) &&
+            (artefactType == nil || (artefactType == .document ? hit.kind == .doc : hit.artefactType == artefactType))
+        }
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -38,13 +46,22 @@ struct SearchView: View {
             .scrollContentBackground(.hidden)
             .background(Amb.canvas)   // grouped rows (white) on the recessed surface
             .overlay {
-                if hits.isEmpty {
+                if visibleHits.isEmpty {
                     EmptyNote(title: searched.count >= 2 ? "No matches" : "Search this \(Device.name)",
                               systemImage: "magnifyingglass",
                               detail: "Searches messages, tasks, documents and files saved on this \(Device.name) for the current workspace.")
                 }
             }
             .searchable(text: $query, placement: .drawerAlways, prompt: "Messages, tasks, docs, files")
+            .safeAreaInset(edge: .top, spacing: 0) {
+                ListHeaderBar {
+                    Picker("Artefact type", selection: $artefactType) {
+                        Text("All records").tag(Optional<ArtefactType>.none)
+                        ForEach(ArtefactType.allCases) { Text($0.label).tag(Optional($0)) }
+                    }
+                    if model.context.channelId != nil { Toggle("This channel", isOn: $currentChannelOnly) }
+                }
+            }
             .navigationTitle("Search")
             .inlineTitle()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
@@ -56,7 +73,7 @@ struct SearchView: View {
     private var groups: [(String, [SearchHit])] {
         let order: [(SearchHit.Kind, String)] = [(.task, "Tasks"), (.doc, "Documents"), (.file, "Files"), (.message, "Messages")]
         return order.compactMap { kind, title in
-            let rows = hits.filter { $0.kind == kind }
+            let rows = visibleHits.filter { $0.kind == kind }
             return rows.isEmpty ? nil : (title, rows)
         }
     }

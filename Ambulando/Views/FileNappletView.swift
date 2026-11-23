@@ -252,7 +252,8 @@ struct TrackerHTMLFileView: View {
         host?.destroy(); host = nil; code = nil; trusted = false; receipt = nil; rememberNotice = nil; failure = nil
         updateTask?.cancel(); updateAvailable = false
         active = true
-        guard model.canRead, model.selectedWorkspaceId == workspace.id, let sync = model.sync, let connection = model.connection else { return }
+        guard model.canRead else { failure = "Unlock to open this artefact."; return }
+        guard model.selectedWorkspaceId == workspace.id, let sync = model.sync, let connection = model.connection else { failure = "Reopen this artefact in its workspace."; return }
         let epoch = model.wikiContextEpoch
         do {
             let result = try await sync.fileNappletCode(connection, workspace, fileId: file.id)
@@ -273,7 +274,7 @@ struct TrackerHTMLFileView: View {
                 if !suppressRemembered && trustStore.contains(candidate) { trusted = true; start(result) }
             } else { code = result }
             if let store = model.store {
-                invalidations.onLoad = { _ in host?.reauthorize() }
+                invalidations.onLoad = { _ in if scenePhase == .active { host?.reauthorize() } }
                 invalidations.start(store: store, matches: { [.files, .channels, .appState, .access].contains($0.table) }) {
                     // A changed canonical row is an invalidation signal only; never store tracker values.
                     let f = try await store.reader.file(workspaceId: workspace.id, id: file.id)

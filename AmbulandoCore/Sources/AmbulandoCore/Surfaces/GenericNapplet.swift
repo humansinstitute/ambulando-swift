@@ -166,6 +166,22 @@ public struct GenericNappletBinding: Sendable, Equatable {
         return Self(manifest: try GenericJSON.canonical(m), resources: try GenericJSON.canonical(resources), name: name, capability: cap, appId: app, title: title, icon: icon, resourceId: id, capabilityVersion: version.intValue, allowsSave: ops.contains("save"))
     }
 }
+/// Launcher labels may reuse verified metadata only for an unchanged immutable File version.
+/// This key never grants runtime authority; opening an app still verifies its current ACL and code.
+public struct GenericAppDescriptorKey: Hashable, Sendable {
+    public let fileId: String
+    public let versionId: String
+    public let sha256: String
+    private let metadataDigest: String
+    public init?(file: FileRecord) {
+        guard let row = try? JSONSerialization.jsonObject(with: file.raw) as? [String: Any],
+              let version = lowerUUID((row["current_version_id"] as? String) ?? (row["current_version"] as? [String: Any])?["id"] as? String),
+              let sha = file.sha256, sha.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return nil }
+        fileId = file.id; versionId = version; sha256 = sha; metadataDigest = SHA256Hex.of(file.raw)
+    }
+    public func matches(_ code: GenericNappletCode) -> Bool { versionId == code.versionId && sha256 == code.sha256 }
+}
+
 public struct GenericNappletCode: Equatable, Sendable {
     public init(html: String, binding: GenericNappletBinding, versionId: String, sha256: String) {
         self.html = html; self.binding = binding; self.versionId = versionId; self.sha256 = sha256

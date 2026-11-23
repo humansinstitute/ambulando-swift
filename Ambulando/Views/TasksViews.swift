@@ -110,7 +110,7 @@ struct TasksView: View {
         .onChange(of: model.context) { _, _ in selected.removeAll(); selecting = false; feedback = nil }
         .onChange(of: board) { _, _ in selected.removeAll(); selecting = false }
         .onChange(of: snapshot.value.rows) { _, _ in selected.formIntersection(Set(selectable.map(\.id))) }
-        .onKeyPress(.escape) { if !busy { selected.removeAll(); selecting = false }; return .handled }
+        .onKeyPress(.escape) { guard selecting, !busy else { return .ignored }; selected.removeAll(); selecting = false; return .handled }
         .sheet(isPresented: $creating) {
             TaskCreateSheet(workspace: workspace, store: store, choice: snapshot.value.choice, context: context)
         }

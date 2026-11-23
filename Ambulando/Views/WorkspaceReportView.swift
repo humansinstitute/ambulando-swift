@@ -117,7 +117,8 @@ struct WorkspaceReportFileView: View {
     }
     private func run() async {
         host?.destroy(); host = nil; code = nil; receipt = nil; failure = nil; active = true
-        guard model.canRead, model.selectedWorkspaceId == workspace.id, let c = model.connection, let sync = model.sync else { return }
+        guard model.canRead else { failure = "Unlock to open this app."; return }
+        guard model.selectedWorkspaceId == workspace.id, let c = model.connection, let sync = model.sync else { failure = "Reopen this app in its workspace."; return }
         let boundary = context
         do {
             let result = try await sync.workspaceReportCode(c, workspace, fileId: file.id)
@@ -127,7 +128,7 @@ struct WorkspaceReportFileView: View {
             self.receipt = receipt; code = result
             if !suppressRemembered && trustStore.contains(receipt) { start(result) }
             if let store = model.store {
-                invalidations.onLoad = { _ in host?.reauthorize() }
+                invalidations.onLoad = { _ in if scenePhase == .active { host?.reauthorize() } }
                 invalidations.start(store: store, matches: { [.files, .channels, .access, .appState].contains($0.table) }) {
                     try await store.reader.file(workspaceId: workspace.id, id: file.id)?.rowVersion ?? 0
                 }
@@ -234,7 +235,8 @@ struct WorkspaceReportAppView: View {
     }
     private func discover() async {
         selected = nil; instances = []; loaded = false; failure = nil; working = false
-        guard model.canRead, model.selectedWorkspaceId == workspace.id, let c = model.connection, let sync = model.sync else { return }
+        guard model.canRead else { failure = "Unlock to open this app."; return }
+        guard model.selectedWorkspaceId == workspace.id, let c = model.connection, let sync = model.sync else { failure = "Reopen this app in its workspace."; return }
         let boundary = context
         working = true
         uncertain = UserDefaults.standard.bool(forKey: attemptKey)
