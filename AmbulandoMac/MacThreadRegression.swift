@@ -74,6 +74,9 @@ enum MacThreadRegression {
         }
         defer { heartbeat.cancel() }
         do {
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDMProfileCheck") {
+                try await dmProfileCheck(window, model: model); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacRuntimeV3Check") {
                 try await runtimeNappletCheck(model:model); fflush(stdout); exit(0)
             }

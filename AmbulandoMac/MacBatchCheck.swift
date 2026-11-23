@@ -4,6 +4,36 @@ import AmbulandoCore
 import WebKit
 
 extension MacThreadRegression {
+    /// Synthetic public-profile arrival in the real shared SwiftUI Deck, with no navigation or channel write.
+    static func dmProfileCheck(_ window: NSWindow, model: AppModel) async throws {
+        guard Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test", model.fixture != nil,
+              let store = model.store, let connection = model.connection, let workspace = model.selectedWorkspace,
+              let original = try await store.reader.channel(workspaceId: workspace.id, id: FixtureTower.generalChannel) else {
+            throw Failure(description: "DM profile check requires isolated Mac Test fixture")
+        }
+        let peerHex = String(repeating: "d4", count: 32), peer = NostrKeys.npub(publicKeyHex: String(repeating: "d4", count: 32))!
+        var raw = try JSONSerialization.jsonObject(with: original.raw) as! [String: Any]
+        raw["name"] = "DM: " + peer; raw["kind"] = "dm"; raw["participant_npubs"] = [connection.signerNpub, peer]
+        raw["row_version"] = original.rowVersion + 1
+        let channel = try ChannelRecord(raw: JSONSerialization.data(withJSONObject: raw))
+        try await store.writer.upsertChannels(workspaceId: workspace.id, scopeId: channel.scopeId, [channel], complete: false)
+        model.selectContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id)); model.mode = .deck
+        window.setContentSize(NSSize(width: 1400, height: 1000))
+        try await waitForText(window, "Inbox: #" + peer, "DM heading fallback", seconds: 15)
+        try await waitForText(window, "Chat · #" + peer, "DM card fallback", seconds: 15)
+        let context = model.context
+        let record = ProfileRecord(pubkey: peerHex, npub: peer, displayName: "Late DM Display Name", name: "dm-handle",
+            eventId: String(repeating: "1", count: 64), eventCreatedAt: 1_800_000_000, status: .found, checkedAt: Date())
+        try await store.writer.recordProfileCheck(connectionId: connection.id, found: [record], checked: [peerHex: peer], at: Date())
+        try await waitForText(window, "Inbox: #Late DM Display Name", "same heading follows profile arrival", seconds: 15)
+        try await waitForText(window, "Chat · #Late DM Display Name", "same card follows profile arrival", seconds: 15)
+        try require(model.context == context, "DM profile arrival preserves routing context")
+        let saved = try await store.reader.channel(workspaceId: workspace.id, id: channel.id)
+        try require(saved?.raw == channel.raw, "DM profile arrival does not rewrite the channel")
+        try snapshot(window, model: model, name: "deck-dm-profile-arrival")
+        print("PASS DM_PROFILE heading/card fallback -> late display_name; channel and route unchanged")
+    }
+
     /// Focused UI check: sends pointer events through AppKit; never substitutes model.movePin for a drag.
     static func pinCardCheck(_ window: NSWindow, model: AppModel) async throws {
         model.mode = .deck

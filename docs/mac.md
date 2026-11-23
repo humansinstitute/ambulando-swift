@@ -540,3 +540,29 @@ The regression uses a local stand-in Tower and a throwaway Test identity. It che
 repeat-open focus, main-navigation independence, multiple documents, resize, guarded Save, workspace suspension,
 offline close/reopen draft recovery and lock privacy. This does not establish a live Tower round trip or installation
 on another Mac. Deliver source through GitHub `main`; Pete pulls and builds on his MacBook separately.
+
+
+## Deck DM profile labels (Mac source build 110, iPhone/iPad source build 111)
+
+The Inbox heading, chat channel labels and channel pins use the existing public
+kind-0 display name/name resolver. Profile arrivals refresh the visible Inbox and
+already selected channel pins. A complete validated participant npub remains the
+fallback when no name is available. Custom channel titles, unavailable pins,
+participant lists and routing IDs retain their existing behavior.
+
+The reusable isolated Mac regression checks the actual shared SwiftUI heading and
+chat card before and after a synthetic profile arrives, preserving the selected
+context and stored channel:
+
+```sh
+xcodebuild -project Ambulando.xcodeproj -scheme AmbulandoMacTest -configuration Test \
+  -destination 'platform=macOS,arch=arm64' -derivedDataPath build/test-mac \
+  -skipPackagePluginValidation build
+'build/test-mac/Build/Products/Test/Ambulando Test.app/Contents/MacOS/Ambulando Test' \
+  -AmbulandoFixtureReset -AmbulandoMacThreadRegression -AmbulandoMacDMProfileCheck
+```
+
+Core profile/pin/context tests validate the local resolution and unchanged records.
+App build and this native window smoke remain required when Xcode's dependency
+plugin or module-cache failures prevent execution. Source build numbers do not
+establish an installed app or live relay/Tower acceptance on a physical device.

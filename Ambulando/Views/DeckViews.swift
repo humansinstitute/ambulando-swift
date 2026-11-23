@@ -545,7 +545,7 @@ struct DeckInboxCard: View {
             // for every incoming reply. Sync and the focused conversation continue normally. Access
             // invalidation remains live even behind the modal; closing always reloads the current feed.
             (key.workspaceId == w || key.workspaceId == nil) &&
-                (key.table == .access || (liveInbox && [.threads, .messages, .tasks, .docs, .files, .viewStates, .comments, .channels, .agents, .members, .attentionPreferences].contains(key.table)))
+                (key.table == .access || (liveInbox && [.threads, .messages, .tasks, .docs, .files, .viewStates, .comments, .channels, .agents, .members, .profiles, .attentionPreferences].contains(key.table)))
         }) {
             var sources = DeckActivity.Sources()
             async let channels = store.reader.channels(workspaceId: w)
@@ -558,8 +558,7 @@ struct DeckInboxCard: View {
             async let docComments = store.reader.deckCommentActivity(workspaceId: w, parent: .doc, viewerNpub: viewer)
             async let activities = store.reader.agentActivities(workspaceId: w, channelIds: channelIds)
             let channelRows = try await channels
-            let members = try await store.reader.directoryMembers(workspaceId: w)
-            let names = Dictionary(members.map { ($0.npub, $0.label) }, uniquingKeysWith: { a, _ in a })
+            let names = try await store.reader.people(workspaceId: w).names
             sources.channelScopes = Dictionary(channelRows.map { ($0.id, $0.scopeId) }, uniquingKeysWith: { a, _ in a })
             sources.threads = try await threads
             sources.tasks = try await tasks

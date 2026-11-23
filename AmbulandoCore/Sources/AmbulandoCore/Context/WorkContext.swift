@@ -121,11 +121,16 @@ public enum SidebarNavigation {
         let participants = participants(channel)
         if direct, participants.count == 1, participants.first == viewerNpub { return "Note to self" }
         let others = participants.filter { $0 != viewerNpub }
-        if !others.isEmpty { return others.map { npub in PersonNamePolicy.usable(names[npub]) ?? "Unknown person" }.joined(separator: ", ") }
+        if !others.isEmpty { return others.map { npub in participantLabel(npub, name: names[npub]) }.joined(separator: ", ") }
         if direct {
             return "Direct message · identity unavailable"
         }
         return title.isEmpty ? String(channel.id.prefix(8)) : title
+    }
+
+    private static func participantLabel(_ npub: String, name: String?) -> String {
+        if let name = PersonNamePolicy.usable(name), name != "Unknown person" { return name }
+        return NostrKeys.publicKeyHex(npub: npub) != nil ? npub : "Unknown person"
     }
 
     public static func participants(_ channel: ChannelRecord) -> [String] {

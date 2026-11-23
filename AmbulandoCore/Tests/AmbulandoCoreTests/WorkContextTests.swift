@@ -122,10 +122,10 @@ final class WorkContextTests: XCTestCase {
         XCTAssertEqual(SidebarNavigation.label(plain, viewerNpub: TestKeys.npub, names: [:]), "general")
     }
 
-    func testDMIdentityLabelsNeverExposeKeysAndPreserveCustomTitles() throws {
+    func testDMIdentityLabelsPreferNamesThenValidatedKeysAndPreserveCustomTitles() throws {
         let dm = try channel(Self.dmChannel, scope: Self.dmScope, "DM: \(Self.other)", kind: "dm", participants: [TestKeys.npub, Self.other])
-        XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [:]), "Unknown person")
-        XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [Self.other: "npub1old…key"]), "Unknown person")
+        XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [:]), Self.other)
+        XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [Self.other: "npub1old…key"]), Self.other)
         XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [Self.other: "Cached name"]), "Cached name")
         XCTAssertEqual(SidebarNavigation.label(dm, viewerNpub: TestKeys.npub, names: [Self.other: "Updated name"]), "Updated name")
         XCTAssertEqual(dm.name, "DM: \(Self.other)")

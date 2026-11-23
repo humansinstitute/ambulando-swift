@@ -434,6 +434,8 @@ extension StoreReader {
         let pins = try rows("SELECT raw FROM pins WHERE connection_id = ? AND workspace_id = ? AND pinned = 1 LIMIT 500",
                             [.text(connectionId), .text(workspaceId)], PinRecord.init(raw:))
             .sorted(by: PinRecord.displayOrder)
+        let names = pins.contains { $0.resourceType == .channel } ? try people(workspaceId: workspaceId).names : [:]
+        let viewer = try viewerNpub(workspaceId: workspaceId)
         return try pins.map { pin in
             switch pin.resourceType {
             case .file:
@@ -447,7 +449,7 @@ extension StoreReader {
                 return PinnedItem(pin: pin, title: d?.title, channelId: d?.channelId ?? pin.channelId, scopeId: d?.scopeId ?? pin.scopeId)
             case .channel:
                 let c = try channel(workspaceId: workspaceId, id: pin.resourceId)
-                return PinnedItem(pin: pin, title: c?.name, channelId: c?.id, scopeId: c?.scopeId ?? pin.scopeId)
+                return PinnedItem(pin: pin, title: c.map { SidebarNavigation.label($0, viewerNpub: viewer, names: names) }, channelId: c?.id, scopeId: c?.scopeId ?? pin.scopeId)
             case .thread:
                 let t = try thread(workspaceId: workspaceId, id: pin.resourceId)
                 var title = t?.title

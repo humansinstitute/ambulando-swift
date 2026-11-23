@@ -278,6 +278,28 @@ final class ProfileStoreTests: XCTestCase {
         return (store, connection)
     }
 
+    func testPinnedDMUsesLateProfilesWithoutChangingItsRouteOrStoredChannel() async throws {
+        let (store, c) = try await connectedStore()
+        let id = Fixtures.channel1
+        var raw = Fixtures.channel(id, scope: Fixtures.scopeA, name: "DM: \(ana)")
+        raw["kind"] = "dm"
+        raw["participant_npubs"] = [TestKeys.npub, ana]
+        let channel = try ChannelRecord(raw: Fixtures.json(raw))
+        try await store.writer.upsertChannels(workspaceId: w, scopeId: Fixtures.scopeA, [channel], complete: false)
+        let pin = try PinRecord(raw: Fixtures.json(["workspace_id": w, "id": UUID().uuidString.lowercased(), "resource_type": "channel",
+            "resource_id": id, "pinned": true, "row_version": 1]))
+        try await store.writer.upsertPins(connectionId: c.id, workspaceId: w, [pin], complete: false)
+        let before = try await store.reader.pinnedItems(connectionId: c.id, workspaceId: w)
+        XCTAssertEqual(before.first?.title, ana)
+        try await store.writer.recordProfileCheck(connectionId: c.id, found: [record(ana, "Kind zero display name", at: 200)], checked: [anaHex: ana], at: Date())
+        let after = try await store.reader.pinnedItems(connectionId: c.id, workspaceId: w)
+        XCTAssertEqual(after.first?.title, "Kind zero display name")
+        XCTAssertEqual(after.first?.pin, before.first?.pin)
+        XCTAssertEqual(after.first?.channelId, id)
+        let saved = try await store.reader.channel(workspaceId: w, id: id)
+        XCTAssertEqual(saved?.name, channel.name)
+    }
+
     func testNewestProfileWinsAndMissingNeverClobbersAFoundProfile() async throws {
         let (store, c) = try await connectedStore()
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
