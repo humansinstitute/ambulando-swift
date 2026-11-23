@@ -40,3 +40,37 @@ Validation uses fixed signed-transport fixtures, strict count/identity/range and
 manifest checks, and isolated native WebKit/UI checks. Local unsigned builds and
 GitHub source delivery do not establish backend activation, live-account counts,
 TestFlight distribution or installation on Pete's devices.
+
+## Generic storage capability
+
+The common v2 cartridge runtime also supports a `workspace-aggregate` binding
+with capability `version: 2` and `operations: ["read"]`. The outer manifest and
+File metadata remain version 2, with the same workspace resource binding. The
+frame's exact `read`/`range` request is unchanged. Capability version 1 and the
+legacy report retain their strict activity-only response and request behavior.
+
+Only an approved version 2 binding adds `storage=workspace` to the existing
+signed report route. The server requires effective `workspace.manage`. Consent
+explicitly covers workspace-wide retained storage, including private scopes,
+without message or file content. Changing the capability version invalidates
+the remembered approval fingerprint. Existing identity, code freshness,
+revocation, context and signer checks continue before and after reads.
+
+Storage is current retained inventory, independent of the activity range. The
+host validates the existing activity report separately, then the bounded
+`workspace-storage-v1` structure: unique generic group/metric IDs, safe integer
+values, bytes/count units, method, estimated/actual/unavailable status, scope,
+snapshot time and caveats. New metric IDs within these bounds need no host
+update. Unavailable measurements remain null, never zero. PostgreSQL logical
+workspace estimates and metadata/history subsets do not represent physical database
+size; deduplicated recorded object metadata does not measure provider billing.
+The cartridge owns metric labels and rendering.
+
+An HTTP 403 from this version 2 report request yields `forbidden` with
+`Workspace management permission required.` Version 1 error handling is
+unchanged. Other failures remain unavailable or invalid; no alternate endpoint,
+arbitrary URL, SQL, provider request or credential is exposed to the frame.
+
+Shared synthetic fixtures in the core test suite cover the full report, storage
+extension and bridge errors. Source support does not activate the backend API,
+publish a new File version, or install an app on a user's device.

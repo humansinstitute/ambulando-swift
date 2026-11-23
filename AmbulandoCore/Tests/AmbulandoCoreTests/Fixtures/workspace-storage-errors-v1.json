@@ -1,0 +1,29 @@
+{
+  "request": {
+    "type": "wingman-napplet-data",
+    "version": 2,
+    "session": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "requestId": "storage1",
+    "operation": "read",
+    "binding": "summary",
+    "range": "all"
+  },
+  "forbidden": {
+    "type": "wingman-napplet-result",
+    "version": 2,
+    "session": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "requestId": "storage1",
+    "status": "error",
+    "code": "forbidden",
+    "message": "Workspace management permission required."
+  },
+  "unavailable": {
+    "type": "wingman-napplet-result",
+    "version": 2,
+    "session": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "requestId": "storage1",
+    "status": "error",
+    "code": "unavailable",
+    "message": "Operation could not be confirmed."
+  }
+}

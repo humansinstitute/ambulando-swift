@@ -1,0 +1,184 @@
+{
+  "manifest": {
+    "version": 2,
+    "app_id": "workspace-report-generic",
+    "title": "Workspace Report",
+    "icon": "📊",
+    "bindings": {
+      "summary": {
+        "capability": "workspace-aggregate",
+        "version": 2,
+        "operations": [
+          "read"
+        ]
+      }
+    }
+  },
+  "metadata": {
+    "napplet": {
+      "version": 2,
+      "app_id": "workspace-report-generic",
+      "bindings": {
+        "summary": {
+          "workspace_id": "00000000-0000-4000-8000-000000000001"
+        }
+      }
+    }
+  },
+  "value": {
+    "format": "workspace-report-v1",
+    "workspace_id": "00000000-0000-4000-8000-000000000001",
+    "range": "all",
+    "from": null,
+    "to": "2026-01-01T00:00:00.000Z",
+    "as_of": "2026-01-01T00:00:00.000Z",
+    "timezone": "UTC",
+    "complete": true,
+    "channel_policy": "active-project-channels",
+    "channels": [],
+    "activity": {
+      "messages": 0,
+      "conversations": 0
+    },
+    "inventory": {
+      "channels": 0,
+      "conversations": 0,
+      "tasks": {
+        "total": 0,
+        "open": 0,
+        "completed": 0,
+        "archived": 0,
+        "by_state": {
+          "new": 0,
+          "ready": 0,
+          "in_progress": 0,
+          "review": 0,
+          "done": 0,
+          "backlog": 0,
+          "blocked": 0,
+          "archive": 0,
+          "archived": 0
+        }
+      },
+      "documents": 0,
+      "files": 0
+    },
+    "ranking": {
+      "total_channels": 0,
+      "returned_channels": 0,
+      "has_more": false,
+      "other_messages": 0,
+      "other_conversations": 0
+    },
+    "coverage": {
+      "tasks_channels": 0,
+      "documents_channels": 0,
+      "files_channels": 0
+    },
+    "storage": {
+      "format": "workspace-storage-v1",
+      "workspace_id": "00000000-0000-4000-8000-000000000001",
+      "scope": "current-workspace",
+      "as_of": "2026-01-01T00:00:00.000Z",
+      "activity_range_applies": false,
+      "groups": [
+        {
+          "id": "postgres",
+          "metrics": [
+            {
+              "id": "rows",
+              "value": 40,
+              "unit": "count",
+              "method": "workspace-row-count",
+              "status": "estimated"
+            },
+            {
+              "id": "row_json_bytes",
+              "value": 18668,
+              "unit": "bytes",
+              "method": "logical-json-utf8",
+              "status": "estimated"
+            },
+            {
+              "id": "metadata_json_bytes",
+              "value": 4,
+              "unit": "bytes",
+              "method": "logical-json-utf8-subset",
+              "status": "estimated"
+            },
+            {
+              "id": "history_rows",
+              "value": 0,
+              "unit": "count",
+              "method": "history-table-row-count",
+              "status": "estimated"
+            },
+            {
+              "id": "history_row_json_bytes",
+              "value": 0,
+              "unit": "bytes",
+              "method": "logical-json-utf8-subset",
+              "status": "estimated"
+            },
+            {
+              "id": "tables_measured",
+              "value": 114,
+              "unit": "count",
+              "method": "workspace-table-count",
+              "status": "estimated"
+            },
+            {
+              "id": "physical_bytes",
+              "value": null,
+              "unit": "bytes",
+              "method": "not-measured",
+              "status": "unavailable"
+            }
+          ]
+        },
+        {
+          "id": "object_storage",
+          "metrics": [
+            {
+              "id": "objects",
+              "value": 0,
+              "unit": "count",
+              "method": "completed-metadata-distinct-paths",
+              "status": "estimated"
+            },
+            {
+              "id": "bytes",
+              "value": 0,
+              "unit": "bytes",
+              "method": "completed-metadata-distinct-paths",
+              "status": "estimated"
+            },
+            {
+              "id": "pending_objects",
+              "value": 0,
+              "unit": "count",
+              "method": "incomplete-metadata-count",
+              "status": "estimated"
+            },
+            {
+              "id": "provider_actual_bytes",
+              "value": null,
+              "unit": "bytes",
+              "method": "not-measured",
+              "status": "unavailable"
+            }
+          ]
+        }
+      ],
+      "provider_measured_at": null,
+      "last_object_completed_at": null,
+      "caveats": [
+        "PostgreSQL totals serialize retained rows in public base tables with an explicit UUID workspace_id; metadata and history are subsets of row_json_bytes.",
+        "Includes soft-deleted and archived rows and retained versions; history means tables named versions, audit or outbox. Excludes shared rows without workspace_id, legacy workspace namespaces, indexes, TOAST overhead, WAL, free space and backups.",
+        "Object bytes are completed v4 storage metadata deduplicated by storage_path, attributed by explicit pg_workspace_id or retained workspace references (including deleted versions). Shared objects may be attributed to more than one workspace; workspace totals are not additive.",
+        "Object metadata does not confirm current provider existence, lifecycle deletion, provider-only versions, multipart uploads, replication or billing. Pending uploads are excluded from bytes. Managed publisher storage and unreferenced legacy uploads without workspace attribution are excluded.",
+        "Physical PostgreSQL and provider-confirmed bytes are unavailable; no instance totals, bucket listing or provider requests are performed."
+      ]
+    }
+  }
+}

@@ -223,3 +223,82 @@ extension MacThreadRegression {
     }
 }
 #endif
+
+#if DEBUG
+extension MacThreadRegression {
+    /// Candidate HTML and golden data are supplied externally; this never reads a live workspace.
+    static func storageReportCheck() async throws {
+        try require(Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test", "isolated test app")
+        let args = ProcessInfo.processInfo.arguments
+        func argument(_ flag: String) throws -> String {
+            guard let at = args.firstIndex(of: flag), args.indices.contains(at + 1) else { throw Failure(description: "missing " + flag) }; return args[at + 1]
+        }
+        let candidate = try String(contentsOfFile: argument("-StorageCandidate"), encoding: .utf8)
+        let golden = try GenericJSON.decode(Data(contentsOf: URL(fileURLWithPath: argument("-StorageGolden"))))
+        let errors = try GenericJSON.decode(Data(contentsOf: URL(fileURLWithPath: argument("-StorageErrors"))))
+        let forbidden = errors["forbidden"] as! [String: Any]
+        let aggregate = golden["value"] as! [String: Any]
+        let probe = "<script>addEventListener('message',e=>{if(e.data?.status==='error')window.storageError=e.data;if(e.data?.storageRefresh)document.getElementById('refresh').click();if(e.data?.storageProbe)parent.postMessage({storageProbe:{error:window.storageError,text:document.body.innerText,overflow:document.documentElement.scrollWidth>innerWidth+1,metrics:[...document.querySelectorAll('.storage-metrics article')].map(x=>({label:x.querySelector('p').textContent,value:x.querySelector('strong').textContent}))}},'*')})</script>"
+        let html = candidate + probe
+        guard let binding = try GenericNappletBinding.parse(html: html, metadata: GenericJSON.canonical(golden["metadata"]!)) else { throw Failure(description: "candidate binding") }
+        try require(binding.includesWorkspaceStorage, "candidate uses aggregate capability 2")
+        let code = GenericNappletCode(html: html, binding: binding, versionId: UUID().uuidString.lowercased(), sha256: SHA256Hex.of(Data(html.utf8)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 820), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; defer { window.orderOut(nil) }
+        var revoked = false, reads = 0
+        for reopen in 0..<2 {
+            let host = GenericNappletHost(code: code, canWrite: false, authorize: { false }, read: { range in
+                reads += 1
+                if revoked { throw FileNappletError.forbidden }
+                var report = aggregate; let range = range ?? "30d"; report["range"] = range
+                let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                let end = formatter.date(from: report["as_of"] as! String)!
+                report["from"] = ["7d": 7, "30d": 30, "90d": 90][range].map { formatter.string(from: end.addingTimeInterval(-Double($0) * 86400)) as Any } ?? NSNull()
+                return FileNappletData(bytes: try GenericJSON.canonical(report), versionId: "", canWrite: false)
+            }, save: { _, _ in throw FileNappletError.invalid })
+            host.open(); defer { host.destroy() }
+            guard let page = host.page, let wk = page.webView else { throw Failure(description: "storage WebKit") }
+            window.contentView = wk; window.makeKeyAndOrderFront(nil)
+            for _ in 0..<200 { if reads > reopen && !host.busy { break }; try await Task.sleep(for: .milliseconds(30)) }
+            try require(host.failure == nil && reads > reopen, "candidate read on fresh reopen")
+            _ = try await wk.evaluateJavaScript("addEventListener('message',e=>{if(e.data?.storageProbe)window.storageProbe=e.data.storageProbe});true")
+            for width in [320, 390, 800] {
+                window.setContentSize(NSSize(width: width, height: 820)); wk.frame = window.contentView!.bounds
+                var state: [String: Any]?
+                for _ in 0..<100 {
+                    _ = try await wk.evaluateJavaScript("window.storageProbe=null;document.getElementById('napplet').contentWindow.postMessage({storageProbe:true},'*');true")
+                    try await Task.sleep(for: .milliseconds(40))
+                    state = try await wk.evaluateJavaScript("window.storageProbe") as? [String: Any]
+                    if (state?["metrics"] as? [[String: Any]])?.isEmpty == false { break }
+                }
+                let metrics = state?["metrics"] as? [[String: Any]] ?? []
+                try require(state?["overflow"] as? Bool == false, "storage responsive at \(width)")
+                for label in ["Physical database bytes", "Provider-measured bytes"] {
+                    try require(metrics.first { $0["label"] as? String == label }?["value"] as? String == "Unavailable", "unmeasured value never zero")
+                }
+                try require((state?["text"] as? String)?.contains("subset") == true, "subset labeling")
+            }
+            if reopen == 1 {
+                revoked = true
+                _ = try await wk.evaluateJavaScript("document.getElementById('napplet').contentWindow.postMessage({storageRefresh:true},'*');true")
+                var denied = false
+                for _ in 0..<100 {
+                    _ = try await wk.evaluateJavaScript("document.getElementById('napplet').contentWindow.postMessage({storageProbe:true},'*');true")
+                    try await Task.sleep(for: .milliseconds(40))
+                    let state = try await wk.evaluateJavaScript("window.storageProbe") as? [String: Any]
+                    if (state?["error"] as? [String: Any])?["message"] as? String == forbidden["message"] as? String {
+                        try require((state?["metrics"] as? [[String: Any]])?.isEmpty == true, "forbidden clears rendered metrics")
+                        denied = true; break
+                    }
+                }
+                try require(denied, "exact forbidden message through native bridge")
+                host.reauthorize()
+                for _ in 0..<200 where host.authorizing { try await Task.sleep(for: .milliseconds(20)) }
+                try require(host.page == nil && host.failure != nil, "periodic management revocation clears projection")
+            }
+            host.destroy()
+        }
+        print("STORAGE_REPORT_PASS candidateRendered freshReopen responsive320390800 unavailableNotZero subsetLabels managementRevocationClears")
+    }
+}
+#endif

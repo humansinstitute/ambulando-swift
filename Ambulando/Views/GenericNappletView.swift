@@ -14,6 +14,7 @@ final class GenericNappletHost {
     private var closed = false
     private var task: Task<Void, Never>?
     private var deadline: Task<Void, Never>?
+    private var aggregateRange: String?
     private var base: String?
     private var queuedRead: (request: GenericNappletRequest, expires: ContinuousClock.Instant)?
     let code: GenericNappletCode
@@ -32,7 +33,7 @@ final class GenericNappletHost {
     }
     func destroy(_ message: String? = nil) {
         closed = true; queuedRead = nil; task?.cancel(); deadline?.cancel(); task = nil; deadline = nil
-        page?.destroy(); page = nil; base = nil; dirty = false; busy = false; authorizing = false; writing = false; failure = message
+        page?.destroy(); page = nil; base = nil; aggregateRange = nil; dirty = false; busy = false; authorizing = false; writing = false; failure = message
     }
     private func timer(until expires: ContinuousClock.Instant? = nil) {
         deadline?.cancel()
@@ -49,6 +50,7 @@ final class GenericNappletHost {
             guard let self else { return }
             do {
                 let write = try await authorize()
+                if code.binding.includesWorkspaceStorage { _ = try await read(aggregateRange ?? "30d") }
                 guard !Task.isCancelled, !closed, page === expectedPage, write == canWrite else { if !Task.isCancelled { destroy("Permissions or context changed. Reopen to review access.") }; return }
                 authorizing = false; deadline?.cancel() // Do not reload or replace a healthy draft DOM.
                 if let next = queuedRead {
@@ -79,7 +81,7 @@ final class GenericNappletHost {
                 if let value = request.value, let base = request.base { data = try await save(base, value) }
                 else { data = try await read(request.range) }
                 guard !Task.isCancelled, !closed, page === p, data.canWrite == canWrite else { if !Task.isCancelled { destroy("Access changed. Reopen the napplet.") }; return }
-                base = data.versionId; busy = false; writing = false; deadline?.cancel()
+                base = data.versionId; aggregateRange = request.range; busy = false; writing = false; deadline?.cancel()
                 if request.operation == "save" { dirty = false }
                 var result: [String: Any] = ["type":"wingman-napplet-result", "version":2, "session":p.session, "requestId":request.id, "status":"ready", "canWrite":canWrite, "privacy":code.binding.capability == "private-json-file" ? "self-channel" : "viewer-channels"]
                 if code.binding.capability == "private-json-file" { result["baseVersionId"] = data.versionId }
@@ -91,7 +93,7 @@ final class GenericNappletHost {
                     guard try await authorize() == canWrite, !Task.isCancelled, !closed else { throw FileNappletError.unavailable }
                     busy = false; writing = false; deadline?.cancel()
                     let code: String
-                    switch error { case FileNappletError.conflict: code = "conflict"; case FileNappletError.invalid: code = "invalid"; default: code = "unavailable" }
+                    switch error { case FileNappletError.forbidden: code = "forbidden"; case FileNappletError.conflict: code = "conflict"; case FileNappletError.invalid: code = "invalid"; default: code = "unavailable" }
                     reply(request.id, code: code)
                 } catch { if !Task.isCancelled { destroy("Access could not be verified. Reopen the napplet.") } }
             }
@@ -100,7 +102,7 @@ final class GenericNappletHost {
     private func reply(_ id: String, code: String) {
         guard let page else { return }
         page.send(["type":"wingman-napplet-result","version":2,"session":page.session,"requestId":id,"status":"error","code":code,
-                   "message":code == "invalid" ? "Invalid request." : code == "conflict" ? "A newer version exists." : "Operation could not be confirmed."])
+                   "message":code == "forbidden" ? "Workspace management permission required." : code == "invalid" ? "Invalid request." : code == "conflict" ? "A newer version exists." : "Operation could not be confirmed."])
     }
 }
 
@@ -151,7 +153,7 @@ struct GenericNappletFileView: View {
             } else if let code {
                 VStack(spacing:16) {
                     Text("\(code.binding.icon) \(code.binding.title)").font(.title2)
-                    Text(code.binding.capability == "private-json-file" ? "Allow this code to read\(canWrite ? " and save" : "") its bound JSON File in your personal channel?" : "Allow this code to read authorized workspace activity and inventory totals?")
+                    Text(code.binding.capability == "private-json-file" ? "Allow this code to read\(canWrite ? " and save" : "") its bound JSON File in your personal channel?" : code.binding.includesWorkspaceStorage ? "Allow this code to read workspace activity and workspace-wide retained storage totals, including private scopes? No message or file content is shared. Current server-verified workspace management permission is required." : "Allow this code to read authorized workspace activity and inventory totals?")
                     if canWrite && code.binding.capability == "private-json-file" {
                         Text("Saving replaces the whole JSON object. This app is responsible for its data format.").font(.caption)
                     }

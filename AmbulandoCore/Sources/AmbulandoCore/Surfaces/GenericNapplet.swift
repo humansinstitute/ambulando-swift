@@ -129,6 +129,8 @@ public struct GenericNappletBinding: Sendable, Equatable {
     public let title: String
     public let icon: String
     public let resourceId: String
+    public let capabilityVersion: Int
+    public var includesWorkspaceStorage: Bool { capability == "workspace-aggregate" && capabilityVersion == 2 }
     public let allowsSave: Bool
     public static func parse(html: String, metadata: Data) throws -> Self? {
         let meta = try JSONSerialization.jsonObject(with: metadata) as? [String: Any] ?? [:]
@@ -155,16 +157,19 @@ public struct GenericNappletBinding: Sendable, Equatable {
               let icon = m["icon"] as? String, (1...8).contains(icon.unicodeScalars.count), !icon.contains(where: { "<>:/\\".contains($0) }),
               ![title, icon].contains(where: { $0.unicodeScalars.contains { $0.value < 32 || (127...159).contains($0.value) } }),
               let bindings = m["bindings"] as? [String: Any], bindings.count == 1, let name = bindings.keys.first, GenericJSON.matches(name, "^[a-z][a-z0-9_]{0,31}"),
-              let b = bindings[name] as? [String: Any], GenericJSON.exact(b, ["capability","version","operations"]), TrackerDocument.number(b["version"]) == 1,
+              let b = bindings[name] as? [String: Any], GenericJSON.exact(b, ["capability","version","operations"]), let version = TrackerDocument.number(b["version"]),
               let cap = b["capability"] as? String, let ops = b["operations"] as? [String],
-              (cap == "private-json-file" && (ops == ["read"] || ops == ["read","save"])) || (cap == "workspace-aggregate" && ops == ["read"]),
+              (cap == "private-json-file" && version == 1 && (ops == ["read"] || ops == ["read","save"])) || (cap == "workspace-aggregate" && (version == 1 || version == 2) && ops == ["read"]),
               GenericJSON.exact(n, ["version","app_id","bindings"]), TrackerDocument.number(n["version"]) == 2, n["app_id"] as? String == app,
               let resources = n["bindings"] as? [String: Any], GenericJSON.exact(resources, [name]), let r = resources[name] as? [String: Any],
               GenericJSON.exact(r, [cap == "private-json-file" ? "file_id" : "workspace_id"]), let id = r.values.first as? String, GenericJSON.uuid(id) else { throw FileNappletError.invalid }
-        return Self(manifest: try GenericJSON.canonical(m), resources: try GenericJSON.canonical(resources), name: name, capability: cap, appId: app, title: title, icon: icon, resourceId: id, allowsSave: ops.contains("save"))
+        return Self(manifest: try GenericJSON.canonical(m), resources: try GenericJSON.canonical(resources), name: name, capability: cap, appId: app, title: title, icon: icon, resourceId: id, capabilityVersion: version.intValue, allowsSave: ops.contains("save"))
     }
 }
 public struct GenericNappletCode: Equatable, Sendable {
+    public init(html: String, binding: GenericNappletBinding, versionId: String, sha256: String) {
+        self.html = html; self.binding = binding; self.versionId = versionId; self.sha256 = sha256
+    }
     public let html: String
     public let binding: GenericNappletBinding
     public let versionId: String

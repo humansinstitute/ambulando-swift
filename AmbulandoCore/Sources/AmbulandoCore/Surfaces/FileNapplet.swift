@@ -2,7 +2,7 @@ import Foundation
 import CoreFoundation
 
 /// File bridge v1 deliberately admits one reviewed format. It never accepts paths, URLs or signing intents.
-public enum FileNappletError: Error, Sendable { case invalid, unavailable, conflict }
+public enum FileNappletError: Error, Sendable { case invalid, unavailable, conflict, forbidden }
 
 public enum TrackerDocument {
     public static let maxBytes = 1024 * 1024

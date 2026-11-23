@@ -77,6 +77,9 @@ enum MacThreadRegression {
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacRuntimeV3Check") {
                 try await runtimeNappletCheck(model:model); fflush(stdout); exit(0)
             }
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacStorageReportCheck") {
+                try await storageReportCheck(); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacGenericNappletCheck") {
                 try await genericNappletCheck(model:model); fflush(stdout); exit(0)
             }

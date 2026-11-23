@@ -68,8 +68,17 @@ extension TowerAPI {
     public func readGenericAggregate(workspace: String, app: String, viewer: String, fileId: String, expected: GenericNappletCode, range: String, identity: [String: String]) async throws -> Data {
         guard expected.binding.capability == "workspace-aggregate", WorkspaceReportRequest.ranges.contains(range) else { throw FileNappletError.invalid }
         _ = try await authorizeGenericNapplet(workspace: workspace, app: app, viewer: viewer, fileId: fileId, expected: expected)
-        let bytes = try await client.request(path: try Self.base(workspace) + "/workspace-report", query: [URLQueryItem(name: "range", value: range), URLQueryItem(name: "top_n", value: "10")], appNpub: app)
-        let value = try WorkspaceReportDocument.validate(bytes, workspace: workspace, range: range, identity: identity)
+        var query = [URLQueryItem(name: "range", value: range), URLQueryItem(name: "top_n", value: "10")]
+        if expected.binding.includesWorkspaceStorage { query.append(URLQueryItem(name: "storage", value: "workspace")) }
+        let bytes: Data
+        do { bytes = try await client.request(path: try Self.base(workspace) + "/workspace-report", query: query, appNpub: app) }
+        catch {
+            if expected.binding.includesWorkspaceStorage, case TowerError.http(let status, _, _) = error, status == 403 { throw FileNappletError.forbidden }
+            throw error
+        }
+        let value = try expected.binding.includesWorkspaceStorage
+            ? WorkspaceStorageDocument.validateReport(bytes, workspace: workspace, range: range, identity: identity)
+            : WorkspaceReportDocument.validate(bytes, workspace: workspace, range: range, identity: identity)
         _ = try await authorizeGenericNapplet(workspace: workspace, app: app, viewer: viewer, fileId: fileId, expected: expected)
         return value
     }

@@ -85,6 +85,7 @@ final class FileNappletFixture: @unchecked Sendable {
     var genericSharedCode = false
     var genericMetadata: [String: Any]?
     var reportMode = false
+    var reportStatus = 200
     var reportPayload: [String: Any] = [:]
     var reportRequests: [URLRequest] = []
     var denied = false
@@ -127,7 +128,7 @@ final class FileNappletFixture: @unchecked Sendable {
             let path = request.url!.path, method = request.httpMethod ?? "GET"
             if denied { return (403, ["code": "permission_denied"]) }
             if reportMode, path.hasSuffix("/me") { return (200, ["identity": ["workspace_id": Fixtures.workspaceId, "app_npub": Fixtures.appNpub]]) }
-            if reportMode, path.hasSuffix("/workspace-report") { reportRequests.append(request); return (200, reportPayload) }
+            if reportMode, path.hasSuffix("/workspace-report") { reportRequests.append(request); return (reportStatus, reportPayload) }
             if path.hasSuffix("/scopes") {
                 return (200, ["scopes": [["id": Fixtures.scopeA, "workspace_id": Fixtures.workspaceId, "name": "DMs", "kind": "dm"]]])
             }

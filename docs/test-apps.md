@@ -78,3 +78,22 @@ HTML source sheet before transferring it to a window. Native close/quit checkpoi
 blocks in-flight napplet saves, and asks before discarding an unsaved napplet. Selecting another
 workspace hides an inactive window; normal access invalidation still destroys private web sessions.
 Sample checks do not establish installation or real-account acceptance on a user's MacBook.
+
+The generic workspace storage check takes a synthetic candidate and golden
+fixture prepared independently of the native build:
+
+```sh
+'build/test-mac/Build/Products/Test/Ambulando Test.app/Contents/MacOS/Ambulando Test' \
+  -AmbulandoMacThreadRegression -AmbulandoMacStorageReportCheck \
+  -StorageCandidate <candidate.html> -StorageGolden <workspace-report-storage-v1.json> \
+  -StorageErrors <workspace-storage-errors-v1.json>
+```
+
+Place these synthetic inputs inside the Test app’s container cache so its
+sandbox can read them. It uses the production opaque WebKit bridge with in-memory aggregate reads,
+checks fresh reopen and widths 320/390/800, unavailable physical/provider values,
+subset labels, and clearing the frame when workspace management is revoked.
+The observer script is test-only; no live workspace or user credentials are used.
+Core signed-transport tests separately validate fixed-route storage opt-in,
+legacy behavior and HTTP 403 mapping. This check does not establish API activation
+or installation on Pete's MacBook.
