@@ -249,6 +249,9 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
     private var reportReceive: ((WorkspaceReportRequest) -> Void)?
     private var reportIDs = Set<String>()
     private var fileReceive: ((FileNappletRequest) -> Void)?
+    private var runtimeManifest: NappletRuntimeManifest?
+    private var runtimeReceive: ((NappletRuntimeRequest) -> Bool)?
+    private var runtimeIDs = Set<String>()
     private var genericBinding: GenericNappletBinding?
     private var genericReceive: ((GenericNappletRequest) -> Bool)?
     private var genericIDs = Set<String>()
@@ -277,6 +280,11 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
         self.session = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         self.html = html; self.capabilities = []; self.receive = { _ in }
         self.genericBinding = binding; self.genericReceive = genericReceive
+    }
+    init(html: String, manifest: NappletRuntimeManifest, runtimeReceive: @escaping (NappletRuntimeRequest) -> Bool) {
+        self.session = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        self.html = html; self.capabilities = []; self.receive = { _ in }
+        self.runtimeManifest = manifest; self.runtimeReceive = runtimeReceive
     }
     static func json(_ value: Any) -> String {
         let bytes = try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys])
@@ -309,11 +317,11 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
                   return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
                 }});
                 """
-                let lifecycle = (self.fileReceive == nil && self.reportReceive == nil && self.genericReceive == nil) ? "" : "addEventListener('pagehide',()=>parent.postMessage({type:'wingman-napplet-lifecycle',session:window.nappletSession},'*'),{once:true});"
+                let lifecycle = (self.fileReceive == nil && self.reportReceive == nil && self.genericReceive == nil && self.runtimeReceive == nil) ? "" : "addEventListener('pagehide',()=>parent.postMessage({type:'wingman-napplet-lifecycle',session:window.nappletSession},'*'),{once:true});"
                 let code = "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"\(csp)\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><script>\(bootstrap)\(lifecycle)</script>" + self.html
-                let forward = self.genericReceive == nil ? "window.webkit.messageHandlers.napplet.postMessage(e.data)" : """
+                let forward = self.genericReceive == nil && self.runtimeReceive == nil ? "window.webkit.messageHandlers.napplet.postMessage(e.data)" : """
                 (()=>{const d=e.data;
-                  if(d?.operation==='save'){
+                  if(d?.operation==='save'||d?.operation==='create'||d?.operation==='update'){
                     let nodes=0;const scalar=s=>!/[\\uD800-\\uDBFF](?![\\uDC00-\\uDFFF])|(?<![\\uD800-\\uDBFF])[\\uDC00-\\uDFFF]/u.test(s);
                     const check=(v,depth)=>{if(++nodes>50000||depth>32)throw 0;
                       if(v===null||typeof v==='boolean')return;
@@ -354,6 +362,12 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
         let result = String(head.dropLast()) + ",\"value\":" + String(decoding:value,as:UTF8.self) + "}"
         webView.evaluateJavaScript("document.getElementById('napplet')?.contentWindow.postMessage(" + result + ",'*')",completionHandler:nil)
     }
+    func sendRuntime(_ header: [String:Any], result: Data) {
+        guard let webView else { return }
+        let head = Self.json(header)
+        let body = String(head.dropLast()) + ",\"result\":" + String(decoding:result,as:UTF8.self) + "}"
+        webView.evaluateJavaScript("document.getElementById('napplet')?.contentWindow.postMessage(" + body + ",'*')",completionHandler:nil)
+    }
     func destroy() {
         timeout?.cancel(); timeout = nil; visible = false; ready = false
         if let view = webView {
@@ -363,6 +377,19 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
         webView = nil
     }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let runtimeReceive, let runtimeManifest {
+            guard let view = webView, message.webView === view, message.frameInfo.isMainFrame,
+                  message.frameInfo.request.url?.absoluteString == "about:blank",
+                  let raw = message.body as? String, raw.utf8.count <= GenericJSON.maxBytes + 1024 else { return }
+            let data = Data(raw.utf8)
+            if let body = try? JSONSerialization.jsonObject(with:data) as? [String:Any], Set(body.keys) == ["type","session"], body["type"] as? String == "wingman-napplet-lifecycle", body["session"] as? String == session {
+                didFail("The napplet document closed."); return
+            }
+            guard let request = try? NappletRuntimeRequest.parse(data,session:session,manifest:runtimeManifest),
+                  runtimeIDs.count < 10000, !runtimeIDs.contains(request.id) else { return }
+            if runtimeReceive(request) { runtimeIDs.insert(request.id); ready = true }
+            return
+        }
         if let genericReceive, let genericBinding {
             guard let view = webView, message.webView === view, message.frameInfo.isMainFrame,
                   message.frameInfo.request.url?.absoluteString == "about:blank",
@@ -408,7 +435,7 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         let url = navigationAction.request.url?.absoluteString
-        if fileReceive != nil || reportReceive != nil || genericReceive != nil {
+        if fileReceive != nil || reportReceive != nil || genericReceive != nil || runtimeReceive != nil {
             if navigationAction.navigationType == .other, url == "about:blank", navigationAction.targetFrame?.isMainFrame == true, !initialMain {
                 initialMain = true; return .allow
             }

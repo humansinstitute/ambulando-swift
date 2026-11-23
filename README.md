@@ -12,6 +12,16 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Common cartridge runtime (Mac build 108, iPhone/iPad build 109)
+
+Workspace Apps discovers authenticated v3 napplets from NStack. Named personal/team
+collections support paginated record reads and revision-checked writes. Code updates
+within approved access load automatically; expanded access, audience/data controls,
+confirmed keep/delete removal and explicit source-preserving JSON import use the
+shared iPhone/Mac host. Existing File trackers keep their original data/history.
+Personal signer/DM capabilities remain unsupported. See [runtime contract and limits](docs/napplet-runtime.md).
+Local builds and synthetic checks do not establish backend activation or device installation.
+
 ## Generic File apps (Mac build 107, iPhone/iPad build 108)
 
 Apps can install an existing v2 HTML File, using its verified title/icon and explicit capability bindings. Unknown app IDs and binding names use the same runtime. Personal File pins supply installations; uninstall keeps Files and history. Check for update opens the latest verified code on the same File, with approval for changed code or access. See [generic File apps](docs/generic-napplets.md). Source, local builds and synthetic checks are separate from physical-device installation and real-account acceptance.

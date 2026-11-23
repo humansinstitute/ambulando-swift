@@ -1,0 +1,8 @@
+[
+  {"type":"wingman-napplet-data","version":3,"session":"0123456789abcdef0123456789abcdef","requestId":"r1","operation":"list","collection":"entries","limit":50,"cursor":null},
+  {"type":"wingman-napplet-data","version":3,"session":"0123456789abcdef0123456789abcdef","requestId":"r2","operation":"get","collection":"entries","record_id":"entry-1"},
+  {"type":"wingman-napplet-data","version":3,"session":"0123456789abcdef0123456789abcdef","requestId":"r3","operation":"create","collection":"entries","record_id":"entry-1","base_revision":0,"value":{"text":"First note","count":0,"done":false}},
+  {"type":"wingman-napplet-data","version":3,"session":"0123456789abcdef0123456789abcdef","requestId":"r4","operation":"update","collection":"entries","record_id":"entry-1","base_revision":1,"value":{"text":"Updated note"}},
+  {"type":"wingman-napplet-data","version":3,"session":"0123456789abcdef0123456789abcdef","requestId":"r5","operation":"delete","collection":"entries","record_id":"entry-1","base_revision":2},
+  {"type":"wingman-napplet-data","version":3,"session":"0123456789abcdef0123456789abcdef","requestId":"d1","operation":"dirty","dirty":true}
+]

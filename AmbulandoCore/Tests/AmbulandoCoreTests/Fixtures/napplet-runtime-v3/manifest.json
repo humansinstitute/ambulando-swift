@@ -1,0 +1,13 @@
+{
+  "version": 3,
+  "napplet_id": "field-notes",
+  "bundle_version": "1.0.0",
+  "title": "Field Notes",
+  "icon": "🌱",
+  "runtime": {"protocol": 3, "min_host": 3},
+  "collections": {
+    "entries": {"scope": "personal", "schema_version": 1, "operations": ["list", "get", "create", "update", "delete"]},
+    "team_notes": {"scope": "team", "schema_version": 1, "operations": ["list", "get"]}
+  },
+  "capabilities": {}
+}

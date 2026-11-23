@@ -1,0 +1,205 @@
+{
+  "installation": {
+    "installation": {
+      "workspace_id": "2e5caefd-dd65-45d2-b747-ee874e8e5fc9",
+      "app_npub": "<workspace app npub>",
+      "napplet_id": "field-notes",
+      "owner_npub": "<requester npub>",
+      "publisher_npub": "<authenticated publisher npub>",
+      "display_name": "Field Notes",
+      "audience_npubs": [
+        "<requester npub>"
+      ],
+      "bundle": {
+        "file_id": "00000000-0000-4000-8000-000000000001",
+        "file_version_id": "00000000-0000-4000-8000-000000000002",
+        "sha256_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "manifest": {
+        "version": 3,
+        "napplet_id": "field-notes",
+        "bundle_version": "1.0.0",
+        "title": "Field Notes",
+        "icon": "\ud83c\udf31",
+        "runtime": {
+          "protocol": 3,
+          "min_host": 3
+        },
+        "collections": {
+          "entries": {
+            "scope": "personal",
+            "schema_version": 1,
+            "operations": [
+              "list",
+              "get",
+              "create",
+              "update",
+              "delete"
+            ]
+          },
+          "team_notes": {
+            "scope": "team",
+            "schema_version": 1,
+            "operations": [
+              "list",
+              "get"
+            ]
+          }
+        },
+        "capabilities": {}
+      },
+      "pending_release": null,
+      "revision": 1,
+      "removed": false,
+      "created_at": "2026-11-23T00:00:00.000Z",
+      "updated_at": "2026-11-23T00:00:00.000Z"
+    }
+  },
+  "list": {
+    "installations": [
+      {
+        "workspace_id": "2e5caefd-dd65-45d2-b747-ee874e8e5fc9",
+        "app_npub": "<workspace app npub>",
+        "napplet_id": "field-notes",
+        "owner_npub": "<requester npub>",
+        "publisher_npub": "<authenticated publisher npub>",
+        "display_name": "Field Notes",
+        "audience_npubs": [
+          "<requester npub>"
+        ],
+        "bundle": {
+          "file_id": "00000000-0000-4000-8000-000000000001",
+          "file_version_id": "00000000-0000-4000-8000-000000000002",
+          "sha256_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "manifest": {
+          "version": 3,
+          "napplet_id": "field-notes",
+          "bundle_version": "1.0.0",
+          "title": "Field Notes",
+          "icon": "\ud83c\udf31",
+          "runtime": {
+            "protocol": 3,
+            "min_host": 3
+          },
+          "collections": {
+            "entries": {
+              "scope": "personal",
+              "schema_version": 1,
+              "operations": [
+                "list",
+                "get",
+                "create",
+                "update",
+                "delete"
+              ]
+            },
+            "team_notes": {
+              "scope": "team",
+              "schema_version": 1,
+              "operations": [
+                "list",
+                "get"
+              ]
+            }
+          },
+          "capabilities": {}
+        },
+        "pending_release": null,
+        "revision": 1,
+        "removed": false,
+        "created_at": "2026-11-23T00:00:00.000Z",
+        "updated_at": "2026-11-23T00:00:00.000Z"
+      }
+    ],
+    "next_cursor": null
+  },
+  "collection": {
+    "collection": {
+      "workspace_id": "2e5caefd-dd65-45d2-b747-ee874e8e5fc9",
+      "app_npub": "<workspace app npub>",
+      "napplet_id": "field-notes",
+      "id": "00000000-0000-4000-8000-000000000003",
+      "name": "entries",
+      "scope": "personal",
+      "owner_npub": "<requester npub>",
+      "read_npubs": [],
+      "write_npubs": [],
+      "schema_version": 1,
+      "revision": 1,
+      "created_at": "2026-11-23T00:00:00.000Z",
+      "updated_at": "2026-11-23T00:00:00.000Z"
+    }
+  },
+  "collections": {
+    "collections": [
+      {
+        "workspace_id": "2e5caefd-dd65-45d2-b747-ee874e8e5fc9",
+        "app_npub": "<workspace app npub>",
+        "napplet_id": "field-notes",
+        "id": "00000000-0000-4000-8000-000000000003",
+        "name": "entries",
+        "scope": "personal",
+        "owner_npub": "<requester npub>",
+        "read_npubs": [],
+        "write_npubs": [],
+        "schema_version": 1,
+        "revision": 1,
+        "created_at": "2026-11-23T00:00:00.000Z",
+        "updated_at": "2026-11-23T00:00:00.000Z"
+      }
+    ],
+    "next_cursor": null
+  },
+  "record": {
+    "record": {
+      "collection_id": "00000000-0000-4000-8000-000000000003",
+      "id": "entry_1",
+      "revision": 1,
+      "schema_version": 1,
+      "data": {
+        "text": "Example"
+      },
+      "deleted": false,
+      "provenance": null,
+      "updated_by_npub": "<requester npub>",
+      "updated_at": "2026-11-23T00:00:00.000Z"
+    }
+  },
+  "records": {
+    "records": [
+      {
+        "collection_id": "00000000-0000-4000-8000-000000000003",
+        "id": "entry_1",
+        "revision": 1,
+        "schema_version": 1,
+        "data": {
+          "text": "Example"
+        },
+        "deleted": false,
+        "provenance": null,
+        "updated_by_npub": "<requester npub>",
+        "updated_at": "2026-11-23T00:00:00.000Z"
+      }
+    ],
+    "next_cursor": null
+  },
+  "history": {
+    "versions": [
+      {
+        "collection_id": "00000000-0000-4000-8000-000000000003",
+        "id": "entry_1",
+        "revision": 1,
+        "schema_version": 1,
+        "data": {
+          "text": "Example"
+        },
+        "deleted": false,
+        "provenance": null,
+        "updated_by_npub": "<requester npub>",
+        "updated_at": "2026-11-23T00:00:00.000Z"
+      }
+    ],
+    "next_cursor": null
+  }
+}

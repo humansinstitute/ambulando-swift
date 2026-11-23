@@ -971,6 +971,7 @@ struct DeckHelloCard: View {
                 Text(contextLabel(nav)).font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground)
             }
             .padding(.horizontal, 4).padding(.bottom, 6)
+            RuntimeAppsSection(workspace: workspace, store: store)
             GenericAppsSection(workspace: workspace, store: store)
             Text("Apps").font(.amb(.footnote).weight(.heavy)).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 4)
             Button { model.openWorkspaceReport(in: workspace) } label: {

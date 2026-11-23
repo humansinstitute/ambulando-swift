@@ -369,6 +369,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     /// Board File versions (list, read, save with a stale-base check) and their canvas projection.
     let trustNapplet = NappletTrustFixture()
     let genericNapplet = GenericNappletFixture()
+    let runtimeNapplet = NappletRuntimeFixture()
     let boards: SampleBoardTower
     /// The Studio workspace's notification inbox (the Lab workspace has none: Tower answers 404, "backend not supported").
     let notifications: SampleNotificationTower
@@ -518,7 +519,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             result = rewrite(body)
         }
         let data = try (result as? Data) ?? JSONSerialization.data(withJSONObject: result)
-        let mime: String? = genericNapplet.mime(request.url!.path) ?? (NappletTrustFixture.enabled && result is Data && request.url!.path.hasSuffix("/object")
+        let mime: String? = (NappletRuntimeFixture.enabled && request.url!.path.hasSuffix("/bundle") ? "application/octet-stream" : nil) ?? genericNapplet.mime(request.url!.path) ?? (NappletTrustFixture.enabled && result is Data && request.url!.path.hasSuffix("/object")
             ? (request.url!.path.contains(NappletTrustFixture.codeId) ? "text/html" : "application/json") : nil)
         return (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: mime.map { ["Content-Type": $0] })!)
     }
@@ -551,6 +552,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             }
             if let handled = try administration.handle(request) { return handled }
         }
+        if let handled = try runtimeNapplet.handle(request,actor:actorNpub) { return handled }
         if let handled = try genericNapplet.handle(request,actor:actorNpub) { return handled }
         if NappletTrustFixture.enabled, let handled = try trustNapplet.handle(request, actor: actorNpub) { return handled }
         // Surface routes first: their ownership is exact (board versions live under `/files/:f/versions/:v/object`).
@@ -1273,7 +1275,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     }
 
     private func workspace(_ id: String, _ label: String) -> [String: Any] {
-        ["identity": WorkspaceReportFixture.enabled && id == Self.studio ? WorkspaceReportFixture.identity : ["workspace_id": id, "app_npub": Self.appNpub, "workspace_owner_npub": Self.ana], "label": label, "slug": label.lowercased(),
+        ["identity": WorkspaceReportFixture.enabled && id == Self.studio ? WorkspaceReportFixture.identity : (NappletRuntimeFixture.enabled ? ["workspace_id":id,"app_npub":Self.appNpub,"workspace_owner_npub":Self.ana,"tower_service_npub":Self.appNpub,"workspace_service_npub":Self.appNpub] : ["workspace_id": id, "app_npub": Self.appNpub, "workspace_owner_npub": Self.ana]), "label": label, "slug": label.lowercased(),
          "tower_base_url": FixtureEnvironment.origin, "membership": ["role": "member"]]
     }
     private func scope(_ id: String, _ w: String, _ name: String) -> [String: Any] {
