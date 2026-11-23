@@ -82,6 +82,8 @@ final class FileNappletFixture: @unchecked Sendable {
     var bytes = Data("{\"format\":\"daily-tracker-v1\",\"metrics\":[],\"days\":{}}".utf8)
     var revision = 1
     var participants = [TestKeys.npub]
+    var genericSharedCode = false
+    var genericMetadata: [String: Any]?
     var reportMode = false
     var reportPayload: [String: Any] = [:]
     var reportRequests: [URLRequest] = []
@@ -112,6 +114,7 @@ final class FileNappletFixture: @unchecked Sendable {
     var discoveryInvalid = false
     var createdFiles: [(String, Data, [String: Any])] = []
     var metadata: [String: Any] {
+        if let genericMetadata { return genericMetadata }
         if reportMode { return ["html_artifact": true, "artefact": ["schema_version": 1, "type": "html", "format_version": 1, "editor_id": "builtin.html"], "napplet": ["version": 1, "app_id": "workspace-report", "bindings": ["report": ["workspace_id": bindingOverride ?? Fixtures.workspaceId]]]] }
         return ["html_artifact": true, "artefact": ["schema_version": 1, "type": "html", "format_version": 1, "editor_id": "builtin.html"],
          "napplet": ["version": 1, "app_id": "daily-tracker", "bindings": ["tracker": ["file_id": bindingOverride ?? dataId]]]]
@@ -153,7 +156,7 @@ final class FileNappletFixture: @unchecked Sendable {
                 let isCode = !path.hasSuffix(dataId)
                 let codeMetadata: [String: Any] = discoveryInvalid ? ["napplet": ["app_id": "daily-tracker"]] : metadata
                 var response: [String: Any] = ["file": ["id": path.components(separatedBy: "/").last!, "workspace_id": Fixtures.workspaceId,
-                    "channel_id": channelId, "can_write": isCode ? codeWritable : writable, "record_state": "active", "metadata": isCode ? codeMetadata : [:],
+                    "channel_id": isCode && genericSharedCode ? objectId : channelId, "can_write": isCode ? codeWritable : writable, "record_state": "active", "metadata": isCode ? codeMetadata : [:],
                     "current_version_id": isCode ? codeVersion : version, "current_version": NSNull()]]
                 if let topLevelWritable { response["can_write"] = topLevelWritable }
                 return (200, response)
@@ -165,6 +168,9 @@ final class FileNappletFixture: @unchecked Sendable {
                     "versions": [["id": wrongHead ? objectId : current, "content_type": isCode ? "text/html" : "application/json", "size_bytes": data.count, "sha256_hex": SHA256Hex.of(data)]]])
             }
             if path.hasSuffix("/object") { return (200, !path.contains(dataId) ? Data(html.utf8) : corrupt ? Data("corrupt".utf8) : bytes) }
+            if genericSharedCode, path.hasSuffix("/channels/" + objectId) {
+                return (200,["channel":["id":objectId,"workspace_id":channelWorkspace,"kind":"project"]])
+            }
             if path.hasSuffix("/channels/" + channelId) {
                 return (200, ["channel": ["id": channelId, "workspace_id": channelWorkspace, "kind": channelKind, "participant_npubs": participants]])
             }
@@ -176,6 +182,7 @@ final class FileNappletFixture: @unchecked Sendable {
             if path.hasSuffix("/complete") {
                 if changeOnUpload == "binding" { bindingOverride = objectId }
                 if changeOnUpload == "permission" { codeWritable = false }
+                if changeOnUpload == "data-permission" { topLevelWritable = false }
                 if changeOnUpload == "code" { codeVersion = objectId }
                 completed = true; return (200, ["completed_at": "now"]) }
             if path.hasSuffix("/storage/" + objectId) {
@@ -425,7 +432,7 @@ final class FileNappletFixture: @unchecked Sendable {
     }
 }
 
-private struct NappletFixtureTransport: HTTPTransport {
+struct NappletFixtureTransport: HTTPTransport {
     let fixture: FileNappletFixture
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (status, body) = try fixture.route(request)

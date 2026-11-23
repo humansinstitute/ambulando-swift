@@ -1,0 +1,508 @@
+{
+  "version": 2,
+  "manifest": {
+    "version": 2,
+    "app_id": "portable-example",
+    "title": "Portable example",
+    "icon": "🌱",
+    "bindings": {
+      "entries": {
+        "capability": "private-json-file",
+        "version": 1,
+        "operations": [
+          "read",
+          "save"
+        ]
+      }
+    }
+  },
+  "metadata": {
+    "napplet": {
+      "version": 2,
+      "app_id": "portable-example",
+      "bindings": {
+        "entries": {
+          "file_id": "22222222-2222-4222-8222-222222222222"
+        }
+      }
+    }
+  },
+  "context": {
+    "baseUrl": "https://example.test/",
+    "tower": "tower",
+    "service": "service",
+    "appNpub": "app",
+    "workspaceId": "33333333-3333-4333-8333-333333333333",
+    "viewer": "viewer"
+  },
+  "codeFileId": "11111111-1111-4111-8111-111111111111",
+  "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "receipt": {
+    "version": 2,
+    "key": "napplet-approval-v2:aa4b8033633c19a0b2ee5787323b9d2f7a2061a08cc7effceb09ae20e4428929",
+    "fingerprint": "bd5cacb79453428c711c65bf8b4f267516ab3a28d2eb52cfe29186c22c2d4f21"
+  },
+  "canonical": [
+    {
+      "value": {
+        "zero": 0,
+        "answered": false,
+        "unanswered": null
+      },
+      "canonical": "{\"answered\":false,\"unanswered\":null,\"zero\":0}",
+      "sha256": "c6f792e9f89936a9a2c3ad31b960189c2c222ce3fcaac9ae941daee8de665301"
+    },
+    {
+      "value": {
+        "😀": 1,
+        "": 2,
+        "a": "line\n\"\\"
+      },
+      "canonical": "{\"a\":\"line\\n\\\"\\\\\",\"\":2,\"😀\":1}",
+      "sha256": "c5eb6114461f71bc371f1d623d9aa4e3227f7a76f46849c57f49960d46934473"
+    },
+    {
+      "value": {
+        "number": 1e-06,
+        "small": 1e-07,
+        "array": [
+          false,
+          0,
+          null
+        ]
+      },
+      "canonical": "{\"array\":[false,0,null],\"number\":0.000001,\"small\":1e-7}",
+      "sha256": "897c350a51ce3578597b71f95639ec59fef0f946b1aea39b212e88212359066a"
+    }
+  ],
+  "invalidJson": [
+    "{\"x\":1,\"x\":2}",
+    "{\"__proto__\":{}}",
+    "{\"n\":-0}",
+    "{\"n\":9007199254740992}",
+    "{\"s\":\"\\ud800\"}",
+    "[]",
+    "{\"a\":1e400}"
+  ],
+  "readonlyManifest": {
+    "version": 2,
+    "app_id": "portable-example",
+    "title": "Portable example",
+    "icon": "🌱",
+    "bindings": {
+      "entries": {
+        "capability": "private-json-file",
+        "version": 1,
+        "operations": [
+          "read"
+        ]
+      }
+    }
+  },
+  "aggregateManifest": {
+    "version": 2,
+    "app_id": "any-summary",
+    "title": "Summary",
+    "icon": "📊",
+    "bindings": {
+      "summary": {
+        "capability": "workspace-aggregate",
+        "version": 1,
+        "operations": [
+          "read"
+        ]
+      }
+    }
+  },
+  "aggregateMetadata": {
+    "napplet": {
+      "version": 2,
+      "app_id": "any-summary",
+      "bindings": {
+        "summary": {
+          "workspace_id": "33333333-3333-4333-8333-333333333333"
+        }
+      }
+    }
+  },
+  "requests": [
+    {
+      "label": "read",
+      "valid": true,
+      "value": {
+        "type": "wingman-napplet-data",
+        "version": 2,
+        "session": "0123456789abcdef0123456789abcdef",
+        "requestId": "r1",
+        "operation": "read",
+        "binding": "entries"
+      }
+    },
+    {
+      "label": "save",
+      "valid": true,
+      "value": {
+        "type": "wingman-napplet-data",
+        "version": 2,
+        "session": "0123456789abcdef0123456789abcdef",
+        "requestId": "r2",
+        "operation": "save",
+        "binding": "entries",
+        "baseVersionId": "11111111-1111-4111-8111-111111111111",
+        "value": {
+          "zero": 0,
+          "answered": false
+        }
+      }
+    },
+    {
+      "label": "dirty",
+      "valid": true,
+      "value": {
+        "type": "wingman-napplet-data",
+        "version": 2,
+        "session": "0123456789abcdef0123456789abcdef",
+        "requestId": "d1",
+        "operation": "dirty",
+        "dirty": true
+      }
+    },
+    {
+      "label": "extra-authority",
+      "valid": false,
+      "value": {
+        "type": "wingman-napplet-data",
+        "version": 2,
+        "session": "0123456789abcdef0123456789abcdef",
+        "requestId": "r1",
+        "operation": "read",
+        "binding": "entries",
+        "fileId": "11111111-1111-4111-8111-111111111111"
+      }
+    },
+    {
+      "label": "wrong-binding",
+      "valid": false,
+      "value": {
+        "type": "wingman-napplet-data",
+        "version": 2,
+        "session": "0123456789abcdef0123456789abcdef",
+        "requestId": "r1",
+        "operation": "read",
+        "binding": "tracker"
+      }
+    },
+    {
+      "label": "bad-session",
+      "valid": false,
+      "value": {
+        "type": "wingman-napplet-data",
+        "version": 2,
+        "session": "wrong",
+        "requestId": "r1",
+        "operation": "read",
+        "binding": "entries"
+      }
+    },
+    {
+      "label": "schema-mixture",
+      "valid": false,
+      "value": {
+        "type": "wingman-napplet-data",
+        "version": 2,
+        "session": "0123456789abcdef0123456789abcdef",
+        "requestId": "r1",
+        "operation": "read",
+        "binding": "entries",
+        "range": "30d"
+      }
+    },
+    {
+      "label": "bad-version",
+      "valid": false,
+      "value": {
+        "type": "wingman-napplet-data",
+        "version": 1,
+        "session": "0123456789abcdef0123456789abcdef",
+        "requestId": "r1",
+        "operation": "read",
+        "binding": "entries"
+      }
+    },
+    {
+      "label": "bad-request-id",
+      "valid": false,
+      "value": {
+        "type": "wingman-napplet-data",
+        "version": 2,
+        "session": "0123456789abcdef0123456789abcdef",
+        "requestId": "a b",
+        "operation": "read",
+        "binding": "entries"
+      }
+    }
+  ],
+  "results": [
+    {
+      "type": "wingman-napplet-result",
+      "version": 2,
+      "session": "0123456789abcdef0123456789abcdef",
+      "requestId": "r1",
+      "status": "ready",
+      "baseVersionId": "11111111-1111-4111-8111-111111111111",
+      "value": {
+        "zero": 0,
+        "answered": false
+      },
+      "canWrite": true,
+      "privacy": "self-channel"
+    },
+    {
+      "type": "wingman-napplet-result",
+      "version": 2,
+      "session": "0123456789abcdef0123456789abcdef",
+      "requestId": "r2",
+      "status": "error",
+      "code": "invalid",
+      "message": "Invalid request."
+    },
+    {
+      "type": "wingman-napplet-result",
+      "version": 2,
+      "session": "0123456789abcdef0123456789abcdef",
+      "requestId": "r2",
+      "status": "error",
+      "code": "conflict",
+      "message": "A newer version exists."
+    },
+    {
+      "type": "wingman-napplet-result",
+      "version": 2,
+      "session": "0123456789abcdef0123456789abcdef",
+      "requestId": "r2",
+      "status": "error",
+      "code": "unavailable",
+      "message": "Operation could not be confirmed."
+    }
+  ],
+  "boundaries": {
+    "maxBytes": 1048576,
+    "maxDepth": 32,
+    "maxNodes": 50000,
+    "maxStringBytes": 65536,
+    "maxAbsNumber": 9007199254740991,
+    "acceptedNumbers": [
+      0,
+      1.5,
+      1e-07,
+      1e-06,
+      9007199254740991
+    ],
+    "invalidUtf8Hex": [
+      "c080",
+      "eda080",
+      "f4908080",
+      "efbbbf7b7d"
+    ],
+    "depthRecipe": {
+      "rootDepth": 1,
+      "validNestedObjects": 32,
+      "invalidNestedObjects": 33
+    },
+    "nodeRecipe": {
+      "rootWithArrayAndNullsAccepted": 49998,
+      "rootWithArrayAndNullsRejected": 49999
+    },
+    "stringRecipe": {
+      "key": "s",
+      "validAsciiLength": 65536,
+      "invalidAsciiLength": 65537
+    }
+  },
+  "receiptReadonly": {
+    "version": 2,
+    "key": "napplet-approval-v2:aa4b8033633c19a0b2ee5787323b9d2f7a2061a08cc7effceb09ae20e4428929",
+    "fingerprint": "34501abf67b54f504291f9cd391327699535e1a052f4b305d17bce311f3c41f5"
+  },
+  "receiptNoWrite": {
+    "version": 2,
+    "key": "napplet-approval-v2:aa4b8033633c19a0b2ee5787323b9d2f7a2061a08cc7effceb09ae20e4428929",
+    "fingerprint": "a7a58dbe672455e5641024d2a976d4bf805ac649451530bc6b2177dee2d8437a"
+  },
+  "readonlySaveRejection": {
+    "manifest": {
+      "version": 2,
+      "app_id": "portable-example",
+      "title": "Portable example",
+      "icon": "🌱",
+      "bindings": {
+        "entries": {
+          "capability": "private-json-file",
+          "version": 1,
+          "operations": [
+            "read"
+          ]
+        }
+      }
+    },
+    "request": {
+      "type": "wingman-napplet-data",
+      "version": 2,
+      "session": "0123456789abcdef0123456789abcdef",
+      "requestId": "r2",
+      "operation": "save",
+      "binding": "entries",
+      "baseVersionId": "11111111-1111-4111-8111-111111111111",
+      "value": {
+        "zero": 0,
+        "answered": false
+      }
+    },
+    "valid": false
+  },
+  "invalidManifests": [
+    {
+      "label": "app_id requires string",
+      "manifest": {
+        "version": 2,
+        "app_id": null,
+        "title": "Portable example",
+        "icon": "🌱",
+        "bindings": {
+          "entries": {
+            "capability": "private-json-file",
+            "version": 1,
+            "operations": [
+              "read",
+              "save"
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "napplet": {
+          "version": 2,
+          "app_id": null,
+          "bindings": {
+            "entries": {
+              "file_id": "22222222-2222-4222-8222-222222222222"
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "app_id requires string",
+      "manifest": {
+        "version": 2,
+        "app_id": true,
+        "title": "Portable example",
+        "icon": "🌱",
+        "bindings": {
+          "entries": {
+            "capability": "private-json-file",
+            "version": 1,
+            "operations": [
+              "read",
+              "save"
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "napplet": {
+          "version": 2,
+          "app_id": true,
+          "bindings": {
+            "entries": {
+              "file_id": "22222222-2222-4222-8222-222222222222"
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "app_id requires string",
+      "manifest": {
+        "version": 2,
+        "app_id": [
+          "portable-example"
+        ],
+        "title": "Portable example",
+        "icon": "🌱",
+        "bindings": {
+          "entries": {
+            "capability": "private-json-file",
+            "version": 1,
+            "operations": [
+              "read",
+              "save"
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "napplet": {
+          "version": 2,
+          "app_id": [
+            "portable-example"
+          ],
+          "bindings": {
+            "entries": {
+              "file_id": "22222222-2222-4222-8222-222222222222"
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "capability requires string",
+      "manifest": {
+        "version": 2,
+        "app_id": "portable-example",
+        "title": "Portable example",
+        "icon": "🌱",
+        "bindings": {
+          "entries": {
+            "capability": [
+              "private-json-file"
+            ],
+            "version": 1,
+            "operations": [
+              "read",
+              "save"
+            ]
+          }
+        }
+      },
+      "metadata": {
+        "napplet": {
+          "version": 2,
+          "app_id": "portable-example",
+          "bindings": {
+            "entries": {
+              "file_id": "22222222-2222-4222-8222-222222222222"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "invalidManifestHtml": [
+    {
+      "label": "data-id is not id",
+      "html": "<script data-id=\"wingman-napplet-manifest\">{\"version\":2,\"app_id\":\"portable-example\",\"title\":\"Portable example\",\"icon\":\"🌱\",\"bindings\":{\"entries\":{\"capability\":\"private-json-file\",\"version\":1,\"operations\":[\"read\",\"save\"]}}}</script>",
+      "metadata": {
+        "napplet": {
+          "version": 2,
+          "app_id": "portable-example",
+          "bindings": {
+            "entries": {
+              "file_id": "22222222-2222-4222-8222-222222222222"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

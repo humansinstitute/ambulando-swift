@@ -135,12 +135,21 @@ public struct FileNappletData: Sendable {
 }
 
 extension TowerAPI {
-    func nappletFile(workspace: String, app: String, id: String) async throws -> [String: Any] {
+    func nappletFile(workspace: String, app: String, id: String, requireTopLevelWrite: Bool = false) async throws -> [String: Any] {
         let o = try object(try await client.request(path: try Self.base(workspace) + "/files/" + Self.uuid(id), appNpub: app), "napplet file")
         guard let row = o["file"] as? [String: Any], lowerUUID(row["id"] as? String) == id,
               lowerUUID(row["workspace_id"] as? String) == workspace,
               row["record_state"] as? String != "archived", row["deleted_at"] == nil || row["deleted_at"] is NSNull else { throw FileNappletError.unavailable }
         var result = row
+        if requireTopLevelWrite {
+            result.removeValue(forKey: "can_write")
+            // Current servers may expose the explicit grant on File; a present top-level flag always wins.
+            if let raw = o["can_write"] ?? row["can_write"] {
+                guard let flag = TrackerDocument.boolean(raw) else { throw FileNappletError.invalid }
+                result["can_write"] = flag
+            }
+            return result
+        }
         if let raw = o["can_write"] {
             guard let canWrite = TrackerDocument.boolean(raw) else { throw FileNappletError.invalid }
             result["can_write"] = canWrite
@@ -170,7 +179,10 @@ extension TowerAPI {
         let metadata = row["metadata"] as? [String: Any] ?? [:]
         // Ordinary HTML keeps its original projection/asset path and never receives a bridge.
         guard metadata["napplet"] != nil else {
-            return FileNappletCode(html: try await artefactHTML(workspaceId: workspace, appNpub: app, fileId: fileId), binding: nil, versionId: "")
+            let html = try await artefactHTML(workspaceId: workspace, appNpub: app, fileId: fileId)
+            // A claimed v2 manifest cannot fall back to bridge-free ordinary HTML, even with missing metadata.
+            guard try GenericNappletBinding.parse(html: html, metadata: rawJSON(metadata)) == nil else { throw FileNappletError.invalid }
+            return FileNappletCode(html: html, binding: nil, versionId: "")
         }
         guard TrackerDocument.boolean(metadata["html_artifact"]) == true, metadata["artefact"] != nil,
               let file = try? FileRecord(raw: rawJSON(row)), ArtefactType.file(file) == .html else { throw FileNappletError.invalid }

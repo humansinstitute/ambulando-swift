@@ -368,6 +368,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     let labSurfaces: SampleSurfaceTower
     /// Board File versions (list, read, save with a stale-base check) and their canvas projection.
     let trustNapplet = NappletTrustFixture()
+    let genericNapplet = GenericNappletFixture()
     let boards: SampleBoardTower
     /// The Studio workspace's notification inbox (the Lab workspace has none: Tower answers 404, "backend not supported").
     let notifications: SampleNotificationTower
@@ -517,8 +518,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             result = rewrite(body)
         }
         let data = try (result as? Data) ?? JSONSerialization.data(withJSONObject: result)
-        let mime: String? = NappletTrustFixture.enabled && result is Data && request.url!.path.hasSuffix("/object")
-            ? (request.url!.path.contains(NappletTrustFixture.codeId) ? "text/html" : "application/json") : nil
+        let mime: String? = genericNapplet.mime(request.url!.path) ?? (NappletTrustFixture.enabled && result is Data && request.url!.path.hasSuffix("/object")
+            ? (request.url!.path.contains(NappletTrustFixture.codeId) ? "text/html" : "application/json") : nil)
         return (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: mime.map { ["Content-Type": $0] })!)
     }
 
@@ -550,6 +551,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             }
             if let handled = try administration.handle(request) { return handled }
         }
+        if let handled = try genericNapplet.handle(request,actor:actorNpub) { return handled }
         if NappletTrustFixture.enabled, let handled = try trustNapplet.handle(request, actor: actorNpub) { return handled }
         // Surface routes first: their ownership is exact (board versions live under `/files/:f/versions/:v/object`).
         if let handled = try notifications.handle(request) {

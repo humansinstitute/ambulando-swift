@@ -74,6 +74,9 @@ enum MacThreadRegression {
         }
         defer { heartbeat.cancel() }
         do {
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacGenericNappletCheck") {
+                try await genericNappletCheck(model:model); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacWorkspaceReportCheck") {
                 try await workspaceReportCheck(model: model); fflush(stdout); exit(0)
             }

@@ -244,6 +244,16 @@ extension AppModel {
     }
     /// Existing internal link handling only; this does not register an OS universal-link domain.
     func handleAppLink(_ url: URL) -> OpenURLAction.Result {
+        if url.path == "/flight-deck", let parts = URLComponents(url:url,resolvingAgainstBaseURL:false),
+           parts.queryItems?.contains(where:{ $0.name == "nappletFile" }) == true {
+            guard let workspace = selectedWorkspace, let c = connection else { return .handled }
+            let absolute = url.host == nil ? c.origin.trimmingCharacters(in:CharacterSet(charactersIn:"/")) + url.absoluteString : url.absoluteString
+            guard let id = try? GenericNappletFileLink.parse(absolute,origin:c.origin,workspace:workspace.id) else {
+                notice = "This app link belongs to another workspace or server, or is invalid."; return .handled
+            }
+            let open = { [self] in toolboxPath.append(.file(workspaceId:workspace.id,fileId:id)); show(.toolbox) }
+            if fileNappletNavigation?(open) != true { open() }; return .handled
+        }
         if url.path == "/flight-deck", let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
            let napplets = parts.queryItems?.filter({ $0.name == "napplet" }), napplets.count == 1, let napplet = napplets[0].value, ["daily-tracker", "workspace-report"].contains(napplet) {
             if url.host != nil && (url.scheme != "https" || url.user != nil || url.password != nil || url.host?.lowercased() != URL(string: connection?.origin ?? "")?.host?.lowercased() || url.port != URL(string: connection?.origin ?? "")?.port) { return browser.handleLink(url) }
@@ -265,5 +275,16 @@ extension AppModel {
             toolboxPath.append(.webContent(workspaceId: workspace.id, source: .workspaceReport)); show(.toolbox)
         }
         if fileNappletNavigation?(open) == true { return }; open()
+    }
+}
+
+
+extension AppModel {
+    /// Close only the active matching File destination; preserve the preceding screen and other tabs.
+    func closeGenericNapplet(fileId: String, workspaceId: String) -> Bool {
+        guard selectedWorkspaceId == workspaceId, let key = Self.pathKey(mode),
+              self[keyPath:key].last == .file(workspaceId:workspaceId,fileId:fileId) else { return false }
+        self[keyPath:key].removeLast()
+        return true
     }
 }

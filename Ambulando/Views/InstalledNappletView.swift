@@ -242,13 +242,16 @@ struct InstalledNappletView: View {
 /// native signer, Tower URL or arbitrary request API. Native validates the main-frame sender and exact message again.
 @MainActor @Observable
 final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
-    let session = UUID().uuidString + UUID().uuidString
+    let session: String
     let capabilities: [String]
     private let html: String
     private let receive: (NappletIntent) -> Void
     private var reportReceive: ((WorkspaceReportRequest) -> Void)?
     private var reportIDs = Set<String>()
     private var fileReceive: ((FileNappletRequest) -> Void)?
+    private var genericBinding: GenericNappletBinding?
+    private var genericReceive: ((GenericNappletRequest) -> Bool)?
+    private var genericIDs = Set<String>()
     private var initialMain = false
     private var initialFrame = false
     private var initialEmptyFrame = false
@@ -259,13 +262,21 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
     private var timeout: Task<Void, Never>?
 
     init(html: String, capabilities: [String], receive: @escaping (NappletIntent) -> Void) {
+        self.session = UUID().uuidString + UUID().uuidString
         self.html = html; self.capabilities = capabilities; self.receive = receive
     }
     init(html: String, fileReceive: @escaping (FileNappletRequest) -> Void) {
+        self.session = UUID().uuidString + UUID().uuidString
         self.html = html; self.capabilities = []; self.receive = { _ in }; self.fileReceive = fileReceive
     }
     init(html: String, reportReceive: @escaping (WorkspaceReportRequest) -> Void) {
+        self.session = UUID().uuidString + UUID().uuidString
         self.html = html; self.capabilities = []; self.receive = { _ in }; self.reportReceive = reportReceive
+    }
+    init(html: String, binding: GenericNappletBinding, genericReceive: @escaping (GenericNappletRequest) -> Bool) {
+        self.session = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        self.html = html; self.capabilities = []; self.receive = { _ in }
+        self.genericBinding = binding; self.genericReceive = genericReceive
     }
     static func json(_ value: Any) -> String {
         let bytes = try! JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys])
@@ -298,12 +309,29 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
                   return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
                 }});
                 """
-                let lifecycle = (self.fileReceive == nil && self.reportReceive == nil) ? "" : "addEventListener('pagehide',()=>parent.postMessage({type:'wingman-napplet-lifecycle',session:window.nappletSession},'*'),{once:true});"
+                let lifecycle = (self.fileReceive == nil && self.reportReceive == nil && self.genericReceive == nil) ? "" : "addEventListener('pagehide',()=>parent.postMessage({type:'wingman-napplet-lifecycle',session:window.nappletSession},'*'),{once:true});"
                 let code = "<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"\(csp)\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><script>\(bootstrap)\(lifecycle)</script>" + self.html
+                let forward = self.genericReceive == nil ? "window.webkit.messageHandlers.napplet.postMessage(e.data)" : """
+                (()=>{const d=e.data;
+                  if(d?.operation==='save'){
+                    let nodes=0;const scalar=s=>!/[\\uD800-\\uDBFF](?![\\uDC00-\\uDFFF])|(?<![\\uD800-\\uDBFF])[\\uDC00-\\uDFFF]/u.test(s);
+                    const check=(v,depth)=>{if(++nodes>50000||depth>32)throw 0;
+                      if(v===null||typeof v==='boolean')return;
+                      if(typeof v==='number'){if(!Number.isFinite(v)||Object.is(v,-0)||Math.abs(v)>9007199254740991)throw 0;return;}
+                      if(typeof v==='string'){if(!scalar(v)||new TextEncoder().encode(v).length>65536)throw 0;return;}
+                      if(!v||typeof v!=='object'||(!Array.isArray(v)&&Object.getPrototypeOf(v)!==Object.prototype&&Object.getPrototypeOf(v)!==null))throw 0;
+                      if(Array.isArray(v)){if(v.length>50000||Object.keys(v).length!==v.length)throw 0;for(let i=0;i<v.length;i++)if(!Object.hasOwn(v,i))throw 0;}
+                      for(const k of Object.keys(v)){if(['__proto__','prototype','constructor'].includes(k)||!scalar(k)||new TextEncoder().encode(k).length>65536)throw 0;check(v[k],depth+1);}
+                    };
+                    try{if(!d.value||typeof d.value!=='object'||Array.isArray(d.value))return;check(d.value,1);}catch{return;}
+                  }
+                  const raw=JSON.stringify(d);if(typeof raw==='string'&&new TextEncoder().encode(raw).length<=1049600)window.webkit.messageHandlers.napplet.postMessage(raw);
+                })()
+                """
                 let parent = """
                 <!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body{margin:0;height:100%;overflow:hidden}iframe{border:0;width:100%;height:100%}</style><iframe id="napplet" sandbox="allow-scripts" title="Workspace napplet"></iframe><script>
                 const frame=document.getElementById('napplet');
-                window.addEventListener('message', e=>{if(e.source===frame.contentWindow&&e.origin==='null'&&e.data?.session===\(Self.json(self.session))) window.webkit.messageHandlers.napplet.postMessage(e.data)});
+                window.addEventListener('message', e=>{if(e.source===frame.contentWindow&&e.origin==='null'&&e.data?.session===\(Self.json(self.session))) \(forward)});
                 frame.srcdoc=\(Self.json(code));
                 </script>
                 """
@@ -319,6 +347,13 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
         guard let webView else { return }
         webView.evaluateJavaScript("document.getElementById('napplet')?.contentWindow.postMessage(\(Self.json(state)),'*')", completionHandler: nil)
     }
+    /// Validated JSON bytes stay textual through the bridge to preserve scalar-distinct object keys.
+    func sendGeneric(_ header:[String:Any], value:Data) {
+        guard let webView else { return }
+        let head = Self.json(header)
+        let result = String(head.dropLast()) + ",\"value\":" + String(decoding:value,as:UTF8.self) + "}"
+        webView.evaluateJavaScript("document.getElementById('napplet')?.contentWindow.postMessage(" + result + ",'*')",completionHandler:nil)
+    }
     func destroy() {
         timeout?.cancel(); timeout = nil; visible = false; ready = false
         if let view = webView {
@@ -328,6 +363,20 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
         webView = nil
     }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let genericReceive, let genericBinding {
+            guard let view = webView, message.webView === view, message.frameInfo.isMainFrame,
+                  message.frameInfo.request.url?.absoluteString == "about:blank",
+                  let raw = message.body as? String, raw.utf8.count <= GenericJSON.maxBytes + 1024 else { return }
+            let data = Data(raw.utf8)
+            if let body = try? JSONSerialization.jsonObject(with:data) as? [String:Any], Set(body.keys) == ["type", "session"], body["type"] as? String == "wingman-napplet-lifecycle", body["session"] as? String == session {
+                didFail("The napplet document closed."); return
+            }
+            guard let request = try? GenericNappletRequest.parse(data, session: session, binding: genericBinding),
+                  genericIDs.count < 10000, !genericIDs.contains(request.id) else { return }
+            // Busy requests do not consume IDs. Host performs no awaits before accepting.
+            if genericReceive(request) { genericIDs.insert(request.id); ready = true }
+            return
+        }
         if let reportReceive {
             guard let view = webView, message.webView === view, message.frameInfo.isMainFrame,
                   message.frameInfo.request.url?.absoluteString == "about:blank",
@@ -359,7 +408,7 @@ final class NappletPage: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
     }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         let url = navigationAction.request.url?.absoluteString
-        if fileReceive != nil || reportReceive != nil {
+        if fileReceive != nil || reportReceive != nil || genericReceive != nil {
             if navigationAction.navigationType == .other, url == "about:blank", navigationAction.targetFrame?.isMainFrame == true, !initialMain {
                 initialMain = true; return .allow
             }

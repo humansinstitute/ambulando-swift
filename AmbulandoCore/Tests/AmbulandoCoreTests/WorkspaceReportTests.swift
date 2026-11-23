@@ -104,3 +104,37 @@ extension WorkspaceReportTests {
         do { _ = try await api.workspaceReportCode(workspace: Fixtures.workspaceId, app: Fixtures.appNpub, viewer: TestKeys.npub, fileId: f.codeId); XCTFail("denied code accepted") } catch {}
     }
 }
+
+extension WorkspaceReportTests {
+    func testGenericAggregateDispatchIsIndependentOfAppIDAndUsesCanonicalReadOnlyRoute() async throws {
+        let f = FileNappletFixture(); f.reportMode = true; f.genericSharedCode = true
+        let golden = try JSONSerialization.jsonObject(with:Data(contentsOf:URL(fileURLWithPath:#filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/generic-v2.json"))) as! [String:Any]
+        let m = golden["aggregateManifest"] as! [String:Any]
+        f.codeOverride = "<script id=\"wingman-napplet-manifest\">" + String(decoding:try rawJSON(m),as:UTF8.self) + "</script>"
+        f.genericMetadata = ["html_artifact":true,"artefact":["schema_version":1,"type":"html","format_version":1,"editor_id":"builtin.html"],"napplet":["version":2,"app_id":m["app_id"]!,"bindings":["summary":["workspace_id":Fixtures.workspaceId]]]]
+        let api = try await FileNappletTransportTests().api(f)
+        let code = try await api.genericNappletCode(workspace:Fixtures.workspaceId,app:Fixtures.appNpub,fileId:f.codeId)
+        let identity = ["workspace_id":Fixtures.workspaceId,"app_npub":Fixtures.appNpub]
+        let writable = try await api.authorizeGenericNapplet(workspace:Fixtures.workspaceId,app:Fixtures.appNpub,viewer:TestKeys.npub,fileId:f.codeId,expected:code)
+        XCTAssertFalse(writable)
+        for range in ["7d","30d","90d","all"] {
+            var payload = fixture(); payload["workspace_id"] = Fixtures.workspaceId; payload["identity"] = identity; payload["range"] = range
+            let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
+            let end = formatter.date(from:payload["to"] as! String)!
+            payload["from"] = ["7d":7,"30d":30,"90d":90][range].map { formatter.string(from:end.addingTimeInterval(-Double($0)*86400)) as Any } ?? NSNull()
+            f.reportPayload = payload
+            let result = try await api.readGenericAggregate(workspace:Fixtures.workspaceId,app:Fixtures.appNpub,viewer:TestKeys.npub,fileId:f.codeId,expected:code,range:range,identity:identity)
+            XCTAssertNil((try JSONSerialization.jsonObject(with:result) as? [String:Any])?["identity"])
+            let query = URLComponents(url:f.reportRequests.last!.url!,resolvingAgainstBaseURL:false)!.queryItems!
+            XCTAssertEqual(query.first { $0.name == "top_n" }?.value,"10"); XCTAssertEqual(query.first { $0.name == "range" }?.value,range)
+        }
+        let session = "0123456789abcdef0123456789abcdef"
+        var request:[String:Any] = ["type":"wingman-napplet-data","version":2,"session":session,"requestId":"r1","operation":"read","binding":"summary","range":"90d"]
+        XCTAssertEqual(try GenericNappletRequest.parse(rawJSON(request),session:session,binding:code.binding).range,"90d")
+        request["operation"] = "save"; XCTAssertThrowsError(try GenericNappletRequest.parse(rawJSON(request),session:session,binding:code.binding))
+        f.reportPayload["complete"] = false
+        do { _ = try await api.readGenericAggregate(workspace:Fixtures.workspaceId,app:Fixtures.appNpub,viewer:TestKeys.npub,fileId:f.codeId,expected:code,range:"all",identity:identity); XCTFail("partial result") } catch {}
+        f.denied = true
+        do { _ = try await api.readGenericAggregate(workspace:Fixtures.workspaceId,app:Fixtures.appNpub,viewer:TestKeys.npub,fileId:f.codeId,expected:code,range:"all",identity:identity); XCTFail("denied result") } catch {}
+    }
+}

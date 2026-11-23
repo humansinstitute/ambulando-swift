@@ -12,6 +12,10 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Generic File apps (Mac build 107, iPhone/iPad build 108)
+
+Apps can install an existing v2 HTML File, using its verified title/icon and explicit capability bindings. Unknown app IDs and binding names use the same runtime. Personal File pins supply installations; uninstall keeps Files and history. Check for update opens the latest verified code on the same File, with approval for changed code or access. See [generic File apps](docs/generic-napplets.md). Source, local builds and synthetic checks are separate from physical-device installation and real-account acceptance.
+
 ## Workspace Report (Mac build 106, iPhone/iPad build 107)
 
 Workspace Report is available in Apps and Toolbox. It reuses or explicitly sets up a private HTML code File and opens a separate read-only host for authorized activity and current inventory totals. The shared dashboard offers 7/30/90-day and all-time ranges, top channels, coverage and server freshness. Device-local approval is remembered for the exact code and workspace capability. See [Workspace Report](docs/workspace-report.md). Source delivery and local fixture checks are separate from backend activation and installation on Pete's devices.

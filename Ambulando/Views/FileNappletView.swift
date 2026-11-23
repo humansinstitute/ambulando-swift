@@ -110,7 +110,11 @@ struct DirectHTMLFileView: View {
     var body: some View {
         if let object = try? JSONSerialization.jsonObject(with: file.raw) as? [String: Any],
            let metadata = object["metadata"] as? [String: Any], let napplet = metadata["napplet"] as? [String: Any],
-           napplet["app_id"] as? String == "workspace-report" {
+           (napplet["version"] as? NSNumber)?.intValue == 2 {
+            GenericNappletFileView(file: file, workspace: workspace)
+        } else if let object = try? JSONSerialization.jsonObject(with: file.raw) as? [String: Any],
+                  let metadata = object["metadata"] as? [String: Any], let napplet = metadata["napplet"] as? [String: Any],
+                  napplet["app_id"] as? String == "workspace-report" {
             WorkspaceReportFileView(file: file, workspace: workspace)
         } else { TrackerHTMLFileView(file: file, workspace: workspace, appMode: appMode, trustStore: trustStore) }
     }

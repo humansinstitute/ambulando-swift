@@ -460,3 +460,16 @@ extension StoreReader {
         }
     }
 }
+
+extension StoreReader {
+    /// Bounded local pages over the existing personal-pin table; no catalogue or new persisted family.
+    public func genericFilePins(connectionId:String,workspaceId:String,after:String = "") throws -> [PinRecord] {
+        try rows("SELECT raw FROM pins WHERE connection_id = ? AND workspace_id = ? AND resource_type = 'file' AND pinned = 1 AND id > ? ORDER BY id LIMIT 200",
+                 [.text(connectionId),.text(workspaceId),.text(after)],PinRecord.init(raw:))
+    }
+    public func genericFilePinsRevision(connectionId:String,workspaceId:String) throws -> Int {
+        let query = try db.prepare("SELECT COALESCE(SUM(row_version),0) FROM pins WHERE connection_id = ? AND workspace_id = ? AND resource_type = 'file'")
+        try query.bind([.text(connectionId),.text(workspaceId)])
+        return try query.step() ? Int(query.int(0)) : 0
+    }
+}
