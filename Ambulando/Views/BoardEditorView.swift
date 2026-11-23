@@ -43,6 +43,7 @@ final class BoardSchemeHandler: NSObject, WKURLSchemeHandler {
 /// canvas that is not selected). Save requests from the page's floating button come back through `onAction`.
 @MainActor struct BoardEditorWebView {
     let session: BoardSession
+    var names: [String: String] = [:]
     var interactive = true
     var dark = false
     /// The floating Save as the board offers it now (nil: none, as for read-only views).
@@ -58,6 +59,35 @@ final class BoardSchemeHandler: NSObject, WKURLSchemeHandler {
         private var pump: Task<Void, Never>?
         private var loaded = false
         private var lastAction: String?
+        private var documentKey = ""
+        private var authorIdentities: [String] = []
+        private var names: [String: String] = [:]
+        private var lastNames: String?
+
+        func setNames(_ value: [String: String]) {
+            names = value
+            sendNames()
+        }
+
+        private func sendNames() {
+            let selected = Dictionary(uniqueKeysWithValues: authorIdentities.compactMap { identity -> (String, String)? in
+                guard let label = PersonNamePolicy.usable(names[identity]), label.count <= 256 else { return nil }
+                return (identity, label)
+            })
+            let json = BoardController.message(["type": "author-names", "key": documentKey, "names": selected])
+            guard json != lastNames else { return }
+            lastNames = json; outgoing?.yield(json)
+        }
+
+        /// Inspect host messages only for presentation lifetime; never rewrite scene data.
+        private func observeDocument(_ json: String) {
+            guard let payload = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] else { return }
+            if payload["type"] as? String == "clear" {
+                documentKey = ""; authorIdentities = []; lastNames = nil
+            } else if payload["type"] as? String == "load", let key = payload["key"] as? String, key != documentKey {
+                documentKey = key; authorIdentities = []; lastNames = nil
+            }
+        }
 
         init(session: BoardSession, onLink: @escaping (URL) -> Void) {
             self.session = session
@@ -72,7 +102,8 @@ final class BoardSchemeHandler: NSObject, WKURLSchemeHandler {
             outgoing = continuation
             pump = Task { @MainActor [weak self] in
                 for await json in stream {
-                    guard let web = self?.webView else { continue }
+                    guard let self, let web = self.webView else { continue }
+                    self.observeDocument(json)
                     _ = try? await web.callAsyncJavaScript("return window.ambulandoBoard ? window.ambulandoBoard.deliver(m) : false",
                                                            arguments: ["m": json], contentWorld: .page)
                 }
@@ -100,14 +131,23 @@ final class BoardSchemeHandler: NSObject, WKURLSchemeHandler {
         func stop() {
             let controller = session.controller, id = id
             Task { await controller.detach(id) }
+            documentKey = ""; authorIdentities = []; names = [:]; lastNames = nil
             outgoing?.finish(); pump?.cancel()
             webView?.configuration.userContentController.removeScriptMessageHandler(forName: "board")
+            webView = nil
         }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
             // Only the bundled editor document in the main frame may talk to the board.
-            guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.scheme == BoardEditorBundle.scheme,
+            guard message.webView === webView, message.frameInfo.isMainFrame, message.frameInfo.request.url?.scheme == BoardEditorBundle.scheme,
+                  message.frameInfo.request.url?.host == "editor",
                   let json = message.body as? String, json.utf8.count <= BoardScene.maxBytes * 2 else { return }
+            if let payload = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+               payload["type"] as? String == "author-identities" {
+                guard payload["key"] as? String == documentKey, let identities = payload["identities"] as? [String], identities.count <= 2000 else { return }
+                authorIdentities = Array(Set(identities.filter(NostrKeys.isValidNpub))).sorted()
+                sendNames(); return
+            }
             if json.hasPrefix(#"{"type":"action""#),
                let o = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any], o["action"] as? String == "save" {
                 // The page only asks; Save runs if the board still offers it.
@@ -207,6 +247,7 @@ extension BoardEditorWebView: UIViewRepresentable {
         context.coordinator.onLink = onLink
         view.isUserInteractionEnabled = interactive
         context.coordinator.setAction(saveAction)
+        context.coordinator.setNames(names)
     }
     static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) { coordinator.stop() }
 }
@@ -216,6 +257,7 @@ extension BoardEditorWebView: NSViewRepresentable {
     func updateNSView(_ view: WKWebView, context: Context) {
         context.coordinator.onLink = onLink
         context.coordinator.setAction(saveAction)
+        context.coordinator.setNames(names)
     }
     static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) { coordinator.stop() }
 }
@@ -227,14 +269,16 @@ struct BoardEditorPanel: View {
     @Environment(\.colorScheme) private var colorScheme
     let session: BoardSession
     var interactive = true
+    @State private var people = LiveQuery<PeopleDirectory>(initial: PeopleDirectory())
 
     var body: some View {
         let state = session.state
         ZStack {
             Color.white
             if BoardEditorBundle.available && model.canRead {
-                BoardEditorWebView(session: session, interactive: interactive && state.status == .ready, dark: colorScheme == .dark,
+                BoardEditorWebView(session: session, names: people.value.names, interactive: interactive && state.status == .ready, dark: colorScheme == .dark,
                                    saveAction: state.saveAction, onLink: { url in model.browser.launch(url) })
+                    .id(session.key)
                     .opacity(state.status == .ready ? 1 : 0)
             }
             switch state.status {
@@ -252,6 +296,13 @@ struct BoardEditorPanel: View {
         }
         .onChange(of: model.isUnlocked) { _, _ in session.refreshSigner() }
         // Reading again after a lock without background reading (the scene was cleared from memory).
+        .task(id: "\(session.key)|\(model.connection?.id ?? "")|\(model.selectedWorkspaceId ?? "")") {
+            guard let store = model.store, let connection = model.connection, let workspace = model.selectedWorkspaceId else { return }
+            people.start(store: store, matches: {
+                $0.table == .profiles || ($0.workspaceId == workspace && [.members, .agents, .access].contains($0.table))
+            }) { try await store.reader.people(connectionId: connection.id, workspaceId: workspace) }
+        }
+        .onDisappear { people.stop() }
         .onChange(of: model.canRead) { _, readable in if readable { session.resume() } }
     }
 }

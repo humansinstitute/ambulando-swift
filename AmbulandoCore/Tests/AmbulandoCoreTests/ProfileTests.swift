@@ -836,3 +836,19 @@ final class LauncherLogoTests: XCTestCase {
         XCTAssertEqual(downloads, 1)
     }
 }
+
+final class CanvasAuthorNameTests: XCTestCase {
+    func testExactIdentityLateNameRenameAndLiteralLabels() throws {
+        let npub = try XCTUnwrap(NostrKeys.npub(publicKeyHex: String(repeating: "12", count: 32)))
+        let other = try XCTUnwrap(NostrKeys.npub(publicKeyHex: String(repeating: "13", count: 32)))
+        XCTAssertEqual(PersonNamePolicy.canvasAuthor(npub, names: [:]), "Unknown person")
+        XCTAssertEqual(PersonNamePolicy.canvasAuthor(npub, names: [npub: "Ada"]), "Ada")
+        XCTAssertEqual(PersonNamePolicy.canvasAuthor(npub, names: [npub: "Renamed"]), "Renamed")
+        XCTAssertEqual(PersonNamePolicy.canvasAuthor(String(repeating: "12", count: 32), names: [npub: "Ada"]), "Ada")
+        XCTAssertEqual(PersonNamePolicy.canvasAuthor(other, names: [npub: "Ada"]), "Unknown person")
+        XCTAssertEqual(PersonNamePolicy.canvasAuthor("npub1broken", names: ["npub1broken": "Wrong"]), "Unknown person")
+        XCTAssertEqual(PersonNamePolicy.canvasAuthor("Custom author", names: [npub: "Ada"]), "Custom author")
+        XCTAssertEqual(PersonNamePolicy.canvasAuthor("", names: [:]), "Unknown person")
+        XCTAssertEqual(PersonNamePolicy.canvasAuthor(npub, names: [npub: npub]), "Unknown person")
+    }
+}

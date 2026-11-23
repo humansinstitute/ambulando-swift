@@ -1,9 +1,10 @@
+import { boardAuthorName } from './person-labels.js';
 import { createElement as h, useImperativeHandle, useState } from 'react';
 import { commentAnchor, commentPosition, COMMENT_LIMITS } from '../board-comments.js';
 import './comments.css';
 
 // DOM overlay: never drawing elements, so image exports contain no pins/text.
-export function BoardComments({ comments, readOnly, send, ref, api }) {
+export function BoardComments({ comments, authorNames = {}, readOnly, send, ref, api }) {
   const [elements, setElements] = useState(() => api?.getSceneElementsIncludingDeleted() || []);
   const [viewport, setViewport] = useState(() => { const state = api?.getAppState(); return { scrollX: state?.scrollX || 0, scrollY: state?.scrollY || 0, zoom: state?.zoom?.value || 1 }; });
   useImperativeHandle(ref, () => ({ update(elements, appState) {
@@ -49,7 +50,7 @@ export function BoardComments({ comments, readOnly, send, ref, api }) {
       thread || anchor ? h('section', { className: 'board-comment-thread' },
         h('h3', null, anchor ? 'New comment' : thread.resolved ? 'Resolved thread' : 'Comment thread'),
         thread ? h('div', { className: 'board-comment-messages' }, thread.messages.map(message => h('article', { key: message.id },
-          h('small', { title: message.author_npub }, `${message.author_npub.slice(0, 16)}… · ${new Date(message.created_at).toLocaleString()}`), h('p', null, message.body)))) : null,
+          h('small', { title: message.author_npub }, `${boardAuthorName(message.author_npub, authorNames)} · ${new Date(message.created_at).toLocaleString()}`), h('p', null, message.body)))) : null,
         thread && !readOnly ? button(thread.resolved ? 'Reopen' : 'Resolve', () => send({ type: 'resolve', thread_id: thread.id, resolved: !thread.resolved })) : null,
         !readOnly ? h('form', { onSubmit: submit }, h('textarea', { 'aria-label': thread ? 'Reply' : 'Comment', value: body, maxLength: COMMENT_LIMITS.body, onChange: event => setBody(event.target.value), placeholder: thread ? 'Reply to this thread' : 'Write a comment', autoFocus: true }),
           h('button', { type: 'submit', disabled: !body.trim() }, thread ? 'Add reply' : 'Post comment')) : null) : null) : null);

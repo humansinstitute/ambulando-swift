@@ -12,6 +12,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Profile names in boards and canvas (Mac 111, iPhone/iPad 112)
+
+Board discussions use available local profile names and update when cached names
+arrive or change. Canvas miniature authors resolve complete public identities;
+ordinary author labels and custom member names remain unchanged. Public-key
+details, saved comments and board history keep their original identities. Source
+and embedded-editor validation are separate from installed-app acceptance.
+
 ## Common cartridge runtime (Mac build 108, iPhone/iPad build 109)
 
 Workspace Apps discovers authenticated v3 napplets from NStack. Named personal/team

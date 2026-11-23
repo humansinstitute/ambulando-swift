@@ -96,6 +96,7 @@ struct CanvasBoardSnapshot: Sendable, Equatable {
     var scene = CanvasScene()
     /// Board previews by naplet id (parsed off the main actor).
     var boards: [String: PreparedBoard] = [:]
+    var names: [String: String] = [:]
 }
 
 struct CanvasBoardView: View {
@@ -279,7 +280,7 @@ struct CanvasBoardView: View {
             // Returning to this board (or reopening it) keeps the position the viewer left it at.
             if viewport == nil { viewport = model.canvasViewports[canvasId] }
             let w = workspace.id, id = canvasId, store = store
-            snapshot.start(store: store, matches: { $0.workspaceId == w && [.canvases, .boards].contains($0.table) }) {
+            snapshot.start(store: store, matches: { $0.table == .profiles || ($0.workspaceId == w && [.canvases, .boards, .members, .agents].contains($0.table)) }) {
                 guard let stored = try await store.reader.canvasSnapshot(workspaceId: w, canvasId: id) else {
                     return CanvasBoardSnapshot(canvas: try await store.reader.canvas(workspaceId: w, id: id))
                 }
@@ -290,7 +291,7 @@ struct CanvasBoardView: View {
                     try Task.checkCancellation()
                     boards[naplet.id] = try PreparedBoard.prepare(try await store.reader.boardScene(workspaceId: w, fileId: ref.fileId), expected: ref)
                 }
-                return CanvasBoardSnapshot(canvas: try await store.reader.canvas(workspaceId: w, id: id), stored: true, scene: scene, boards: boards)
+                return CanvasBoardSnapshot(canvas: try await store.reader.canvas(workspaceId: w, id: id), stored: true, scene: scene, boards: boards, names: try await store.reader.people(workspaceId: w).names)
             }
             model.openCanvas(workspace, canvasId: canvasId)
         }
@@ -360,7 +361,7 @@ struct CanvasBoardView: View {
     }
 
     private func cardView(_ naplet: CanvasNaplet, _ value: CanvasBoardSnapshot, _ vp: CanvasViewport) -> some View {
-        placed(NapletCard(naplet: naplet, board: value.boards[naplet.id], selected: selected == naplet.id), naplet, vp)
+        placed(NapletCard(naplet: naplet, names: value.names, board: value.boards[naplet.id], selected: selected == naplet.id), naplet, vp)
             .gesture(editGesture(naplet, vp, resize: false), including: movable(naplet) ? .all : .subviews)
             .onTapGesture(count: 2) { open(naplet) }
             .onTapGesture { selected = naplet.id }
@@ -1109,6 +1110,7 @@ struct CanvasAddItemSheet: View {
 /// One naplet drawn at world size (the board scales it). Each source type shows what Tower projected for this viewer.
 struct NapletCard: View {
     let naplet: CanvasNaplet
+    var names: [String: String] = [:]
     let board: PreparedBoard?
     let selected: Bool
 
@@ -1151,7 +1153,7 @@ struct NapletCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(messages.suffix(6)) { m in
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(m.author.isEmpty ? "Someone" : m.author).font(.system(size: 11, weight: .semibold)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
+                        Text(PersonNamePolicy.canvasAuthor(m.author, names: names)).font(.system(size: 11, weight: .semibold)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
                         Text(m.body).font(.system(size: 13)).lineLimit(3)
                     }
                 }

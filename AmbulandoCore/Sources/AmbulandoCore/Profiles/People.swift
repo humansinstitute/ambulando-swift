@@ -134,6 +134,16 @@ public enum PersonNamePolicy {
     static let placeholders: Set<String> = ["workspace creator", "flight deck pg creator", "flight deck pg workspace owner",
                                             "flight deck pg smoke viewer", "flight deck pg collaborator"]
 
+    /// Legacy canvas payloads contain a label OR an exact public identity in `author`.
+    /// Never infer a person from a shortened key or an arbitrary label.
+    public static func canvasAuthor(_ author: String, names: [String: String]) -> String {
+        let identity = NostrKeys.isValidNpub(author) ? author : NostrKeys.npub(publicKeyHex: author)
+        if let identity {
+            return usable(names[identity]) ?? "Unknown person"
+        }
+        return usable(author) ?? "Unknown person"
+    }
+
     public static func usable(_ value: String?) -> String? {
         guard let name = NostrProfileContent.clean(value, limit: NostrProfileContent.maxNameLength) else { return nil }
         let lower = name.lowercased()

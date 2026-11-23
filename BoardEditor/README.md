@@ -63,3 +63,13 @@ This uses disposable Markdown and rich documents, exercises null and non-Element
 the first record link, continued typing and caret placement, snapshot/reload and stable link activation callbacks.
 `BoardEditor/test/document-mentions.test.js` also covers selection gestures and keyboard activation. This check
 provides embedded-page evidence; installed-app save/rename and iPhone keyboard checks are separate UI tests.
+
+Board discussion author names use the existing native `PeopleDirectory` projection,
+observing local profile/member changes. The editor requests current exact npubs
+with `author-identities` and receives a separate `author-names` map. Both messages
+carry the current load key; stale keys are ignored, and load/clear resets labels.
+The host validates npub checksums and bounds input (2,000 identities, 256-character
+usable names); React renders names as text. Full keys remain in explicit details.
+Names never modify scene JSON, comments, history or save fingerprints. The canvas
+miniature resolves only complete validated npub/hex author strings; ordinary
+payload labels remain unchanged. No new profile fetcher or shared record contract.

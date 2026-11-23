@@ -1,3 +1,4 @@
+import { validatedAuthorNames } from './person-labels.js';
 import { BoardComments } from './comments.js';
 import { boardComments, followCommentAnchors } from '../board-comments.js';
 import { createElement, useCallback, useEffect, useRef, useState } from 'react';
@@ -31,8 +32,12 @@ function BoardEditor({ port, theme }) {
   const state = useRef({ key: '', readOnly: true, fingerprint: '', sentFiles: new Set(), interacted: false, timer: 0, pending: null, comments: [] });
   const [readOnly, setReadOnly] = useState(true);
   const [discussion, setDiscussion] = useState([]);
+  const [authorNames, setAuthorNames] = useState({});
   const discussionView = useRef(null);
   const [discussionKey, setDiscussionKey] = useState('');
+  useEffect(() => {
+    port.postMessage({ type: 'author-identities', key: discussionKey, identities: [...new Set(discussion.flatMap(thread => thread.messages.map(message => message.author_npub)))].slice(0, 2000) });
+  }, [discussion, discussionKey, port]);
   const [ready, setReady] = useState(false);
   // Page-owned Save state (label, disabled); hidden for read-only views.
   const [action, setAction] = useState(null);
@@ -91,7 +96,7 @@ function BoardEditor({ port, theme }) {
       const message = event.data || {};
       if (message.type === 'load') {
         const reset = message.key !== state.current.key;
-        if (reset) setDiscussionKey(message.key);
+        if (reset) { setDiscussionKey(message.key); setAuthorNames({}); }
         state.current.key = message.key;
         state.current.readOnly = message.readOnly === true;
         setReadOnly(state.current.readOnly);
@@ -103,6 +108,8 @@ function BoardEditor({ port, theme }) {
         clearTimeout(state.current.timer);
         flush();
         port.postMessage({ type: 'flushed', token: message.token });
+      } else if (message.type === 'author-names') {
+        if (message.key === state.current.key) setAuthorNames(validatedAuthorNames(message.names));
       } else if (message.type === 'action-ui') {
         setAction(message.action && typeof message.action === 'object' ? message.action : null);
       } else if (message.type === 'patch') {
@@ -110,8 +117,8 @@ function BoardEditor({ port, theme }) {
       } else if (message.type === 'comments') {
         state.current.comments = message.comments; setDiscussion(message.comments);
       } else if (message.type === 'clear') {
-        state.current.readOnly = true; setReadOnly(true);
-        state.current.comments = []; setDiscussion([]); setDiscussionKey(crypto.randomUUID());
+        state.current.key = ''; state.current.readOnly = true; setReadOnly(true);
+        state.current.comments = []; setDiscussion([]); setAuthorNames({}); setDiscussionKey('');
         apiRef.current?.resetScene();
         reportCounts([], {});
       }
@@ -190,7 +197,7 @@ function BoardEditor({ port, theme }) {
 
   return createElement('div', { style: { position: 'relative', width: '100%', height: '100%' }, 'data-board-ready': ready ? 'true' : 'false', 'data-board-readonly': readOnly ? 'true' : 'false' },
     phoneAt && action?.action ? createElement('div', { className: 'wingman-board-action-phone', style: { top: `${phoneAt.top}px`, right: `${phoneAt.right}px` } }, saveButton()) : null,
-    createElement(BoardComments, { key: `${discussionKey}:${readOnly}`, api: apiRef.current, ref: discussionView, comments: discussion, readOnly, send: operation => { clearTimeout(state.current.timer); flush(); port.postMessage({ type: 'comment-op', operation }); } }),
+    createElement(BoardComments, { key: `${discussionKey}:${readOnly}`, api: apiRef.current, ref: discussionView, comments: discussion, authorNames, readOnly, send: operation => { clearTimeout(state.current.timer); flush(); port.postMessage({ type: 'comment-op', operation }); } }),
     createElement(Excalidraw, {
       excalidrawAPI: api => { apiRef.current = api; setReady(Boolean(api)); },
       onChange,
