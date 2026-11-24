@@ -297,6 +297,8 @@ final class AppModel {
     // The catalog owns connection/discovery metadata only. Content is always read from a boundary partition.
     @ObservationIgnored private(set) var catalogStore: LocalStore?
     @ObservationIgnored private var catalogSync: WorkspaceSync?
+    /// Identity and transport for features that sign their own requests (invited onboarding).
+    var signingSync: WorkspaceSync? { catalogSync ?? sync }
     @ObservationIgnored private var connectionDiscoveries: [String: WorkspaceSync] = [:]
     @ObservationIgnored private var storePool: WorkspaceStorePool?
     @ObservationIgnored private var sharedEngine: SyncEngine?

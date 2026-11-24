@@ -51,6 +51,7 @@ struct SettingsView: View {
                         LabeledContent("Workspaces", value: "\(model.workspaces.value.count)")
                         ConnectionStatusRow()
                         Button("Refresh now") { model.refresh(force: true) }.disabled(model.identity.npub == nil)
+                        if !Product.isGrandparentChat { OnboardingEntry(origin: connection.origin) }
                         Button("Disconnect and clear local data", role: .destructive) {
                             Task { unsent = await model.unsentCount(); confirmDisconnect = true }
                         }

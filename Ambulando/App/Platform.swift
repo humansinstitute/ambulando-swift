@@ -138,6 +138,15 @@ extension View {
         #endif
     }
 
+    /// Decimal amounts (funding): decimal pad on the iPhone.
+    func decimalEntry() -> some View {
+        #if os(iOS)
+        keyboardType(.decimalPad)
+        #else
+        self
+        #endif
+    }
+
     /// No automatic capitalisation (names, keys).
     func noCapitalization() -> some View {
         #if os(iOS)

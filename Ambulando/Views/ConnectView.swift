@@ -58,6 +58,7 @@ struct ConnectView: View {
                     if let checkError { Notice(tone: .error, text: checkError) }
                     if let descriptor { DescriptorSummary(descriptor: descriptor) }
                     if let notice = model.notice { Notice(tone: .error, text: notice) }
+                    if !Product.isGrandparentChat, workspaceQr == nil { OnboardingEntry(origin: (try? TowerOrigin(origin).description) ?? "") }
                     if let qr = workspaceQr {
                         Text(qr.name ?? "NStack workspace").font(.headline)
                         Text(qr.workspace_id).textSelection(.enabled)

@@ -30,6 +30,12 @@ struct ImportIdentityView: View {
                     SecureField("Confirm PIN", text: $confirm).numberPadEntry()
                         .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                     if let notice = model.notice { Notice(tone: .error, text: notice) }
+                    if !Product.isGrandparentChat {
+                        // A new identity is deliberately not offered yet: it needs a safe encrypted backup (NIP-49 `ncryptsec`) that
+                        // is not implemented, and this vault's PIN sealing is not that backup. Import stays the only path.
+                        Text("Creating a new identity is not available yet. It needs an encrypted backup that is still being built, so for now import the key you already have.")
+                            .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("identity.create.unavailable")
+                    }
                     Button {
                         working = true
                         Task {
