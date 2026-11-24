@@ -196,15 +196,93 @@ final class OnboardingTests: XCTestCase {
 
     // MARK: Durable state and identity binding
 
+    private func posts(_ t: FakeOnboardingTower) -> Int { t.requests.filter { $0.method == "POST" && $0.path.hasPrefix("/api/v4/onboarding") }.count }
+
     func testUnsavableDraftStopsEverySideEffect() async throws {
         let t = tower()
-        let store = FlakyDraftStore()                         // every write fails
-        let (c, _) = try await ready(t, store: store)
+        let store = FlakyDraftStore()                         // every write fails from the start
+        let (c, review) = try await ready(t, store: store)
+        XCTAssertNotNil(review.failure)
+        XCTAssertNotEqual(review.phase, .review, "an unsaved review is not a review")
+        XCTAssertNotEqual(review.draft.reviewedDigest, review.draft.formDigest)
         let snap = await c.continueToPayment()
-        XCTAssertEqual(snap.failure?.kind, .persistence)
+        XCTAssertNotNil(snap.failure)
         XCTAssertNil(snap.checkoutURL)
-        XCTAssertTrue(t.requests.filter { $0.path.hasPrefix("/api/v4/onboarding") && $0.method == "POST" }.isEmpty, "no account, create or checkout request")
+        XCTAssertEqual(posts(t), 0, "no account, create, update or checkout request")
         XCTAssertTrue(t.intents.isEmpty)
+    }
+
+    func testExistingIntentEditAndReviewPersistenceFailureSendsNoUpdateOrCheckout() async throws {
+        let t = tower()
+        let store = FlakyDraftStore { _ in false }
+        let (c, _) = try await ready(t, store: store)
+        let created = await c.continueToPayment()
+        XCTAssertNil(created.failure)
+        let before = created.draft
+        let baseline = posts(t)
+        store.breakAll()                                      // the store starts failing; an intent already exists
+        let edited = await c.edit(name: "Renamed", fundingCents: 5000)
+        XCTAssertEqual(edited.failure?.kind, .persistence)
+        XCTAssertEqual(edited.draft, before, "memory did not move ahead of disk")
+        let reviewed = await c.confirmReview()
+        XCTAssertEqual(reviewed.failure?.kind, .persistence)
+        let pay = await c.continueToPayment()
+        XCTAssertNotNil(pay.failure)
+        XCTAssertEqual(posts(t), baseline, "zero options and zero checkout requests")
+        XCTAssertEqual(t.intents[0].name, "Studio")
+        XCTAssertEqual(t.count("POST", suffix: "/options"), 0)
+    }
+
+    func testExistingIntentPendingChangeIsNotSentWhenStoreFailsBeforeRequest() async throws {
+        let t = tower()
+        let store = FlakyDraftStore { _ in false }
+        let (c, _) = try await ready(t, store: store)
+        _ = await c.continueToPayment()
+        _ = await c.edit(name: "Renamed")                     // saved and reviewed while healthy
+        _ = await c.confirmReview()
+        let baseline = posts(t)
+        store.breakAll()                                      // fails only now, before the request
+        let pay = await c.continueToPayment()
+        XCTAssertEqual(pay.failure?.kind, .persistence)
+        XCTAssertEqual(posts(t), baseline)
+        XCTAssertEqual(t.count("POST", suffix: "/options"), 0)
+        store.heal()
+        let ok = await c.continueToPayment()
+        XCTAssertNil(ok.failure)
+        XCTAssertEqual(t.count("POST", suffix: "/options"), 1)
+    }
+
+    func testCheckoutRequiresDurableBindingBeforeRequestInExistingIntentPath() async throws {
+        let t = tower()
+        let store = FlakyDraftStore { _ in false }
+        let (c, _) = try await ready(t, store: store)
+        _ = await c.continueToPayment()                       // intent + first order exist
+        store.breakAll()
+        let before = t.count("POST", suffix: "/checkout")
+        let again = await c.continueToPayment()
+        XCTAssertEqual(again.failure?.kind, .persistence)
+        XCTAssertEqual(t.count("POST", suffix: "/checkout"), before)
+    }
+
+    func testRetryInSameControllerAfterFailedIntentBindingSave() async throws {
+        let t = tower()
+        let store = FlakyDraftStore { $0.intentId != nil }
+        let (c, _) = try await ready(t, store: store)
+        let first = await c.continueToPayment()
+        XCTAssertEqual(first.failure?.kind, .persistence)
+        XCTAssertEqual(t.count("POST", suffix: "/checkout"), 0)
+        // Still failing: a retry must not reach checkout either.
+        let second = await c.continueToPayment()
+        XCTAssertEqual(second.failure?.kind, .persistence)
+        XCTAssertEqual(t.count("POST", suffix: "/checkout"), 0)
+        store.heal()
+        let third = await c.continueToPayment()
+        XCTAssertNil(third.failure)
+        XCTAssertEqual(t.intents.count, 1)
+        XCTAssertEqual(t.checkoutOrders.count, 1)
+        let disk = try XCTUnwrap(store.load(origin: t.origin, signerNpub: third.draft.signerNpub))
+        XCTAssertEqual(disk.intentId, t.intents[0].id, "binding is durable before checkout was requested")
+        XCTAssertEqual(disk.checkoutOrderId, t.checkoutOrders.values.first)
     }
 
     func testBindingSaveFailureAfterCreateStopsBeforeCheckoutAndRelaunchReusesKeys() async throws {

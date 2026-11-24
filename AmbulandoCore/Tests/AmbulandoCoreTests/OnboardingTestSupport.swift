@@ -223,6 +223,7 @@ final class FlakyDraftStore: OnboardingDraftStore, @unchecked Sendable {
     private let lock = NSLock()
     private var rule: @Sendable (OnboardingDraft) -> Bool
     init(failWhen rule: @escaping @Sendable (OnboardingDraft) -> Bool = { _ in true }) { self.rule = rule }
+    func breakAll() { lock.withLock { rule = { _ in true } } }
     func heal() { lock.withLock { rule = { _ in false } } }
     func load(origin: String, signerNpub: String) -> OnboardingDraft? { inner.load(origin: origin, signerNpub: signerNpub) }
     func save(_ draft: OnboardingDraft) throws {

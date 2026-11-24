@@ -1,4 +1,4 @@
-# Invited onboarding (Mac source build 120, first slice)
+# Invited onboarding (Mac source build 121, first slice)
 
 A signed-in user can start a new NStack workspace from a capped group invitation: choose a workspace name, optionally an
 agent from the Tower's versioned catalogue, a funding amount (US$21 / 50 / 100 or a custom amount of at least US$21),

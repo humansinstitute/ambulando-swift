@@ -159,14 +159,14 @@ public actor OnboardingController {
         if let agentOfferId { d.agentOfferId = agentOfferId; if agentOfferId == nil { d.agentDailyCapCents = nil } }
         if let agentDailyCapCents { d.agentDailyCapCents = agentDailyCapCents }
         if let invite, d.intentId == nil { d.invite = invite }
-        state.draft = d
-        persistLocally()
+        commit(d)
         return settle()
     }
 
     /// Back from the review screen to editing.
     public func reopenForEditing() -> OnboardingSnapshot {
-        state.draft.reviewedDigest = nil; persistLocally(); return settle()
+        var d = state.draft; d.reviewedDigest = nil
+        commit(d); return settle()
     }
 
     /// Validates the choices locally. Nothing is sent. The review screen is the gate in front of every side effect.
@@ -174,9 +174,10 @@ public actor OnboardingController {
         state.failure = nil
         if let failure = validateForm() { state.failure = failure; return settle() }
         // Pin the effective cap so the reviewed choices equal what the server will record.
-        if let id = state.draft.agentOfferId, state.draft.agentDailyCapCents == nil { state.draft.agentDailyCapCents = state.offers.first { $0.id == id }?.default_daily_cap_cents }
-        state.draft.reviewedDigest = state.draft.formDigest
-        persistLocally()
+        var d = state.draft
+        if let id = d.agentOfferId, d.agentDailyCapCents == nil { d.agentDailyCapCents = state.offers.first { $0.id == id }?.default_daily_cap_cents }
+        d.reviewedDigest = d.formDigest
+        commit(d)
         return settle()
     }
 
@@ -205,6 +206,7 @@ public actor OnboardingController {
         guard await signerMatches() else { return fail(.unavailable(.signerMismatch), nil) }
         guard state.draft.reviewedDigest == state.draft.formDigest, validateForm() == nil else { return settle(OnboardingFailure(kind: .validation, code: "review_required")) }
         do {
+            try persist()                // keys, form and bindings on disk before any account, create, update or checkout request
             try await ensureIntent()
             guard let intent = state.intent else { return settle() }
             if intent.fundingConfirmed { return settle() }
@@ -260,6 +262,7 @@ public actor OnboardingController {
             changed = true
         }
         guard changed else { return }
+        try persist()
         do { try adopt(try await api.updateIntent(intent.id, update)) }
         catch let f as OnboardingFailure where f.kind == .staleRevision {
             // Someone else moved the revision. Take the server's latest and make the user look again.
@@ -273,6 +276,7 @@ public actor OnboardingController {
         guard intent.status == .open else { throw OnboardingFailure(kind: .notEditable, code: "intent_not_open") }
         guard let returnURL else { throw OnboardingFailure(kind: .paymentUnavailable, code: "no_return_url") }
         guard state.draft.reviewedDigest == Self.intentDigest(intent) else { throw OnboardingFailure(kind: .validation, code: "review_required") }
+        try persist()                       // checkout key and review binding durable before the request that can create a payable order
         let checkout = try await api.checkout(intent.id, idempotencyKey: state.draft.checkoutKey, returnURL: returnURL)
         guard checkout.mode == "test", checkout.amount_cents == intent.funding_cents, let url = Self.safeCheckoutURL(checkout.checkout_url) else {
             throw OnboardingFailure(kind: .paymentUnavailable, code: "unexpected_checkout")
@@ -415,7 +419,12 @@ public actor OnboardingController {
     private func persist() throws {
         do { try store.save(state.draft) } catch { throw OnboardingFailure(kind: .persistence) }
     }
-    private func persistLocally() { do { try persist() } catch { state.failure = OnboardingFailure(kind: .persistence) } }
+    /// Local edits are durable first: the in-memory draft changes only if the write succeeded, so memory and disk never diverge
+    /// (a review that was not saved is not a review, and cannot gate a later request).
+    private func commit(_ draft: OnboardingDraft) {
+        do { try store.save(draft); state.draft = draft }
+        catch { state.failure = OnboardingFailure(kind: .persistence) }
+    }
 
     private func fail(_ phase: OnboardingPhase, _ failure: OnboardingFailure?) -> OnboardingSnapshot {
         state.phase = phase; state.failure = failure; return state
