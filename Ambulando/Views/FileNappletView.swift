@@ -189,8 +189,7 @@ struct TrackerHTMLFileView: View {
                         Button("Trust and open") { Task { await approve(code) } }.disabled(approving).accessibilityIdentifier("napplet.approve")
                     }.padding().frame(maxWidth: 480)
                 } else {
-                    Label("Sandboxed HTML", systemImage: "lock.shield").font(.amb(.caption)).padding(6)
-                    SandboxedHTMLView(html: code.html)
+                    HTMLArtefactReviewView(file: file, workspace: workspace)
                 }
             } else { ProgressView("Loading artefact…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }

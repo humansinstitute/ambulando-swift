@@ -238,13 +238,37 @@ enum CanvasHTMLDocument {
     }
 }
 
+struct HTMLAnchorTargetSpec: Equatable {
+    let threadId: String
+    let anchor: HTMLCommentAnchor
+    let resolved: Bool
+    let replyCount: Int
+}
+
 @MainActor
 struct SandboxedHTMLView {
     let html: String
     var interactive = true
+    var anchorSpecs: [HTMLAnchorTargetSpec] = []
+    var focusThreadNonce: (String, Int)? = nil
+    var onTargetSelected: ((HTMLCommentAnchor) -> Void)? = nil
+    var onAnchorMatches: (([String: Bool]) -> Void)? = nil
+    var onBadgeTapped: ((String) -> Void)? = nil
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    private var reviewEnabled: Bool {
+        onTargetSelected != nil || onAnchorMatches != nil || onBadgeTapped != nil
+    }
+
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var loaded = false
+        var pageReady = false
+        var lastSyncedJSON: String = ""
+        var lastFocusNonce: Int = 0
+        var onTargetSelected: ((HTMLCommentAnchor) -> Void)?
+        var onAnchorMatches: (([String: Bool]) -> Void)?
+        var onBadgeTapped: ((String) -> Void)?
+        weak var webView: WKWebView?
+
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
             // The generated document loads once; nothing navigates afterwards.
             if !loaded, action.request.url?.absoluteString == "about:blank" { loaded = true; return .allow }
@@ -252,19 +276,224 @@ struct SandboxedHTMLView {
         }
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction,
                      windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            pageReady = true
+            if !lastSyncedJSON.isEmpty {
+                webView.evaluateJavaScript("window.__ambSyncAnchors&&window.__ambSyncAnchors(\(lastSyncedJSON));")
+            }
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "ambReview",
+                  let body = message.body as? [String: Any],
+                  let kind = body["type"] as? String else { return }
+            switch kind {
+            case "target":
+                guard let raw = body["anchor"] as? [String: Any],
+                      let data = try? JSONSerialization.data(withJSONObject: raw),
+                      data.count <= 4096,
+                      let anchor = HTMLCommentAnchor.parse(raw) else { return }
+                onTargetSelected?(anchor)
+            case "matches":
+                guard let raw = body["matches"] as? [String: Bool], raw.count <= 500 else { return }
+                var filtered: [String: Bool] = [:]
+                for (k, v) in raw {
+                    if let id = UUID(uuidString: k)?.uuidString.lowercased() { filtered[id] = v }
+                }
+                onAnchorMatches?(filtered)
+            case "badge":
+                guard let id = (body["threadId"] as? String).flatMap({ UUID(uuidString: $0)?.uuidString.lowercased() }) else { return }
+                onBadgeTapped?(id)
+            default:
+                break
+            }
+        }
+
+        func sync(specs: [HTMLAnchorTargetSpec], focus: (String, Int)?) {
+            let encoded: [[String: Any]] = specs.map { spec in
+                [
+                    "threadId": spec.threadId,
+                    "resolved": spec.resolved,
+                    "replyCount": spec.replyCount,
+                    "anchor": spec.anchor.toJSONObject(),
+                ]
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: encoded),
+               let json = String(data: data, encoding: .utf8),
+               json != lastSyncedJSON {
+                lastSyncedJSON = json
+                if pageReady {
+                    webView?.evaluateJavaScript("window.__ambSyncAnchors&&window.__ambSyncAnchors(\(json));")
+                }
+            }
+            if let focus, focus.1 != lastFocusNonce, pageReady {
+                lastFocusNonce = focus.1
+                if let data = try? JSONSerialization.data(withJSONObject: [focus.0]),
+                   let arr = String(data: data, encoding: .utf8) {
+                    webView?.evaluateJavaScript("window.__ambFocusThread&&window.__ambFocusThread((\(arr))[0]);")
+                }
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
+
+    private static let reviewOverlayHead = """
+    <style>
+    .amb-review-highlight{outline:2px solid #2563eb !important;outline-offset:2px !important;border-radius:3px !important;}
+    .amb-review-highlight-resolved{outline:2px dashed #64748b !important;outline-offset:2px !important;border-radius:3px !important;}
+    .amb-review-focus{outline:3px solid #f59e0b !important;outline-offset:3px !important;}
+    .amb-review-badge{position:absolute;z-index:2147483640;background:#2563eb;color:#fff;font:600 11px/1 system-ui,sans-serif;padding:3px 7px;border-radius:999px;border:1.5px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.22);cursor:pointer;user-select:none;}
+    .amb-review-badge-resolved{background:#64748b;}
+    .amb-ctx-menu{position:fixed;z-index:2147483645;background:#1e293b;color:#fff;border-radius:8px;padding:4px;box-shadow:0 8px 24px rgba(0,0,0,.28);font:500 12px/1.2 system-ui,sans-serif;}
+    .amb-ctx-menu button{background:none;border:none;color:#fff;padding:6px 10px;border-radius:5px;cursor:pointer;display:block;width:100%;text-align:left;}
+    .amb-ctx-menu button:hover{background:rgba(255,255,255,.14);}
+    </style>
+    """
+
+    private static let reviewOverlayScript = """
+    <script>(()=>{
+    const post=m=>{try{window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.ambReview&&window.webkit.messageHandlers.ambReview.postMessage(m);}catch{}};
+    let currentSpecs=[];let badgeLayer=null;let ctxMenu=null;
+    const norm=s=>String(s||'').replace(/\\s+/g,' ').trim();
+    const closeMenu=()=>{if(ctxMenu){ctxMenu.remove();ctxMenu=null;}};
+    const ensureLayer=()=>{
+      if(badgeLayer&&badgeLayer.isConnected)return badgeLayer;
+      badgeLayer=document.createElement('div');
+      badgeLayer.setAttribute('data-amb-review-ui','1');
+      badgeLayer.style.cssText='position:absolute;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483640;';
+      document.body&&document.body.appendChild(badgeLayer);
+      return badgeLayer;
+    };
+    const domPathFor=el=>{
+      const path=[];let cur=el;
+      while(cur&&cur!==document.body&&cur!==document.documentElement){
+        const p=cur.parentElement;if(!p)break;
+        const idx=Array.prototype.indexOf.call(p.children,cur);
+        if(idx<0)break;
+        path.unshift(idx);cur=p;
+      }
+      return path;
+    };
+    const selectorFor=el=>{
+      if(el.id&&/^[A-Za-z_][A-Za-z0-9_-]*$/.test(el.id))return '#'+el.id;
+      const parts=[];let cur=el;
+      while(cur&&cur!==document.body&&cur!==document.documentElement&&parts.length<8){
+        if(cur.id&&/^[A-Za-z_][A-Za-z0-9_-]*$/.test(cur.id)){parts.unshift('#'+cur.id);break;}
+        const tag=cur.tagName.toLowerCase();
+        const p=cur.parentElement;if(!p){parts.unshift(tag);break;}
+        const sibs=Array.prototype.filter.call(p.children,c=>c.tagName===cur.tagName);
+        const idx=sibs.indexOf(cur)+1;
+        parts.unshift(sibs.length>1?(tag+':nth-of-type('+idx+')'):tag);
+        cur=p;
+      }
+      return parts.join(' > ');
+    };
+    const attrFingerprintFor=el=>{
+      const keys=['data-asset','data-asset-background','alt','aria-label','title','name','type','role','href'];
+      const parts=[];
+      for(const k of keys){const v=norm(el.getAttribute&&el.getAttribute(k));if(v)parts.push(k+'='+v.slice(0,60));}
+      return parts.join('|').slice(0,256);
+    };
+    const strictMatches=(el,a)=>{
+      if(!el||el.closest('[data-amb-review-ui]'))return false;
+      const tag=a.tag_name?String(a.tag_name).toLowerCase():null;
+      if(tag&&el.tagName.toLowerCase()!==tag)return false;
+      const quote=a.text_quote?norm(a.text_quote):'';
+      const curText=norm(el.innerText||el.textContent||'');
+      const expectedFp=a.attr_fingerprint?norm(a.attr_fingerprint):'';
+      const curFp=attrFingerprintFor(el);
+      if(quote&&curText!==quote&&!(quote.length>=155&&curText.startsWith(quote)))return false;
+      if(expectedFp&&curFp!==expectedFp)return false;
+      if(!quote&&!expectedFp&&!a.element_id)return false;
+      return true;
+    };
+    const resolveAnchor=a=>{
+      if(!a||a.kind==='document')return null;
+      if(a.element_id){const byId=document.getElementById(a.element_id);if(strictMatches(byId,a))return byId;}
+      if(a.selector){try{const nodes=document.querySelectorAll(a.selector);if(nodes.length===1&&strictMatches(nodes[0],a))return nodes[0];}catch{}}
+      if(Array.isArray(a.dom_path)&&a.dom_path.length>0&&document.body){
+        let cur=document.body;
+        for(const idx of a.dom_path){if(!cur||!cur.children||idx<0||idx>=cur.children.length){cur=null;break;}cur=cur.children[idx];}
+        if(strictMatches(cur,a))return cur;
+      }
+      return null;
+    };
+    const render=()=>{
+      document.querySelectorAll('.amb-review-highlight,.amb-review-highlight-resolved,.amb-review-focus').forEach(el=>{
+        el.classList.remove('amb-review-highlight','amb-review-highlight-resolved','amb-review-focus');
+      });
+      const layer=ensureLayer();if(layer)layer.innerHTML='';
+      const matches={};
+      for(const spec of currentSpecs){
+        const el=resolveAnchor(spec.anchor);
+        matches[spec.threadId]=Boolean(el);
+        if(!el)continue;
+        el.classList.add(spec.resolved?'amb-review-highlight-resolved':'amb-review-highlight');
+        const rect=el.getBoundingClientRect();
+        if(layer&&(rect.width>0||rect.height>0)){
+          const btn=document.createElement('button');btn.type='button';
+          btn.className='amb-review-badge'+(spec.resolved?' amb-review-badge-resolved':'');
+          btn.style.pointerEvents='auto';
+          btn.style.left=Math.max(4,rect.left+window.scrollX)+'px';
+          btn.style.top=Math.max(4,rect.top+window.scrollY-12)+'px';
+          btn.textContent=spec.replyCount>0?('💬 '+(spec.replyCount+1)):'💬';
+          btn.addEventListener('click',ev=>{ev.preventDefault();ev.stopPropagation();post({type:'badge',threadId:spec.threadId});});
+          layer.appendChild(btn);
+        }
+      }
+      post({type:'matches',matches});
+    };
+    window.__ambSyncAnchors=specs=>{currentSpecs=Array.isArray(specs)?specs:[];render();};
+    window.__ambFocusThread=id=>{
+      const spec=currentSpecs.find(s=>s.threadId===id);if(!spec)return;
+      const el=resolveAnchor(spec.anchor);if(!el)return;
+      el.scrollIntoView({behavior:'smooth',block:'center'});
+      el.classList.add('amb-review-focus');
+      setTimeout(()=>el.classList.remove('amb-review-focus'),1800);
+    };
+    document.addEventListener('contextmenu',e=>{
+      const target=e.target&&e.target.nodeType===1?e.target:e.target&&e.target.parentElement;
+      if(!target||target.closest('[data-amb-review-ui]')||target===document.documentElement||target===document.body)return;
+      e.preventDefault();closeMenu();
+      ctxMenu=document.createElement('div');ctxMenu.className='amb-ctx-menu';ctxMenu.setAttribute('data-amb-review-ui','1');
+      ctxMenu.style.left=Math.min(e.clientX,window.innerWidth-150)+'px';
+      ctxMenu.style.top=Math.min(e.clientY,window.innerHeight-44)+'px';
+      const btn=document.createElement('button');btn.type='button';btn.textContent='Add comment';
+      btn.addEventListener('click',ev=>{
+        ev.preventDefault();ev.stopPropagation();closeMenu();
+        const txt=norm(target.innerText||target.textContent||'').slice(0,160);
+        const fp=attrFingerprintFor(target);
+        post({type:'target',anchor:{kind:'html_element',element_id:target.id||undefined,selector:selectorFor(target),dom_path:domPathFor(target),tag_name:target.tagName.toLowerCase(),text_quote:txt||undefined,attr_fingerprint:fp||undefined}});
+      });
+      ctxMenu.appendChild(btn);document.body.appendChild(ctxMenu);
+    },true);
+    document.addEventListener('click',closeMenu);
+    window.addEventListener('resize',()=>{if(currentSpecs.length)render();});
+    })();</script>
+    """
 
     func make(_ coordinator: Coordinator) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        coordinator.onTargetSelected = onTargetSelected
+        coordinator.onAnchorMatches = onAnchorMatches
+        coordinator.onBadgeTapped = onBadgeTapped
+        if reviewEnabled {
+            configuration.userContentController.add(coordinator, name: "ambReview")
+        }
         let view = WKWebView(frame: .zero, configuration: configuration)
+        coordinator.webView = view
         view.navigationDelegate = coordinator
         view.uiDelegate = coordinator
         view.allowsLinkPreview = false
-        view.loadHTMLString(CanvasHTMLDocument.build(html), baseURL: nil)
+        let built = CanvasHTMLDocument.build(html)
+        let finalHTML = reviewEnabled
+            ? ArtefactHTMLDocument.insertingHeadContent(Self.reviewOverlayHead, into: built) + Self.reviewOverlayScript
+            : built
+        view.loadHTMLString(finalHTML, baseURL: nil)
         return view
     }
 }
@@ -272,12 +501,23 @@ struct SandboxedHTMLView {
 #if os(iOS)
 extension SandboxedHTMLView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView { make(context.coordinator) }
-    func updateUIView(_ view: WKWebView, context: Context) { view.isUserInteractionEnabled = interactive }
+    func updateUIView(_ view: WKWebView, context: Context) {
+        view.isUserInteractionEnabled = interactive
+        context.coordinator.onTargetSelected = onTargetSelected
+        context.coordinator.onAnchorMatches = onAnchorMatches
+        context.coordinator.onBadgeTapped = onBadgeTapped
+        if reviewEnabled { context.coordinator.sync(specs: anchorSpecs, focus: focusThreadNonce) }
+    }
 }
 #else
 extension SandboxedHTMLView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView { make(context.coordinator) }
-    func updateNSView(_ view: WKWebView, context: Context) {}
+    func updateNSView(_ view: WKWebView, context: Context) {
+        context.coordinator.onTargetSelected = onTargetSelected
+        context.coordinator.onAnchorMatches = onAnchorMatches
+        context.coordinator.onBadgeTapped = onBadgeTapped
+        if reviewEnabled { context.coordinator.sync(specs: anchorSpecs, focus: focusThreadNonce) }
+    }
 }
 #endif
 
