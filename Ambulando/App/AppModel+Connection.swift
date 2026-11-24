@@ -80,12 +80,31 @@ extension AppModel {
         }
     }
 
+    /// Per workspace: is authorization verified, are sends open, is data caught up, what is waiting, and why startup last failed.
+    /// Counts and codes only. Authorization-ready (access) is reported apart from data-caught-up (data).
+    func workspaceStateText() async -> String {
+        var lines = ["Workspace state (identity \(isUnlocked ? "unlocked" : "locked"))"]
+        for (index, entry) in enabledWorkspaceEntries.enumerated() {
+            guard let runtime = entry.runtime else { lines.append("  #\(index + 1): runtime not created"); continue }
+            var counts: [String: Int] = [:]
+            for item in (try? await runtime.store.reader.outbox(connectionId: entry.connection.id, signerNpub: entry.connection.signerNpub)) ?? [] {
+                counts[item.state.rawValue, default: 0] += 1
+            }
+            let waiting = counts.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+            lines.append("  #\(index + 1): access=\(runtime.accessValidated ? "verified" : "pending") data=\(runtime.validated ? "caught-up" : "pending") " +
+                         "reads=\(runtime.activity.isEnabled ? "on" : "off") writes=\(runtime.writeActivity.isEnabled ? "open" : "fenced") " +
+                         "unsent[\(waiting.isEmpty ? "none" : waiting)] lastStartupFailure=\(runtime.lastStartupFailure ?? "none")")
+        }
+        return lines.joined(separator: "\n") + "\n\n"
+    }
+
     /// Plain-text export for the share sheet, built only when the user asks.
     func diagnosticsText() async -> String {
         let info = Bundle.main.infoDictionary
         let system = ProcessInfo.processInfo.operatingSystemVersionString
-        return await diagnostics?.exportText(app: info?["CFBundleShortVersionString"] as? String ?? "Unknown",
-                                             build: info?["CFBundleVersion"] as? String ?? "Unknown",
-                                             platform: Device.name, system: system) ?? "No diagnostics recorded.\n"
+        let log = await diagnostics?.exportText(app: info?["CFBundleShortVersionString"] as? String ?? "Unknown",
+                                                build: info?["CFBundleVersion"] as? String ?? "Unknown",
+                                                platform: Device.name, system: system) ?? "No diagnostics recorded.\n"
+        return await workspaceStateText() + log
     }
 }

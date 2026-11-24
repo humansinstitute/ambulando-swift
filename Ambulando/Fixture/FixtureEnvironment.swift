@@ -393,7 +393,10 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     /// Scope lists answer HTTP 500 as Tower does for an internal error (`-AmbulandoFixtureScopesFail`).
     var failScopes: Bool { get { lock.withLock { _failScopes } } set { lock.withLock { _failScopes = newValue } } }
     private var _failScopes = false
-    private var missingEventResources = Set<String>()
+    private var missingEventResources: [String: String] = [:]
+    /// Event reads answer 403 after membership was confirmed (authority withdrawn during catch-up).
+    var denyEvents: Bool { get { lock.withLock { _denyEvents } } set { lock.withLock { _denyEvents = newValue } } }
+    private var _denyEvents = false
     var rejectNext: Bool { get { lock.withLock { _rejectNext } } set { lock.withLock { _rejectNext = newValue } } }
     var actorNpub: String { get { lock.withLock { _actor } } set { lock.withLock { _actor = newValue } } }
 
@@ -527,8 +530,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
 
     private func route(_ request: URLRequest) throws -> (Int, Any) {
         let path = request.url!.path
-        if lock.withLock({ missingEventResources.contains(request.url!.lastPathComponent) }) {
-            return (400, ["code": "resource-not-found"])
+        if path.hasSuffix("/events"), lock.withLock({ _denyEvents }) { return (403, ["code": "forbidden"]) }
+        if let code = lock.withLock({ missingEventResources[request.url!.lastPathComponent] }) {
+            return (400, ["code": code])
         }
         if path == "/.well-known/nstack.json" {
             return (200, ["schema": "org.wingman.nstack.services", "schema_version": 1, "stack": ["tower_npub": Self.appNpub],
@@ -895,7 +899,17 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     func emitMissingResource(workspace: String, channel: String, type: String) {
         lock.withLock {
             let id = UUID().uuidString.lowercased()
-            missingEventResources.insert(id)
+            missingEventResources[id] = "resource-not-found"
+            emitLocked(workspace: workspace, channel: channel, type: type, id: id, rowVersion: 2)
+        }
+    }
+
+    /// An event names a record whose route keeps failing with a 400 the client does not classify as "gone".
+    /// Event catch-up cannot finish, yet membership is fine: sending must not depend on it.
+    func emitUnreadableResource(workspace: String, channel: String, type: String) {
+        lock.withLock {
+            let id = UUID().uuidString.lowercased()
+            missingEventResources[id] = "validation_error"
             emitLocked(workspace: workspace, channel: channel, type: type, id: id, rowVersion: 2)
         }
     }

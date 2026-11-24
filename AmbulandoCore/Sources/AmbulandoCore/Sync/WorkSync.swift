@@ -16,6 +16,8 @@ extension WorkspaceSync {
     public static let reactionTargetLimit = 40
     /// Most inbox records fetched individually because they are not in local lists yet.
     public static let inboxHydrationLimit = 30
+    /// Most individual reads per inbox pass, including records Tower reports gone.
+    static let inboxHydrationAttempts = 120
 
     func channelIds(_ workspace: WorkspaceRecord, scopeId: String?) async throws -> [String] {
         try await store.reader.channels(workspaceId: workspace.id).filter { scopeId == nil || $0.scopeId == scopeId }.map(\.id)
@@ -129,28 +131,33 @@ extension WorkspaceSync {
             let states = try await api.viewStates(workspaceId: workspace.id, appNpub: workspace.appNpub)
             try Task.checkCancellation()
             try await sync.store.writer.upsertViewStates(workspaceId: workspace.id, states, complete: true)
-            var fetched = 0
-            for state in states where (state.unread || state.needsAttention) && fetched < Self.inboxHydrationLimit {
+            var fetched = 0, attempts = 0
+            for state in states where (state.unread || state.needsAttention) && fetched < Self.inboxHydrationLimit && attempts < Self.inboxHydrationAttempts {
                 try Task.checkCancellation()
+                let resource = "\(key)/\(state.resourceType.rawValue):\(state.resourceId)"
+                if await sync.inboxSnapshots.isGone(resource) { continue }
+                /// One bounded read; only an existing record counts against the budget, a gone one is remembered.
+                func hydrate<T>(_ read: () async throws -> T, save: (T) async throws -> Void) async throws {
+                    attempts += 1
+                    let value: T
+                    do { value = try await read() }
+                    catch where Self.isRecordMissing(error) { await sync.inboxSnapshots.markGone(resource); return }
+                    catch where Self.isRecordGone(error) { return }   // forbidden now: retried next pass, never remembered
+                    catch is CancellationError { throw CancellationError() }
+                    catch { fetched += 1; return }
+                    fetched += 1
+                    try await save(value)
+                }
                 switch state.resourceType {
                 case .task:
                     guard try await sync.store.reader.task(workspaceId: workspace.id, id: state.resourceId) == nil else { continue }
-                    fetched += 1
-                    if let task = try? await api.task(workspaceId: workspace.id, appNpub: workspace.appNpub, taskId: state.resourceId) {
-                        try await sync.store.writer.upsertTasks(workspaceId: workspace.id, [task])
-                    }
+                    try await hydrate({ try await api.task(workspaceId: workspace.id, appNpub: workspace.appNpub, taskId: state.resourceId) }) { try await sync.store.writer.upsertTasks(workspaceId: workspace.id, [$0]) }
                 case .document:
                     guard try await sync.store.reader.doc(workspaceId: workspace.id, id: state.resourceId) == nil else { continue }
-                    fetched += 1
-                    if let doc = try? await api.doc(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: state.resourceId) {
-                        try await sync.store.writer.upsertDocs(workspaceId: workspace.id, [doc])
-                    }
+                    try await hydrate({ try await api.doc(workspaceId: workspace.id, appNpub: workspace.appNpub, docId: state.resourceId) }) { try await sync.store.writer.upsertDocs(workspaceId: workspace.id, [$0]) }
                 case .thread:
                     guard try await sync.store.reader.thread(workspaceId: workspace.id, id: state.resourceId) == nil else { continue }
-                    fetched += 1
-                    if let thread = try? await api.thread(workspaceId: workspace.id, appNpub: workspace.appNpub, threadId: state.resourceId) {
-                        try await sync.store.writer.upsertThreads(workspaceId: workspace.id, [thread])
-                    }
+                    try await hydrate({ try await api.thread(workspaceId: workspace.id, appNpub: workspace.appNpub, threadId: state.resourceId) }) { try await sync.store.writer.upsertThreads(workspaceId: workspace.id, [$0]) }
                 }
             }
         }

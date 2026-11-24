@@ -75,3 +75,26 @@ cached messages, keeping one card and leaving the normal transcript fetch to del
 These paths are shared native code, so the behavior also applies to iPhone/iPad; the focused
 interaction harness runs on Mac. Local synthetic transport evidence does not establish installation
 or live authenticated behavior on another Mac.
+
+## Write gate and diagnostics (Mac source build 118)
+
+Build 117 kept sends closed until event catch-up, Inbox hydration and list refreshes all succeeded, so one
+slow or unreadable record could strand every send, reply and image upload as "Sending…". Build 118 splits
+the two: **access** (membership and application verified, identity unlocked and matching the connection's
+signer) opens the write fence; **data** (catch-up and refresh) is tracked separately and its failure no longer
+affects sends. Confirmed authority loss (events answer 403/404) closes the fence again, clears both flags and
+keeps every row durable. Pause, lock or cancellation while the signer is checked never reopens it.
+
+A send refused by the closed fence stays queued with code `waiting-for-workspace` and the row reads
+"Waiting for this workspace's connection to be verified; it will send automatically." (not "Sending…").
+
+Settings › diagnostics now starts with a `Workspace state` block per workspace:
+`access=verified|pending data=caught-up|pending reads=on|off writes=open|fenced unsent[state=count…]
+lastStartupFailure=stage=<access|write-open|catch-up|refresh> http=<status> code=<tower code> route=<area>`
+(or `network=<URLError code>`). Counts and codes only; no ids, text or names.
+
+Checks (separate processes, with `-AmbulandoMacThreadRegression`): `-AmbulandoMacCatchUpFailureStartupCheck`
+(unclassified 400 on a catch-up record: sends and image upload still complete), and
+`-AmbulandoMacAccessLostStartupCheck` (events 403 after discovery: writes fenced again, send stays durable
+with the waiting status). Inbox hydration now remembers records Tower reports gone so they stop consuming the
+30-record budget that readable threads (for example a DM conversation) need.

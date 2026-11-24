@@ -636,6 +636,8 @@ struct OutboxRow: View {
         case .awaitingSignature:
             if case .unlocked = model.identity { return ("Sending…", "arrow.up.circle", Amb.mutedForeground) }
             return ("Waiting for unlock to sign and send", "lock", Amb.info)
+        case .queued where item.lastCode == OutboxSender.waitingCode:
+            return (item.lastError ?? OutboxSender.waitingMessage, "clock.arrow.circlepath", Amb.warning)
         case .queued, .sending: return ("Sending…", "arrow.up.circle", Amb.mutedForeground)
         case .retrying: return (item.lastError ?? "Will retry automatically", "arrow.clockwise.circle", Amb.warning)
         case .failed: return ("Not sent. " + (item.lastError ?? "Tower rejected the message."), "exclamationmark.circle", Amb.destructive)

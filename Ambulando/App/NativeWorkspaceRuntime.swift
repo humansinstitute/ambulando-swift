@@ -61,6 +61,10 @@ final class NativeWorkspaceRuntime {
     let uploads: ComposerUploads
     let fileCache: FileCache
     var validated = false
+    /// Membership and application access were verified on this activation; enough to open sends, unlike `validated`.
+    var accessValidated = false
+    /// Last startup failure as stage, status and server code only (no ids, text or URLs); nil after a clean start.
+    var lastStartupFailure: String?
     var starting: Task<Void, Never>?
     var startRevision = UUID()
     var resumeRetry: Task<Void, Never>?
@@ -101,6 +105,7 @@ final class NativeWorkspaceRuntime {
         writeActivity.pause()
         activity.pause() // synchronous gate precedes all actor hops
         validated = false
+        accessValidated = false
         startRevision = UUID()
         starting?.cancel(); starting = nil
         resumeRetry?.cancel(); resumeRetry = nil

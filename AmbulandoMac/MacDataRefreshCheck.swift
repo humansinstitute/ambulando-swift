@@ -59,7 +59,7 @@ extension MacThreadRegression {
         runtime.activity.resume()
         try require(composer.string == text, "access cancellation preserves unsent text")
         try press(window, "thread.focus.close"); await settle()
-        try require(find(window, "data.refresh") != nil, "main refresh remains accessible")
+        try require(find(window, "data.refresh") == nil, "section strip carries no refresh control; Account > Refresh Data and per-surface buttons remain")
         model.focusedThread = ThreadFocus(workspaceId: FixtureTower.lab, channelId: "foreign-channel", threadId: "foreign-thread")
         model.dataRefresh.start(model)
         model.focusedThread = nil

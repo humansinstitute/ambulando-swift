@@ -67,4 +67,64 @@ final class InboxSnapshotLifetimeTests: XCTestCase {
             XCTAssertTrue(repaired.isEmpty)
         }
     }
+
+    /// Leftover view states of removed records answer 400/resource-not-found. They must not use up the hydration
+    /// budget (nor be asked again), or the readable record behind them never reaches the Inbox.
+    func testGoneViewStatesDoNotStarveReadableRecordsOrRepeat() async throws {
+        let h = try await WorkHarness.make()
+        defer { try? FileManager.default.removeItem(at: h.chat.directory) }
+        let ghosts = (0..<WorkspaceSync.inboxHydrationLimit + 10).map { String(format: "00000000-0000-4000-8000-%012d", $0) }
+        for ghost in ghosts { h.work.seedViewState(type: "task", resource: ghost, scope: Fixtures.scopeA, channel: Fixtures.channel1, activity: 3, viewed: 1) }
+        let real = h.work.seedTask(id: "ffffffff-0000-4000-8000-000000000001", scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "Readable")
+        h.work.seedViewState(type: "task", resource: real, scope: Fixtures.scopeA, channel: Fixtures.channel1, activity: 3, viewed: 1)
+        let gone = Set(ghosts)
+        let transport = StubTransport { request in
+            if let id = request.url?.pathComponents.last, gone.contains(id), request.url!.path.contains("/tasks/") { return (400, ["code": "resource-not-found"]) }
+            return try h.transport.handlerResult(request)
+        }
+        let sync = WorkspaceSync(store: h.store, engine: h.engine, identity: h.chat.identity, transport: transport)
+        try await sync.synchronizeInbox(h.connection, h.workspace)
+        let hydrated = try await h.store.reader.task(workspaceId: h.workspace.id, id: real)
+        XCTAssertEqual(hydrated?.title, "Readable")
+        let first = transport.recorded.filter { $0.url!.path.contains("/tasks/") }.count
+        try await sync.synchronizeInbox(h.connection, h.workspace)
+        XCTAssertEqual(transport.recorded.filter { $0.url!.path.contains("/tasks/") }.count, first, "gone records are not asked for again")
+    }
+
+    /// A 403 is never remembered, and a remembered "does not exist" is dropped when access changes: a conversation
+    /// that becomes readable later still reaches the Inbox.
+    func testRegainedAccessHydratesPreviouslyRefusedRecords() async throws {
+        final class Mode: @unchecked Sendable {
+            private let lock = NSLock(); private var value = 403
+            var status: Int { get { lock.withLock { value } } set { lock.withLock { value = newValue } } }
+        }
+        for first in [403, 400] {
+            let h = try await WorkHarness.make()
+            defer { try? FileManager.default.removeItem(at: h.chat.directory) }
+            let hidden = h.work.seedTask(id: "00000000-0000-4000-8000-000000000001", scope: Fixtures.scopeA, channel: Fixtures.channel1, title: "Hidden")
+            h.work.seedViewState(type: "task", resource: hidden, scope: Fixtures.scopeA, channel: Fixtures.channel1, activity: 3, viewed: 1)
+            let mode = Mode(); mode.status = first
+            let transport = StubTransport { request in
+                if request.url!.path.hasSuffix("/tasks/" + hidden), mode.status != 200 {
+                    return (mode.status, ["code": mode.status == 403 ? "permission_denied" : "resource-not-found"])
+                }
+                return try h.transport.handlerResult(request)
+            }
+            let sync = WorkspaceSync(store: h.store, engine: h.engine, identity: h.chat.identity, transport: transport)
+            try await sync.synchronizeInbox(h.connection, h.workspace)
+            let before = try await h.store.reader.task(workspaceId: h.workspace.id, id: hidden)
+            XCTAssertNil(before)
+            mode.status = 200
+            if first == 400 {
+                // Remembered as missing: stays quiet until access is re-verified.
+                try await sync.synchronizeInbox(h.connection, h.workspace)
+                let still = try await h.store.reader.task(workspaceId: h.workspace.id, id: hidden)
+                XCTAssertNil(still)
+                await sync.accessEpochChanged(h.connection, h.workspace)
+            }
+            try await sync.synchronizeInbox(h.connection, h.workspace)
+            let after = try await h.store.reader.task(workspaceId: h.workspace.id, id: hidden)
+            XCTAssertEqual(after?.title, "Hidden", "first answer \(first)")
+        }
+    }
 }

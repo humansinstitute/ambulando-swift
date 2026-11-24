@@ -274,6 +274,25 @@ extension WorkspaceSync {
         return result
     }
 
+    /// Tower authorization checks resource existence before the record route: missing historical resources are
+    /// 400/resource-not-found, not route 404. Other validation/auth/server failures must keep the page replayable.
+    static func isRecordGone(_ error: Error) -> Bool {
+        guard case TowerError.http(let status, let code, _) = error else { return false }
+        return status == 403 || status == 404 || (status == 400 && code == "resource-not-found")
+    }
+
+    /// Access was re-verified or changed: forget remembered "does not exist" answers so formerly hidden records are asked for again.
+    public func accessEpochChanged(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord) async {
+        guard let key = try? WorkspaceBoundary(connection: connection, workspace: workspace).id else { return }
+        await inboxSnapshots.invalidate(key)
+    }
+
+    /// The record itself does not exist (as opposed to being forbidden, which access changes can lift).
+    static func isRecordMissing(_ error: Error) -> Bool {
+        guard case TowerError.http(let status, let code, _) = error else { return false }
+        return status == 404 || (status == 400 && code == "resource-not-found")
+    }
+
     /// Starts from the current head and schedules direct catch-up of everything the screens show.
     func reseed(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, api: TowerAPI) async throws {
         let head = try await api.eventHead(workspaceId: workspace.id, appNpub: workspace.appNpub)
@@ -355,15 +374,7 @@ extension WorkspaceSync {
     private func materialize(_ refresh: EventPlan.Refresh, version: Int?, _ connection: ConnectionRecord, _ workspace: WorkspaceRecord,
                              api: TowerAPI, visible: String?) async throws {
         let w = workspace.id, app = workspace.appNpub
-        func lost(_ error: Error) -> Bool {
-            if case TowerError.http(let status, let code, _) = error {
-                // Tower authorization checks resource existence before the record route:
-                // missing historical resources are 400/resource-not-found, not route 404.
-                // Other validation/auth/server failures must keep the page replayable.
-                return status == 403 || status == 404 || (status == 400 && code == "resource-not-found")
-            }
-            return false
-        }
+        func lost(_ error: Error) -> Bool { Self.isRecordGone(error) }
         try Task.checkCancellation()
         switch refresh {
         case .message(let channel, let id):

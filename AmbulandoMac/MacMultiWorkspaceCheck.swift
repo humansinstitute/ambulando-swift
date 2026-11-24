@@ -255,14 +255,39 @@ extension MacThreadRegression {
         runtime.writeActivity.pause()
         runtime.validated = false
         let missingResource = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMissingResourceStartupCheck")
-        if missingResource {
+        let unreadable = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacCatchUpFailureStartupCheck")
+        let accessLost = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacAccessLostStartupCheck")
+        if accessLost {
+            await runtime.pause()
+            fixture.tower.denyEvents = true
+        } else if unreadable {
+            await runtime.pause()
+            fixture.tower.emitUnreadableResource(workspace: entry.workspace.id, channel: channel.id, type: "task")
+        } else if missingResource {
             await runtime.pause()
             fixture.tower.emitMissingResource(workspace: entry.workspace.id, channel: channel.id, type: "task")
             fixture.tower.emitMissingResource(workspace: entry.workspace.id, channel: channel.id, type: "thread")
             fixture.tower.postAsMember(channel: channel.id, body: marker + " incoming")
         } else { fixture.tower.offline = true }
         await model.resumeWorkspace(entry)
-        if !missingResource { try require(!runtime.writeActivity.isEnabled && runtime.activity.isEnabled, "failed validation leaves read lifecycle active and writes fenced") }
+        if accessLost {
+            try require(!runtime.writeActivity.isEnabled && !runtime.accessValidated && !runtime.validated, "authority lost during catch-up re-fences sends")
+            let held = try await runtime.outbox.send(text: marker, mentions: [], target: target, connection: entry.connection, workspace: entry.workspace)
+            try await Task.sleep(for: .seconds(2))
+            let stuck = try await runtime.store.reader.outboxItem(id: held?.id ?? "")
+            try require(stuck != nil && !runtime.writeActivity.isEnabled, "send stays durable and unsent after authority loss")
+            try require(stuck?.state == .queued && stuck?.lastCode == OutboxSender.waitingCode, "gated send says it is waiting instead of an unexplained Sending: \(String(describing: stuck?.lastCode))")
+            let state = await model.workspaceStateText()
+            try require(state.contains("access=pending data=pending") && state.contains("writes=fenced") && state.contains("unsent[queued=1"), "diagnostics report fenced state: \(state)")
+            print("PASS: authority lost after discovery fences writes again; sends stay durable and unsent"); return
+        }
+        if unreadable {
+            try require(!runtime.validated && runtime.writeActivity.isEnabled, "catch-up failure leaves reads unvalidated but sends open")
+            let state = await model.workspaceStateText()
+            try require(state.contains("access=verified data=pending") && state.contains("writes=open") && state.contains("stage=catch-up http=400 code=validation_error"),
+                        "diagnostics separate authorization-ready from data-caught-up and name the failure: \(state)")
+        }
+        if !missingResource && !unreadable { try require(!runtime.writeActivity.isEnabled && runtime.activity.isEnabled, "failed validation leaves read lifecycle active and writes fenced") }
         fixture.tower.offline = false
         let item = try await runtime.outbox.send(text: marker, mentions: [], target: target,
                                                 connection: entry.connection, workspace: entry.workspace)
@@ -290,6 +315,7 @@ extension MacThreadRegression {
         try require(composer.text.hasPrefix("Retained draft "), "upload recovery preserves unsent text")
         try await multiWait("recovered image remains in durable unsent draft") { (try? await runtime.store.reader.draft(target))?.text == composer.text }
         runtime.uploads.detach(composer)
+        if unreadable { print("PASS: unreadable catch-up record does not strand durable sends or image upload"); return }
         print("PASS: transient native startup failure recovers durable send and retained image upload/draft without network notification or manual refresh")
     }
 

@@ -51,3 +51,6 @@ build/mac-navigation-layout
 It checks clipping, common icon/title rows, refresh spinner placement, selection and native actions
 at narrow/wide widths in light/dark appearance. The isolated full-app navigation check above covers
 real mouse routing and scroll-position preservation. iPhone/iPad strip rendering is unchanged.
+
+Mac source build 118: the strip starts with the sidebar toggle, then Home, then the sections. It carries
+no refresh control; refresh stays at Account › Refresh Data (⌘R) and on the thread and browser surfaces.

@@ -16,14 +16,17 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (117) |
+| Version | 0.1.0 (118) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
 | Data | `~/Library/Containers/studio.otherstuff.ambulando.mac/` (kept when the app is replaced or updated) |
 | Keychain | Login keychain, services `studio.otherstuff.ambulando.mac.identity-vault.v1`, `….session.v1` |
 
-Source build 117 repairs missing-resource event catch-up and retained outgoing writes,
+Source build 118 re-orders the strip (sidebar control, then Home; no refresh control in the strip),
+opens sends once access is verified rather than after full event catch-up, and adds workspace state
+to Settings diagnostics (see [write readiness](mac-startup-recovery.md#write-gate-and-diagnostics-mac-source-build-118)).
+Build 117 repairs missing-resource event catch-up and retained outgoing writes,
 includes canonical Inbox thread cards before transcript hydration, and fixes clipped
 navigation icons. See [write readiness checks](mac-startup-recovery.md#write-readiness-and-event-catch-up-mac-source-build-117)
 and [navigation checks](navigation-strip.md). Local validation is separate from installation

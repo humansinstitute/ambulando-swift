@@ -1032,7 +1032,7 @@ final class AppModel {
                 guard !Task.isCancelled, entry.enabled, let runtime = entry.runtime, runtime.activity.isEnabled else { return }
                 await runtime.sync.catchUpEvents(entry.connection, entry.workspace, pages: WorkspaceSync.backgroundPageBudget, priority: .background)
                 await runtime.sync.refreshInbox(entry.connection, entry.workspace, priority: .background)
-                if self.isUnlocked, runtime.validated {
+                if self.isUnlocked, runtime.accessValidated {
                     await runtime.outbox.kick(entry.connection)
                     await runtime.writes.kick(entry.connection)
                 }
@@ -1129,7 +1129,7 @@ final class AppModel {
             for entry in enabledWorkspaceEntries {
                 Task { @MainActor in
                 await resumeWorkspace(entry, force: force)
-                guard entry.enabled, let runtime = entry.runtime, runtime.validated else { return }
+                guard entry.enabled, let runtime = entry.runtime, runtime.accessValidated else { return }
                 await runtime.outbox.kick(entry.connection, force: force)
                 await runtime.writes.kick(entry.connection, force: force)
                 }
@@ -1802,6 +1802,25 @@ extension AppModel {
         guard entry.enabled, let lease = try? runtime.activity.lease() else { await runtime.pause(); return }
         let revision = UUID()
         runtime.startRevision = revision
+        // Sending needs only verified membership and an unlocked matching signer. It must not wait for event catch-up,
+        // inbox hydration or list refreshes, whose slow or failing records would otherwise strand every send and upload.
+        @MainActor func openWrites(lease: UInt64) async throws {
+            if isUnlocked, !runtime.writeActivity.isEnabled {
+                try await runtime.sync.identity.requireSigner(npub: entry.connection.signerNpub)
+                try await runtime.store.writer.resetInterruptedSends()
+                try await runtime.store.writer.resetInterruptedWrites()
+                try Task.checkCancellation()
+                try runtime.activity.check(lease)
+                guard entry.enabled, entry.runtime === runtime, runtime.accessValidated,
+                      isUnlocked, identity.npub == entry.connection.signerNpub else { return }
+                runtime.writeActivity.resume()
+                // An earlier send may have reached the closed write gate before validation/unlock
+                // finished. Resume the durable queues now, without waiting for another network event.
+                await runtime.outbox.kick(entry.connection, force: true)
+                await runtime.writes.kick(entry.connection, force: true)
+            }
+        }
+        var stage = "access"
         let task = Task { @MainActor in
             do {
                 // The engine shares runtime.activity; it was resumed synchronously above.
@@ -1824,31 +1843,34 @@ extension AppModel {
                         notice = "Access to \(entry.workspace.label) is no longer available."
                         return
                     }
+                    runtime.accessValidated = true
+                    await runtime.sync.accessEpochChanged(entry.connection, entry.workspace)
+                    stage = "write-open"
+                    try await openWrites(lease: lease)
+                    stage = "catch-up"
                     let catchUp = try await runtime.sync.catchUpEventsAndWait(entry.connection, entry.workspace, priority: .visible)
                     try runtime.activity.check(lease)
-                    guard !catchUp.accessLost, entry.enabled, runtime.activity.isEnabled else { return }
+                    if catchUp.accessLost {
+                        // Authority was withdrawn after sends opened: fence them again before anything else can post.
+                        runtime.writeActivity.pause()
+                        runtime.accessValidated = false
+                        runtime.validated = false
+                        return
+                    }
+                    guard entry.enabled, runtime.activity.isEnabled else { return }
+                    stage = "refresh"
                     await runtime.sync.refreshInbox(entry.connection, entry.workspace, priority: .background, force: force)
                     await runtime.sync.refreshWorkspace(entry.connection, entry.workspace, priority: .background, force: force)
                     guard entry.enabled, runtime.activity.isEnabled else { return }
                     runtime.validated = true
                 }
-                if isUnlocked, !runtime.writeActivity.isEnabled {
-                    try await runtime.sync.identity.requireSigner(npub: entry.connection.signerNpub)
-                    try await runtime.store.writer.resetInterruptedSends()
-                    try await runtime.store.writer.resetInterruptedWrites()
-                    try Task.checkCancellation()
-                    try runtime.activity.check(lease)
-                    guard entry.enabled, entry.runtime === runtime, runtime.validated,
-                          isUnlocked, identity.npub == entry.connection.signerNpub else { return }
-                    runtime.writeActivity.resume()
-                    // An earlier send may have reached the closed write gate before validation/unlock
-                    // finished. Resume the durable queues now, without waiting for another network event.
-                    await runtime.outbox.kick(entry.connection, force: true)
-                    await runtime.writes.kick(entry.connection, force: true)
-                }
+                stage = "write-open"
+                try await openWrites(lease: lease)
+                runtime.lastStartupFailure = nil
                 runtime.resumeRetry?.cancel(); runtime.resumeRetry = nil
                 runtime.resumeFailures = 0
             } catch {
+                if !(error is CancellationError) { runtime.lastStartupFailure = Self.startupFailureSummary(error, stage: stage) }
                 if !(error is CancellationError) { notice = "\(entry.workspace.label) could not reconnect: \(error.localizedDescription)" }
                 // A failed startup uses perform (no read retries). Reads may subsequently
                 // recover independently, while every write still hits the closed fence.
@@ -1873,6 +1895,18 @@ extension AppModel {
         runtime.starting = task
         await task.value
         if runtime.startRevision == revision { runtime.starting = nil }
+    }
+
+    /// Stage, HTTP status and Tower's error code only; nothing that could name a record, person or message.
+    nonisolated static func startupFailureSummary(_ error: Error, stage: String) -> String {
+        func safe(_ text: String?) -> String {
+            String((text ?? "none").filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }.prefix(40))
+        }
+        switch error {
+        case TowerError.http(let status, let code, let area): return "stage=\(stage) http=\(status) code=\(safe(code)) route=\(safe(area))"
+        case let url as URLError: return "stage=\(stage) network=\(url.code.rawValue)"
+        default: return "stage=\(stage) error=\(safe(String(describing: type(of: error))))"
+        }
     }
 
     private func pauseAllWorkspaces() async {

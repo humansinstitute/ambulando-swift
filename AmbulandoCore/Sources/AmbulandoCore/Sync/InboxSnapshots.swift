@@ -6,6 +6,19 @@ actor InboxSnapshots {
     private var running: [String: Task<Void, Error>] = [:]
     private var dirty = Set<String>()
     private var baselines = Set<String>()
+    private var gone: [String: ContinuousClock.Instant] = [:]
+    static let goneLifetime: Duration = .seconds(600)
+
+    /// View states can outlive their record. A record Tower says does not exist (404, or 400 resource-not-found; never a
+    /// 403, which can be lifted) is not fetched again for a while, so leftovers do not use up the hydration budget that
+    /// readable records need. Entries expire, and any access change for the workspace clears them.
+    func isGone(_ resource: String) -> Bool {
+        guard let until = gone[resource] else { return false }
+        if ContinuousClock.now < until { return true }
+        gone[resource] = nil
+        return false
+    }
+    func markGone(_ resource: String) { gone[resource] = ContinuousClock.now + Self.goneLifetime }
 
     func refresh(_ key: String, reuseBaseline: Bool, work: @escaping @Sendable () async throws -> Void) async throws {
         try Task.checkCancellation()
@@ -28,6 +41,7 @@ actor InboxSnapshots {
 
     func invalidate(_ key: String) {
         baselines.remove(key)
+        gone = gone.filter { !$0.key.hasPrefix(key + "/") }
         if running[key] != nil { dirty.insert(key) }
     }
 

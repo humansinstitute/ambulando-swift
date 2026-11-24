@@ -74,7 +74,7 @@ enum MacThreadRegression {
         }
         defer { heartbeat.cancel() }
         do {
-            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacWriteStartupRetryCheck") || ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMissingResourceStartupCheck") {
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacWriteStartupRetryCheck") || ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMissingResourceStartupCheck") || ProcessInfo.processInfo.arguments.contains("-AmbulandoMacCatchUpFailureStartupCheck") || ProcessInfo.processInfo.arguments.contains("-AmbulandoMacAccessLostStartupCheck") {
                 try await writeStartupRetryCheck(model: model); fflush(stdout); exit(0)
             }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacAppsPresentationCheck") {
@@ -1211,7 +1211,9 @@ enum MacThreadRegression {
         try require(model.lockedView == nil, "Home releases scoped view lock")
         let home = find(window, "section.home")!
         let deck = find(window, "section.deck")!
-        try require(frame(of: home).minX < frame(of: deck).minX, "globe is leftmost")
+        let sidebar = find(window, "sidebar.toggle")!
+        try require(frame(of: sidebar).minX < frame(of: home).minX && frame(of: home).minX < frame(of: deck).minX, "sidebar control, then Home globe, then sections")
+        try require(find(window, "data.refresh") == nil, "section strip has no refresh control")
         try require(frame(of: home).width >= 90, "Mac controls have comfortable widths")
         func stripScroller(_ view: NSView) -> NSScrollView? {
             if let scroll = view as? NSScrollView, scroll.frame.height < 65,
@@ -1258,7 +1260,7 @@ enum MacThreadRegression {
         model.fileNappletNavigation = nil
         deferred?()
         try require(model.workspaceHomeSelected, "approved guarded navigation reaches Home")
-        print("PASS navigation strip: real mouse Home/Chat, locked scoped Home semantics, current workspace, leftmost globe, fixed wide controls, route/data identity and same-route control rebuild offsets")
+        print("PASS navigation strip: real mouse Home/Chat, locked scoped Home semantics, current workspace, sidebar control before Home, no strip refresh, fixed wide controls, route/data identity and same-route control rebuild offsets")
     }
 
     static func kanbanCardCheck(_ window: NSWindow, model: AppModel) async throws {

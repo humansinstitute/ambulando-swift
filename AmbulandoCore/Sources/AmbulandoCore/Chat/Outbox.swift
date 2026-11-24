@@ -123,6 +123,9 @@ public struct OutboxSender: Sendable {
     }
 
     public static func key(_ connection: ConnectionRecord) -> String { "outbox:\(connection.id)" }
+    /// `lastCode` of a queued row held back by the workspace write gate rather than by Tower.
+    public static let waitingCode = "waiting-for-workspace"
+    public static let waitingMessage = "Waiting for this workspace's connection to be verified; it will send automatically."
 
     /// Composes a message into the outbox (clearing that draft) and starts sending if unlocked.
     @discardableResult
@@ -229,7 +232,10 @@ public struct OutboxSender: Sendable {
                 do {
                     ready = try await uploadAttachments(item, api: TowerAPI(client: client, transfers: transfers))
                 } catch {
-                    if Task.isCancelled || error is CancellationError { throw CancellationError() }
+                    if Task.isCancelled || error is CancellationError {
+                        if !Task.isCancelled { try? await store.writer.markOutbox(id: item.id, state: .queued, code: Self.waitingCode, error: Self.waitingMessage) }
+                        throw CancellationError()
+                    }
                     let permanent = error is FileTransferError
                     try await store.writer.markOutbox(id: item.id, state: permanent ? .failed : .retrying,
                                                       error: "Attachment upload: " + ((error as? LocalizedError)?.errorDescription ?? Self.networkMessage(error)),
@@ -258,7 +264,11 @@ public struct OutboxSender: Sendable {
             case .failure(let error):
                 if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
                     // Interrupted (lock, workspace removal, app suspension): the request may have arrived; replay is safe.
-                    try? await store.writer.markOutbox(id: item.id, state: .queued, status: item.lastStatus, code: item.lastCode, error: item.lastError)
+                    // Not cancelled itself, yet refused by the workspace's write gate (access still being verified or lost):
+                    // say so, instead of leaving an unexplained "Sending…".
+                    let gated = !Task.isCancelled && !((error as? URLError)?.code == .cancelled)
+                    try? await store.writer.markOutbox(id: item.id, state: .queued, status: item.lastStatus,
+                                                       code: gated ? Self.waitingCode : item.lastCode, error: gated ? Self.waitingMessage : item.lastError)
                     throw CancellationError()
                 }
                 outcome = .retryable(status: nil, code: nil, message: Self.networkMessage(error))
