@@ -356,7 +356,12 @@ extension WorkspaceSync {
                              api: TowerAPI, visible: String?) async throws {
         let w = workspace.id, app = workspace.appNpub
         func lost(_ error: Error) -> Bool {
-            if case TowerError.http(let status, _, _) = error { return status == 403 || status == 404 }
+            if case TowerError.http(let status, let code, _) = error {
+                // Tower authorization checks resource existence before the record route:
+                // missing historical resources are 400/resource-not-found, not route 404.
+                // Other validation/auth/server failures must keep the page replayable.
+                return status == 403 || status == 404 || (status == 400 && code == "resource-not-found")
+            }
             return false
         }
         try Task.checkCancellation()

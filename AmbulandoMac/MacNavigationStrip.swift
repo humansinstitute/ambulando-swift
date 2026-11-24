@@ -21,8 +21,36 @@ struct MacNavigationStrip: NSViewRepresentable {
     final class Button: NSButton {
         var invoke: (() -> Void)?
         let spinner = NSProgressIndicator()
+        // NSButton's symbol-dependent alignment insets make equal Auto Layout heights
+        // produce unequal physical frames, extending beyond the strip's clip view.
+        override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsetsZero }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
         @objc func press() { invoke?() }
+    }
+    final class Cell: NSButtonCell {
+        override func imageRect(forBounds rect: NSRect) -> NSRect {
+            guard let image else { return .zero }
+            let scale = min(24 / max(image.size.width, 1), 24 / max(image.size.height, 1))
+            let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+            return NSRect(x: rect.midX - size.width / 2, y: rect.minY + 5 + (24 - size.height) / 2,
+                          width: size.width, height: size.height)
+        }
+        override func titleRect(forBounds rect: NSRect) -> NSRect {
+            NSRect(x: rect.minX, y: rect.minY + 34, width: rect.width, height: 15)
+        }
+        override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+            let colour = (controlView as? NSButton)?.contentTintColor ?? .secondaryLabelColor
+            let tint = isEnabled ? colour : colour.withAlphaComponent(0.4)
+            image?.withSymbolConfiguration(.init(paletteColors: [tint]))?
+                .draw(in: imageRect(forBounds: cellFrame), from: .zero, operation: .sourceOver,
+                      fraction: isHighlighted ? 0.65 : 1, respectFlipped: true, hints: nil)
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .center
+            (title as NSString).draw(in: titleRect(forBounds: cellFrame), withAttributes: [
+                .font: font ?? NSFont.systemFont(ofSize: 11, weight: .medium),
+                .foregroundColor: tint, .paragraphStyle: paragraph
+            ])
+        }
     }
     final class Coordinator {
         var route: SectionStripRoute?
@@ -61,6 +89,7 @@ struct MacNavigationStrip: NSViewRepresentable {
             context.coordinator.buttons = [:]
             for control in controls {
                 let button = Button(title: control.title, target: nil, action: nil)
+                button.cell = Cell(textCell: control.title)
                 button.target = button
                 button.action = #selector(Button.press)
                 button.setButtonType(.momentaryChange)
@@ -74,7 +103,7 @@ struct MacNavigationStrip: NSViewRepresentable {
                 button.spinner.style = .spinning
                 button.spinner.controlSize = .small
                 button.spinner.isDisplayedWhenStopped = false
-                button.spinner.frame = NSRect(x: (control.width - 16) / 2, y: 19, width: 16, height: 16)
+                button.spinner.frame = NSRect(x: (control.width - 16) / 2, y: 9, width: 16, height: 16)
                 button.addSubview(button.spinner)
                 stack.addArrangedSubview(button)
                 context.coordinator.buttons[control.id] = button

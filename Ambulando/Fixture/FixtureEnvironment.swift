@@ -393,6 +393,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     /// Scope lists answer HTTP 500 as Tower does for an internal error (`-AmbulandoFixtureScopesFail`).
     var failScopes: Bool { get { lock.withLock { _failScopes } } set { lock.withLock { _failScopes = newValue } } }
     private var _failScopes = false
+    private var missingEventResources = Set<String>()
     var rejectNext: Bool { get { lock.withLock { _rejectNext } } set { lock.withLock { _rejectNext = newValue } } }
     var actorNpub: String { get { lock.withLock { _actor } } set { lock.withLock { _actor = newValue } } }
 
@@ -526,6 +527,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
 
     private func route(_ request: URLRequest) throws -> (Int, Any) {
         let path = request.url!.path
+        if lock.withLock({ missingEventResources.contains(request.url!.lastPathComponent) }) {
+            return (400, ["code": "resource-not-found"])
+        }
         if path == "/.well-known/nstack.json" {
             return (200, ["schema": "org.wingman.nstack.services", "schema_version": 1, "stack": ["tower_npub": Self.appNpub],
                           "services": [["id": "tower", "kind": "tower", "endpoint": FixtureEnvironment.origin, "protocols": ["https", "nip-98"],
@@ -883,6 +887,16 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         lock.withLock {
             emitLocked(workspace: Self.studio, channel: channel, type: "agent_activity", id: rowId, rowVersion: nil, operation: "updated", payload: payload)
             persist()
+        }
+    }
+
+    /// Historical events may name a resource already removed. Tower's authorization
+    /// layer returns 400/resource-not-found before the record route can return 404.
+    func emitMissingResource(workspace: String, channel: String, type: String) {
+        lock.withLock {
+            let id = UUID().uuidString.lowercased()
+            missingEventResources.insert(id)
+            emitLocked(workspace: workspace, channel: channel, type: type, id: id, rowVersion: 2)
         }
     }
 

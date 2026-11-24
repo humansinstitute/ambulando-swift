@@ -294,6 +294,52 @@ final class LiveSyncTests: XCTestCase {
         XCTAssertNil(local)
     }
 
+    func testMissingResource400DoesNotPoisonEventCursor() async throws {
+        let h = try await LiveHarness.make()
+        _ = try await h.sync.catchUpEventsAndWait(h.connection, h.workspace)
+        let missingTask = UUID().uuidString.lowercased(), missingThread = UUID().uuidString.lowercased()
+        try await h.store.writer.upsertTasks(workspaceId: h.workspace.id, [try TaskRecord(raw: rawJSON(FakeEventTower.task(missingTask, title: "Stale", version: 1)))])
+        try await h.store.writer.upsertThreads(workspaceId: h.workspace.id, [ThreadRecord(workspaceId: h.workspace.id, id: missingThread,
+            channelId: Fixtures.channel1, sourceMessageId: nil, title: "Stale", updatedAt: "2026-10-01T00:00:00.000Z")])
+        h.tower.emit("task", id: missingTask, entityRowVersion: 2)
+        h.tower.emit("thread", id: missingThread)
+        let valid = UUID().uuidString.lowercased()
+        h.tower.tasks[valid] = FakeEventTower.task(valid, title: "Later valid task", version: 2)
+        h.tower.emit("task", id: valid, entityRowVersion: 2)
+        h.transport.setHandler { request in
+            if [missingTask, missingThread].contains(request.url!.lastPathComponent) {
+                return (400, ["code": "resource-not-found"])
+            }
+            return try h.tower.handler()(request)
+        }
+        _ = try await h.sync.catchUpEventsAndWait(h.connection, h.workspace)
+        let cursor = try await h.cursor()
+        XCTAssertEqual(cursor, FakeEventTower.cursor(h.tower.head), "missing authorized resource must not replay the whole page forever")
+        let task = try await h.store.reader.task(workspaceId: h.workspace.id, id: missingTask)
+        let thread = try await h.store.reader.thread(workspaceId: h.workspace.id, id: missingThread)
+        let later = try await h.store.reader.task(workspaceId: h.workspace.id, id: valid)
+        XCTAssertNil(task)
+        XCTAssertTrue(thread?.deleted ?? true)
+        XCTAssertEqual(later?.title, "Later valid task")
+    }
+
+    func testOther400AndAuthenticationFailuresKeepEventCursor() async throws {
+        for (status, code) in [(400, "validation_error"), (400, "workspace-app-mismatch"), (401, "unauthorized"), (500, "resource-not-found")] {
+            let h = try await LiveHarness.make()
+            _ = try await h.sync.catchUpEventsAndWait(h.connection, h.workspace)
+            let before = try await h.cursor()
+            let task = UUID().uuidString.lowercased()
+            h.tower.emit("task", id: task, entityRowVersion: 2)
+            h.transport.setHandler { request in
+                if request.url!.path.contains("/tasks/") { return (status, ["code": code]) }
+                return try h.tower.handler()(request)
+            }
+            do { _ = try await h.sync.catchUpEventsAndWait(h.connection, h.workspace); XCTFail("must fail closed: \(status) \(code)") } catch {}
+            let after = try await h.cursor()
+            XCTAssertEqual(after, before)
+        }
+    }
+
     func testBacklogBeyondBudgetRecoversAtHead() async throws {
         let h = try await LiveHarness.make()
         _ = try await h.sync.catchUpEventsAndWait(h.connection, h.workspace)

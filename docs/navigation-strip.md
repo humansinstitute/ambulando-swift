@@ -34,3 +34,20 @@ failures), Swift Testing (60 cases), installer regressions (92 cases) and Mac Te
 build pass. The Mac native-container interaction regression passes. iPhone syntax parse passes; full iPhone build and UI execution are
 blocked because Xcode offers no eligible iOS simulator destination. These are
 outstanding acceptance requirements, not successful device validation.
+
+Mac source build 117 fixes the physical button frames and icon/title drawing rows. AppKit's
+symbol-dependent alignment insets previously expanded equal layout heights past the strip's clip
+view; image-only buttons also centered their icon on a different row. Controls retain their existing
+order, symbols, actions, scrolling, accessibility and route/offset behavior.
+
+The fast geometry regression compiles the production strip into a standalone AppKit host:
+
+```sh
+swiftc -parse-as-library AmbulandoMac/MacNavigationStrip.swift \
+  scripts/tests/mac-navigation-layout.swift -o build/mac-navigation-layout
+build/mac-navigation-layout
+```
+
+It checks clipping, common icon/title rows, refresh spinner placement, selection and native actions
+at narrow/wide widths in light/dark appearance. The isolated full-app navigation check above covers
+real mouse routing and scroll-position preservation. iPhone/iPad strip rendering is unchanged.

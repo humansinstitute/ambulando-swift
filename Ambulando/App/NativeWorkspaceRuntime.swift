@@ -63,6 +63,8 @@ final class NativeWorkspaceRuntime {
     var validated = false
     var starting: Task<Void, Never>?
     var startRevision = UUID()
+    var resumeRetry: Task<Void, Never>?
+    var resumeFailures = 0
 
     init(entry: EnabledWorkspaceEntry, store: LocalStore, shared: SyncEngine, identity: IdentityService, outboxGuard: OutboxGuardSlot? = nil,
          transport: HTTPTransport, events: EventStreamTransport, staging: URL, cacheRoot: URL,
@@ -101,6 +103,8 @@ final class NativeWorkspaceRuntime {
         validated = false
         startRevision = UUID()
         starting?.cancel(); starting = nil
+        resumeRetry?.cancel(); resumeRetry = nil
+        resumeFailures = 0
         await engine.pause()
         await stream.stop()
         await saver.forgetAll()

@@ -43,3 +43,35 @@ ordinary regression runs retain disposable databases. The fixture reset applies 
 The existing main-actor heartbeat and independent watchdog guard responsiveness. These checks do not prove a
 real Tower round trip, Intel execution or recovery on the reporting Mac. Release installation and authenticated
 live evidence must be recorded separately on the delivery task.
+
+## Write readiness and event catch-up (Mac source build 117)
+
+Workspace startup validates access and applies event catch-up before opening its write services.
+Historical task/thread/document events can name a record already removed from Tower. Tower's
+resource-existence authorization check returns **400 `resource-not-found`** before the route can
+return 404. Native event materialization treats that exact response like its existing missing-record
+case, removes the cached server copy and continues the batch. Other 400 responses, authentication
+failures and server errors keep the cursor replayable. No pending outbox message, attachment,
+identity or connection is reset.
+
+A transient startup failure also receives up to three bounded retries. Successful revalidation
+reopens the existing write fence and drains retained sends; workspace pause/lock invalidates the
+retry. The permission fence is never bypassed. A permanently rejected startup remains visible as
+an error rather than enabling writes.
+
+The isolated Mac Test executable accepts these checks together with
+`-AmbulandoMacThreadRegression` (run each as a separate process):
+
+- `-AmbulandoMacMissingResourceStartupCheck`: historical task/thread 400 responses, a later valid
+  incoming message, retained/new outgoing sends, real image prepare/upload/complete and a durable
+  unsent image draft.
+- `-AmbulandoMacWriteStartupRetryCheck`: one failed startup followed by recovered transport,
+  automatic send recovery and retry of the retained image without a network-return notification.
+
+Core `LiveSyncTests` cover cursor progress and refusal to skip other validation/authentication
+failures. `DeckActivityTests` cover canonical thread cards before transcript hydration, current
+activity ordering, channel boundaries and archive exclusion. Inbox merges thread metadata with
+cached messages, keeping one card and leaving the normal transcript fetch to deliberate opening.
+These paths are shared native code, so the behavior also applies to iPhone/iPad; the focused
+interaction harness runs on Mac. Local synthetic transport evidence does not establish installation
+or live authenticated behavior on another Mac.

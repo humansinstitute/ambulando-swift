@@ -121,7 +121,7 @@ public enum DeckActivity {
         for thread in sources.threads where matches(nil, thread.channelId) {
             let title = threadTitle(thread)
             items.append(Item(kind: .chat, recordId: thread.threadId, channelId: thread.channelId, scopeId: scope(nil, thread.channelId),
-                              title: title, subtitle: MentionCodec.plain(thread.latestBody), reason: thread.messageCount == 1 ? "1 message" : "\(thread.messageCount) messages",
+                              title: title, subtitle: MentionCodec.plain(thread.latestBody), reason: thread.messageCount == 0 ? "Conversation updated" : thread.messageCount == 1 ? "1 message" : "\(thread.messageCount) messages",
                               activityAt: thread.latestAt, isUnread: unread["thread:\(thread.threadId)"] == true,
                               workingUntil: showsWorking("thread:\(thread.threadId)", thread.channelId), taskState: nil, isThread: thread.isThread,
                               searchText: [title, thread.latestBody, thread.rootBody ?? ""].joined(separator: " ").lowercased()))
@@ -235,7 +235,29 @@ extension StoreReader {
             rows.append(.init(threadId: s.text(0)!, channelId: s.text(1)!, isThread: s.int(4) != 0, title: s.text(5), rootBody: s.text(6),
                               latestBody: s.text(7) ?? "", latestAt: s.text(2) ?? "", messageCount: Int(s.int(3))))
         }
-        return rows
+        // Inbox hydration and live events fetch canonical thread metadata before its
+        // transcript. A message-only projection hides that conversation until opened,
+        // and an old cached message can incorrectly date it below newer documents.
+        let summaries = try db.prepare("""
+        SELECT t.id, t.channel_id, t.title, t.latest, t.updated_at FROM threads t
+        WHERE t.workspace_id = ? AND t.deleted = 0 AND t.archived = 0 \(filter.replacingOccurrences(of: "m.channel_id", with: "t.channel_id"))
+        ORDER BY t.updated_at DESC, t.id LIMIT ?
+        """)
+        try summaries.bind([.text(workspaceId)] + (channelIds ?? []).map { .text($0) } + [.int(Int64(limit))])
+        var merged = Dictionary(uniqueKeysWithValues: rows.map { ($0.threadId, $0) })
+        while try summaries.step() {
+            let id = summaries.text(0)!, cached = merged[id], updated = summaries.text(4) ?? ""
+            let newer = updated > (cached?.latestAt ?? "")
+            let summaryBody = summaries.text(3)
+            let body: String
+            if newer { body = summaryBody ?? cached?.latestBody ?? "" }
+            else { body = cached?.latestBody ?? summaryBody ?? "" }
+            merged[id] = .init(threadId: id, channelId: summaries.text(1)!, isThread: true,
+                               title: summaries.text(2) ?? cached?.title, rootBody: cached?.rootBody,
+                               latestBody: body,
+                               latestAt: max(updated, cached?.latestAt ?? ""), messageCount: cached?.messageCount ?? 0)
+        }
+        return Array(merged.values.sorted { $0.latestAt != $1.latestAt ? $0.latestAt > $1.latestAt : $0.threadId < $1.threadId }.prefix(max(0, limit)))
     }
 
     /// Comment counts and newest times per task (comments by anyone but `viewerNpub`) or per document (open comments).

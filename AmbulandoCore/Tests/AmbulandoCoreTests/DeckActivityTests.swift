@@ -109,4 +109,33 @@ final class DeckActivityTests: XCTestCase {
         let activity = try await h.store.reader.deckCommentActivity(workspaceId: w, parent: .task, viewerNpub: TestKeys.npub)
         XCTAssertEqual(activity[task], .init(count: 1, latestAt: "2026-10-24T11:00:00.000Z"), "the viewer's own comments don't count")
     }
+
+    func testInboxIncludesCanonicalThreadBeforeMessagesAreHydrated() async throws {
+        let h = try await ChatHarness.make()
+        let thread = UUID().uuidString.lowercased()
+        let updated = "2026-10-24T12:00:00.000Z"
+        try await h.store.writer.upsertThreads(workspaceId: w, [
+            ThreadRecord(workspaceId: w, id: thread, channelId: Fixtures.channel1, sourceMessageId: nil,
+                         title: "Launch discussion", latest: "Latest launch reply", updatedAt: updated)
+        ])
+        var rows = try await h.store.reader.deckThreads(workspaceId: w, channelIds: [Fixtures.channel1])
+        XCTAssertEqual(rows.map(\.threadId), [thread], "a thread hydrated from unread state must appear before its transcript is opened")
+        XCTAssertEqual(rows.first?.latestAt, updated)
+        XCTAssertEqual(rows.first?.latestBody, "Latest launch reply")
+        let other = try await h.store.reader.deckThreads(workspaceId: w, channelIds: [Fixtures.channel2])
+        XCTAssertTrue(other.isEmpty, "summary keeps its own channel boundary")
+        try await h.store.writer.upsertMessages([
+            MessageRecord(workspaceId: w, id: UUID().uuidString.lowercased(), channelId: Fixtures.channel1,
+                          threadId: thread, body: "Older cached reply", createdAt: "2026-10-24T09:00:00.000Z")
+        ])
+        rows = try await h.store.reader.deckThreads(workspaceId: w, channelIds: nil)
+        XCTAssertEqual(rows.count, 1, "hydration must not duplicate the summary card")
+        XCTAssertEqual(rows.first?.latestAt, updated, "old cached transcript must not hide newer canonical activity")
+        try await h.store.writer.upsertThreads(workspaceId: w, [
+            ThreadRecord(workspaceId: w, id: thread, channelId: Fixtures.channel1, sourceMessageId: nil,
+                         title: "Launch discussion", archived: true, rowVersion: 2, updatedAt: updated, raw: Data("{\"record_state\":\"archived\"}".utf8))
+        ])
+        let archived = try await h.store.reader.deckThreads(workspaceId: w, channelIds: nil)
+        XCTAssertTrue(archived.isEmpty, "archived summaries and their cached messages remain excluded")
+    }
 }

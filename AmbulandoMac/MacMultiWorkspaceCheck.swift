@@ -239,6 +239,60 @@ extension MacThreadRegression {
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: output), options: .atomic)
     }
 
+    static func writeStartupRetryCheck(model: AppModel) async throws {
+        guard Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test", let fixture = model.fixture else {
+            throw Failure(description: "Write startup check requires isolated Test fixtures")
+        }
+        try await multiWait("ready fixture writes") { model.enabledWorkspaceEntries.first?.runtime?.writeActivity.isEnabled == true }
+        guard let entry = model.enabledWorkspaceEntries.first, let runtime = entry.runtime,
+              let channel = entry.navigation.groups.flatMap(\.channels).first else { throw Failure(description: "Missing fixture runtime") }
+        await runtime.starting?.value
+        await runtime.engine.waitUntilIdle()
+        let target = ChatTarget(connectionId: entry.connection.id, workspaceId: entry.workspace.id, channelId: channel.id)
+        let marker = "Startup recovery " + UUID().uuidString
+        let retained = try await runtime.store.writer.enqueueSend(target: target, origin: entry.connection.origin,
+            signerNpub: entry.connection.signerNpub, appNpub: entry.workspace.appNpub, body: marker + " retained", mentions: [])
+        runtime.writeActivity.pause()
+        runtime.validated = false
+        let missingResource = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMissingResourceStartupCheck")
+        if missingResource {
+            await runtime.pause()
+            fixture.tower.emitMissingResource(workspace: entry.workspace.id, channel: channel.id, type: "task")
+            fixture.tower.emitMissingResource(workspace: entry.workspace.id, channel: channel.id, type: "thread")
+            fixture.tower.postAsMember(channel: channel.id, body: marker + " incoming")
+        } else { fixture.tower.offline = true }
+        await model.resumeWorkspace(entry)
+        if !missingResource { try require(!runtime.writeActivity.isEnabled && runtime.activity.isEnabled, "failed validation leaves read lifecycle active and writes fenced") }
+        fixture.tower.offline = false
+        let item = try await runtime.outbox.send(text: marker, mentions: [], target: target,
+                                                connection: entry.connection, workspace: entry.workspace)
+        guard let item else { throw Failure(description: "Send was not durably enqueued") }
+        let composer = ComposerModel(target: target, store: runtime.store)
+        runtime.uploads.attach(composer)
+        guard let png = FixtureTower.samplePNG() else { throw Failure(description: "Missing synthetic image") }
+        let provider = NSItemProvider()
+        provider.suggestedName = "startup-recovery.png"
+        provider.registerDataRepresentation(forTypeIdentifier: "public.png", visibility: .all) { completion in
+            completion(png, nil); return nil
+        }
+        composer.text = "Retained draft " + runtime.uploads.paste([provider], target: target, appNpub: entry.workspace.appNpub, context: "message").joined()
+        try await Task.sleep(for: .seconds(5))
+        let pending = try await runtime.store.reader.outboxItem(id: item.id)
+        try require(pending == nil, "outgoing text stranded after one transient startup failure: state=\(String(describing: pending?.state)), gate=\(runtime.writeActivity.isEnabled)")
+        try require(try await runtime.store.reader.outboxItem(id: retained.id) == nil, "pre-existing unsent message is acknowledged after validation")
+        try require(runtime.writeActivity.isEnabled, "automatic startup recovery reopens validated write services")
+        if missingResource {
+            let messages = try await runtime.store.reader.latestMessages(workspaceId: entry.workspace.id, channelId: channel.id, limit: 100)
+            try require(messages.contains { $0.body == marker + " incoming" }, "valid incoming discussion after missing-resource events materializes")
+        }
+        for upload in runtime.uploads.uploads(for: target) where upload.retryable { runtime.uploads.retry(upload.id) }
+        try await multiWait("retained image retries through prepare/upload/complete") { composer.text.contains("storage://") }
+        try require(composer.text.hasPrefix("Retained draft "), "upload recovery preserves unsent text")
+        try await multiWait("recovered image remains in durable unsent draft") { (try? await runtime.store.reader.draft(target))?.text == composer.text }
+        runtime.uploads.detach(composer)
+        print("PASS: transient native startup failure recovers durable send and retained image upload/draft without network notification or manual refresh")
+    }
+
     private static func multiWait(_ description: String, condition: @MainActor () async -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(25)
         while ContinuousClock.now < deadline {

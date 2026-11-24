@@ -74,6 +74,9 @@ enum MacThreadRegression {
         }
         defer { heartbeat.cancel() }
         do {
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacWriteStartupRetryCheck") || ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMissingResourceStartupCheck") {
+                try await writeStartupRetryCheck(model: model); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacAppsPresentationCheck") {
                 try await appsPresentationCheck(model: model); fflush(stdout); exit(0)
             }

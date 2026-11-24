@@ -1793,6 +1793,7 @@ extension AppModel {
             if runtime.startRevision == revision { runtime.starting = nil }
         }
         guard entry.enabled, canRead, entry.runtime === runtime else { return }
+        if force { runtime.resumeFailures = 0 }
         // Reads can be validated while locked using the read-only credential. Unlocking must
         // reopen the separately fenced write services even when those reads are already healthy.
         if runtime.validated, runtime.activity.isEnabled, (!isUnlocked || runtime.writeActivity.isEnabled) { return }
@@ -1845,8 +1846,28 @@ extension AppModel {
                     await runtime.outbox.kick(entry.connection, force: true)
                     await runtime.writes.kick(entry.connection, force: true)
                 }
+                runtime.resumeRetry?.cancel(); runtime.resumeRetry = nil
+                runtime.resumeFailures = 0
             } catch {
                 if !(error is CancellationError) { notice = "\(entry.workspace.label) could not reconnect: \(error.localizedDescription)" }
+                // A failed startup uses perform (no read retries). Reads may subsequently
+                // recover independently, while every write still hits the closed fence.
+                // Retry validation itself, then let the existing validated resume drain
+                // retained sends; never open write authority on an unvalidated workspace.
+                if ConnectionFailure.isTransient(error), entry.enabled, entry.runtime === runtime,
+                   runtime.activity.isEnabled, runtime.resumeFailures < SyncBackoff.readRetries {
+                    runtime.resumeFailures += 1
+                    runtime.resumeRetry?.cancel()
+                    let delay = SyncBackoff.delay(failures: runtime.resumeFailures, random: 0.5)
+                    runtime.resumeRetry = Task { @MainActor [weak self, weak entry, weak runtime] in
+                        do { try await Task.sleep(for: delay) } catch { return }
+                        guard let self, let entry, let runtime, entry.enabled,
+                              entry.runtime === runtime, runtime.startRevision == revision,
+                              runtime.activity.isEnabled, !Task.isCancelled else { return }
+                        runtime.resumeRetry = nil
+                        await self.resumeWorkspace(entry)
+                    }
+                }
             }
         }
         runtime.starting = task
