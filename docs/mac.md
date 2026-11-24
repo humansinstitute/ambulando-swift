@@ -16,12 +16,18 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (116) |
+| Version | 0.1.0 (117) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
 | Data | `~/Library/Containers/studio.otherstuff.ambulando.mac/` (kept when the app is replaced or updated) |
 | Keychain | Login keychain, services `studio.otherstuff.ambulando.mac.identity-vault.v1`, `….session.v1` |
+
+Source build 117 repairs missing-resource event catch-up and retained outgoing writes,
+includes canonical Inbox thread cards before transcript hydration, and fixes clipped
+navigation icons. See [write readiness checks](mac-startup-recovery.md#write-readiness-and-event-catch-up-mac-source-build-117)
+and [navigation checks](navigation-strip.md). Local validation is separate from installation
+and authenticated testing on another Mac.
 
 ## Install on another Mac (for example a MacBook)
 
