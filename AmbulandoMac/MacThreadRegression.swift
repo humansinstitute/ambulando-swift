@@ -1076,6 +1076,9 @@ enum MacThreadRegression {
         guard Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test" else {
             throw Failure(description: "Navigation check requires isolated Test app")
         }
+        let agentsPreference = UserDefaults.standard.bool(forKey: AppMode.agentsPreference)
+        UserDefaults.standard.set(false, forKey: AppMode.agentsPreference)
+        defer { UserDefaults.standard.set(agentsPreference, forKey: AppMode.agentsPreference) }
         window.setContentSize(NSSize(width: 900, height: 700))
         window.setFrameOrigin(NSPoint(x: 20, y: 20))
         try await Task.sleep(for: .milliseconds(300))
@@ -1116,6 +1119,14 @@ enum MacThreadRegression {
         model.notice = "Another synthetic live update"
         try await Task.sleep(for: .milliseconds(250))
         try require(abs(scroll.contentView.bounds.minX - offset) < 2, "live same-screen update preserves strip offset")
+        let documentWidth = scroll.documentView!.frame.width
+        UserDefaults.standard.set(true, forKey: AppMode.agentsPreference)
+        try await Task.sleep(for: .milliseconds(400))
+        try require(scroll.documentView!.frame.width > documentWidth + 80, "optional control rebuild occurred on same route")
+        try require(abs(scroll.contentView.bounds.minX - offset) < 2, "same-route control-ID rebuild preserves offset")
+        UserDefaults.standard.set(false, forKey: AppMode.agentsPreference)
+        try await Task.sleep(for: .milliseconds(300))
+        try require(abs(scroll.contentView.bounds.minX - offset) < 2, "removing an optional control preserves valid offset")
         model.show(.chat)
         try await Task.sleep(for: .milliseconds(300))
         try require(scroll.contentView.bounds.minX < 2, "actual section navigation resets left")
@@ -1137,7 +1148,7 @@ enum MacThreadRegression {
         model.fileNappletNavigation = nil
         deferred?()
         try require(model.workspaceHomeSelected, "approved guarded navigation reaches Home")
-        print("PASS navigation strip: real mouse Home/Chat, locked scoped Home semantics, current workspace, leftmost globe, fixed wide controls and route/data identity")
+        print("PASS navigation strip: real mouse Home/Chat, locked scoped Home semantics, current workspace, leftmost globe, fixed wide controls, route/data identity and same-route control rebuild offsets")
     }
 
     static func kanbanCardCheck(_ window: NSWindow, model: AppModel) async throws {

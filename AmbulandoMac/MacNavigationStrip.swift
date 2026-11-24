@@ -53,6 +53,8 @@ struct MacNavigationStrip: NSViewRepresentable {
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let stack = scroll.documentView as? NSStackView else { return }
+        let previousOffset = scroll.contentView.bounds.origin
+        let routeChanged = context.coordinator.route != route
         let ids = controls.map(\.id)
         if stack.arrangedSubviews.compactMap({ $0.identifier?.rawValue }) != ids {
             for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
@@ -97,10 +99,10 @@ struct MacNavigationStrip: NSViewRepresentable {
         stack.frame = NSRect(x: 0, y: 0, width: controls.reduce(0) { $0 + $1.width }, height: 56)
         stack.layoutSubtreeIfNeeded()
         stack.setAccessibilityChildren(stack.arrangedSubviews)
-        if context.coordinator.route != route {
-            context.coordinator.route = route
-            scroll.contentView.scroll(to: .zero)
-            scroll.reflectScrolledClipView(scroll.contentView)
-        }
+        context.coordinator.route = route
+        // Removing arranged controls can momentarily shrink the document. Restore the retained clip
+        // position after layout, including refresh-result and optional-section changes on this route.
+        scroll.contentView.scroll(to: routeChanged ? .zero : previousOffset)
+        scroll.reflectScrolledClipView(scroll.contentView)
     }
 }

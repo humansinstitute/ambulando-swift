@@ -15,7 +15,8 @@ The scroll position starts at the left on appearance and changes of visible rout
 workspace, context or focused conversation. Ordinary live data updates and explicit
 data refresh do not reset it. The Mac uses an AppKit scroll view and stack with native buttons, explicit sizing
 and an accessible control group. The local regression verifies real mouse clicks,
-route-only reset, preserved same-screen offset and fixed narrow/wide control widths.
+route-only reset, preserved same-screen offset (including adding/removing optional
+controls) and fixed narrow/wide control widths.
 
 Focused checks:
 
