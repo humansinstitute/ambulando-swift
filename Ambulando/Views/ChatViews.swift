@@ -936,6 +936,19 @@ struct Composer: View {
     @State private var dismissedAt: String?
     #if os(macOS)
     @State private var attachingFiles = false
+    @State private var showingVoice = false
+    @State private var voice = MacVoiceRecorder()
+    @State private var voiceOrigin: MacVoiceAuthority?
+    @State private var voiceTarget: ChatTarget?
+    private var voiceAuthority: MacVoiceAuthority {
+        MacVoiceAuthority(connection: model.connection?.id, workspace: model.selectedWorkspaceId,
+                          app: workspace.appNpub, signer: model.identity.npub, unlocked: model.isUnlocked)
+    }
+    private var voiceAllowed: Bool {
+        editing == nil && model.isUnlocked && model.uploads != nil && composer?.target == target &&
+        model.connection?.id == target.connectionId && workspace.id == target.workspaceId &&
+        model.selectedWorkspaceId == workspace.id && model.identity.npub == model.connection?.signerNpub
+    }
     #endif
 
     /// The `@` lookahead as on the web: people and agents from the directory, and documents, tasks, conversations,
@@ -1008,6 +1021,30 @@ struct Composer: View {
                 MentionPicker(suggestions: suggestions, people: members.value, highlighted: min(highlighted, suggestions.count - 1)) { pick($0.mention) }
             }
             Divider().overlay(Amb.border)
+            #if os(macOS)
+            if showingVoice, editing == nil {
+                MacVoiceRecorderView(recorder: voice) { url in
+                    guard voiceAllowed, voiceOrigin == voiceAuthority, voiceTarget == target,
+                          let composer, composer.target == voiceTarget else {
+                        voice.discard(); showingVoice = false; return false
+                    }
+                    guard let bytes = try? Data(contentsOf: url) else {
+                        voice.notice = "Could not read the recording. Try playing it or record again."; return false
+                    }
+                    let provider = NSItemProvider()
+                    provider.suggestedName = url.lastPathComponent
+                    provider.registerDataRepresentation(forTypeIdentifier: "public.mpeg-4-audio", visibility: .all) { completion in
+                        completion(bytes, nil); return nil
+                    }
+                    let tokens = pasteItems([provider])
+                    guard !tokens.isEmpty else { voice.notice = "Connect and unlock this workspace before attaching. Your clip is kept here."; return false }
+                    composer.text += "\n" + tokens.joined(separator: "\n") + "\n"
+                    showingVoice = false
+                    return true
+                }
+                Button("Cancel recording") { voice.discard(); showingVoice = false }.padding(.bottom, 8)
+            }
+            #endif
             if let composer, editing == nil {
                 @Bindable var composer = composer
                 ComposerAttachmentStrip(mentions: composer.presentMentions, people: members.value, removeMention: { composer.removeMention($0) },
@@ -1103,6 +1140,9 @@ struct Composer: View {
             }
         }
         .task(id: editing?.id) {
+            #if os(macOS)
+            if editing != nil { voice.discard(); showingVoice = false }
+            #endif
             guard let editing else { revisionComposer = nil; return }
             if let pending = insertion { replyComposer?.text += pending; insertion = nil }
             replyComposer?.saveNow()
@@ -1116,9 +1156,18 @@ struct Composer: View {
             dismissedAt = nil; highlighted = 0; focused = true
         }
         .onChange(of: target) { _, _ in
+            #if os(macOS)
+            voice.discard(); showingVoice = false
+            #endif
             revisionComposer?.saveNow()
             editing = nil
         }
+        #if os(macOS)
+        .onChange(of: voiceAuthority) { _, _ in voice.discard(); showingVoice = false }
+        .onChange(of: voiceAllowed) { _, allowed in
+            if !allowed { voice.discard(); showingVoice = false }
+        }
+        #endif
         .onChange(of: storedDraft.value) { _, draft in replyComposer?.adopt(draft) }
         .textAttachmentModal(item: $openAttachment) { subject in
             TextAttachmentModal(subject: subject, workspace: workspace) { next in
@@ -1153,6 +1202,9 @@ struct Composer: View {
             }
         }
         .onDisappear {
+            #if os(macOS)
+            voice.discard()
+            #endif
             if let replyComposer { model.uploads?.detach(replyComposer); replyComposer.saveNow() }
             revisionComposer?.saveNow()
         }
@@ -1177,6 +1229,17 @@ struct Composer: View {
         .accessibilityIdentifier("composer.photo")
         .iconButton()
         #if os(macOS)
+        Button {
+            showingVoice.toggle()
+            if showingVoice { voiceOrigin = voiceAuthority; voiceTarget = target }
+            else { voice.discard() }
+        } label: {
+            Image(systemName: "mic").font(.body.weight(.semibold)).frame(width: 34, height: 32)
+        }
+        .accessibilityLabel("Record voice")
+        .accessibilityIdentifier("composer.voice")
+        .disabled(!voiceAllowed || model.uploads?.uploads(for: target).contains(where: \.isActive) == true)
+        .iconButton()
         Button { attachingFiles = true } label: {
             Image(systemName: "paperclip").font(.amb(.body).weight(.semibold)).frame(width: 34, height: 32)
         }
@@ -1211,6 +1274,9 @@ struct Composer: View {
     }
 
     private var canSend: Bool {
+        #if os(macOS)
+        guard !voice.busy else { return false }
+        #endif
         guard let composer else { return false }
         // A pasted item still uploading (or failed) holds its placeholder in the text: nothing is sent until it is resolved.
         guard !UploadToken.contains(in: composer.text) else { return false }

@@ -16,7 +16,7 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (114) |
+| Version | 0.1.0 (115) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
@@ -602,3 +602,10 @@ entry with a retained reply while hidden. It leaves Show Chat on. The second
 checks that a new process retains that choice, then saves it off. These checks
 use only the isolated Test app; they do not establish installation or live-account
 acceptance on Pete's MacBook.
+
+## Voice recording (Mac source build 115)
+
+See [voice recording](voice-recording.md) for the composer recorder, input
+selection, real meter, review/attach flow and validation limits. The Mac target
+requests microphone permission and includes the sandbox audio-input entitlement.
+Source delivery does not establish installation or physical-device acceptance.

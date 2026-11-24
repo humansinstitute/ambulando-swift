@@ -87,6 +87,35 @@ final class ComposerUploadTests: XCTestCase {
 
     // MARK: Uploads
 
+    func testRecordedAudioUsesFileUploadAndExplicitSendForItsCapturedTarget() async throws {
+        let h = try await WorkHarness.make()
+        let uploads = center(h)
+        // Match the recorder's in-memory provider: accepting the clip must survive deleting its temp file.
+        let bytes = Data("synthetic audio attachment bytes".utf8)
+        let provider = NSItemProvider()
+        provider.suggestedName = "Voice-check.m4a"
+        provider.registerDataRepresentation(forTypeIdentifier: "public.mpeg-4-audio", visibility: .all) { completion in
+            completion(bytes, nil); return nil
+        }
+        let host = Host(h.chat.target(thread: "11111111-2222-4333-8444-555555555555"), text: "", caret: 0)
+        uploads.attach(host)
+        host.insert(uploads.paste([provider], target: host.uploadTarget, appNpub: h.workspace.appNpub, context: "thread").joined())
+        XCTAssertTrue(host.uploadText.hasPrefix("[ Uploading file "))
+        try await eventually { host.uploadText.contains("storage://") }
+        let ref = try XCTUnwrap(StorageMarkdown.references(in: host.uploadText).first)
+        XCTAssertEqual(ref.kind, "file")
+        XCTAssertEqual(ref.filename, "Voice-check.m4a")
+        XCTAssertTrue(h.chat.tower.recordedPosts.isEmpty, "attaching audio does not send a message")
+        try await h.outbox.send(text: host.uploadText, mentions: [], target: host.uploadTarget, connection: h.connection, workspace: h.workspace)
+        await h.engine.waitUntilIdle()
+        let post = try XCTUnwrap(h.chat.tower.recordedPosts.last)
+        let body = try JSONSerialization.jsonObject(with: post.body) as! [String: Any]
+        let attachments = ((body["metadata"] as? [String: Any])?["attachments"] as? [[String: Any]]) ?? []
+        XCTAssertEqual(attachments.first?["kind"] as? String, "file")
+        XCTAssertEqual(attachments.first?["storage_object_id"] as? String, ref.storageObjectId)
+        XCTAssertTrue(try stagedFiles(h).isEmpty)
+    }
+
     func testPastedImageUploadsAndReplacesItsPlaceholderAtTheCaret() async throws {
         let h = try await WorkHarness.make()
         let uploads = center(h)

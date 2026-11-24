@@ -12,6 +12,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Voice recording (Mac source build 115)
+
+The composer microphone button offers a real input-level meter, microphone choice
+and a recorded-input label. Stop to play, cancel or attach the clip, then use the
+existing Send flow. See [recording behavior and limits](docs/voice-recording.md).
+Mac transcription and iPhone recording remain explicit gaps. Source/build
+validation is separate from installation and testing on Pete’s MacBook.
+
 ## Optional Chat navigation (Mac source build 114)
 
 Mac Settings → Sections → **Show Chat** starts off. Turn it on to restore Chat
