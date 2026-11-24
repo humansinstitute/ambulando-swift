@@ -16,7 +16,7 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (95) |
+| Version | 0.1.0 (114) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
@@ -145,7 +145,7 @@ each time, so after each rebuild macOS asks once for the login password to let A
 
 - One main window (minimum 900 × 600) with Home, Unread & Active, scopes, channels and the workspace switcher in a
   resizable sidebar. Deck, Chat, Tasks, Docs, Files, optional Agents/Context and Toolbox sit horizontally above main
-  content and remain visible on record screens. The window toolbar has sync status, Search, Browser and Settings.
+  content and remain visible on record screens. Chat is optional from Mac build 114 (Settings → Sections → Show Chat, initially off). The window toolbar has sync status, Search, Browser and Settings.
 - The in-app browser (with `window.nostr`) is its own window; **Back to Ambulando** or closing it ends the browsing
   presentation, and websites can then no longer ask for signatures.
 - **Refresh data** (build 99) is available beside the sections, in an open conversation, in the browser bar and from
@@ -576,3 +576,29 @@ and foregrounded or explicitly requested; online runtime authorization remains r
 and current-channel filters, and Tasks lets Escape pass through when there is no selection to cancel.
 See [full native finding disposition](native-review-fixes.md). Build/source delivery and MacBook installation
 remain separate; no physical-device acceptance is inferred from local tests.
+
+## Optional Chat navigation (Mac source build 114)
+
+Settings → Sections → **Show Chat** controls the Mac Chat navigation button and
+Go menu item. It starts off and persists in this app's local preferences across
+relaunches and compatible updates. Turning it on restores Chat in its existing
+position after Deck. Hiding the button leaves the current conversation, drafts,
+Deck name, default/back routes and explicit conversation links unchanged.
+Agents and Context retain their independent switches. Phone/tablet settings and
+navigation are unchanged pending their separate parity checks.
+
+After building `AmbulandoMacTest`, run the isolated synthetic checks in order:
+
+```sh
+'build/test-mac/Build/Products/Test/Ambulando Test.app/Contents/MacOS/Ambulando Test' \
+  -AmbulandoFixtureReset -AmbulandoMacThreadRegression -AmbulandoMacChatVisibilityCheck
+'build/test-mac/Build/Products/Test/Ambulando Test.app/Contents/MacOS/Ambulando Test' \
+  -AmbulandoMacThreadRegression -AmbulandoMacChatVisibilityCheck -AmbulandoMacChatVisibilityResume
+```
+
+The first checks the actual Settings switch, section/menu visibility, original
+order, narrow/wide mouse navigation, a retained channel draft, and explicit thread
+entry with a retained reply while hidden. It leaves Show Chat on. The second
+checks that a new process retains that choice, then saves it off. These checks
+use only the isolated Test app; they do not establish installation or live-account
+acceptance on Pete's MacBook.

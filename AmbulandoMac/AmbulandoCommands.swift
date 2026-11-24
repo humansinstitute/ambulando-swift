@@ -6,6 +6,7 @@ struct AmbulandoCommands: Commands {
     let model: AppModel
     let ui: MacUI
     private let textScale = TextScale.shared
+    @AppStorage(AppMode.chatPreference) private var showChat = false
     @AppStorage(AppMode.agentsPreference) private var showAgents = false
     @AppStorage(AppMode.contextPreference) private var showContext = false
 
@@ -40,7 +41,7 @@ struct AmbulandoCommands: Commands {
                 .disabled(textScale.isDefault)
         }
         CommandMenu("Go") {
-            ForEach(Array(AppMode.visible(agents: showAgents, context: showContext).enumerated()), id: \.element) { index, section in
+            ForEach(Array(AppMode.visible(chat: showChat, agents: showAgents, context: showContext).enumerated()), id: \.element) { index, section in
                 Button(section.title) { model.show(section) }
                     .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
                     .disabled(!ready)

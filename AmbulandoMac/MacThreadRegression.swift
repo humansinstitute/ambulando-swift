@@ -74,6 +74,11 @@ enum MacThreadRegression {
         }
         defer { heartbeat.cancel() }
         do {
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacChatVisibilityCheck") {
+                try await chatVisibilityCheck(window, model: model); fflush(stdout); exit(0)
+            }
+            // Existing interaction scenarios explicitly exercise the optional Chat button.
+            UserDefaults.standard.set(true, forKey: AppMode.chatPreference)
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacNavigationStripCheck") {
                 try await navigationStripCheck(window, model: model); fflush(stdout); exit(0)
             }
@@ -1072,6 +1077,105 @@ enum MacThreadRegression {
         // SwiftUI gestures need direct delivery too; a native button may already have consumed the queued release.
         if let release { window.sendEvent(release) }
     }
+    static func chatVisibilityCheck(_ window: NSWindow, model: AppModel) async throws {
+        guard Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test" else {
+            throw Failure(description: "Chat visibility requires isolated Test app")
+        }
+        for agents in [false, true] {
+            for context in [false, true] {
+                let shown = AppMode.visible(chat: true, agents: agents, context: context)
+                let hidden = AppMode.visible(chat: false, agents: agents, context: context)
+                try require(shown == AppMode.allCases.filter { ($0 != .agents || agents) && ($0 != .context || context) }, "ON retains original section order")
+                try require(hidden == shown.filter { $0 != .chat }, "OFF only removes Chat for each optional-section combination")
+            }
+        }
+        func menuHasChat() -> Bool {
+            guard let go = NSApp.mainMenu?.items.first(where: { $0.title == "Go" })?.submenu else { return false }
+            // SwiftUI refreshes menu contents on opening, rather than NSMenu.update alone.
+            let result = MacRegressionMemory<Bool>()
+            let timer = Timer(timeInterval: 0.1, repeats: false) { _ in
+                MainActor.assumeIsolated {
+                    result.save(go.items.contains { $0.title == "Chat" })
+                    go.cancelTracking()
+                }
+            }
+            RunLoop.main.add(timer, forMode: .eventTracking)
+            RunLoop.main.add(timer, forMode: .common)
+            go.popUp(positioning: nil, at: NSPoint(x: 20, y: 20), in: window.contentView)
+            timer.invalidate()
+            return result.load() == true
+        }
+        let defaults = UserDefaults.standard
+        let resume = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacChatVisibilityResume")
+        try require(defaults.bool(forKey: AppMode.chatPreference) == resume, "default hidden / saved ON survives process relaunch")
+        try require((find(window, "section.chat") != nil) == resume, "actual navigation reflects launch preference")
+        try require(menuHasChat() == resume, "Go menu reflects launch preference")
+        if resume {
+            defaults.set(false, forKey: AppMode.chatPreference)
+            defaults.synchronize()
+            await settle()
+            try require(find(window, "section.chat") == nil, "saved OFF restores hidden navigation")
+            print("PASS Chat preference relaunch: ON survived new process; OFF saved")
+            return
+        }
+        let settings = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 700, height: 900),
+                                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        settings.isReleasedWhenClosed = false
+        settings.contentView = NSHostingView(rootView: SettingsView().environment(model))
+        settings.makeKeyAndOrderFront(nil)
+        await settle()
+        try require(find(settings, "settings.sections.chat") != nil, "Show Chat is discoverable in actual Settings")
+        // SwiftUI Toggle can apply AXPress while returning false; verify its resulting saved/UI state below.
+        guard let toggle = find(settings, "settings.sections.chat") else { throw Failure(description: "Missing Show Chat switch") }
+        let selector = NSSelectorFromString("accessibilityPerformPress")
+        typealias ToggleAction = @convention(c) (AnyObject, Selector) -> Bool
+        _ = unsafeBitCast(toggle.method(for: selector), to: ToggleAction.self)(toggle, selector)
+        await settle()
+        try require(defaults.bool(forKey: AppMode.chatPreference), "Settings switch saves ON")
+        try require(menuHasChat(), "Settings ON restores Go menu Chat")
+        settings.orderOut(nil)
+        window.makeKeyAndOrderFront(nil)
+        model.selectWorkspace(FixtureTower.studio)
+        model.selectContext(WorkContext(scopeId: FixtureTower.scopeAmbulando, channelId: FixtureTower.generalChannel))
+        for width in [900.0, 1200.0] {
+            window.setContentSize(NSSize(width: width, height: 800))
+            model.show(.deck)
+            await settle()
+            try click(window, "section.chat")
+            await settle()
+            try require(model.mode == .chat, "restored Chat button accepts real clicks at narrow/wide widths")
+        }
+        try type(window, "Chat visibility retained draft")
+        await settle()
+        defaults.set(false, forKey: AppMode.chatPreference)
+        await settle()
+        try require(!menuHasChat(), "Settings OFF removes Go menu Chat")
+        try require(find(window, "section.chat") == nil && model.mode == .chat, "hiding current Chat only removes its button")
+        try require(try textView(window).string == "Chat visibility retained draft", "active composer draft remains usable")
+        model.show(.deck)
+        model.openInChat(channelId: FixtureTower.generalChannel, threadId: "f1c7bbbb-0000-4000-8000-000000009999")
+        await settle()
+        guard let focus = model.focusedThread else { throw Failure(description: "Explicit thread entry blocked while hidden") }
+        try type(window, "Hidden navigation reply draft")
+        await settle()
+        defaults.set(true, forKey: AppMode.chatPreference)
+        await settle()
+        defaults.set(false, forKey: AppMode.chatPreference)
+        await settle()
+        try require(model.focusedThread == focus, "visibility changes retain current explicit thread")
+        try require(try textView(window).string == "Hidden navigation reply draft", "focused conversation remains usable")
+        try press(window, "thread.focus.close")
+        await settle()
+        settings.makeKeyAndOrderFront(nil)
+        guard let toggleAgain = find(settings, "settings.sections.chat") else { throw Failure(description: "Missing Show Chat switch") }
+        _ = unsafeBitCast(toggleAgain.method(for: selector), to: ToggleAction.self)(toggleAgain, selector)
+        await settle()
+        try require(defaults.bool(forKey: AppMode.chatPreference), "Settings restores ON after hidden conversation")
+        defaults.synchronize()
+        settings.orderOut(nil)
+        print("PASS Chat visibility: default hidden, actual Settings switch, narrow/wide mouse clicks, current channel draft, explicit thread entry and retained reply; ON saved for relaunch")
+    }
+
     static func navigationStripCheck(_ window: NSWindow, model: AppModel) async throws {
         guard Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test" else {
             throw Failure(description: "Navigation check requires isolated Test app")

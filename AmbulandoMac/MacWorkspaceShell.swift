@@ -10,6 +10,7 @@ struct MacWorkspaceShell: View {
     @Environment(MacUI.self) private var ui
     @Environment(\.openWindow) private var openWindow
     @SceneStorage("shell.tab") private var storedMode = AppMode.chat.rawValue
+    @AppStorage(AppMode.chatPreference) private var showChat = false
     @AppStorage(AppMode.agentsPreference) private var showAgents = false
     @AppStorage(AppMode.contextPreference) private var showContext = false
 
@@ -29,7 +30,7 @@ struct MacWorkspaceShell: View {
                 .accessibilityHidden(!ui.sidebarVisible)
             VStack(spacing: 0) {
                 if !model.macFocusedArtefact {
-                MacSectionBar(sections: AppMode.visible(agents: showAgents, context: showContext))
+                MacSectionBar(sections: AppMode.visible(chat: showChat, agents: showAgents, context: showContext))
                 Divider()
                 }
                 sectionView(model.mode)
