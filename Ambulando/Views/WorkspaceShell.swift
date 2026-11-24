@@ -262,12 +262,10 @@ private struct LocalMentions: ViewModifier {
     }
 }
 
+#if os(iOS)
 /// One scrolling strip, with Home inside the same content as all existing controls.
 struct SectionBar: View {
     @Environment(AppModel.self) private var model
-    #if os(macOS)
-    @Environment(MacUI.self) private var ui
-    #endif
     let sections: [AppMode]
     @State private var position = ScrollPosition(edge: .leading)
 
@@ -277,20 +275,12 @@ struct SectionBar: View {
                 HStack(spacing: 0) {
                     navigationButton(title: "Home", image: "globe", active: model.workspaceHomeSelected,
                                      id: "home", width: buttonWidth(geometry.size.width)) { model.showWorkspaceHome() }
-                    #if os(macOS)
-                    MacStripButton(title: "", image: "sidebar.left", selected: false, identifier: "sidebar.toggle",
-                                   label: ui.sidebarVisible ? "Hide Sidebar" : "Show Sidebar") { ui.sidebarVisible.toggle() }
-                        .frame(width: 44, height: 54)
-                    #endif
                     ForEach(sections, id: \.self) { section in
                         navigationButton(title: section.title, image: section.systemImage, active: model.mode == section,
                                          id: section.rawValue, width: buttonWidth(geometry.size.width)) {
                             if model.mode == section { model.popToRoot(section) } else { model.show(section) }
                         }
                     }
-                    #if os(macOS)
-                    MacRefreshDataButton()
-                    #endif
                 }
             }
             .scrollPosition($position)
@@ -306,20 +296,12 @@ struct SectionBar: View {
     }
 
     private func buttonWidth(_ available: CGFloat) -> CGFloat {
-        #if os(iOS)
         // Four full controls and half of the next on phones; comfortable fixed sizes on wide screens.
         min(104, max(72, available / 4.5))
-        #else
-        104
-        #endif
     }
 
     private func navigationButton(title: String, image: String, active: Bool, id: String,
                                   width: CGFloat, action: @escaping () -> Void) -> some View {
-        #if os(macOS)
-        MacStripButton(title: title, image: image, selected: active, identifier: "section.\(id)", action: action)
-            .frame(width: width, height: 54)
-        #else
         Button(action: action) {
             VStack(spacing: 3) {
                 Image(systemName: image).font(.system(size: 20, weight: active ? .semibold : .regular))
@@ -334,9 +316,10 @@ struct SectionBar: View {
         .accessibilityAddTraits(active ? [.isSelected, .isButton] : .isButton)
         .accessibilityHint(id == "home" ? "Opens Deck across all accessible scopes and channels in this workspace" : "")
         .accessibilityIdentifier("section.\(id)")
-        #endif
     }
 }
+
+#endif
 
 private struct ShellToolbar: ViewModifier {
     @Environment(AppModel.self) private var model

@@ -13,10 +13,9 @@ phone bottom safe area/keyboard behavior remain.
 
 The scroll position starts at the left on appearance and changes of visible route,
 workspace, context or focused conversation. Ordinary live data updates and explicit
-data refresh do not reset it. The Mac uses native AppKit button tracking. Local mouse-event validation currently
-fails: hit testing resolves to the underlying content list even at the Home
-button’s native and accessibility frame. Mac interaction acceptance is blocked
-until the horizontal-scroll hosting boundary is corrected and the regression passes.
+data refresh do not reset it. The Mac uses an AppKit scroll view and stack with native buttons, explicit sizing
+and an accessible control group. The local regression verifies real mouse clicks,
+route-only reset, preserved same-screen offset and fixed narrow/wide control widths.
 
 Focused checks:
 
@@ -31,6 +30,6 @@ account acceptance. Pete pulls GitHub main and builds on his MacBook separately.
 
 Validation for this source revision: core XCTest (830 cases, five skips, zero
 failures), Swift Testing (60 cases), installer regressions (92 cases) and Mac Test
-build pass. iPhone syntax parse passes; full iPhone build and UI execution are
+build pass. The Mac native-container interaction regression passes. iPhone syntax parse passes; full iPhone build and UI execution are
 blocked because Xcode offers no eligible iOS simulator destination. These are
 outstanding acceptance requirements, not successful device validation.

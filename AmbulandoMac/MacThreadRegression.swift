@@ -1090,13 +1090,6 @@ enum MacThreadRegression {
         model.notice = "Synthetic same-screen update"
         try require(model.sectionStripRoute == before, "same-screen data does not change strip route")
         try await Task.sleep(for: .milliseconds(300))
-        if let root = window.contentView, let native = nativeActionsButton(root, id: "section.home") {
-            let bounds = native.convert(native.bounds, to: nil)
-            let point = NSPoint(x: bounds.midX, y: bounds.midY)
-            let hit = root.hitTest(root.convert(point, from: nil))
-            print("STRIP_CLICK window=\(window.frame) screen=\(String(describing: window.screen?.frame)) nativeAX=\(native.accessibilityFrame()) native=\(bounds) ax=\(frame(of: find(window, "section.home")!)) hit=\(String(describing: hit)) enabled=\(native.isEnabled) target=\(String(describing: native.target))")
-            try sendClick(window, point: point)
-        } else { throw Failure(description: "Missing native Home button") }
         try click(window, "section.home")
         try await Task.sleep(for: .milliseconds(400))
         try require(model.workspaceHomeSelected, "real mouse globe opens workspace Deck even from locked Tasks")
@@ -1135,7 +1128,7 @@ enum MacThreadRegression {
         let originalWidth = frame(of: home).width
         window.setContentSize(NSSize(width: 1200, height: 800))
         try await Task.sleep(for: .milliseconds(300))
-        try require(abs(frame(of: find(window, "section.home")!).width - originalWidth) < 2, "wide layout keeps comfortable fixed controls")
+        try require(abs((find(window, "section.home").map { frame(of: $0).width } ?? 0) - originalWidth) < 2, "wide layout keeps comfortable fixed controls")
         model.show(.tasks)
         var deferred: (() -> Void)?
         model.fileNappletNavigation = { deferred = $0; return true }

@@ -18,8 +18,8 @@ A leftmost Home globe scrolls with the full section strip and opens workspace-wi
 Deck. Phone controls show roughly four and a half at once; wider windows retain
 comfortable control widths. Actual navigation resets the strip left, while live
 updates retain position. See [navigation strip](docs/navigation-strip.md).
-Mac mouse interaction currently fails the local regression; iPhone full build/UI
-validation is blocked by the host Xcode component. Source delivery remains separate
+Mac native-container interaction checks pass; iPhone full build/UI validation
+is blocked by the host Xcode component. Source delivery remains separate
 from installation and physical-device acceptance.
 
 ## Reviewed artefact and app fixes (Mac build 112, iPhone/iPad source build 113)

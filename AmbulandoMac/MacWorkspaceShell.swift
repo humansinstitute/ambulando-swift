@@ -147,8 +147,42 @@ struct MacSidebar: View {
     var body: some View { SidebarContent().background(Amb.card) }
 }
 
-/// Shares the scrolling controls and navigation identity with iPhone.
+/// AppKit owns the entire Mac strip so native hit testing and scrolling share one coordinate space.
 struct MacSectionBar: View {
+    @Environment(AppModel.self) private var model
+    @Environment(MacUI.self) private var ui
+    @State private var showingRefreshResult = false
     let sections: [AppMode]
-    var body: some View { SectionBar(sections: sections) }
+    var body: some View {
+        MacNavigationStrip(controls: controls, route: model.sectionStripRoute)
+            .frame(maxWidth: .infinity)
+            .frame(height: 56)
+            .background(Amb.card)
+            .popover(isPresented: $showingRefreshResult) {
+                Text(model.dataRefresh.message ?? "").padding().frame(maxWidth: 300)
+            }
+    }
+    private var controls: [MacNavigationControl] {
+        var items = [MacNavigationControl(id: "section.home", title: "Home", image: "globe",
+                                         selected: model.workspaceHomeSelected) { model.showWorkspaceHome() },
+                     MacNavigationControl(id: "sidebar.toggle", title: "", image: "sidebar.left",
+                                          label: ui.sidebarVisible ? "Hide Sidebar" : "Show Sidebar", width: 44) { ui.sidebarVisible.toggle() }]
+        items += sections.map { section in
+            MacNavigationControl(id: "section.\(section.rawValue)", title: section.title, image: section.systemImage,
+                                 selected: model.mode == section) {
+                if model.mode == section { model.popToRoot(section) } else { model.show(section) }
+            }
+        }
+        items.append(MacNavigationControl(id: "data.refresh", title: "", image: "arrow.clockwise",
+                                          label: model.dataRefresh.running ? "Refreshing data" : "Refresh data",
+                                          enabled: model.dataRefresh.available(model), busy: model.dataRefresh.running, width: 44) {
+            model.dataRefresh.start(model)
+        })
+        if let message = model.dataRefresh.message {
+            items.append(MacNavigationControl(id: "data.refresh.result", title: "",
+                                              image: model.dataRefresh.failed ? "exclamationmark.triangle" : "checkmark.circle",
+                                              label: message, width: 32) { showingRefreshResult.toggle() })
+        }
+        return items
+    }
 }
