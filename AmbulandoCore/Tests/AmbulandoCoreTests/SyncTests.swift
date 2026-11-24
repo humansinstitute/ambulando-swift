@@ -177,8 +177,8 @@ final class WorkspaceSyncTests: XCTestCase {
             XCTAssertEqual(event.pubkey, TestKeys.pubkeyHex)
             XCTAssertEqual(event.tags.first, ["u", request.url!.absoluteString])
         }
-        XCTAssertEqual(transport.recorded.count, 11,
-                       "descriptor + workspaces + scopes + 2 channel lists + members + scope order + messages and threads of both channels")
+        XCTAssertEqual(transport.recorded.count, 13,
+                       "descriptor + workspaces + scopes + 2 channel lists + members + scope order + messages and early/final thread lists of both channels")
         let members = try await store.reader.members(workspaceId: Fixtures.workspaceId)
         XCTAssertEqual(members.map(\.label), ["Me"])
         let order = ScopeOrdering.decode(try await store.reader.state(WorkspaceSync.scopeOrderKey(Fixtures.workspaceId)))
