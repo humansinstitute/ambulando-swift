@@ -6,6 +6,14 @@ struct RuntimeAppsSection: View {
     let workspace: WorkspaceRecord
     let store: LocalStore
     var active = true
+    var management = false
+    private var showsManagement: Bool {
+        #if os(macOS)
+        management
+        #else
+        true
+        #endif
+    }
     @Environment(\.scenePhase) private var scenePhase
     @State private var refresh = 0
     @State private var apps = LiveQuery<[RuntimeInstallation]>(initial:[])
@@ -16,22 +24,35 @@ struct RuntimeAppsSection: View {
     private var context: [String] { [model.connection?.id ?? "",model.connection?.signerNpub ?? "",workspace.id,String(model.wikiContextEpoch),String(model.canRead), String(active), String(scenePhase == .active), String(refresh)] }
     var body: some View {
         VStack(alignment:.leading,spacing:8) {
-            HStack {
-                Text("Workspace apps").font(.headline)
-                Spacer()
-                Button("Refresh apps", systemImage: "arrow.clockwise") { refresh += 1 }.labelStyle(.iconOnly).buttonStyle(.borderless)
+            if showsManagement || !apps.value.isEmpty {
+                HStack {
+                    Text("Workspace apps").font(.headline)
+                    Spacer()
+                    Button("Refresh apps", systemImage: "arrow.clockwise") { refresh += 1 }.labelStyle(.iconOnly).buttonStyle(.borderless)
+                }
             }
             ForEach(apps.value) { app in
                 Button { selection = app } label: { Label(app.manifest.title,systemImage:"app").badge(app.pendingManifest == nil ? 0 : 1) }.buttonStyle(.borderless).accessibilityIdentifier("runtime.app.\(app.id)")
             }
-            if apps.value.isEmpty { Text("Your bot can publish an app here for you. Shared access to an app does not grant access to its records.").font(.caption).foregroundStyle(.secondary) }
-            DisclosureGroup("Reconnect a removed app") {
-                TextField("Stable app ID",text:$reconnectID)
-                Text("Uses the current removed installation revision. Kept collection data reconnects; deleted data cannot be recovered. NStack requires installation authority.").font(.caption)
-                Button("Reconnect retained app") { reconnect() }.buttonStyle(.borderless).disabled(reconnecting || !model.isUnlocked || !NappletRuntimeManifest.name(reconnectID))
+            if showsManagement {
+                if apps.value.isEmpty { Text("Your bot can publish an app here for you. Shared access to an app does not grant access to its records.").font(.caption).foregroundStyle(.secondary) }
+                DisclosureGroup("Reconnect a removed app") {
+                    TextField("Stable app ID",text:$reconnectID)
+                    Text("Uses the current removed installation revision. Kept collection data reconnects; deleted data cannot be recovered. NStack requires installation authority.").font(.caption)
+                    Button("Reconnect retained app") { reconnect() }.buttonStyle(.borderless).disabled(reconnecting || !model.isUnlocked || !NappletRuntimeManifest.name(reconnectID))
+                }
+                if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
             }
-            if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
+            #if os(macOS)
+            if let error = model.syncError(forKey: WorkspaceSync.runtimeAppsKey(workspace.id)) {
+                if showsManagement { Text(error).font(.caption).foregroundStyle(.secondary) }
+                else { loadFailure }
+            } else if model.syncStatus.connectionFailures.contains(WorkspaceSync.runtimeAppsKey(workspace.id)) {
+                loadFailure
+            }
+            #else
             if let error = model.syncError(forKey: WorkspaceSync.runtimeAppsKey(workspace.id)) { Text(error).font(.caption).foregroundStyle(.secondary) }
+            #endif
         }
         .sheet(item:$selection) { item in NavigationStack { NappletRuntimeView(workspace:workspace,id:item.id) }.frame(minWidth:320,minHeight:460) }
         .task(id:context) {
@@ -44,6 +65,12 @@ struct RuntimeAppsSection: View {
         }
         .onChange(of: Array(context.prefix(5))) { _, _ in selection = nil }
         .onDisappear { apps.stop() }
+    }
+    private var loadFailure: some View {
+        HStack {
+            Text("Apps could not refresh.").font(.caption).foregroundStyle(.secondary)
+            Button("Retry apps") { refresh += 1 }.buttonStyle(.borderless).accessibilityIdentifier("runtime.retry")
+        }
     }
     private func reconnect() {
         guard let c = model.connection, let sync = model.sync, !reconnecting else { return }

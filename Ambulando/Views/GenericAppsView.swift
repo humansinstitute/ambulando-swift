@@ -7,6 +7,14 @@ struct GenericAppsSection: View {
     let workspace: WorkspaceRecord
     let store: LocalStore
     var active = true
+    var management = false
+    private var showsManagement: Bool {
+        #if os(macOS)
+        management
+        #else
+        true
+        #endif
+    }
     @Environment(\.scenePhase) private var scenePhase
     @State private var verifiedEntries: [String: Entry] = [:]
     @State private var verifiedContext: [String] = []
@@ -24,17 +32,21 @@ struct GenericAppsSection: View {
     private var context: [String] { [model.connection?.id ?? "", workspace.id, String(model.wikiContextEpoch), String(model.canRead), String(refreshing),String(pins.value), String(active), String(scenePhase == .active)] }
     var body: some View {
         VStack(alignment:.leading, spacing:8) {
-            HStack {
-                Button("Add napplet", systemImage:"plus.app") { adding = true }.buttonStyle(.borderless).disabled(!model.canRead).accessibilityIdentifier("generic.add")
-                Spacer()
-                Button("Refresh", systemImage:"arrow.clockwise") { refreshing += 1 }.labelStyle(.iconOnly).buttonStyle(.borderless)
+            if showsManagement {
+                HStack {
+                    Button("Add napplet", systemImage:"plus.app") { adding = true }.buttonStyle(.borderless).disabled(!model.canRead).accessibilityIdentifier("generic.add")
+                    Spacer()
+                    Button("Refresh", systemImage:"arrow.clockwise") { refreshing += 1 }.labelStyle(.iconOnly).buttonStyle(.borderless)
+                }
             }
             ForEach(apps) { app in
                 Button { model.push(.file(workspaceId:workspace.id,fileId:app.id),in:model.mode) } label: {
                     HStack { Text(app.binding.icon); Text(app.binding.title); Spacer(); Image(systemName:"chevron.right") }
                 }.buttonStyle(.borderless).accessibilityIdentifier("generic.app.\(app.id)")
             }
-            Text("Install an existing NStack HTML File. Apps use personal File pins; removing an app keeps its Files and history.").font(.caption).foregroundStyle(.secondary)
+            if showsManagement {
+                Text("Install an existing NStack HTML File. Apps use personal File pins; removing an app keeps its Files and history.").font(.caption).foregroundStyle(.secondary)
+            }
         }
         .sheet(isPresented:$adding, onDismiss:{ refreshing += 1 }) { AddGenericNappletView(workspace:workspace,store:store) }
         .task(id: context.prefix(4).map { $0 } + [String(active), String(scenePhase == .active)]) {

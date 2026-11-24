@@ -5,6 +5,53 @@ import SwiftUI
 import WebKit
 
 extension MacThreadRegression {
+    /// Everyday Apps is a launcher; installation/recovery belongs in Toolbox.
+    static func appsPresentationCheck(model: AppModel) async throws {
+        guard Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test",
+              model.fixture != nil, let workspace = model.selectedWorkspace, let store = model.store else {
+            throw Failure(description: "Apps presentation requires isolated Mac Test")
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil) }
+        window.contentView = NSHostingView(rootView: VStack {
+            RuntimeAppsSection(workspace: workspace, store: store, active: false)
+            GenericAppsSection(workspace: workspace, store: store, active: false)
+        }.environment(model).frame(width: 600, height: 600))
+        window.makeKeyAndOrderFront(nil)
+        await settle()
+        try require(!containsText(window, "Workspace apps"), "empty runtime section hidden in everyday Apps")
+        try require(!containsText(window, "Reconnect a removed app"), "technical recovery hidden in everyday Apps")
+        try require(find(window, "generic.add") == nil, "installation control absent from everyday Apps")
+        try require(!containsText(window, "NStack HTML File"), "technical installation explanation absent from everyday Apps")
+        window.contentView = NSHostingView(rootView: VStack {
+            RuntimeAppsSection(workspace: workspace, store: store, active: false, management: true)
+            GenericAppsSection(workspace: workspace, store: store, active: false, management: true)
+        }.environment(model).frame(width: 600, height: 600))
+        await settle()
+        try require(containsText(window, "Reconnect a removed app"), "Toolbox retains recovery control")
+        try require(find(window, "generic.add") != nil, "Toolbox retains installation control")
+        guard let sync = model.sync else { throw Failure(description: "Missing fixture sync") }
+        let key = WorkspaceSync.runtimeAppsKey(workspace.id)
+        await sync.engine.enqueue(key, priority: .visible, force: true) {
+            throw TowerError.http(status: 403, code: "fixture", stage: "runtime apps")
+        }
+        for _ in 0..<50 {
+            if model.syncError(forKey: key) != nil { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try require(model.syncError(forKey: key) != nil, "fixture app-list error reached selected sync status")
+        window.contentView = NSHostingView(rootView: RuntimeAppsSection(workspace: workspace, store: store, active: false)
+            .environment(model).frame(width: 600, height: 600))
+        await settle()
+        try require(containsText(window, "Apps could not refresh."), "empty failed list remains visibly different from no apps")
+        try require(find(window, "runtime.retry") != nil, "empty failed list offers retry")
+        try require(!containsText(window, "Reconnect a removed app"), "failed list does not restore technical recovery clutter")
+        await sync.engine.cancel(key)
+        print("PASS: Mac empty Apps launcher has no unsolicited setup or recovery controls; Toolbox retains both; failed app discovery stays visible with retry")
+    }
+
     /// Real native Apps/view/sandbox/Sync/store with signed synthetic backend responses.
     static func runtimeNappletCheck(model: AppModel) async throws {
         try require(Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test" && NappletRuntimeFixture.enabled,"isolated post-build Test scenario")
@@ -36,6 +83,7 @@ extension MacThreadRegression {
             await mount(RuntimeAppsSection(workspace:w,store:store))
             for _ in 0..<100 { if find(window,"runtime.app." + id) != nil { break }; try await Task.sleep(for:.milliseconds(30)) }
             try require(find(window,"runtime.app." + id) != nil,"arbitrary runtime Apps entry")
+            try require(!containsText(window, "Reconnect a removed app"), "installed app launcher has no recovery form")
             await mount(NappletRuntimeView(workspace:w,id:id))
             for _ in 0..<200 { if find(window,"runtime.approve") != nil { break }; try await Task.sleep(for:.milliseconds(30)) }
             try press(window,"runtime.approve")

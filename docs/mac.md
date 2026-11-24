@@ -16,7 +16,7 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (115) |
+| Version | 0.1.0 (116) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
@@ -177,6 +177,31 @@ each time, so after each rebuild macOS asks once for the login password to let A
 | ⌘, | Settings |
 | ⌃⌘S | Show or hide the sidebar |
 | ⌘+ · ⌘− · ⌘0 | View › Increase, Decrease and Actual Text Size (the app's text, kept across launches) |
+
+## Apps launcher and management (Mac build 116)
+
+The Deck Apps launcher shows installed apps without an empty Workspace apps section,
+installation instructions or a reconnect form. **Manage apps in Toolbox** retains
+File app installation and workspace app recovery. A failed app refresh still shows
+a short explanation and **Retry apps**, even when no entries could be loaded.
+This is a presentation change;
+it does not remove installations, approvals, File pins, collections or history.
+iPhone/iPad presentation and the runtime protocol are unchanged.
+
+The workspace installation/recovery controls originated in the v3 runtime in Mac
+build 108 (`96e7eae`); the File app installation controls originated in Mac build
+107 (`a1f4c5b`). Build 112 (`a6b4c8a`) scheduled workspace app refresh through the
+normal keyed sync engine. These controls do not establish a cause for an unrelated
+sync/upload failure. To diagnose one, record the installed build, failing action,
+Refresh data result and **Settings → Export diagnostics**. A passing fixture test
+does not establish live Tower access or behavior on another Mac.
+
+The isolated Mac Test launcher check uses the actual AppKit/SwiftUI presentation:
+
+```sh
+'build/mac-sync-test/Build/Products/Test/Ambulando Test.app/Contents/MacOS/Ambulando Test' \
+  -AmbulandoMacThreadRegression -AmbulandoMacAppsPresentationCheck
+```
 
 ## Differences from the iPhone app
 

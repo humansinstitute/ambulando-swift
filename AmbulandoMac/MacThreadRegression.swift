@@ -74,6 +74,9 @@ enum MacThreadRegression {
         }
         defer { heartbeat.cancel() }
         do {
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacAppsPresentationCheck") {
+                try await appsPresentationCheck(model: model); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacChatVisibilityCheck") {
                 try await chatVisibilityCheck(window, model: model); fflush(stdout); exit(0)
             }
