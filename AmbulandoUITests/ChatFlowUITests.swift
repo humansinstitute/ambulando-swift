@@ -9,7 +9,7 @@ final class ChatFlowUITests: XCTestCase {
 
     private func launch(reset: Bool, _ extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-AmbulandoUITestFixture"] + (reset ? ["-AmbulandoFixtureReset"] : []) + extra
+        app.launchArguments = ["-AmbulandoUITestFixture", "-sections.chat", "YES"] + (reset ? ["-AmbulandoFixtureReset"] : []) + extra
         app.launch()
         XCTAssertTrue(app.staticTexts["Sample data on this iPhone. Not connected to a Tower."].waitForExistence(timeout: 15), "sample data is labelled")
         return app

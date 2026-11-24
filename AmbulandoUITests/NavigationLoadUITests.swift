@@ -11,7 +11,7 @@ final class NavigationLoadUITests: XCTestCase {
 
     private func launch(_ arguments: [String]) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-AmbulandoUITestFixture"] + arguments
+        app.launchArguments = ["-AmbulandoUITestFixture", "-sections.chat", "YES"] + arguments
         app.launch()
         XCTAssertTrue(app.staticTexts["Sample data on this iPhone. Not connected to a Tower."].waitForExistence(timeout: 15))
         return app

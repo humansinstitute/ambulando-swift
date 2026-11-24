@@ -9,7 +9,7 @@ final class ThreadFocusUITests: XCTestCase {
 
     private func launch(reset: Bool, _ extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-AmbulandoUITestFixture"] + (reset ? ["-AmbulandoFixtureReset"] : []) + extra
+        app.launchArguments = ["-AmbulandoUITestFixture", "-sections.chat", "YES"] + (reset ? ["-AmbulandoFixtureReset"] : []) + extra
         app.launch()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Sample data on this'")).firstMatch.waitForExistence(timeout: 15))
         return app

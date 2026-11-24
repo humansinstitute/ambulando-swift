@@ -9,7 +9,7 @@ final class RichContentUITests: XCTestCase {
 
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-AmbulandoUITestFixture", "-AmbulandoFixtureReset"]
+        app.launchArguments = ["-AmbulandoUITestFixture", "-sections.chat", "YES", "-AmbulandoFixtureReset"]
         app.launch()
         XCTAssertTrue(app.staticTexts["Sample data on this iPhone. Not connected to a Tower."].waitForExistence(timeout: 15), "sample data is labelled")
         return app

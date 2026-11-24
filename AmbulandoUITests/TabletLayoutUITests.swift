@@ -8,7 +8,7 @@ final class TabletLayoutUITests: XCTestCase {
     private func launch(compact: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
-        app.launchArguments = ["-AmbulandoUITestFixture", "-AmbulandoFixtureReset", "-appearance", "light"]
+        app.launchArguments = ["-AmbulandoUITestFixture", "-sections.chat", "YES", "-AmbulandoFixtureReset", "-appearance", "light"]
         if compact { app.launchArguments.append("-AmbulandoFixtureCompactWindow") }
         app.launch()
         XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 20))

@@ -9,7 +9,7 @@ final class SectionNavigationUITests: XCTestCase {
 
     private func launch(_ extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-AmbulandoUITestFixture", "-AmbulandoFixtureReset"] + extra
+        app.launchArguments = ["-AmbulandoUITestFixture", "-sections.chat", "YES", "-AmbulandoFixtureReset"] + extra
         app.launch()
         XCTAssertTrue(app.staticTexts["Sample data on this iPhone. Not connected to a Tower."].waitForExistence(timeout: 15))
         XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 15))

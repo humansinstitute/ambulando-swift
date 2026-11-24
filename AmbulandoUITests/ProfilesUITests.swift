@@ -10,7 +10,7 @@ final class ProfilesUITests: XCTestCase {
 
     private func launch(reset: Bool = true, dark: Bool = false, _ extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-AmbulandoUITestFixture", "-appearance", dark ? "dark" : "light"] + (reset ? ["-AmbulandoFixtureReset"] : []) + extra
+        app.launchArguments = ["-AmbulandoUITestFixture", "-sections.chat", "YES", "-appearance", dark ? "dark" : "light"] + (reset ? ["-AmbulandoFixtureReset"] : []) + extra
         app.launch()
         XCTAssertTrue(app.staticTexts["Sample data on this iPhone. Not connected to a Tower."].waitForExistence(timeout: 15))
         return app

@@ -17,3 +17,26 @@ navigation on labelled local sample data. Run the tablet tests on an iPad simula
 on an iPhone simulator. The compact test uses `-AmbulandoFixtureCompactWindow` with sample mode: a visibly labelled
 420-point window harness, compiled only for Debug simulators. It does not test the system's Split View gestures.
 Release/device builds cannot activate that harness or sample mode.
+
+## Optional Chat navigation (iPhone/iPad source build 115)
+
+Settings → Sections → **Show Chat** defaults off and uses the existing device-local
+`sections.chat` preference. It controls both the compact scrolling section strip
+and the wide tablet sidebar. Enabling it restores Chat immediately after Deck.
+Disabling it keeps the active Chat host mounted, its conversation/draft, explicit
+Deck/thread/message/notification/link entry and saved startup/back routing.
+The Home globe and whole-strip scrolling are unchanged. Mac behavior is unchanged.
+
+`NavigationStripUITests/testShowChatSettingRetainsConversationAndPersists` is the
+focused Settings/draft/Deck-entry/relaunch acceptance case; run it on an iPhone
+and a wide iPad destination. Existing navigation tests explicitly enable Chat
+when they need its button. Also run the existing whole-strip and thread-focus
+checks, including explicit links/notifications with Chat hidden.
+
+Source parsing and a standalone shared AppStorage check pass (fresh OFF, all
+optional-section orders, then ON and OFF across separate processes). These do
+not establish iOS UI acceptance: this host lists the iOS SDK but the normal app
+scheme reports only ineligible destinations with the platform missing. Full
+iPhone/iPad build, narrow/wide Settings interaction, current focused-thread/draft
+retention, notification/deep-link round trips and physical-device acceptance
+remain open. No TestFlight build or installation is claimed.

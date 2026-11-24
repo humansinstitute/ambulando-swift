@@ -32,8 +32,8 @@ final class UpgradeRetentionUITests: XCTestCase {
         capture("upgrade-sidebar")
         app.buttons["sidebar.backdrop"].firstMatch.tap()
         // Build 9 sections on the migrated store (schema 4 tables created empty; nothing synced from the invalid origin).
-        XCTAssertTrue(app.buttons["section.deck"].waitForExistence(timeout: 5) && app.buttons["section.chat"].isSelected
-                      && app.buttons["section.toolbox"].exists, "the saved Chat section is restored in the new section bar")
+        XCTAssertTrue(app.buttons["section.deck"].waitForExistence(timeout: 5) && !app.buttons["section.chat"].exists
+                      && app.buttons["section.toolbox"].exists, "the saved conversation is restored while Chat navigation defaults hidden")
         XCTAssertTrue(app.buttons["section.agents"].exists && app.buttons["section.context"].exists,
                       "Agents and Context, in the sidebar before the upgrade, stay visible as sections")
         app.buttons["settings"].tap()

@@ -20,12 +20,13 @@ existing Send flow. See [recording behavior and limits](docs/voice-recording.md)
 Mac transcription and iPhone recording remain explicit gaps. Source/build
 validation is separate from installation and testing on Pete’s MacBook.
 
-## Optional Chat navigation (Mac source build 114)
+## Optional Chat navigation (Mac source build 114, iPhone/iPad source build 115)
 
-Mac Settings → Sections → **Show Chat** starts off. Turn it on to restore Chat
-in the section strip and Go menu. Hiding the button keeps conversations, drafts,
+Settings → Sections → **Show Chat** starts off. Turn it on to restore Chat
+in the iPhone strip, iPad sidebar, or Mac strip and Go menu. Hiding the button keeps conversations, drafts,
 Deck and explicit thread links available. See [Mac behavior and checks](docs/mac.md#optional-chat-navigation-mac-source-build-114).
-Phone/tablet parity and MacBook installation are separate acceptance steps.
+iPhone/iPad full build and UI acceptance remain blocked by unavailable Xcode destinations.
+Source validation and MacBook installation are separate acceptance steps.
 
 ## Scrolling workspace navigation (Mac source build 113, iPhone source build 114)
 

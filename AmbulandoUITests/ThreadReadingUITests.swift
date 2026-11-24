@@ -42,7 +42,7 @@ final class ThreadReadingUITests: XCTestCase {
 
     func testLongThreadOpensFilledAndReopensWhereTheReaderLeft() {
         let app = XCUIApplication()
-        app.launchArguments = ["-AmbulandoUITestFixture", "-AmbulandoFixtureReset"]
+        app.launchArguments = ["-AmbulandoUITestFixture", "-sections.chat", "YES", "-AmbulandoFixtureReset"]
         app.launch()
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Sample data on this'")).firstMatch.waitForExistence(timeout: 20))
         app.selectSidebarChannel("deploys")

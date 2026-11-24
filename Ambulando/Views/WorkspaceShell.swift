@@ -3,12 +3,13 @@ import SwiftUI
 
 #if os(iOS)
 /// Main native navigation, laid out like the web app on a phone: every section has its own navigation stack, and a
-/// bottom section bar (sol `.mobile-section-switcher`) stays on every screen, so Chat is always one tap away and no
+/// bottom section bar (sol `.mobile-section-switcher`) stays on every screen, and no
 /// section covers another. Sections are created when first opened and kept, so switching back returns to the same
 /// screen, scroll position, Canvas board position and composer draft. The sidebar context is shared by all of them.
 struct WorkspaceShell: View {
     @Environment(AppModel.self) private var model
     @SceneStorage("shell.tab") private var storedMode = AppMode.chat.rawValue
+    @AppStorage(AppMode.chatPreference) private var showChat = false
     @AppStorage(AppMode.agentsPreference) private var showAgents = false
     @AppStorage(AppMode.contextPreference) private var showContext = false
     @State private var showSettings = false
@@ -19,7 +20,7 @@ struct WorkspaceShell: View {
     var body: some View {
         HStack(spacing: 0) {
             if tablet.visible {
-                TabletSidebar(sections: AppMode.visible(agents: showAgents, context: showContext))
+                TabletSidebar(sections: AppMode.visible(chat: showChat, agents: showAgents, context: showContext))
                     .frame(width: 280)
                 Divider()
             }
@@ -43,7 +44,7 @@ struct WorkspaceShell: View {
             // it), so typing never re-lays-out the shell or the other sections.
             // A canvas (or its full-screen board) takes the whole screen; its own controls sit at the bottom instead.
             if !tablet.visible && !canvasOnTop {
-                SectionBar(sections: AppMode.visible(agents: showAgents, context: showContext))
+                SectionBar(sections: AppMode.visible(chat: showChat, agents: showAgents, context: showContext))
             }
             }
         }

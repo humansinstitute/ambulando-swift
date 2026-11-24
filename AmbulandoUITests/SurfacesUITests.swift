@@ -9,8 +9,8 @@ final class SurfacesUITests: XCTestCase {
 
     private func launch(reset: Bool = true) -> XCUIApplication {
         let app = XCUIApplication()
-        // Agents and Context are optional sections (off by default, as on the web); these tests turn them on.
-        app.launchArguments = ["-AmbulandoUITestFixture", "-sections.agents", "YES", "-sections.context", "YES"] + (reset ? ["-AmbulandoFixtureReset"] : [])
+        // These navigation tests explicitly enable the optional Chat, Agents and Context controls.
+        app.launchArguments = ["-AmbulandoUITestFixture", "-sections.chat", "YES", "-sections.agents", "YES", "-sections.context", "YES"] + (reset ? ["-AmbulandoFixtureReset"] : [])
         app.launch()
         XCTAssertTrue(app.staticTexts["Sample data on this iPhone. Not connected to a Tower."].waitForExistence(timeout: 15))
         XCTAssertTrue(app.buttons["channel.general"].waitForExistence(timeout: 15))

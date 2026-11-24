@@ -7,9 +7,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("autopilotAdministrationOrigin") private var autopilotAdministrationOrigin = ""
     @AppStorage("appearance") private var appearance = AppearancePreference.system.rawValue
-#if os(macOS)
     @AppStorage(AppMode.chatPreference) private var showChat = false
-#endif
     @AppStorage(AppMode.agentsPreference) private var showAgents = false
     @AppStorage(AppMode.contextPreference) private var showContext = false
     @State private var showWorkspaceManagement = false
@@ -106,17 +104,11 @@ struct SettingsView: View {
                 AttentionTypesSettingsSection()
                 NotificationSettingsSection()
                 Section {
-#if os(macOS)
                     Toggle("Show Chat", isOn: $showChat).accessibilityIdentifier("settings.sections.chat")
-#endif
                     Toggle("Agents", isOn: $showAgents).accessibilityIdentifier("settings.sections.agents")
                     Toggle("Context", isOn: $showContext).accessibilityIdentifier("settings.sections.context")
                 } header: { Text("Sections") } footer: {
-#if os(macOS)
                     Text("Chat, Agents and Context navigation buttons are hidden unless you turn them on. Hiding Chat keeps your conversations available from Deck and links.")
-#else
-                    Text("Agents and Context are optional sections, off unless you turn them on, as in the web app. They appear in the \(Device.name == "Mac" ? "sidebar" : "bar at the bottom").")
-#endif
                 }
                 Section {
                     Picker("Default document opening mode", selection: Binding(get: { model.documentOpeningMode },

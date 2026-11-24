@@ -41,12 +41,11 @@ enum AppMode: String, CaseIterable, Codable {
     /// Sections whose records belong to the sidebar context; a new sidebar choice returns them to their first screen.
     var followsContext: Bool { [.tasks, .docs, .files, .agents, .context].contains(self) }
 
-    /// Device-local navigation options. Chat visibility is currently configured by the Mac client.
+    /// Device-local navigation options shared by the native clients.
     static let chatPreference = "sections.chat"
     static let agentsPreference = "sections.agents"
     static let contextPreference = "sections.context"
 
-    // Keep other clients unchanged until their navigation/settings parity pass.
     static func visible(chat: Bool = true, agents: Bool, context: Bool) -> [AppMode] {
         allCases.filter { ($0 != .chat || chat) && ($0 != .agents || agents) && ($0 != .context || context) }
     }
