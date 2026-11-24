@@ -262,18 +262,42 @@ private struct LocalMentions: ViewModifier {
     }
 }
 
-/// The bottom section bar (sol `.mobile-section-switcher`): the web's order and labels, scrolling sideways if the
-/// sections do not fit. Tapping the current section returns it to its first screen.
+/// One scrolling strip, with Home inside the same content as all existing controls.
 struct SectionBar: View {
     @Environment(AppModel.self) private var model
+    #if os(macOS)
+    @Environment(MacUI.self) private var ui
+    #endif
     let sections: [AppMode]
+    @State private var position = ScrollPosition(edge: .leading)
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 0) { buttons(fill: true) }
-            ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 0) { buttons(fill: false) } }
+        GeometryReader { geometry in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    navigationButton(title: "Home", image: "globe", active: model.workspaceHomeSelected,
+                                     id: "home", width: buttonWidth(geometry.size.width)) { model.showWorkspaceHome() }
+                    #if os(macOS)
+                    MacStripButton(title: "", image: "sidebar.left", selected: false, identifier: "sidebar.toggle",
+                                   label: ui.sidebarVisible ? "Hide Sidebar" : "Show Sidebar") { ui.sidebarVisible.toggle() }
+                        .frame(width: 44, height: 54)
+                    #endif
+                    ForEach(sections, id: \.self) { section in
+                        navigationButton(title: section.title, image: section.systemImage, active: model.mode == section,
+                                         id: section.rawValue, width: buttonWidth(geometry.size.width)) {
+                            if model.mode == section { model.popToRoot(section) } else { model.show(section) }
+                        }
+                    }
+                    #if os(macOS)
+                    MacRefreshDataButton()
+                    #endif
+                }
+            }
+            .scrollPosition($position)
+            .onChange(of: model.sectionStripRoute) { _, _ in position.scrollTo(edge: .leading) }
+            .onAppear { position.scrollTo(edge: .leading) }
         }
-        .padding(.top, 2)
+        .frame(height: 56)
         .background(Amb.card.ignoresSafeArea(edges: .bottom))
         .overlay(alignment: .top) { Rectangle().fill(Amb.border).frame(height: 0.5) }
         .accessibilityElement(children: .contain)
@@ -281,27 +305,36 @@ struct SectionBar: View {
         .accessibilityIdentifier("section.bar")
     }
 
-    @ViewBuilder private func buttons(fill: Bool) -> some View {
-        ForEach(sections, id: \.self) { section in
-            let active = model.mode == section
-            Button {
-                if active { model.popToRoot(section) } else { model.show(section) }
-            } label: {
-                VStack(spacing: 3) {
-                    Image(systemName: section.systemImage).font(.system(size: 18, weight: active ? .semibold : .regular))
-                    Text(section.title).font(.system(size: 10, weight: active ? .semibold : .medium)).lineLimit(1).fixedSize()
-                }
-                .foregroundStyle(active ? Amb.primary : Amb.mutedForeground)
-                .frame(minWidth: 52, maxWidth: fill ? .infinity : nil, minHeight: 46)
-                .padding(.horizontal, 2)
-                .contentShape(Rectangle())
+    private func buttonWidth(_ available: CGFloat) -> CGFloat {
+        #if os(iOS)
+        // Four full controls and half of the next on phones; comfortable fixed sizes on wide screens.
+        min(104, max(72, available / 4.5))
+        #else
+        104
+        #endif
+    }
+
+    private func navigationButton(title: String, image: String, active: Bool, id: String,
+                                  width: CGFloat, action: @escaping () -> Void) -> some View {
+        #if os(macOS)
+        MacStripButton(title: title, image: image, selected: active, identifier: "section.\(id)", action: action)
+            .frame(width: width, height: 54)
+        #else
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: image).font(.system(size: 20, weight: active ? .semibold : .regular))
+                Text(title).font(.system(size: 11, weight: active ? .semibold : .medium)).lineLimit(1)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(section.title)
-            .accessibilityAddTraits(active ? [.isSelected, .isButton] : .isButton)
-            .accessibilityHint(active ? "Returns to the first screen of \(section.title)" : "")
-            .accessibilityIdentifier("section.\(section.rawValue)")
+            .foregroundStyle(active ? Amb.primary : Amb.mutedForeground)
+            .frame(width: width, height: 54)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(active ? [.isSelected, .isButton] : .isButton)
+        .accessibilityHint(id == "home" ? "Opens Deck across all accessible scopes and channels in this workspace" : "")
+        .accessibilityIdentifier("section.\(id)")
+        #endif
     }
 }
 

@@ -155,23 +155,16 @@ struct MacRefreshDataButton: View {
     @State private var showingResult = false
     var body: some View {
         HStack(spacing: 4) {
-            Button { model.dataRefresh.start(model) } label: {
-                if model.dataRefresh.running { ProgressView().controlSize(.small).frame(width: 18, height: 18) }
-                else { Image(systemName: "arrow.clockwise").frame(width: 18, height: 18) }
-            }
-            .buttonStyle(.plain).padding(8)
-            .disabled(!model.dataRefresh.available(model))
-            .accessibilityLabel(model.dataRefresh.running ? "Refreshing data" : "Refresh data")
-            .accessibilityIdentifier("data.refresh")
-            .help("Refresh Ambulando data. Keeps your location and unsaved work; does not reload web pages.")
+            MacStripButton(title: "", image: "arrow.clockwise", selected: false, identifier: "data.refresh",
+                           label: model.dataRefresh.running ? "Refreshing data" : "Refresh data") { model.dataRefresh.start(model) }
+                .frame(width: 44, height: 44)
+                .overlay { if model.dataRefresh.running { ProgressView().controlSize(.small).allowsHitTesting(false) } }
+                .disabled(!model.dataRefresh.available(model))
+                .help("Refresh Ambulando data. Keeps your location and unsaved work; does not reload web pages.")
             if let message = model.dataRefresh.message {
-                Button { showingResult.toggle() } label: {
-                    Image(systemName: model.dataRefresh.failed ? "exclamationmark.triangle" : "checkmark.circle")
-                        .foregroundStyle(model.dataRefresh.failed ? Amb.warning : Amb.mutedForeground)
-                }
-                .buttonStyle(.plain).padding(4)
-                .accessibilityLabel(message).accessibilityIdentifier("data.refresh.result")
-                .help(message)
+                MacStripButton(title: "", image: model.dataRefresh.failed ? "exclamationmark.triangle" : "checkmark.circle",
+                               selected: false, identifier: "data.refresh.result", label: message) { showingResult.toggle() }
+                .frame(width: 32, height: 44)
                 .popover(isPresented: $showingResult) { Text(message).padding().frame(maxWidth: 300) }
             }
         }

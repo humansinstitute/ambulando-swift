@@ -120,6 +120,26 @@ extension AppModel {
         mode = destination
     }
 
+    /// Explicit workspace Home shortcut; unlike a sidebar choice it always opens Deck.
+    func showWorkspaceHome() {
+        if fileNappletNavigation?({ self.showWorkspaceHome() }) == true { return }
+        lockedView = nil
+        focusedThread = nil
+        chooseInSidebar(.home)
+    }
+
+    var workspaceHomeSelected: Bool {
+        mode == .deck && context == .home && deckPath.isEmpty && focusedThread == nil
+    }
+
+    /// Only visible navigation participates: live query/profile/data changes must retain strip position.
+    var sectionStripRoute: SectionStripRoute {
+        SectionStripRoute(workspace: selectedWorkspaceBoundary?.id ?? selectedWorkspaceId,
+                          mode: mode, context: context,
+                          path: Self.pathKey(mode).map { self[keyPath: $0] } ?? [],
+                          chatPath: mode == .chat ? chatPath : [], focus: focusedThread)
+    }
+
     /// Shows a section; the sidebar closes so the section is visible.
     func show(_ next: AppMode) {
         if fileNappletNavigation?({ self.show(next) }) == true { return }
@@ -215,4 +235,13 @@ extension AppModel {
             return .failure(.unexpected(error.localizedDescription))
         }
     }
+}
+
+struct SectionStripRoute: Equatable {
+    let workspace: String?
+    let mode: AppMode
+    let context: WorkContext
+    let path: [WorkRoute]
+    let chatPath: [ChatRoute]
+    let focus: ThreadFocus?
 }

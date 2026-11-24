@@ -54,6 +54,10 @@ extension XCUIApplication {
     @MainActor func section(_ name: String, file: StaticString = #filePath, line: UInt = #line) {
         let button = buttons["section.\(name.lowercased())"].firstMatch
         XCTAssertTrue(button.waitForExistence(timeout: 10), "section \(name) in the bar", file: file, line: line)
+        let strip = descendants(matching: .any)["section.bar"].firstMatch
+        for _ in 0..<3 where !button.isHittable { strip.swipeRight() }
+        for _ in 0..<4 where !button.isHittable { strip.swipeLeft() }
+        XCTAssertTrue(button.isHittable, "section reachable by scrolling", file: file, line: line)
         button.tap()
     }
 

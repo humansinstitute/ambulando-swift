@@ -29,14 +29,7 @@ struct MacWorkspaceShell: View {
                 .accessibilityHidden(!ui.sidebarVisible)
             VStack(spacing: 0) {
                 if !model.macFocusedArtefact {
-                HStack(spacing: 0) {
-                    Button { ui.sidebarVisible.toggle() } label: { Image(systemName: "sidebar.left") }
-                        .buttonStyle(.plain).padding(10)
-                        .accessibilityLabel(ui.sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
-                        .accessibilityIdentifier("sidebar.toggle")
-                    MacSectionBar(sections: AppMode.visible(agents: showAgents, context: showContext))
-                    MacRefreshDataButton()
-                }.background(Amb.card)
+                MacSectionBar(sections: AppMode.visible(agents: showAgents, context: showContext))
                 Divider()
                 }
                 sectionView(model.mode)
@@ -154,45 +147,8 @@ struct MacSidebar: View {
     var body: some View { SidebarContent().background(Amb.card) }
 }
 
-/// The section bar is a plain row, not a horizontal `ScrollView`: on macOS that scroll view swallowed real mouse clicks
-/// on its plain buttons (accessibility presses still worked), so the bar looked dead. When the labelled row does not
-/// fit, the same buttons show icons only (with the name as tooltip and accessibility label).
+/// Shares the scrolling controls and navigation identity with iPhone.
 struct MacSectionBar: View {
-    @Environment(AppModel.self) private var model
     let sections: [AppMode]
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            row(labelled: true)
-            row(labelled: false)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading).background(Amb.card)
-        .accessibilityElement(children: .contain).accessibilityLabel("Sections").accessibilityIdentifier("section.bar")
-    }
-
-    private func row(labelled: Bool) -> some View {
-        HStack(spacing: 4) {
-            ForEach(sections, id: \.self) { section in
-                let selected = model.mode == section
-                Button {
-                    if selected { model.popToRoot(section) } else { model.show(section) }
-                } label: {
-                    Group {
-                        if labelled { Label(section.title, systemImage: section.systemImage) } else { Image(systemName: section.systemImage) }
-                    }
-                    .font(.amb(.subheadline).weight(selected ? .semibold : .regular))
-                    .padding(.horizontal, 10).padding(.vertical, 8)
-                    .background(selected ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: 6))
-                    // The whole pill is clickable, not only the glyphs.
-                    .contentShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
-                .help(section.title)
-                .accessibilityLabel(section.title)
-                .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
-                .accessibilityIdentifier("section.\(section.rawValue)")
-            }
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        .padding(8)
-    }
+    var body: some View { SectionBar(sections: sections) }
 }

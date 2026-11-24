@@ -12,6 +12,16 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Scrolling workspace navigation (Mac source build 113, iPhone source build 114)
+
+A leftmost Home globe scrolls with the full section strip and opens workspace-wide
+Deck. Phone controls show roughly four and a half at once; wider windows retain
+comfortable control widths. Actual navigation resets the strip left, while live
+updates retain position. See [navigation strip](docs/navigation-strip.md).
+Mac mouse interaction currently fails the local regression; iPhone full build/UI
+validation is blocked by the host Xcode component. Source delivery remains separate
+from installation and physical-device acceptance.
+
 ## Reviewed artefact and app fixes (Mac build 112, iPhone/iPad source build 113)
 
 Artefacts retain standards-mode HTML, report locked and filtered-empty states, refresh on unlock, and keep

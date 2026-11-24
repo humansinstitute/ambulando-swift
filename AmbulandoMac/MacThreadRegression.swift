@@ -74,6 +74,9 @@ enum MacThreadRegression {
         }
         defer { heartbeat.cancel() }
         do {
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacNavigationStripCheck") {
+                try await navigationStripCheck(window, model: model); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDMProfileCheck") {
                 try await dmProfileCheck(window, model: model); fflush(stdout); exit(0)
             }
@@ -1069,6 +1072,81 @@ enum MacThreadRegression {
         // SwiftUI gestures need direct delivery too; a native button may already have consumed the queued release.
         if let release { window.sendEvent(release) }
     }
+    static func navigationStripCheck(_ window: NSWindow, model: AppModel) async throws {
+        guard Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test" else {
+            throw Failure(description: "Navigation check requires isolated Test app")
+        }
+        window.setContentSize(NSSize(width: 900, height: 700))
+        window.setFrameOrigin(NSPoint(x: 20, y: 20))
+        try await Task.sleep(for: .milliseconds(300))
+        model.mode = .tasks
+        model.lockedView = .tasks
+        guard let channel = model.navigation.value.channels(in: .home).first else {
+            throw Failure(description: "Missing fixture channel")
+        }
+        model.selectContext(WorkContext(scopeId: channel.scopeId, channelId: channel.id))
+        let workspace = model.selectedWorkspaceBoundary
+        let before = model.sectionStripRoute
+        model.notice = "Synthetic same-screen update"
+        try require(model.sectionStripRoute == before, "same-screen data does not change strip route")
+        try await Task.sleep(for: .milliseconds(300))
+        if let root = window.contentView, let native = nativeActionsButton(root, id: "section.home") {
+            let bounds = native.convert(native.bounds, to: nil)
+            let point = NSPoint(x: bounds.midX, y: bounds.midY)
+            let hit = root.hitTest(root.convert(point, from: nil))
+            print("STRIP_CLICK window=\(window.frame) screen=\(String(describing: window.screen?.frame)) nativeAX=\(native.accessibilityFrame()) native=\(bounds) ax=\(frame(of: find(window, "section.home")!)) hit=\(String(describing: hit)) enabled=\(native.isEnabled) target=\(String(describing: native.target))")
+            try sendClick(window, point: point)
+        } else { throw Failure(description: "Missing native Home button") }
+        try click(window, "section.home")
+        try await Task.sleep(for: .milliseconds(400))
+        try require(model.workspaceHomeSelected, "real mouse globe opens workspace Deck even from locked Tasks")
+        try require(model.context == .home && model.selectedWorkspaceBoundary == workspace, "Home clears scope/channel and retains workspace")
+        try require(model.sectionStripRoute != before, "navigation changes strip route")
+        try require(model.lockedView == nil, "Home releases scoped view lock")
+        let home = find(window, "section.home")!
+        let deck = find(window, "section.deck")!
+        try require(frame(of: home).minX < frame(of: deck).minX, "globe is leftmost")
+        try require(frame(of: home).width >= 90, "Mac controls have comfortable widths")
+        func stripScroller(_ view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView, scroll.frame.height < 65,
+               (scroll.documentView?.frame.width ?? 0) > scroll.contentSize.width + 100 { return scroll }
+            return view.subviews.compactMap { stripScroller($0) }.first
+        }
+        guard let content = window.contentView, let scroll = stripScroller(content) else {
+            throw Failure(description: "Missing overflowing horizontal strip")
+        }
+        scroll.contentView.scroll(to: NSPoint(x: 220, y: 0))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        try await Task.sleep(for: .milliseconds(250))
+        let offset = scroll.contentView.bounds.minX
+        try require(offset > 100, "whole strip scrolls horizontally")
+        model.notice = "Another synthetic live update"
+        try await Task.sleep(for: .milliseconds(250))
+        try require(abs(scroll.contentView.bounds.minX - offset) < 2, "live same-screen update preserves strip offset")
+        model.show(.chat)
+        try await Task.sleep(for: .milliseconds(300))
+        try require(scroll.contentView.bounds.minX < 2, "actual section navigation resets left")
+        model.show(.deck)
+        try await Task.sleep(for: .milliseconds(250))
+        try click(window, "section.chat")
+        try await Task.sleep(for: .milliseconds(300))
+        try require(model.mode == .chat && !model.workspaceHomeSelected, "real mouse section clicks remain reliable inside scroller")
+        model.showWorkspaceHome()
+        let originalWidth = frame(of: home).width
+        window.setContentSize(NSSize(width: 1200, height: 800))
+        try await Task.sleep(for: .milliseconds(300))
+        try require(abs(frame(of: find(window, "section.home")!).width - originalWidth) < 2, "wide layout keeps comfortable fixed controls")
+        model.show(.tasks)
+        var deferred: (() -> Void)?
+        model.fileNappletNavigation = { deferred = $0; return true }
+        model.showWorkspaceHome()
+        try require(model.mode == .tasks && deferred != nil, "Home respects unsaved app navigation guard")
+        model.fileNappletNavigation = nil
+        deferred?()
+        try require(model.workspaceHomeSelected, "approved guarded navigation reaches Home")
+        print("PASS navigation strip: real mouse Home/Chat, locked scoped Home semantics, current workspace, leftmost globe, fixed wide controls and route/data identity")
+    }
+
     static func kanbanCardCheck(_ window: NSWindow, model: AppModel) async throws {
         guard Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test",
               let store = model.store, let workspace = model.selectedWorkspace else {
