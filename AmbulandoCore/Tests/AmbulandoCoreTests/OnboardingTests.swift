@@ -194,6 +194,99 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(snap.intent?.funding_cents, 2100)
     }
 
+    // MARK: Durable state and identity binding
+
+    func testUnsavableDraftStopsEverySideEffect() async throws {
+        let t = tower()
+        let store = FlakyDraftStore()                         // every write fails
+        let (c, _) = try await ready(t, store: store)
+        let snap = await c.continueToPayment()
+        XCTAssertEqual(snap.failure?.kind, .persistence)
+        XCTAssertNil(snap.checkoutURL)
+        XCTAssertTrue(t.requests.filter { $0.path.hasPrefix("/api/v4/onboarding") && $0.method == "POST" }.isEmpty, "no account, create or checkout request")
+        XCTAssertTrue(t.intents.isEmpty)
+    }
+
+    func testBindingSaveFailureAfterCreateStopsBeforeCheckoutAndRelaunchReusesKeys() async throws {
+        let t = tower()
+        let store = FlakyDraftStore { $0.intentId != nil }    // keys save; the intent binding does not
+        let (c, _) = try await ready(t, store: store)
+        let snap = await c.continueToPayment()
+        XCTAssertEqual(snap.failure?.kind, .persistence)
+        XCTAssertEqual(t.intents.count, 1, "the server did accept the create")
+        XCTAssertEqual(t.count("POST", suffix: "/checkout"), 0)
+        XCTAssertNil(snap.checkoutURL)
+        let onDisk = try XCTUnwrap(store.load(origin: t.origin, signerNpub: snap.draft.signerNpub))
+        XCTAssertEqual(onDisk.createKey, snap.draft.createKey)
+        XCTAssertNil(onDisk.intentId)
+        store.heal()
+        let c2 = try await OnboardingFixture.controller(t, signer: makeIdentity(), store: store)
+        let loaded = await c2.load()
+        XCTAssertEqual(loaded.draft.checkoutKey, snap.draft.checkoutKey)
+        _ = await c2.confirmReview()
+        let resumed = await c2.continueToPayment()
+        XCTAssertNil(resumed.failure)
+        XCTAssertEqual(t.intents.count, 1)
+        XCTAssertEqual(t.checkoutOrders.count, 1)
+    }
+
+    func testOrderBindingSaveFailureNeverOpensCheckoutAndRelaunchReplaysSameOrder() async throws {
+        let t = tower()
+        let store = FlakyDraftStore { $0.checkoutOrderId != nil }
+        let (c, _) = try await ready(t, store: store)
+        let snap = await c.continueToPayment()
+        XCTAssertEqual(snap.failure?.kind, .persistence)
+        XCTAssertNil(snap.checkoutURL, "the browser is never opened with an unsaved order")
+        XCTAssertEqual(t.checkoutOrders.count, 1)
+        store.heal()
+        let c2 = try await OnboardingFixture.controller(t, signer: makeIdentity(), store: store)
+        _ = await c2.load(); _ = await c2.confirmReview()
+        let again = await c2.continueToPayment()
+        XCTAssertNil(again.failure)
+        XCTAssertEqual(t.checkoutOrders.count, 1, "same key, same order: no second payable checkout")
+        XCTAssertNotNil(again.checkoutURL)
+    }
+
+    func testIdentityChangeDuringOperationNeverSignsDraftAsAnotherIdentity() async throws {
+        let t = tower()
+        let alice = try await makeIdentity()
+        let bob = try await OnboardingFixture.otherIdentity()
+        let bobNpub = NostrKeys.npub(publicKeyHex: try await bob.publicKeyHex())!
+        let swappable = SwappableSigner(alice)
+        let aliceNpub = NostrKeys.npub(publicKeyHex: try await alice.publicKeyHex())!
+        let c = OnboardingController(origin: try TowerOrigin(t.origin), signerNpub: aliceNpub, signer: swappable, transport: t,
+                                    store: MemoryOnboardingDraftStore(), returnURL: OnboardingFixture.returnURL, makeKey: OnboardingFixture.keys())
+        _ = await c.load()
+        _ = await c.edit(name: "Studio", fundingCents: 2100, invite: OnboardingInviteCode(OnboardingFixture.invite))
+        _ = await c.confirmReview()
+        // The identity changes after the create request has been signed and sent, before checkout is signed.
+        t.hook = { seen in if seen.method == "POST", seen.path.hasSuffix("/intents") { swappable.swap(to: bob) } }
+        let snap = await c.continueToPayment()
+        XCTAssertEqual(snap.phase, .unavailable(.signerMismatch))
+        XCTAssertEqual(t.count("POST", suffix: "/checkout"), 0, "checkout was never signed or sent")
+        XCTAssertFalse(t.requests.contains { $0.signer == bobNpub }, "nothing from this draft was signed as the new identity")
+        // Cancel and provision are bound the same way.
+        let cancelled = await c.cancelSetup()
+        XCTAssertEqual(cancelled.phase, .unavailable(.signerMismatch))
+        XCTAssertEqual(t.count("POST", suffix: "/cancel"), 0)
+        let provisioned = await c.provision()
+        XCTAssertEqual(provisioned.phase, .unavailable(.signerMismatch))
+        XCTAssertFalse(t.requests.contains { $0.signer == bobNpub })
+    }
+
+    func testBoundSignerRejectsAForeignEventEvenIfKeyLookupLooksRight() async throws {
+        struct Liar: EventSigner {
+            let claimed: String; let real: IdentityService
+            func publicKeyHex() async throws -> String { claimed }
+            func sign(_ t: NostrEventTemplate) async throws -> NostrEvent { try await real.sign(t) }
+        }
+        let alice = try await makeIdentity(), bob = try await OnboardingFixture.otherIdentity()
+        let aliceHex = try await alice.publicKeyHex()
+        let bound = BoundSigner(inner: Liar(claimed: aliceHex, real: bob), expectedHex: aliceHex)
+        do { _ = try await bound.sign(NostrEventTemplate(kind: 27235, tags: [], content: "")); XCTFail("signed") }
+        catch { XCTAssertEqual(error as? IdentityError, .signerMismatch) }
+    }
+
     // MARK: Payment truth
 
     func testReturnOrRedirectNeverFundsOnlyServerEvidenceDoes() async throws {
@@ -272,6 +365,41 @@ final class OnboardingTests: XCTestCase {
     }
 
     // MARK: Relaunch, retries, duplicate protection
+
+    func testAmbiguousCheckoutThenGateUnavailableKeepsProgressAndKeysWithoutFinancialAssurance() async throws {
+        let t = tower()
+        t.dropResponses["/checkout"] = 1                        // checkout order was made; the answer was lost
+        let dir = temporaryDirectory()
+        let (c, _) = try await ready(t, store: FileOnboardingDraftStore(directory: dir))
+        let first = await c.continueToPayment()
+        XCTAssertEqual(first.failure?.kind, .network)
+        let intentId = try XCTUnwrap(first.draft.intentId), key = first.draft.checkoutKey
+        // Meanwhile the payment completes server-side and the rollout gate then turns off.
+        t.fund(intentId); t.rolloutEnabled = false
+        let retry = await c.continueToPayment()
+        XCTAssertEqual(retry.phase, .unavailable(.rolloutDisabled))
+        XCTAssertEqual(retry.draft.intentId, intentId, "progress retained")
+        XCTAssertEqual(retry.draft.checkoutKey, key, "operation key unchanged")
+        for text in [retry.failure?.localizedDescription ?? "", OnboardingFailure(kind: .paymentUnavailable).localizedDescription] {
+            XCTAssertFalse(text.localizedCaseInsensitiveContains("nothing was"), text)
+            XCTAssertFalse(text.localizedCaseInsensitiveContains("charged"), text)
+            XCTAssertFalse(text.contains("Tower"), text)
+        }
+        let checkoutsBefore = t.count("POST", suffix: "/checkout")
+        XCTAssertEqual(checkoutsBefore, 2, "the lost attempt and the retry the gate refused")
+        let sentKeys = t.requests.filter { $0.path.hasSuffix("/checkout") }.compactMap { $0.body["idempotency_key"] as? String }
+        XCTAssertEqual(sentKeys, [key, key])
+        // Relaunch while the gate is still off: reads still show the server's verified funding, and no new checkout is made.
+        let c2 = try await OnboardingFixture.controller(t, signer: makeIdentity(), store: FileOnboardingDraftStore(directory: dir))
+        let loaded = await c2.load()
+        XCTAssertEqual(loaded.phase, .readyToProvision)
+        XCTAssertTrue(loaded.intent!.fundingConfirmed)
+        XCTAssertEqual(t.count("POST", suffix: "/checkout"), checkoutsBefore)
+        t.rolloutEnabled = true
+        let done = await c2.provision()
+        XCTAssertEqual(done.phase, .provisioned)
+        XCTAssertEqual(t.count("POST", suffix: "/checkout"), checkoutsBefore)
+    }
 
     func testNetworkFailureThenRelaunchReusesEveryOperationKey() async throws {
         let dir = temporaryDirectory()

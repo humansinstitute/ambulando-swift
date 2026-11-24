@@ -33,6 +33,7 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
     var onboardingRouteMounted = true
     var descriptorOrigin: String?
     var provisionDelay: TimeInterval = 0
+    var hook: (@Sendable (Seen) -> Void)?
 
     init(origin: String = "https://tower.example") { self.origin = origin }
 
@@ -83,7 +84,9 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
             let payload = event.tags.first { $0.first == "payload" }?[1]
             if method == "GET" || payload == SHA256Hex.of(rawBody) { signer = NostrKeys.npub(publicKeyHex: event.pubkey) }
         }
-        lock.withLock { seen.append(Seen(method: method, path: path, body: body, signer: signer, url: url)) }
+        let record = Seen(method: method, path: path, body: body, signer: signer, url: url)
+        lock.withLock { seen.append(record) }
+        hook?(record)
         let key = "\(method) \(path)"
         if let queued = lock.withLock({ () -> Error? in
             guard let hit = failures.first(where: { key.hasSuffix($0.key) && !$0.value.isEmpty }) else { return nil }
@@ -210,4 +213,32 @@ enum OnboardingFixture {
         try await s.importIdentity(nsec: TestKeys.otherNsec(), pin: TestKeys.pin)
         return s
     }
+}
+
+
+/// A store whose writes fail while `shouldFail` says so (disk full, protection unavailable).
+final class FlakyDraftStore: OnboardingDraftStore, @unchecked Sendable {
+    struct Disk: Error {}
+    let inner = MemoryOnboardingDraftStore()
+    private let lock = NSLock()
+    private var rule: @Sendable (OnboardingDraft) -> Bool
+    init(failWhen rule: @escaping @Sendable (OnboardingDraft) -> Bool = { _ in true }) { self.rule = rule }
+    func heal() { lock.withLock { rule = { _ in false } } }
+    func load(origin: String, signerNpub: String) -> OnboardingDraft? { inner.load(origin: origin, signerNpub: signerNpub) }
+    func save(_ draft: OnboardingDraft) throws {
+        if lock.withLock({ rule(draft) }) { throw Disk() }
+        try inner.save(draft)
+    }
+    func clear(origin: String, signerNpub: String) { inner.clear(origin: origin, signerNpub: signerNpub) }
+}
+
+/// Identity that can be swapped under a running controller (lock/remove/import of another key during an await).
+final class SwappableSigner: EventSigner, @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: IdentityService
+    init(_ first: IdentityService) { current = first }
+    func swap(to next: IdentityService) { lock.withLock { current = next } }
+    private var now: IdentityService { lock.withLock { current } }
+    func sign(_ template: NostrEventTemplate) async throws -> NostrEvent { try await now.sign(template) }
+    func publicKeyHex() async throws -> String { try await now.publicKeyHex() }
 }

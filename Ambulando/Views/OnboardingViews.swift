@@ -19,7 +19,7 @@ struct OnboardingEntry: View {
         .accessibilityIdentifier("onboarding.start")
         if let error { Notice(tone: .error, text: error) }
         Text(model.onboardingAvailable
-             ? "Uses the Tower address above. Setup is in test mode: no real money moves."
+             ? "Uses the NStack address above. Setup is in test mode: no real money moves."
              : "Unlock your identity to start a new workspace.")
             .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
         Color.clear.frame(height: 0).sheet(item: $flow) { flow in
@@ -78,7 +78,7 @@ struct OnboardingFlowView: View {
 
     @ViewBuilder private var phaseBody: some View {
         switch snap.phase {
-        case .checking: ProgressView("Checking this Tower…")
+        case .checking: ProgressView("Checking this NStack…")
         case .unavailable(let why): unavailable(why)
         case .form: form
         case .review: review
@@ -100,12 +100,13 @@ struct OnboardingFlowView: View {
 
     private static func explanation(_ why: OnboardingUnavailability) -> String {
         switch why {
-        case .originRejected(let m): "This address did not check out as the Tower it claims to be (\(m)). Nothing was signed or sent."
-        case .backendMissing: "This Tower does not have invited onboarding. Your existing connections are unchanged."
-        case .rolloutDisabled: "Invited onboarding is installed but not switched on yet. Nothing was created or charged."
-        case .offline: "The Tower could not be reached. Your progress is saved."
-        case .signerRefused: "The Tower did not accept this identity's signature."
-        case .signerMismatch: "The unlocked identity is not the one this setup belongs to. Nothing was sent."
+        case .originRejected(let m): "This address did not check out as the NStack it claims to be (\(m)). No signed request was sent to it."
+        case .backendMissing: "This NStack does not have invited onboarding. Your existing connections are unchanged."
+        case .rolloutDisabled: "Invited onboarding is currently unavailable on this NStack. Your progress is kept on this device and on NStack. Check the status again; a payment you already made is not affected by this message."
+        case .offline: "NStack could not be reached. Your progress is saved."
+        case .signerRefused: "NStack did not accept this identity's signature."
+        case .identityLocked: "Unlock your identity to continue. Your progress is kept."
+        case .signerMismatch: "The unlocked identity is not the one this setup belongs to. No request was signed or sent for it."
         }
     }
 
@@ -119,7 +120,7 @@ struct OnboardingFlowView: View {
                     .accessibilityIdentifier("onboarding.invite")
                 if let inviteNote { Notice(tone: .warning, text: inviteNote) }
             } else {
-                Notice(tone: .info, text: "An earlier setup was found on the Tower and resumed. Review it again before paying.")
+                Notice(tone: .info, text: "An earlier setup was found on the NStack and resumed. Review it again before paying.")
             }
             Text("Workspace name").font(.amb(.subheadline).weight(.semibold))
             TextField("Studio", text: $name)
@@ -141,7 +142,7 @@ struct OnboardingFlowView: View {
                 if snap.draft.intentId == nil {
                     guard let parsed = OnboardingInviteInput.parse(inviteText) else { inviteNote = "That is not an invitation code."; return }
                     if let suggested = parsed.suggestedOrigin, suggested != onboarding.origin {
-                        inviteNote = "That link points at a different Tower (\(suggested.description)). Nothing was sent. Start from that Tower's address if you trust it."; return
+                        inviteNote = "That link points at a different NStack (\(suggested.description)). No request was sent to it. Start from that NStack's address if you trust it."; return
                     }
                     invite = parsed.code; inviteNote = nil
                 }
@@ -156,7 +157,7 @@ struct OnboardingFlowView: View {
     @ViewBuilder private var agentSection: some View {
         Text("Agent (optional)").font(.amb(.subheadline).weight(.semibold))
         if snap.offers.isEmpty {
-            Text("No agents are on offer from this Tower yet, so none can be chosen.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+            Text("No agents are on offer from this NStack yet, so none can be chosen.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
         } else {
             Picker("Agent", selection: $agentId) {
                 Text("No agent").tag(String?.none)
@@ -198,7 +199,7 @@ struct OnboardingFlowView: View {
     private var awaiting: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Waiting for payment confirmation").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
-            Text("Finish the test payment in your browser, then come back. Setup only continues once the Tower itself confirms the payment; coming back or a browser message is not enough.")
+            Text("Finish the test payment in your browser, then come back. Setup only continues once the NStack itself confirms the payment; coming back or a browser message is not enough.")
                 .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             Button("Check payment now") { run { await onboarding.refresh() } }.buttonStyle(PrimaryButtonStyle()).disabled(busy)
             Button("Reopen payment page") { run { await onboarding.continueToPayment { app.openCheckout($0) } } }.disabled(busy)
@@ -208,7 +209,7 @@ struct OnboardingFlowView: View {
 
     private var ready: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Payment confirmed by the Tower", systemImage: "checkmark.seal").foregroundStyle(Amb.success)
+            Label("Payment confirmed by the NStack", systemImage: "checkmark.seal").foregroundStyle(Amb.success)
             Text("Create \(snap.intent?.workspace_name ?? "your workspace") now. If it stops part-way, your payment and finished steps are kept and you can retry.")
                 .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             Button("Create workspace") { run { await onboarding.provision() } }.buttonStyle(PrimaryButtonStyle()).disabled(busy)
@@ -228,7 +229,7 @@ struct OnboardingFlowView: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Workspace created", systemImage: "checkmark.circle").font(Amb.editorial).foregroundStyle(Amb.success)
             if let landing = snap.landing {
-                Text(landing.generalReady ? "General is ready." : "General is not set up yet: the Tower has not recorded it.").font(.amb(.footnote))
+                Text(landing.generalReady ? "General is ready." : "General is not set up yet: the NStack has not recorded it.").font(.amb(.footnote))
                 if let agent = landing.agentName {
                     Text(landing.agentRunning ? "Your \(agent) agent is ready." : "Your \(agent) agent is chosen but not running yet. When it is, you decide the first request.")
                         .font(.amb(.footnote))
@@ -242,7 +243,7 @@ struct OnboardingFlowView: View {
     private var cancelled: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Setup cancelled").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
-            Text("Nothing further will be charged. Any payment already made stays as credit on your account.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+            Text("This setup is cancelled. Any payment already confirmed stays as credit on your account; check your account status if you are unsure.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             Button("Start over") { run { await onboarding.finish(); seeded = false; seed() } }.disabled(busy)
         }
     }

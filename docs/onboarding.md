@@ -1,4 +1,4 @@
-# Invited onboarding (Mac source build 119, first slice)
+# Invited onboarding (Mac source build 120, first slice)
 
 A signed-in user can start a new NStack workspace from a capped group invitation: choose a workspace name, optionally an
 agent from the Tower's versioned catalogue, a funding amount (US$21 / 50 / 100 or a custom amount of at least US$21),
@@ -49,6 +49,12 @@ human direct-signature NIP-98 only. Native uses: `GET/POST /account`, `GET /agen
 * **Stable operation keys.** `client_request_key` and the checkout `idempotency_key` are generated once, persisted, and reused on
   retry and relaunch. A lost create response is recovered by replaying the same key, or by adopting the intent found by name.
   Concurrent taps coalesce to one request. Funding cannot change once a checkout exists (the server would conflict on amount).
+* **Durable before side effects.** Draft writes are never swallowed. Keys and form are saved before any account, create or
+  checkout request; the intent id and checkout order are saved before checkout opens in the browser. A failed write surfaces as
+  a persistence failure and stops further steps; relaunch replays the same keys, so no second payable order is made.
+* **Signer binding.** Every request is signed through a per-controller wrapper that checks the expected key before signing and the
+  pubkey of the signed event after, so an identity change mid-operation (create, checkout, cancel, provision) signs nothing.
+* **Copy.** Unavailable/payment errors make no claim about money: a prior payment may exist, so they say progress is kept and to check status.
 * **Revision conflicts.** `stale_revision` fetches the latest intent, adopts it, clears the review and shows the conflict.
 * **Checkout validation.** The returned URL must be `https` on `stripe.com`; mode must be `test`; the amount must equal the intent.
 * **Agents.** Only offers returned by the Tower can be chosen, with the cap within their maximum; an empty catalogue disables
@@ -64,6 +70,6 @@ switched off** ("no approved payment return address"). Plain `https` (or loopbac
 ## Known gaps
 
 See the handoff for the dated list. In short: no new-identity creation (a NIP-49 `ncryptsec` implementation with scrypt and
-XChaCha20-Poly1305 and the hosted-username ciphertext service do not exist; the PIN vault is not an `ncryptsec`), Lightning
+XChaCha20-Poly1305 and the hosted-username ciphertext service do not exist; the PIN vault is not an `ncryptsec` and is not a substitute; full `ncryptsec` waits on the backend contract), Lightning
 is shown unavailable, agents and General are not provisioned by the backend yet, the return URL needs real configuration, no
 invitation deep-link format exists in NStack, and nothing was exercised against a live Tower, a real Stripe test checkout or a device.

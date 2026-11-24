@@ -7,6 +7,7 @@ public enum OnboardingUnavailability: Equatable, Sendable {
     case offline
     case signerRefused
     case signerMismatch
+    case identityLocked
 }
 
 public enum OnboardingPhase: Equatable, Sendable {
@@ -75,8 +76,9 @@ public actor OnboardingController {
 
     public init(origin: TowerOrigin, signerNpub: String, signer: EventSigner, transport: HTTPTransport, store: OnboardingDraftStore,
                 returnURL: URL?, makeKey: @escaping @Sendable () -> String = OnboardingController.randomKey) {
-        self.api = OnboardingAPI(client: TowerClient(origin: origin, transport: transport, signer: signer))
-        self.transport = transport; self.signer = signer; self.signerNpub = signerNpub; self.store = store
+        let bound = BoundSigner(inner: signer, expectedHex: NostrKeys.publicKeyHex(npub: signerNpub) ?? "")
+        self.api = OnboardingAPI(client: TowerClient(origin: origin, transport: transport, signer: bound))
+        self.transport = transport; self.signer = bound; self.signerNpub = signerNpub; self.store = store
         self.returnURL = returnURL.flatMap(Self.approvedReturn); self.makeKey = makeKey
         let draft = store.load(origin: origin.description, signerNpub: signerNpub)
             ?? OnboardingDraft(origin: origin.description, signerNpub: signerNpub, createKey: makeKey(), checkoutKey: makeKey())
@@ -106,7 +108,7 @@ public actor OnboardingController {
         if returnURL == nil {
             card = .init(method: .card, available: false, label: "Card (test mode)", unavailableReason: "This build has no approved payment return address, so card checkout is switched off.")
         } else if paymentBlocked {
-            card = .init(method: .card, available: false, label: "Card (test mode)", unavailableReason: "The Tower reports payment is not available right now.")
+            card = .init(method: .card, available: false, label: "Card (test mode)", unavailableReason: "This payment method is currently unavailable. Check the status again later.")
         } else {
             card = .init(method: .card, available: true, label: "Card (Stripe test mode; no real money)", unavailableReason: nil)
         }
@@ -138,13 +140,13 @@ public actor OnboardingController {
 
     private func resumeIntent() async throws {
         if let id = state.draft.intentId {
-            do { adopt(try await api.intent(id)) }
+            do { try adopt(try await api.intent(id)) }
             catch let f as OnboardingFailure where f.kind == .notFound {
                 // Not this signer's intent (or removed): never reuse it. Form choices stay; keys rotate so nothing is replayed.
-                dropIntent(note: "The earlier setup could not be found for this identity, so a new one will be created.")
+                try dropIntent(note: "The earlier setup could not be found for this identity, so a new one will be created.")
             }
         } else if let active = try await api.intents().first(where: { [.open, .funded, .provisioning].contains($0.status) }) {
-            adopt(active)
+            try adopt(active)
         }
     }
 
@@ -158,13 +160,13 @@ public actor OnboardingController {
         if let agentDailyCapCents { d.agentDailyCapCents = agentDailyCapCents }
         if let invite, d.intentId == nil { d.invite = invite }
         state.draft = d
-        save()
+        persistLocally()
         return settle()
     }
 
     /// Back from the review screen to editing.
     public func reopenForEditing() -> OnboardingSnapshot {
-        state.draft.reviewedDigest = nil; save(); return settle()
+        state.draft.reviewedDigest = nil; persistLocally(); return settle()
     }
 
     /// Validates the choices locally. Nothing is sent. The review screen is the gate in front of every side effect.
@@ -174,7 +176,7 @@ public actor OnboardingController {
         // Pin the effective cap so the reviewed choices equal what the server will record.
         if let id = state.draft.agentOfferId, state.draft.agentDailyCapCents == nil { state.draft.agentDailyCapCents = state.offers.first { $0.id == id }?.default_daily_cap_cents }
         state.draft.reviewedDigest = state.draft.formDigest
-        save()
+        persistLocally()
         return settle()
     }
 
@@ -225,21 +227,21 @@ public actor OnboardingController {
         if d.createDigest != nil, d.createDigest != digest {
             // The earlier attempt may or may not have reached the server: look for it by name before creating a second one.
             if let existing = try await api.intents().first(where: { [.open, .funded, .provisioning].contains($0.status) && $0.workspace_name.lowercased() == name.lowercased() }) {
-                adopt(existing); return
+                try adopt(existing); return
             }
             d.createKey = makeKey()
         }
         d.createDigest = digest
-        state.draft = d; save()
+        state.draft = d; try persist()
         // Account before workspace: idempotent, opens the owner account with no promotional credit.
         state.account = try await api.openAccount()
         do {
-            adopt(try await api.createIntent(OnboardingCreateRequest(clientRequestKey: d.createKey, invite: invite, workspaceName: name,
+            try adopt(try await api.createIntent(OnboardingCreateRequest(clientRequestKey: d.createKey, invite: invite, workspaceName: name,
                                                                       fundingCents: d.fundingCents, agentOfferId: d.agentOfferId, agentDailyCapCents: cap)))
         } catch let f as OnboardingFailure where f.kind == .nameTaken {
             // Possibly our own earlier create whose answer was lost: adopt it rather than failing.
             guard let existing = try await api.intents().first(where: { [.open, .funded, .provisioning].contains($0.status) && $0.workspace_name.lowercased() == name.lowercased() }) else { throw f }
-            adopt(existing)
+            try adopt(existing)
         }
     }
 
@@ -258,11 +260,11 @@ public actor OnboardingController {
             changed = true
         }
         guard changed else { return }
-        do { adopt(try await api.updateIntent(intent.id, update)) }
+        do { try adopt(try await api.updateIntent(intent.id, update)) }
         catch let f as OnboardingFailure where f.kind == .staleRevision {
             // Someone else moved the revision. Take the server's latest and make the user look again.
-            adopt(try await api.intent(intent.id))
-            state.draft.reviewedDigest = nil; save()
+            try adopt(try await api.intent(intent.id))
+            state.draft.reviewedDigest = nil; try persist()
             throw f
         }
     }
@@ -275,7 +277,8 @@ public actor OnboardingController {
         guard checkout.mode == "test", checkout.amount_cents == intent.funding_cents, let url = Self.safeCheckoutURL(checkout.checkout_url) else {
             throw OnboardingFailure(kind: .paymentUnavailable, code: "unexpected_checkout")
         }
-        state.draft.checkoutOrderId = checkout.order_id; save()
+        state.draft.checkoutOrderId = checkout.order_id
+        try persist()                       // the binding must be durable before the browser is opened
         state.checkoutURL = url
     }
 
@@ -316,7 +319,7 @@ public actor OnboardingController {
     private func doRefresh() async -> OnboardingSnapshot {
         guard await signerMatches() else { return fail(.unavailable(.signerMismatch), nil) }
         guard let id = state.draft.intentId else { return settle() }
-        do { adopt(try await api.intent(id)) } catch { return failed(error) }
+        do { try adopt(try await api.intent(id)) } catch { return failed(error) }
         return settle()
     }
 
@@ -333,12 +336,12 @@ public actor OnboardingController {
         guard await signerMatches() else { return fail(.unavailable(.signerMismatch), nil) }
         guard let id = state.draft.intentId else { return settle(OnboardingFailure(kind: .fundingRequired)) }
         // The local view may be stale after a relaunch: confirm funding from the server before asking it to build anything.
-        do { adopt(try await api.intent(id)) } catch { return failed(error) }
+        do { try adopt(try await api.intent(id)) } catch { return failed(error) }
         guard let intent = state.intent, intent.fundingConfirmed else { return settle(OnboardingFailure(kind: .fundingRequired)) }
         if intent.status == .provisioned { return settle() }
-        do { adopt(try await api.provision(id)) }
+        do { try adopt(try await api.provision(id)) }
         catch {
-            if let latest = try? await api.intent(id) { adopt(latest) }
+            if let latest = try? await api.intent(id) { try? adopt(latest) }
             return failed(error)
         }
         return settle()
@@ -351,7 +354,7 @@ public actor OnboardingController {
     private func doCancel() async -> OnboardingSnapshot {
         state.failure = nil
         guard let id = state.draft.intentId else { return settle() }
-        do { adopt(try await api.cancel(id)) } catch { return failed(error) }
+        do { try adopt(try await api.cancel(id)) } catch { return failed(error) }
         return settle()
     }
 
@@ -383,7 +386,7 @@ public actor OnboardingController {
         return out
     }
 
-    private func adopt(_ intent: OnboardingIntent) {
+    private func adopt(_ intent: OnboardingIntent) throws {
         state.intent = intent
         var d = state.draft
         if intent.status == .cancelled {
@@ -398,23 +401,30 @@ public actor OnboardingController {
             // A review survives only if the server's choices are exactly the reviewed ones.
             if d.reviewedDigest != d.formDigest { d.reviewedDigest = nil }
         }
-        state.draft = d; save()
+        state.draft = d; try persist()
     }
 
-    private func dropIntent(note: String) {
+    private func dropIntent(note: String) throws {
         var d = state.draft
         d.intentId = nil; d.intentRevision = nil; d.checkoutOrderId = nil; d.reviewedDigest = nil
         d.createKey = makeKey(); d.createDigest = nil; d.checkoutKey = makeKey()
-        state.draft = d; state.intent = nil; state.notice = note; save()
+        state.draft = d; state.intent = nil; state.notice = note; try persist()
     }
 
-    private func save() { try? store.save(state.draft) }
+    /// A failed write is never ignored: operation keys and server bindings must survive relaunch before anything further is sent.
+    private func persist() throws {
+        do { try store.save(state.draft) } catch { throw OnboardingFailure(kind: .persistence) }
+    }
+    private func persistLocally() { do { try persist() } catch { state.failure = OnboardingFailure(kind: .persistence) } }
 
     private func fail(_ phase: OnboardingPhase, _ failure: OnboardingFailure?) -> OnboardingSnapshot {
         state.phase = phase; state.failure = failure; return state
     }
 
     private func failed(_ error: Error) -> OnboardingSnapshot {
+        if let identity = error as? IdentityError {
+            return fail(.unavailable(identity == .locked ? .identityLocked : .signerMismatch), nil)
+        }
         let failure = (error as? OnboardingFailure) ?? OnboardingFailure(kind: (error is TowerError) ? .malformed : .network)
         return settle(failure)
     }
@@ -453,5 +463,24 @@ public actor OnboardingController {
             state.landing = OnboardingLanding(workspaceId: i.workspace_id, generalReady: i.hasGeneral, agentName: i.agent?.template, agentRunning: i.hasAgentDM)
         } else { state.landing = nil }
         return state
+    }
+}
+
+/// Every request this controller signs is bound to one npub, checked when signing starts and again on the event that comes back,
+/// so an identity change during any await (lock, remove, import of another key) can never sign this draft's body as someone else.
+struct BoundSigner: EventSigner {
+    let inner: EventSigner
+    let expectedHex: String
+
+    func publicKeyHex() async throws -> String {
+        let hex = try await inner.publicKeyHex()
+        guard !expectedHex.isEmpty, hex == expectedHex else { throw IdentityError.signerMismatch }
+        return hex
+    }
+    func sign(_ template: NostrEventTemplate) async throws -> NostrEvent {
+        _ = try await publicKeyHex()
+        let event = try await inner.sign(template)
+        guard event.pubkey == expectedHex else { throw IdentityError.signerMismatch }
+        return event
     }
 }

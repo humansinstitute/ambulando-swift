@@ -7,7 +7,7 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
         case inviteFull, inviteInvalid, nameTaken, agentUnavailable, tooManyIntents
         case staleRevision, idempotencyConflict, notFound
         case fundingRequired, fundingReversed, checkoutOutstanding, notEditable
-        case validation, provisioningFailed, server, network, malformed
+        case validation, provisioningFailed, server, network, malformed, persistence
     }
     public let kind: Kind
     public let status: Int?
@@ -47,10 +47,10 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
 
     public var errorDescription: String? {
         switch kind {
-        case .backendMissing: "This Tower does not offer invited onboarding."
-        case .rolloutDisabled: "Invited onboarding is not switched on for this Tower yet. Nothing was created or charged."
-        case .paymentUnavailable: "Payment is not available on this Tower right now. Nothing was charged."
-        case .signerRefused: "This Tower did not accept the signed request. Check the unlocked identity."
+        case .backendMissing: "This NStack does not offer invited onboarding."
+        case .rolloutDisabled: "Invited onboarding is currently unavailable on this NStack. Your progress is kept; check the status again later."
+        case .paymentUnavailable: "This payment method is currently unavailable. Your progress is kept; check the status again later before paying again."
+        case .signerRefused: "This NStack did not accept the signed request. Check the unlocked identity."
         case .inviteFull: "This invitation has no places left."
         case .inviteInvalid: "This invitation is not valid or has been withdrawn."
         case .nameTaken: "You already have a workspace or pending setup with that name."
@@ -63,11 +63,12 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
         case .fundingReversed: "The payment was refunded or reversed, so setup cannot continue."
         case .checkoutOutstanding: "A payment is still open. It has to finish or expire first."
         case .notEditable: "This setup can no longer be changed."
-        case .validation: "The Tower rejected these details\(code.map { " (\(TowerClient.summary($0)))" } ?? "")."
+        case .validation: "NStack rejected these details\(code.map { " (\(TowerClient.summary($0)))" } ?? "")."
         case .provisioningFailed: "Workspace setup stopped part-way. Your payment and finished steps are kept; try again."
-        case .server: "The Tower had a problem (HTTP \(status ?? 0)). Try again shortly."
-        case .network: "Could not reach the Tower. Your progress is saved; try again."
-        case .malformed: "The Tower sent an unexpected answer."
+        case .server: "NStack had a problem (HTTP \(status ?? 0)). Try again shortly."
+        case .network: "Could not reach the NStack. Your progress is saved; try again."
+        case .malformed: "NStack sent an unexpected answer."
+        case .persistence: "This device could not save your setup progress, so no new step was started. Free some space, then check the status and try again."
         }
     }
 }
