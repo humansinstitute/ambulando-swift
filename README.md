@@ -12,6 +12,14 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Compact Mac navigation (source build 123)
+
+The Mac section strip shows small icons beside their names on one line, with
+content-sized buttons and a shorter row. Narrow windows retain horizontal scrolling;
+selection, destinations and accessibility labels stay available. See
+[navigation layout and platform gaps](docs/navigation-strip.md#compact-inline-mac-navigation-source-build-123).
+Source/build validation is separate from installation on Pete's MacBook.
+
 ## Voice recording (Mac source build 115)
 
 The composer microphone button offers a real input-level meter, microphone choice

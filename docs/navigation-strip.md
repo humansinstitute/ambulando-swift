@@ -54,3 +54,27 @@ real mouse routing and scroll-position preservation. iPhone/iPad strip rendering
 
 Mac source build 118: the strip starts with the sidebar toggle, then Home, then the sections. It carries
 no refresh control; refresh stays at Account › Refresh Data (⌘R) and on the thread and browser surfaces.
+
+## Compact inline Mac navigation (source build 123)
+
+The Mac section strip places a small icon to the left of its name on one line.
+Its normal height is 36 points; font metrics increase the height when needed.
+Buttons size to their complete label instead of stretching into equal desktop
+columns. They keep at least a 36-point hit target, native accessibility labels,
+selected state and existing routing. Narrow windows scroll the complete strip.
+The strip has no badges; the separate notification toolbar badge is unchanged.
+
+The standalone AppKit geometry check above covers 390- and 1200-point widths,
+light/dark appearances, 13- and 22-point fonts, icon-left alignment, complete labels,
+selection, accessible identifiers, busy indicators and every native action. Set
+`NAVIGATION_CAPTURE_DIR` to an existing ignored directory to save rendered PNGs.
+The full-app navigation check additionally exercises route resets and retained
+scroll offsets. Fixture and source validation do not establish MacBook installation.
+
+At the initial parity audit, Android `ShellChrome.kt` / `SectionButton` used stacked
+icon/title controls; its correction and release are coordinated separately.
+iPhone `WorkspaceShell.swift` / `SectionBar.navigationButton` remains a stacked
+bottom navigation control; its phone sizing, safe area and keyboard behavior are
+unchanged. Web desktop already uses inline icon/name controls; mobile web uses
+icon-only controls with accessible names. Those mobile differences are explicit
+parity gaps, not part of the Mac layout change.

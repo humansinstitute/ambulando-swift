@@ -9,7 +9,7 @@ struct MacNavigationControl {
     var selected = false
     var enabled = true
     var busy = false
-    var width: CGFloat = 104
+    var width: CGFloat = 44
     let action: () -> Void
 }
 
@@ -17,6 +17,15 @@ struct MacNavigationControl {
 struct MacNavigationStrip: NSViewRepresentable {
     let controls: [MacNavigationControl]
     let route: SectionStripRoute
+    var font: NSFont = .preferredFont(forTextStyle: .body)
+
+    static func height(for font: NSFont = .preferredFont(forTextStyle: .body)) -> CGFloat {
+        max(36, ceil(font.ascender - font.descender) + 12)
+    }
+    var rowHeight: CGFloat { Self.height(for: font) }
+    private func width(for control: MacNavigationControl) -> CGFloat {
+        max(control.width, control.title.isEmpty ? 36 : ceil((control.title as NSString).size(withAttributes: [.font: font]).width) + 42)
+    }
 
     final class Button: NSButton {
         var invoke: (() -> Void)?
@@ -30,13 +39,16 @@ struct MacNavigationStrip: NSViewRepresentable {
     final class Cell: NSButtonCell {
         override func imageRect(forBounds rect: NSRect) -> NSRect {
             guard let image else { return .zero }
-            let scale = min(24 / max(image.size.width, 1), 24 / max(image.size.height, 1))
+            let scale = min(16 / max(image.size.width, 1), 16 / max(image.size.height, 1))
             let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
-            return NSRect(x: rect.midX - size.width / 2, y: rect.minY + 5 + (24 - size.height) / 2,
-                          width: size.width, height: size.height)
+            return NSRect(x: title.isEmpty ? rect.midX - size.width / 2 : rect.minX + 10 + (16 - size.width) / 2,
+                          y: rect.midY - size.height / 2, width: size.width, height: size.height)
         }
         override func titleRect(forBounds rect: NSRect) -> NSRect {
-            NSRect(x: rect.minX, y: rect.minY + 34, width: rect.width, height: 15)
+            let textFont = font ?? .preferredFont(forTextStyle: .body)
+            let height = ceil(textFont.ascender - textFont.descender)
+            return NSRect(x: rect.minX + 32, y: rect.midY - height / 2,
+                          width: max(0, rect.width - 42), height: height)
         }
         override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
             let colour = (controlView as? NSButton)?.contentTintColor ?? .secondaryLabelColor
@@ -45,9 +57,9 @@ struct MacNavigationStrip: NSViewRepresentable {
                 .draw(in: imageRect(forBounds: cellFrame), from: .zero, operation: .sourceOver,
                       fraction: isHighlighted ? 0.65 : 1, respectFlipped: true, hints: nil)
             let paragraph = NSMutableParagraphStyle()
-            paragraph.alignment = .center
+            paragraph.alignment = .left
             (title as NSString).draw(in: titleRect(forBounds: cellFrame), withAttributes: [
-                .font: font ?? NSFont.systemFont(ofSize: 11, weight: .medium),
+                .font: font ?? NSFont.preferredFont(forTextStyle: .body),
                 .foregroundColor: tint, .paragraphStyle: paragraph
             ])
         }
@@ -58,7 +70,7 @@ struct MacNavigationStrip: NSViewRepresentable {
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> NSSize? {
-        NSSize(width: proposal.width ?? 600, height: 56)
+        NSSize(width: proposal.width ?? 600, height: rowHeight)
     }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
@@ -94,16 +106,16 @@ struct MacNavigationStrip: NSViewRepresentable {
                 button.action = #selector(Button.press)
                 button.setButtonType(.momentaryChange)
                 button.isBordered = false
-                button.imagePosition = control.title.isEmpty ? .imageOnly : .imageAbove
-                button.font = .systemFont(ofSize: 11, weight: .medium)
+                button.imagePosition = control.title.isEmpty ? .imageOnly : .imageLeft
+                button.font = font
                 button.identifier = NSUserInterfaceItemIdentifier(control.id)
                 button.translatesAutoresizingMaskIntoConstraints = false
-                NSLayoutConstraint.activate([button.widthAnchor.constraint(equalToConstant: control.width),
-                                             button.heightAnchor.constraint(equalToConstant: 54)])
+                NSLayoutConstraint.activate([button.widthAnchor.constraint(equalToConstant: width(for: control)),
+                                             button.heightAnchor.constraint(equalToConstant: rowHeight)])
                 button.spinner.style = .spinning
                 button.spinner.controlSize = .small
                 button.spinner.isDisplayedWhenStopped = false
-                button.spinner.frame = NSRect(x: (control.width - 16) / 2, y: 9, width: 16, height: 16)
+                button.spinner.frame = NSRect(x: control.title.isEmpty ? (width(for: control) - 16) / 2 : 10, y: (rowHeight - 16) / 2, width: 16, height: 16)
                 button.addSubview(button.spinner)
                 stack.addArrangedSubview(button)
                 context.coordinator.buttons[control.id] = button
@@ -111,10 +123,17 @@ struct MacNavigationStrip: NSViewRepresentable {
         }
         for control in controls {
             guard let button = context.coordinator.buttons[control.id] else { continue }
+            button.font = font
+            for constraint in button.constraints {
+                if constraint.firstAttribute == .width { constraint.constant = width(for: control) }
+                if constraint.firstAttribute == .height { constraint.constant = rowHeight }
+            }
+            button.spinner.frame = NSRect(x: control.title.isEmpty ? (width(for: control) - 16) / 2 : 10,
+                                          y: (rowHeight - 16) / 2, width: 16, height: 16)
             button.invoke = control.action
             button.title = control.title
             button.image = control.busy ? nil : NSImage(systemSymbolName: control.image, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 20, weight: control.selected ? .semibold : .regular))
+                .withSymbolConfiguration(.init(pointSize: 14, weight: control.selected ? .semibold : .regular))
             button.contentTintColor = control.selected ? .controlAccentColor : .secondaryLabelColor
             button.state = control.selected ? .on : .off
             button.isEnabled = control.enabled
@@ -125,7 +144,7 @@ struct MacNavigationStrip: NSViewRepresentable {
             button.spinner.isHidden = !control.busy
             if control.busy { button.spinner.startAnimation(nil) } else { button.spinner.stopAnimation(nil) }
         }
-        stack.frame = NSRect(x: 0, y: 0, width: controls.reduce(0) { $0 + $1.width }, height: 56)
+        stack.frame = NSRect(x: 0, y: 0, width: controls.reduce(0) { $0 + width(for: $1) }, height: rowHeight)
         stack.layoutSubtreeIfNeeded()
         stack.setAccessibilityChildren(stack.arrangedSubviews)
         context.coordinator.route = route

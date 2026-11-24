@@ -156,7 +156,7 @@ struct MacSectionBar: View {
     var body: some View {
         MacNavigationStrip(controls: controls, route: model.sectionStripRoute)
             .frame(maxWidth: .infinity)
-            .frame(height: 56)
+            .frame(height: MacNavigationStrip.height())
             .background(Amb.card)
     }
     private var controls: [MacNavigationControl] {

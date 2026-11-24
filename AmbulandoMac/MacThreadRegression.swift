@@ -1187,8 +1187,14 @@ enum MacThreadRegression {
             throw Failure(description: "Navigation check requires isolated Test app")
         }
         let agentsPreference = UserDefaults.standard.bool(forKey: AppMode.agentsPreference)
+        let contextPreference = UserDefaults.standard.bool(forKey: AppMode.contextPreference)
         UserDefaults.standard.set(false, forKey: AppMode.agentsPreference)
-        defer { UserDefaults.standard.set(agentsPreference, forKey: AppMode.agentsPreference) }
+        // Optional Context makes the content-sized controls overflow the real narrow detail pane.
+        UserDefaults.standard.set(true, forKey: AppMode.contextPreference)
+        defer {
+            UserDefaults.standard.set(agentsPreference, forKey: AppMode.agentsPreference)
+            UserDefaults.standard.set(contextPreference, forKey: AppMode.contextPreference)
+        }
         window.setContentSize(NSSize(width: 900, height: 700))
         window.setFrameOrigin(NSPoint(x: 20, y: 20))
         try await Task.sleep(for: .milliseconds(300))
@@ -1214,27 +1220,31 @@ enum MacThreadRegression {
         let sidebar = find(window, "sidebar.toggle")!
         try require(frame(of: sidebar).minX < frame(of: home).minX && frame(of: home).minX < frame(of: deck).minX, "sidebar control, then Home globe, then sections")
         try require(find(window, "data.refresh") == nil, "section strip has no refresh control")
-        try require(frame(of: home).width >= 90, "Mac controls have comfortable widths")
+        try require(frame(of: home).width >= 60 && frame(of: home).height >= 36 && frame(of: home).height <= 40,
+                    "Mac controls use compact inline rows with usable hit targets")
+        try snapshot(window, model: model, name: "inline-navigation-narrow")
         func stripScroller(_ view: NSView) -> NSScrollView? {
             if let scroll = view as? NSScrollView, scroll.frame.height < 65,
-               (scroll.documentView?.frame.width ?? 0) > scroll.contentSize.width + 100 { return scroll }
+               (scroll.documentView?.frame.width ?? 0) > scroll.contentSize.width + 20 { return scroll }
             return view.subviews.compactMap { stripScroller($0) }.first
         }
         guard let content = window.contentView, let scroll = stripScroller(content) else {
             throw Failure(description: "Missing overflowing horizontal strip")
         }
-        scroll.contentView.scroll(to: NSPoint(x: 220, y: 0))
+        let overflow = scroll.documentView!.frame.width - scroll.contentSize.width
+        print("INLINE_NAVIGATION viewport=\(scroll.contentSize.width) document=\(scroll.documentView!.frame.width) overflow=\(overflow)")
+        scroll.contentView.scroll(to: NSPoint(x: min(80, overflow / 2), y: 0))
         scroll.reflectScrolledClipView(scroll.contentView)
         try await Task.sleep(for: .milliseconds(250))
         let offset = scroll.contentView.bounds.minX
-        try require(offset > 100, "whole strip scrolls horizontally")
+        try require(offset > 10, "whole strip scrolls horizontally")
         model.notice = "Another synthetic live update"
         try await Task.sleep(for: .milliseconds(250))
         try require(abs(scroll.contentView.bounds.minX - offset) < 2, "live same-screen update preserves strip offset")
         let documentWidth = scroll.documentView!.frame.width
         UserDefaults.standard.set(true, forKey: AppMode.agentsPreference)
         try await Task.sleep(for: .milliseconds(400))
-        try require(scroll.documentView!.frame.width > documentWidth + 80, "optional control rebuild occurred on same route")
+        try require(scroll.documentView!.frame.width > documentWidth + 60, "optional control rebuild occurred on same route")
         try require(abs(scroll.contentView.bounds.minX - offset) < 2, "same-route control-ID rebuild preserves offset")
         UserDefaults.standard.set(false, forKey: AppMode.agentsPreference)
         try await Task.sleep(for: .milliseconds(300))
@@ -1252,6 +1262,14 @@ enum MacThreadRegression {
         window.setContentSize(NSSize(width: 1200, height: 800))
         try await Task.sleep(for: .milliseconds(300))
         try require(abs((find(window, "section.home").map { frame(of: $0).width } ?? 0) - originalWidth) < 2, "wide layout keeps comfortable fixed controls")
+        for section in [AppMode.deck, .chat, .tasks, .docs, .files, .context, .toolbox] {
+            try click(window, "section.\(section.rawValue)")
+            try await Task.sleep(for: .milliseconds(250))
+            try require(model.mode == section, "real mouse opens \(section.title)")
+            try require(find(window, "section.\(section.rawValue)").flatMap { value($0, "AXValue") as? NSNumber }?.intValue == 1,
+                        "selected state follows \(section.title)")
+        }
+        try snapshot(window, model: model, name: "inline-navigation-wide")
         model.show(.tasks)
         var deferred: (() -> Void)?
         model.fileNappletNavigation = { deferred = $0; return true }
@@ -1260,7 +1278,7 @@ enum MacThreadRegression {
         model.fileNappletNavigation = nil
         deferred?()
         try require(model.workspaceHomeSelected, "approved guarded navigation reaches Home")
-        print("PASS navigation strip: real mouse Home/Chat, locked scoped Home semantics, current workspace, sidebar control before Home, no strip refresh, fixed wide controls, route/data identity and same-route control rebuild offsets")
+        print("PASS compact inline navigation strip: real mouse Home/all visible sections, selected state, actual narrow overflow, locked scoped Home semantics, current workspace, sidebar control before Home, no strip refresh, fixed wide controls, route/data identity and same-route control rebuild offsets")
     }
 
     static func kanbanCardCheck(_ window: NSWindow, model: AppModel) async throws {
