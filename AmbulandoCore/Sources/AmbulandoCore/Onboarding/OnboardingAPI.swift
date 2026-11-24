@@ -8,6 +8,8 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
         case staleRevision, idempotencyConflict, notFound
         case fundingRequired, fundingReversed, checkoutOutstanding, notEditable
         case validation, provisioningFailed, server, network, malformed, persistence
+        /// A newly created identity has not completed its required backups; nothing was sent.
+        case backupRequired, hostedBackupRequired
     }
     public let kind: Kind
     public let status: Int?
@@ -26,6 +28,7 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
         case (_, "stripe_unconfigured"), (_, "stripe_live_rollout_blocked"), (_, "lightning_unavailable"),
              (_, "return_url_not_allowed"), (_, "invalid_return_url"): kind = .paymentUnavailable
         case (401, _), (403, _): kind = .signerRefused
+        case (_, "identity_backup_required"): kind = .hostedBackupRequired
         case (_, "invite_full"): kind = .inviteFull
         case (_, "invite_not_found"), (_, "invite_revoked"): kind = .inviteInvalid
         case (_, "workspace_name_taken"): kind = .nameTaken
@@ -68,6 +71,8 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
         case .server: "NStack had a problem (HTTP \(status ?? 0)). Try again shortly."
         case .network: "Could not reach the NStack. Your progress is saved; try again."
         case .malformed: "NStack sent an unexpected answer."
+        case .backupRequired: "Save and confirm an encrypted backup of your new identity first (Settings > Identity backup)."
+        case .hostedBackupRequired: HostedBackup.requirementNotice
         case .persistence: "This device could not save your setup progress, so no new step was started. Free some space, then check the status and try again."
         }
     }
@@ -80,6 +85,9 @@ public struct OnboardingCreateRequest: Sendable, Equatable {
     public var fundingCents: Int
     public var agentOfferId: String?
     public var agentDailyCapCents: Int?
+    /// `"new"` for an identity created in this app (the server then withholds payment until a hosted backup exists); omitted otherwise,
+    /// which the server reads as `existing`. A client-declared guardrail, not proof of origin.
+    public var identityOrigin: String?
 }
 
 /// Options update; `nil` fields are left out of the body so the server keeps them.
@@ -95,6 +103,17 @@ public struct OnboardingOptionsUpdate: Sendable, Equatable {
 /// Signed client for `/api/v4/onboarding`. Every mutation carries a JSON body (at least `{}`), because the server's strict
 /// NIP-98 check requires a payload hash even for bodiless actions. Reads send none. The invitation code appears only in the
 /// create-intent body, never in a path or query (the public `GET /invites/{code}` is deliberately not used for that reason).
+public struct OnboardingDeploymentConfig: Decodable, Sendable {
+    public struct Card: Decodable, Sendable {
+        public let available: Bool
+        public let mode: String?
+        public let return_urls: [String]
+    }
+    public let version: Int
+    public let onboarding_enabled: Bool
+    public let card: Card
+}
+
 public struct OnboardingAPI: Sendable {
     public static let base = "/api/v4/onboarding"
     let client: TowerClient
@@ -139,6 +158,19 @@ public struct OnboardingAPI: Sendable {
         if object["account"] is NSNull || object["account"] == nil { return nil }
         return try decode(OnboardingAccount.self, data, key: "account")
     }
+    /// Older deployments may lack this read. Their explicitly configured build return URL remains subject to server validation.
+    public func deploymentConfig() async throws -> OnboardingDeploymentConfig? {
+        let result: (status: Int, body: Data)
+        do { result = try await client.exchange(method: "GET", path: Self.base + "/config", appNpub: nil, jsonBody: nil) }
+        catch is CancellationError { throw CancellationError() }
+        catch let error as IdentityError { throw error }
+        catch { throw OnboardingFailure(kind: .network) }
+        if result.status == 404 { return nil }
+        guard result.status == 200 else { throw OnboardingFailure(kind: .paymentUnavailable, status: result.status) }
+        let config = try decode(OnboardingDeploymentConfig.self, result.body)
+        guard config.version == 1 else { throw OnboardingFailure(kind: .malformed) }
+        return config
+    }
     /// Idempotent. Opens the owner account with no welcome or promotional credit.
     public func openAccount() async throws -> OnboardingAccount {
         try decode(OnboardingAccount.self, try await send("POST", Self.base + "/account"), key: "account")
@@ -158,6 +190,7 @@ public struct OnboardingAPI: Sendable {
                                    "workspace_name": request.workspaceName, "funding_cents": request.fundingCents]
         if let offer = request.agentOfferId { body["agent_offer_id"] = offer }
         if let cap = request.agentDailyCapCents { body["agent_daily_cap_cents"] = cap }
+        if let origin = request.identityOrigin { body["identity_origin"] = origin }
         return try decode(OnboardingIntent.self, try await send("POST", Self.base + "/intents", body: body), key: "intent")
     }
     public func updateIntent(_ id: String, _ update: OnboardingOptionsUpdate) async throws -> OnboardingIntent {

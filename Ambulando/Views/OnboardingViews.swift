@@ -45,6 +45,7 @@ struct OnboardingFlowView: View {
     @State private var seeded = false
     @State private var inviteNote: String?
     @State private var busy = false
+    @State private var openProblem: String?
 
     private var snap: OnboardingSnapshot { onboarding.snapshot }
     private var fundingCents: Int? { custom ? OnboardingFunding.cents(fromDollars: customDollars) : fundingChoice }
@@ -55,6 +56,14 @@ struct OnboardingFlowView: View {
                 header
                 if let failure = snap.failure { Notice(tone: .error, text: failure.localizedDescription) }
                 if let notice = snap.notice { Notice(tone: .info, text: notice) }
+                switch snap.backupGate {
+                case .allowed: EmptyView()
+                case .localBackupRequired:
+                    Notice(tone: .warning, text: OnboardingFailure(kind: .backupRequired).localizedDescription).accessibilityIdentifier("onboarding.backupGate")
+                case .hostedBackupRequired:
+                    Notice(tone: .warning, text: OnboardingFailure(kind: .hostedBackupRequired).localizedDescription).accessibilityIdentifier("onboarding.backupGate")
+                }
+                if onboarding.needsHostedBackup { HostedBackupSection(onboarding: onboarding).ambCard() }
                 phaseBody.ambCard()
                 if case .form = snap.phase {} else { backendFootnote }
             }
@@ -235,8 +244,21 @@ struct OnboardingFlowView: View {
                         .font(.amb(.footnote))
                 }
             }
-            Text("Connect to see it in your workspace list.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
-            Button("Done") { run { await onboarding.finish() }; dismiss() }.buttonStyle(PrimaryButtonStyle())
+            if let workspaceId = snap.landing?.workspaceId {
+                Text("Open it now: this connects to \(onboarding.origin.description) as \(shortNpub(onboarding.signerNpub)) and keeps your other connections.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+                Button("Open workspace") {
+                    busy = true
+                    Task {
+                        openProblem = await app.openProvisionedWorkspace(origin: onboarding.origin.description, signerNpub: onboarding.signerNpub, workspaceId: workspaceId)
+                        busy = false
+                        if openProblem == nil { await onboarding.finish(); dismiss() }
+                    }
+                }.buttonStyle(PrimaryButtonStyle()).disabled(busy).accessibilityIdentifier("onboarding.openWorkspace")
+                if let openProblem { Notice(tone: .warning, text: openProblem) }
+            } else {
+                Text("The NStack did not report a workspace id. Connect from the Connect screen to see it in your workspace list.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+            }
+            Button("Done") { run { await onboarding.finish() }; dismiss() }.disabled(busy)
         }
     }
 
@@ -249,7 +271,7 @@ struct OnboardingFlowView: View {
     }
 
     private var backendFootnote: some View {
-        Text("Identity backup and agent provisioning are still being built; this first slice creates the workspace only.")
+        Text("Hosted username backup and agent provisioning are still being built; this slice creates the workspace only.")
             .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
     }
 

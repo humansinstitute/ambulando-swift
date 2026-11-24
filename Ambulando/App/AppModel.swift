@@ -661,6 +661,25 @@ final class AppModel {
         catch { notice = error.localizedDescription }
     }
 
+    /// Stores the backed-up key in the vault. On any failure the pending key stays in memory and nothing else starts.
+    func commitNewIdentity(pin: String) async -> Bool {
+        guard let sync, canCreateIdentity else { return false }
+        do {
+            identity = try await sync.identity.commitNewIdentity(pin: pin, requiredNpub: connection?.signerNpub)
+            notice = nil
+            return true
+        } catch { notice = error.localizedDescription; return false }
+    }
+
+    func importIdentityBackup(ncryptsec: String, password: String, pin: String) async -> Bool {
+        guard let sync, canImportBackup else { return false }
+        do {
+            identity = try await sync.identity.importBackup(ncryptsec: ncryptsec, password: password, pin: pin, requiredNpub: connection?.signerNpub)
+            notice = nil
+            return true
+        } catch { notice = error.localizedDescription; return false }
+    }
+
     func unlock(pin: String) async {
         guard let sync else { return }
         do {

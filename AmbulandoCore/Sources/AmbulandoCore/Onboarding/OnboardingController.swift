@@ -52,6 +52,8 @@ public struct OnboardingSnapshot: Equatable, Sendable {
     public var paymentOptions: [OnboardingPaymentOption] = []
     public var landing: OnboardingLanding?
     public var busy = false
+    /// Whether a newly created identity may start paid setup. Checked before any request is built, signed or saved.
+    public var backupGate: PaymentBackupGate = .allowed
     /// The user must pick a first request themselves; the app never sends paid work on their behalf.
     public var agentNeedsFirstRequest: Bool { intent?.agent_state == .selected_not_provisioned || intent?.agent_state == .provisioned }
 }
@@ -68,18 +70,23 @@ public actor OnboardingController {
     private let signer: EventSigner
     private let signerNpub: String
     private let store: OnboardingDraftStore
-    private let returnURL: URL?
+    private var returnURL: URL?
+    private let configuredReturnURL: URL?
     private let makeKey: @Sendable () -> String
+    private let backupGate: (@Sendable () async -> PaymentBackupGate)?
+    private let declaresNewIdentity: (@Sendable () async -> Bool)?
     private var state: OnboardingSnapshot
     private var inflight: [String: Task<OnboardingSnapshot, Never>] = [:]
     private var loaded = false
 
     public init(origin: TowerOrigin, signerNpub: String, signer: EventSigner, transport: HTTPTransport, store: OnboardingDraftStore,
-                returnURL: URL?, makeKey: @escaping @Sendable () -> String = OnboardingController.randomKey) {
+                returnURL: URL?, backupGate: (@Sendable () async -> PaymentBackupGate)? = nil, declaresNewIdentity: (@Sendable () async -> Bool)? = nil,
+                makeKey: @escaping @Sendable () -> String = OnboardingController.randomKey) {
+        self.backupGate = backupGate; self.declaresNewIdentity = declaresNewIdentity
         let bound = BoundSigner(inner: signer, expectedHex: NostrKeys.publicKeyHex(npub: signerNpub) ?? "")
         self.api = OnboardingAPI(client: TowerClient(origin: origin, transport: transport, signer: bound))
         self.transport = transport; self.signer = bound; self.signerNpub = signerNpub; self.store = store
-        self.returnURL = returnURL.flatMap(Self.approvedReturn); self.makeKey = makeKey
+        self.returnURL = returnURL.flatMap(Self.approvedReturn); self.configuredReturnURL = self.returnURL; self.makeKey = makeKey
         let draft = store.load(origin: origin.description, signerNpub: signerNpub)
             ?? OnboardingDraft(origin: origin.description, signerNpub: signerNpub, createKey: makeKey(), checkoutKey: makeKey())
         state = OnboardingSnapshot(draft: draft)
@@ -106,7 +113,7 @@ public actor OnboardingController {
     static func options(returnURL: URL?, paymentBlocked: Bool) -> [OnboardingPaymentOption] {
         let card: OnboardingPaymentOption
         if returnURL == nil {
-            card = .init(method: .card, available: false, label: "Card (test mode)", unavailableReason: "This build has no approved payment return address, so card checkout is switched off.")
+            card = .init(method: .card, available: false, label: "Card (test mode)", unavailableReason: "Card payments are unavailable right now. Your setup is saved; try again later or contact your inviter.")
         } else if paymentBlocked {
             card = .init(method: .card, available: false, label: "Card (test mode)", unavailableReason: "This payment method is currently unavailable. Check the status again later.")
         } else {
@@ -116,6 +123,13 @@ public actor OnboardingController {
     }
 
     public func snapshot() -> OnboardingSnapshot { state }
+
+    /// Re-reads the local backup gate (after the user saved a hosted backup). Sends nothing.
+    @discardableResult public func refreshBackupGate() async -> OnboardingSnapshot {
+        state.backupGate = await backupGate?() ?? .allowed
+        if state.failure?.kind == .backupRequired || state.failure?.kind == .hostedBackupRequired { state.failure = nil }
+        return settle()
+    }
 
     // MARK: Loading and resume
 
@@ -127,9 +141,14 @@ public actor OnboardingController {
     private func doLoad() async -> OnboardingSnapshot {
         state.phase = .checking; state.failure = nil
         guard await signerMatches() else { return fail(.unavailable(.signerMismatch), nil) }
+        state.backupGate = await backupGate?() ?? .allowed
         do { _ = try await TowerAPI(client: TowerClient(origin: api.origin, transport: transport, signer: nil)).descriptor() }
         catch { return fail(.unavailable(.originRejected(error.localizedDescription)), nil) }
         do {
+            if let config = try await api.deploymentConfig() {
+                returnURL = config.onboarding_enabled && config.card.available && config.card.mode == "test"
+                    ? config.card.return_urls.compactMap { URL(string: $0).flatMap(Self.approvedReturn) }.first : nil
+            } else { returnURL = configuredReturnURL }
             state.account = try await api.account()
             state.offers = (try? await api.agentOffers()) ?? []
             try await resumeIntent()
@@ -204,6 +223,13 @@ public actor OnboardingController {
     private func doPay() async -> OnboardingSnapshot {
         state.failure = nil; state.notice = nil; state.checkoutURL = nil
         guard await signerMatches() else { return fail(.unavailable(.signerMismatch), nil) }
+        // A newly created identity must have its backups before the first request that can claim an invite seat or start a payment.
+        state.backupGate = await backupGate?() ?? .allowed
+        switch state.backupGate {
+        case .allowed: break
+        case .localBackupRequired: return settle(OnboardingFailure(kind: .backupRequired))
+        case .hostedBackupRequired: return settle(OnboardingFailure(kind: .hostedBackupRequired))
+        }
         guard state.draft.reviewedDigest == state.draft.formDigest, validateForm() == nil else { return settle(OnboardingFailure(kind: .validation, code: "review_required")) }
         do {
             try persist()                // keys, form and bindings on disk before any account, create, update or checkout request
@@ -239,7 +265,8 @@ public actor OnboardingController {
         state.account = try await api.openAccount()
         do {
             try adopt(try await api.createIntent(OnboardingCreateRequest(clientRequestKey: d.createKey, invite: invite, workspaceName: name,
-                                                                      fundingCents: d.fundingCents, agentOfferId: d.agentOfferId, agentDailyCapCents: cap)))
+                                                                      fundingCents: d.fundingCents, agentOfferId: d.agentOfferId, agentDailyCapCents: cap,
+                                                                      identityOrigin: await declaresNewIdentity?() == true ? "new" : nil)))
         } catch let f as OnboardingFailure where f.kind == .nameTaken {
             // Possibly our own earlier create whose answer was lost: adopt it rather than failing.
             guard let existing = try await api.intents().first(where: { [.open, .funded, .provisioning].contains($0.status) && $0.workspace_name.lowercased() == name.lowercased() }) else { throw f }

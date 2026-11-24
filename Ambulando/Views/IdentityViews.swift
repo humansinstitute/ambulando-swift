@@ -1,3 +1,4 @@
+import AmbulandoCore
 import SwiftUI
 
 /// Explicit identity import. The user pastes their own nsec; the app never searches for or reads
@@ -8,6 +9,8 @@ struct ImportIdentityView: View {
     @State private var pin = ""
     @State private var confirm = ""
     @State private var working = false
+    @State private var showNewIdentity = false
+    @State private var showImportBackup = false
 
     private var valid: Bool { nsec.hasPrefix("nsec1") && pin.count >= 4 && pin == confirm }
 
@@ -30,11 +33,13 @@ struct ImportIdentityView: View {
                     SecureField("Confirm PIN", text: $confirm).numberPadEntry()
                         .padding(10).background(Amb.muted, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                     if let notice = model.notice { Notice(tone: .error, text: notice) }
-                    if !Product.isGrandparentChat {
-                        // A new identity is deliberately not offered yet: it needs a safe encrypted backup (NIP-49 `ncryptsec`) that
-                        // is not implemented, and this vault's PIN sealing is not that backup. Import stays the only path.
-                        Text("Creating a new identity is not available yet. It needs an encrypted backup that is still being built, so for now import the key you already have.")
-                            .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("identity.create.unavailable")
+                    if model.canImportBackup {
+                        Button("Import an encrypted backup (ncryptsec)") { showImportBackup = true }.accessibilityIdentifier("identity.importBackup")
+                    }
+                    if model.canCreateIdentity {
+                        Button("Create a new identity") { showNewIdentity = true }.accessibilityIdentifier("identity.create")
+                        Text("A new identity is encrypted into a backup you save before it is used. \(HostedBackup.requirementNotice)")
+                            .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).accessibilityIdentifier("identity.create.hostedRequired")
                     }
                     Button {
                         working = true
@@ -51,6 +56,8 @@ struct ImportIdentityView: View {
             .padding(20)
         }
         .scrollDismissesKeyboard(.interactively)
+        .sheet(isPresented: $showNewIdentity) { NewIdentityView() }
+        .sheet(isPresented: $showImportBackup) { ImportBackupView() }
     }
 }
 

@@ -11,7 +11,10 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
         var id = UUID().uuidString.lowercased(); var owner: String; var key: String; var digest: String
         var status = "open"; var revision = 1; var name: String; var funding: Int; var offerId: String?; var cap: Int?
         var funded = false; var reversed = false; var steps: [String] = []; var lastError: String?; var workspaceId: String?
+        var identityOrigin = "existing"
     }
+    /// Hosted identity backup row, as tower docs/contract/hosted-identity-backup-v1.md describes it.
+    struct HostedRow { var owner: String; var ncryptsec: String; var revision: Int }
     struct Offer { let id: String; let cap: Int; let max: Int }
 
     let origin: String
@@ -20,6 +23,7 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
     var intents: [Intent] = []
     var offers: [Offer] = []
     var rolloutEnabled = true
+    var deploymentConfig: [String: Any]?
     var inviteCodes: [String: Int] = [:]          // code -> max admissions
     var seats: [String: Set<String>] = [:]        // code -> owner npubs
     var accounts: Set<String> = []
@@ -34,6 +38,11 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
     var descriptorOrigin: String?
     var provisionDelay: TimeInterval = 0
     var hook: (@Sendable (Seen) -> Void)?
+    var hosted: [String: HostedRow] = [:]
+    var hostedMounted = true
+    /// The server's accepted scrypt cost range; the real contract is 16...18, tests lower it to keep debug builds fast.
+    var hostedLogN: ClosedRange<UInt8> = 16...18
+    var hostedTamperReadback = false
 
     init(origin: String = "https://tower.example") { self.origin = origin }
 
@@ -92,6 +101,13 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
             guard let hit = failures.first(where: { key.hasSuffix($0.key) && !$0.value.isEmpty }) else { return nil }
             return failures[hit.key]!.removeFirst()
         }) { throw queued }
+        if path.hasPrefix(HostedBackupAPI.base) {
+            let (d, r) = lock.withLock { hostedRoute(method, path, rawBody, body, signer) }
+            if lock.withLock({ () -> Bool in if let n = dropResponses.first(where: { key.hasSuffix($0.key) && $0.value > 0 }) { dropResponses[n.key] = n.value - 1; return true }; return false }) {
+                throw URLError(.networkConnectionLost)
+            }
+            return (d, r)
+        }
         guard onboardingRouteMounted else { return (Data("404 Not Found".utf8), HTTPURLResponse(url: url, statusCode: 404, httpVersion: nil, headerFields: nil)!) }
         guard let owner = signer else { let (d, r, _) = error(401, "nip98_payload_mismatch"); return (d, r) }
         let (data, response, _) = lock.withLock { route(method, path, body, owner) }
@@ -107,6 +123,9 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
         guard path.hasPrefix(base) else { return error(404, "not_found") }
         let rest = String(path.dropFirst(base.count))
         let mutating = method != "GET"
+        if method == "GET", rest == "/config" {
+            return deploymentConfig.map { reply(200, $0) } ?? error(404, "not_found")
+        }
         if method == "POST", rest == "/account" { accounts.insert(owner); return reply(200, ["account": account(owner)]) }
         if method == "GET", rest == "/account" { return reply(200, ["account": accounts.contains(owner) ? account(owner) as Any : NSNull(), "funding": NSNull()]) }
         if method == "GET", rest == "/agent-offers" {
@@ -116,7 +135,8 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
         if method == "POST", rest == "/intents" {
             guard rolloutEnabled else { return error(503, "onboarding_rollout_disabled") }
             let keys = Set(body.keys)
-            guard keys.isSubset(of: ["client_request_key", "invite_code", "workspace_name", "funding_cents", "agent_offer_id", "agent_daily_cap_cents", "return_state"]),
+            guard keys.isSubset(of: ["client_request_key", "invite_code", "workspace_name", "funding_cents", "agent_offer_id", "agent_daily_cap_cents", "return_state", "identity_origin"]),
+                  ["new", "existing", nil].contains(body["identity_origin"] as? String),
                   let k = body["client_request_key"] as? String, let code = body["invite_code"] as? String, let name = body["workspace_name"] as? String,
                   let funding = body["funding_cents"] as? Int, name == name.trimmingCharacters(in: .whitespaces), (1...80).contains(name.count), (2100...1_000_000).contains(funding) else { return error(400, "invalid_body") }
             let digest = SHA256Hex.of("\(code)|\(name)|\(funding)|\(body["agent_offer_id"] as? String ?? "-")|\(body["agent_daily_cap_cents"] as? Int ?? -1)")
@@ -135,7 +155,8 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
                 seats[code, default: []].insert(owner)
             }
             accounts.insert(owner)
-            let intent = Intent(owner: owner, key: k, digest: digest, name: name, funding: funding, offerId: offer, cap: cap)
+            var intent = Intent(owner: owner, key: k, digest: digest, name: name, funding: funding, offerId: offer, cap: cap)
+            intent.identityOrigin = body["identity_origin"] as? String ?? "existing"
             intents.append(intent)
             return reply(201, ["intent": view(intent), "replayed": false])
         }
@@ -160,6 +181,7 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
             return reply(200, ["intent": view(intents[index])])
         case ("POST", "checkout"):
             guard Set(body.keys) == ["idempotency_key", "return_url"], let k = body["idempotency_key"] as? String, intents[index].status == "open" else { return error(409, "intent_not_open") }
+            if intents[index].identityOrigin == "new", !hosted.values.contains(where: { $0.owner == owner }) { return error(409, "identity_backup_required") }
             let order = checkoutOrders[k] ?? UUID().uuidString.lowercased(); checkoutOrders[k] = order
             return reply(201, ["order_id": order, "checkout_url": checkoutURL, "mode": checkoutMode, "amount_cents": intents[index].funding + checkoutAmountOffset])
         case ("POST", "cancel"):
@@ -183,6 +205,44 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
             return reply(200, ["intent": view(intents[index])])
         default: return error(404, "not_found")
         }
+    }
+
+    private func hostedRoute(_ method: String, _ path: String, _ raw: Data, _ body: [String: Any], _ signer: String?) -> (Data, HTTPURLResponse) {
+        func out(_ status: Int, _ value: Any) -> (Data, HTTPURLResponse) {
+            let (d, r, _) = reply(status, value); return (d, r)
+        }
+        func fail(_ status: Int, _ code: String) -> (Data, HTTPURLResponse) { out(status, ["code": code, "error": code]) }
+        guard hostedMounted else { return (Data("404 Not Found".utf8), HTTPURLResponse(url: URL(string: origin)!, statusCode: 404, httpVersion: nil, headerFields: nil)!) }
+        let name = String(path.dropFirst(HostedBackupAPI.base.count + 1))
+        if method == "GET", name == "me" {
+            guard let owner = signer else { return fail(401, "nip98_payload_mismatch") }
+            guard let row = hosted.first(where: { $0.value.owner == owner }) else { return fail(404, "backup_not_found") }
+            return out(200, ["username": row.key, "revision": String(row.value.revision), "updated_at": "2026-11-24T00:00:00.000Z"])
+        }
+        guard HostedBackupUsername.normalized(name) == name else { return fail(400, "invalid_username") }
+        if method == "GET" {
+            guard let row = hosted[name] else { return fail(404, "backup_not_found") }
+            var text = row.ncryptsec
+            if hostedTamperReadback { text = String(text.dropLast()) + (text.last == "q" ? "p" : "q") }
+            return out(200, ["username": name, "ncryptsec": text, "revision": String(row.revision), "updated_at": "2026-11-24T00:00:00.000Z"])
+        }
+        guard method == "PUT" else { return fail(405, "method_not_allowed") }
+        guard let owner = signer else { return fail(401, "nip98_payload_mismatch") }
+        guard Set(body.keys) == ["ncryptsec", "expected_revision"], let text = body["ncryptsec"] as? String, let expected = body["expected_revision"] as? String else { return fail(400, "invalid_json") }
+        guard text.count == 162, text == text.lowercased(), let decoded = Bech32.decode(text, maxLength: 162), decoded.hrp == "ncryptsec", decoded.data.count == 91,
+              Array(decoded.data)[0] == 2, hostedLogN.contains(Array(decoded.data)[1]), Array(decoded.data)[42] <= 2 else { return fail(400, "invalid_backup") }
+        if let row = hosted[name] {
+            if expected == "0" { return fail(409, "username_unavailable") }   // create on an existing name, whoever owns it
+            guard row.owner == owner else { return fail(403, "backup_owner_mismatch") }
+            if row.ncryptsec == text, expected == String(row.revision - 1) { return out(200, ["username": name, "revision": String(row.revision), "created": false]) }
+            guard expected == String(row.revision) else { return out(409, ["code": "revision_conflict", "error": "revision_conflict", "current_revision": String(row.revision)]) }
+            hosted[name]!.ncryptsec = text; hosted[name]!.revision += 1
+            return out(200, ["username": name, "revision": String(hosted[name]!.revision), "created": false])
+        }
+        guard expected == "0" else { return fail(409, "revision_conflict") }
+        if hosted.values.contains(where: { $0.owner == owner }) { return fail(409, "identity_already_backed_up") }
+        hosted[name] = HostedRow(owner: owner, ncryptsec: text, revision: 1)
+        return out(201, ["username": name, "revision": "1", "created": true])
     }
 
     private func account(_ owner: String) -> [String: Any] {

@@ -288,6 +288,9 @@ public actor IdentityService: EventSigner {
     /// itself is unlocked, so the app stays unlocked across relaunch until Lock now / remove / disconnect.
     private let sessionStore: SessionKeyStore?
     private let sessionRevocationURL: URL
+    /// Public record of how this identity came to be and which backups the user confirmed (never a secret).
+    private let backupStore: IdentityBackupStore
+    private var pending: PendingIdentity?
     /// Durable revocation marker, written before the Keychain item is deleted. While it exists the credential is never
     /// loaded or used, even if deleting the Keychain item failed (revocation fails closed).
     private let revocationURL: URL
@@ -301,6 +304,7 @@ public actor IdentityService: EventSigner {
         sessionStore = session
         revocationURL = vaultURL.deletingLastPathComponent().appendingPathComponent("background-read.revoked")
         sessionRevocationURL = vaultURL.deletingLastPathComponent().appendingPathComponent("session.revoked")
+        backupStore = IdentityBackupStore(url: vaultURL.deletingLastPathComponent().appendingPathComponent("identity-backup.json"))
     }
 
     private var sessionRevoked: Bool { FileManager.default.fileExists(atPath: sessionRevocationURL.path) }
@@ -429,7 +433,136 @@ public actor IdentityService: EventSigner {
         try revokeSession()
         try revokeBackgroundRead()
         try vault.remove()
+        try? backupStore.remove()
         return state
+    }
+
+    // MARK: New identity and encrypted backup (NIP-49)
+
+    /// A generated key waiting for its backup. It lives only in this actor's memory until `commitNewIdentity` stores it in the vault;
+    /// the plaintext key is never returned, logged, written to a draft or sent anywhere.
+    private struct PendingIdentity {
+        var secret: Data
+        var npub: String
+        var backup: String?
+        var exported = false
+        var acknowledged = false
+    }
+
+    public struct NewIdentityPreview: Equatable, Sendable { public let npub: String }
+
+    /// Starts (or restarts) creation of a new identity. Refused while any vault exists; never replaces one.
+    public func beginNewIdentity() throws -> NewIdentityPreview {
+        if vault.exists { throw IdentityError.exists }
+        discardNewIdentity()
+        let secret = try NewIdentity.generateSecret()
+        let npub = try NewIdentity.npub(secret: secret)
+        pending = PendingIdentity(secret: secret, npub: npub)
+        return NewIdentityPreview(npub: npub)
+    }
+
+    /// Encrypts the pending key under `password` (NFKC, scrypt, XChaCha20-Poly1305) and returns the `ncryptsec` for the user to save.
+    /// A new key that was never shown unencrypted is marked `safe`. Calling again replaces the backup and clears the acknowledgement.
+    public func createPendingBackup(password: String, logN: UInt8 = NIP49.defaultLogN) async throws -> String {
+        guard let current = pending else { throw IdentityError.missing }
+        let backup = try await NIP49.encrypt(secretKey: current.secret, password: password, logN: logN, keySecurity: .safe)
+        guard pending?.npub == current.npub else { throw IdentityError.missing }
+        pending?.backup = backup; pending?.exported = false; pending?.acknowledged = false
+        return backup
+    }
+
+    /// Called only after the user's own explicit copy or save of the backup actually succeeded.
+    public func notePendingBackupExported() throws {
+        guard pending?.backup != nil else { throw IdentityError.missing }
+        pending?.exported = true
+    }
+
+    /// The user says they saved the backup and proves the password by decrypting it back to this identity. Only then may it be committed.
+    public func acknowledgePendingBackup(password: String) async throws {
+        guard let current = pending, let backup = current.backup, current.exported else { throw IdentityError.missing }
+        var opened = try await NIP49.decrypt(backup, password: password).secretKey
+        defer { opened.resetBytes(in: 0..<opened.count) }
+        guard opened == current.secret, pending?.npub == current.npub, pending?.backup == backup, pending?.exported == true else { throw NIP49Error.wrongPasswordOrDamaged }
+        pending?.acknowledged = true
+    }
+
+    public func discardNewIdentity() {
+        if pending != nil { pending!.secret.resetBytes(in: 0..<pending!.secret.count) }
+        pending = nil
+    }
+
+    public var hasPendingNewIdentity: Bool { pending != nil }
+
+    /// Stores the pending key in the vault under `pin`. The public record is written first and removed again if the vault cannot be
+    /// created, so there is never an identity on the device without its record. Any failure keeps the pending key in memory (the user's
+    /// exported backup is unaffected) and creates no session, connection or payment.
+    @discardableResult public func commitNewIdentity(pin: String, requiredNpub: String? = nil) throws -> IdentityState {
+        guard let current = pending, current.acknowledged, current.exported, current.backup != nil else { throw IdentityError.missing }
+        if vault.exists { throw IdentityError.exists }
+        if requiredNpub != nil { throw IdentityError.accountMismatch }
+        guard IdentityVault.validPIN(pin) else { throw IdentityError.invalidPIN }
+        try backupStore.save(IdentityBackupRecord(npub: current.npub, origin: .created, localBackupConfirmedAt: Date()))
+        do { try vault.create(nsec: Bech32.encode(hrp: "nsec", data: current.secret), pin: pin) }
+        catch { try? backupStore.remove(); throw error }
+        storeSession()
+        discardNewIdentity()
+        return state
+    }
+
+    /// Imports a key from an `ncryptsec` and its password. Same refusals as `importIdentity`; a wrong password or damaged backup
+    /// imports nothing. An imported identity is not forced through the new-identity backup gate.
+    @discardableResult public func importBackup(ncryptsec: String, password: String, pin: String, requiredNpub: String? = nil) async throws -> IdentityState {
+        if vault.exists { throw IdentityError.exists }
+        var opened = try await NIP49.decrypt(ncryptsec.trimmingCharacters(in: .whitespacesAndNewlines), password: password).secretKey
+        defer { opened.resetBytes(in: 0..<opened.count) }
+        return try importIdentity(nsec: Bech32.encode(hrp: "nsec", data: opened), pin: pin, requiredNpub: requiredNpub)
+    }
+
+    /// A password-protected backup of the unlocked identity, for an explicit user export. Keys created here were never shown
+    /// unencrypted (`safe`); others are `untracked`, because this app cannot know how they were handled before import.
+    public func exportBackup(password: String, logN: UInt8 = NIP49.defaultLogN) async throws -> String {
+        guard vault.isUnlocked, let hex = vault.publicKeyHex, let npub = NostrKeys.npub(publicKeyHex: hex) else { throw IdentityError.locked }
+        var secret = try vault.secretCopy()
+        defer { secret.resetBytes(in: 0..<secret.count) }
+        var security = NIP49.KeySecurity.untracked
+        if case .record(let record) = backupStore.read(npub: npub), record.origin == .created { security = .safe }
+        return try await NIP49.encrypt(secretKey: secret, password: password, logN: logN, keySecurity: security)
+    }
+
+    /// The public backup record of the identity on this device, if it was created here and the record is readable.
+    public func backupRecord() -> IdentityBackupRecord? {
+        guard let hex = vault.knownPublicKeyHex, let npub = NostrKeys.npub(publicKeyHex: hex), case .record(let record) = backupStore.read(npub: npub) else { return nil }
+        return record
+    }
+
+    /// Durably stages the exact hosted upload before it is sent.
+    public func stageHostedAttempt(_ attempt: IdentityBackupRecord.HostedAttempt, expectedNpub: String) throws {
+        guard case .unlocked(let current) = state else { throw IdentityError.locked }
+        guard current == expectedNpub else { throw IdentityError.accountMismatch }
+        guard var record = backupRecord(), record.origin == .created else { throw IdentityError.missing }
+        record.hostedAttempt = attempt
+        try backupStore.save(record)
+    }
+
+    /// Records the hosted copy as confirmed (only after the caller has read it back and decrypted it to this identity).
+    public func confirmHostedBackup(username: String, revision: String, origin: String, expectedNpub: String) throws {
+        guard case .unlocked(let current) = state else { throw IdentityError.locked }
+        guard current == expectedNpub else { throw IdentityError.accountMismatch }
+        guard var record = backupRecord(), record.origin == .created else { throw IdentityError.missing }
+        record.hostedUsername = username; record.hostedRevision = revision; record.hostedAttempt = nil
+        record.hostedOrigin = origin
+        record.hostedBackupConfirmedAt = Date()
+        try backupStore.save(record)
+    }
+
+    /// Whether paid setup is allowed for the identity on this device. Unreadable records fail closed.
+    public func paymentBackupGate(origin: TowerOrigin? = nil) -> PaymentBackupGate {
+        guard let hex = vault.knownPublicKeyHex, let npub = NostrKeys.npub(publicKeyHex: hex) else { return .allowed }
+        switch backupStore.read(npub: npub) {
+        case .none: return .allowed
+        case .record(let record): return origin.map { record.gate(for: $0.description) } ?? record.gate
+        case .unreadable: return .localBackupRequired
+        }
     }
 
     /// Stores the background credential for `origin` and the given workspaces. Requires the unlocked vault.

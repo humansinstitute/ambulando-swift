@@ -45,12 +45,14 @@ public enum Bech32 {
         return hrp + "1" + (words + checksum).map { String(alphabet[Int($0)]) }.joined()
     }
 
-    /// Decodes and verifies the checksum. Mixed case is rejected, as BIP-173 requires.
-    public static func decode(_ input: String) -> (hrp: String, data: Data)? {
+    /// Decodes and verifies the checksum. Mixed case is rejected, as BIP-173 requires. `maxLength` is 90 for the 32-byte NIP-19
+    /// entities; NIP-49 `ncryptsec` strings are longer and pass their own bound. The bound is applied before any allocation.
+    public static func decode(_ input: String, maxLength: Int = 90) -> (hrp: String, data: Data)? {
+        guard input.utf8.count <= maxLength + 64 else { return nil }
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed == trimmed.lowercased() || trimmed == trimmed.uppercased() else { return nil }
         let value = trimmed.lowercased()
-        guard value.count <= 90, let separator = value.lastIndex(of: "1") else { return nil }
+        guard value.count <= maxLength, let separator = value.lastIndex(of: "1") else { return nil }
         let hrp = String(value[..<separator])
         let payload = value[value.index(after: separator)...]
         guard !hrp.isEmpty, payload.count >= 6 else { return nil }
@@ -81,6 +83,12 @@ public enum NostrKeys {
     }
 
     public static func isValidNpub(_ value: String) -> Bool { publicKeyHex(npub: value) != nil && value == value.lowercased() }
+
+    /// True for a 32-byte value in [1, n-1], a usable secp256k1 secret scalar.
+    public static func isValidScalar(_ data: Data) -> Bool {
+        let bytes = Array(data)
+        return bytes.count == 32 && bytes.contains { $0 != 0 } && bytes.lexicographicallyPrecedes(order)
+    }
 
     /// Returns the 32-byte scalar of a valid `nsec`, or nil.
     public static func secretKey(nsec: String) -> Data? {

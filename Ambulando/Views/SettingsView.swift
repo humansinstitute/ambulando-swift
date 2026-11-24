@@ -12,6 +12,7 @@ struct SettingsView: View {
     @AppStorage(AppMode.contextPreference) private var showContext = false
     @State private var showWorkspaceManagement = false
     @State private var confirmRemove = false
+    @State private var showBackup = false
     @State private var confirmDisconnect = false
     @State private var unsent = 0
     @State private var live: LiveStatus?
@@ -35,7 +36,9 @@ struct SettingsView: View {
                 Section("Identity") {
                     LabeledContent("Public key", value: model.identity.npub.map(shortNpub) ?? "None")
                     switch model.identity {
-                    case .unlocked: Button("Lock now") { Task { await model.lock() } }
+                    case .unlocked:
+                        Button("Lock now") { Task { await model.lock() } }
+                        if !Product.isGrandparentChat { Button("Back up identity (encrypted)…") { showBackup = true }.accessibilityIdentifier("settings.backupIdentity") }
                     case .locked, .none, .unavailable: EmptyView()
                     }
                     if model.identity.npub != nil {
@@ -149,6 +152,7 @@ struct SettingsView: View {
                     try? await Task.sleep(for: .seconds(1))
                 }
             }
+            .sheet(isPresented: $showBackup) { ExportBackupView() }
             .sheet(isPresented: $showWorkspaceManagement) {
                 if let workspace = model.selectedWorkspace, let connection = model.connection {
                     WorkspaceManagementView(workspace: workspace, connection: connection)

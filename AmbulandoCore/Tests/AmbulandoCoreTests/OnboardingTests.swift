@@ -20,6 +20,33 @@ final class OnboardingTests: XCTestCase {
 
     // MARK: Contract: signing, URL, secrecy
 
+    func testTrustedConfigSuppliesApprovedReturnWithoutBuildConfiguration() async throws {
+        let t = tower()
+        t.deploymentConfig = ["version": 1, "onboarding_enabled": true,
+                              "card": ["available": true, "mode": "test", "return_urls": ["https://u:p@bad.example", OnboardingFixture.returnURL.absoluteString]]]
+        let (c, review) = try await ready(t, returnURL: nil)
+        XCTAssertTrue(review.paymentOptions.first { $0.method == .card }?.available == true)
+        let paid = await c.continueToPayment()
+        XCTAssertNotNil(paid.checkoutURL)
+        let checkout = try XCTUnwrap(t.requests.first { $0.path.hasSuffix("/checkout") })
+        XCTAssertEqual(checkout.body["return_url"] as? String, OnboardingFixture.returnURL.absoluteString)
+    }
+
+    func testUnavailableOrUnsafeConfigCannotBeOverriddenByBuildReturn() async throws {
+        for card in [
+            ["available": false, "mode": "test", "return_urls": [OnboardingFixture.returnURL.absoluteString]] as [String: Any],
+            ["available": true, "mode": "live", "return_urls": [OnboardingFixture.returnURL.absoluteString]],
+            ["available": true, "mode": "test", "return_urls": ["http://remote.example/return", "https://example.test/return?secret=x"]]
+        ] {
+            let t = tower()
+            t.deploymentConfig = ["version": 1, "onboarding_enabled": true, "card": card]
+            let (c, review) = try await ready(t)
+            XCTAssertFalse(review.paymentOptions.first { $0.method == .card }?.available == true)
+            _ = await c.continueToPayment()
+            XCTAssertEqual(t.count("POST", suffix: "/checkout"), 0)
+        }
+    }
+
     func testEveryMutationCarriesPayloadHashAndInviteStaysOutOfURLs() async throws {
         let t = tower()
         let (c, review) = try await ready(t)
