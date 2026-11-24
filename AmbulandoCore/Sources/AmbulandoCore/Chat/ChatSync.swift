@@ -31,6 +31,14 @@ extension WorkspaceSync {
         var pageCursor = cursor, pageAfter = cursor == nil ? nil : startAfter
         var keep = Set<String>(), last: MessageKey?, seen = Set<String>()
         let started = ISO8601DateFormatter.tower.string(from: Date())
+        // History pages oldest first, so a long channel (a direct message with an agent) delivers its newest discussions
+        // last. The thread list is newest-updated first in one request: read it before the history so the current
+        // discussions are discoverable straight away, and again at the end for changes made while paging. A failure here
+        // never blocks the history; the final read below reports it.
+        if let early = try? await api.threads(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channelId) {
+            try Task.checkCancellation()
+            try await store.writer.upsertThreads(workspaceId: workspace.id, early.threads)
+        }
         while true {
             let page = try await api.messagesPage(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channelId, cursor: cursor)
             try Task.checkCancellation()

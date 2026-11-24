@@ -337,6 +337,16 @@ final class ChannelCatchUpTests: XCTestCase {
         XCTAssertNil(present, "a full refresh reconciles the whole channel")
     }
 
+    func testThreadListArrivesBeforeALongChannelsHistory() async throws {
+        let h = try await ChatHarness.make()
+        for i in 0..<450 { h.tower.seed(channel: Fixtures.channel1, body: "m\(i)") }
+        await h.sync.catchUpChannel(h.connection, h.workspace, channelId: Fixtures.channel1)
+        await h.engine.waitUntilIdle()
+        let paths = h.tower.recordedGets.compactMap { $0.url?.path }.filter { $0.hasSuffix("/messages") || $0.hasSuffix("/threads") }
+        XCTAssertEqual(paths.first?.hasSuffix("/threads"), true, "thread discovery does not wait for the oldest-first history: \(paths)")
+        XCTAssertEqual(paths.filter { $0.hasSuffix("/messages") }.count, 3)
+    }
+
     func testReconcileNeverRemovesMessagesAfterTheCoveredRange() async throws {
         let h = try await ChatHarness.make()
         let early = MessageRecord(workspaceId: Fixtures.workspaceId, id: "00000000-0000-4000-8000-000000000001", channelId: Fixtures.channel1,
