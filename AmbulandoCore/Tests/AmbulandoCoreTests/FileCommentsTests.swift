@@ -83,6 +83,16 @@ struct FileCommentsTests {
 
         try store.remove(k1)
         #expect(store.loadAll().isEmpty)
+
+        // Failed reply submission must retain text and exact clientRequestId until confirmed acceptance removes it.
+        let replyKey = "reply:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1"
+        let reqId = "req-reply-retry-1"
+        try store.save(FileCommentDraft(key: replyKey, body: "Will retry after network error", clientRequestId: reqId, parentCommentId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1"))
+        let retainedAfterFailure = store.loadAll()[replyKey]
+        #expect(retainedAfterFailure?.body == "Will retry after network error")
+        #expect(retainedAfterFailure?.clientRequestId == reqId)
+        try store.remove(replyKey)
+        #expect(store.loadAll()[replyKey] == nil)
         try? FileManager.default.removeItem(at: dir)
     }
 }

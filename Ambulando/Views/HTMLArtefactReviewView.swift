@@ -26,6 +26,7 @@ struct HTMLArtefactReviewView: View {
     @State private var focusThreadNonce: (String, Int)?
     @State private var anchorMatches: [String: Bool] = [:]
     @State private var drafts: [String: FileCommentDraft] = [:]
+    @State private var replyAcceptedNonce: [String: Int] = [:]
     @State private var editingCommentId: String?
     @State private var editBodyText = ""
 
@@ -133,8 +134,12 @@ struct HTMLArtefactReviewView: View {
             }
         }
         .onChange(of: boundaryKey) { _, _ in
+            payload = nil
             commentList = nil
+            drafts = [:]
+            replyAcceptedNonce = [:]
             pendingTarget = nil
+            focusedThreadId = nil
             anchorMatches = [:]
             commentsError = nil
         }
@@ -384,6 +389,7 @@ struct HTMLArtefactReviewView: View {
                 ReplyComposer(
                     initialBody: drafts[replyKey]?.body ?? "",
                     requestId: drafts[replyKey]?.clientRequestId ?? UUID().uuidString.lowercased(),
+                    acceptedNonce: replyAcceptedNonce[root.id] ?? 0,
                     busy: commentsBusy,
                     onDraftChange: { body, reqId in
                         saveDraft(FileCommentDraft(key: replyKey, body: body, clientRequestId: reqId, parentCommentId: root.id))
@@ -418,62 +424,81 @@ struct HTMLArtefactReviewView: View {
     }
 
     private func loadHTML() async {
+        // Clear old viewer immediately so a late callback from the previous version cannot target the new selection.
+        payload = nil
+        anchorMatches = [:]
         guard model.canRead, let sync = model.sync, let c = model.connection else {
             failure = "Unlock to open this artefact."
             return
         }
+        let capturedBoundary = boundaryKey
+        let capturedSelected = selectedVersionId
         failure = nil
         do {
-            let loaded = try await sync.artefactHTMLPayload(c, workspace, fileId: file.id, versionId: selectedVersionId)
-            guard !Task.isCancelled else { return }
+            let loaded = try await sync.artefactHTMLPayload(c, workspace, fileId: file.id, versionId: capturedSelected)
+            guard !Task.isCancelled, boundaryKey == capturedBoundary, selectedVersionId == capturedSelected else { return }
             payload = loaded
         } catch is CancellationError {}
         catch {
-            failure = error.localizedDescription
+            if boundaryKey == capturedBoundary { failure = error.localizedDescription }
         }
     }
 
     private func loadComments() async {
         guard model.canRead, let sync = model.sync, let c = model.connection else { return }
+        let capturedBoundary = boundaryKey
         do {
             let list = try await sync.allFileComments(c, workspace, fileId: file.id)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, boundaryKey == capturedBoundary else { return }
             commentList = list
             commentsError = nil
         } catch is CancellationError {}
         catch {
-            commentsError = error.localizedDescription
+            if boundaryKey == capturedBoundary { commentsError = error.localizedDescription }
         }
     }
 
     private func submitRoot(anchor: HTMLCommentAnchor, versionId: String, body: String, requestId: String, draftKey: String) async {
         guard let sync = model.sync, let c = model.connection else { return }
-        commentsBusy = true; commentsError = nil
-        defer { commentsBusy = false }
+        let capturedBoundary = boundaryKey
+        let capturedStore = draftStore
+        commentsBusy = true; commentsError = nullError
+        defer { if boundaryKey == capturedBoundary { commentsBusy = false } }
         do {
             _ = try await sync.createFileComment(c, workspace, fileId: file.id, body: body, fileVersionId: versionId, anchor: anchor, clientRequestId: requestId)
+            try? capturedStore?.remove(draftKey)
+            guard boundaryKey == capturedBoundary else { return }
             drafts.removeValue(forKey: draftKey)
-            try? draftStore?.remove(draftKey)
             pendingTarget = nil
             await loadComments()
         } catch {
-            commentsError = "Could not post comment (draft preserved): \(error.localizedDescription)"
+            if boundaryKey == capturedBoundary {
+                commentsError = "Could not post comment (draft preserved): \(error.localizedDescription)"
+            }
         }
     }
 
     private func submitReply(parentId: String, body: String, requestId: String, draftKey: String) async {
         guard let sync = model.sync, let c = model.connection else { return }
+        let capturedBoundary = boundaryKey
+        let capturedStore = draftStore
         commentsBusy = true; commentsError = nil
-        defer { commentsBusy = false }
+        defer { if boundaryKey == capturedBoundary { commentsBusy = false } }
         do {
             _ = try await sync.createFileComment(c, workspace, fileId: file.id, body: body, parentCommentId: parentId, clientRequestId: requestId)
+            try? capturedStore?.remove(draftKey)
+            guard boundaryKey == capturedBoundary else { return }
             drafts.removeValue(forKey: draftKey)
-            try? draftStore?.remove(draftKey)
+            replyAcceptedNonce[parentId, default: 0] += 1
             await loadComments()
         } catch {
-            commentsError = "Could not post reply (draft preserved): \(error.localizedDescription)"
+            if boundaryKey == capturedBoundary {
+                commentsError = "Could not post reply (draft preserved): \(error.localizedDescription)"
+            }
         }
     }
+
+    private var nullError: String? { nil }
 
     private func toggleResolve(_ comment: FileCommentRecord) async {
         guard let sync = model.sync, let c = model.connection else { return }
@@ -553,6 +578,7 @@ private struct NewCommentComposer: View {
 private struct ReplyComposer: View {
     let initialBody: String
     let requestId: String
+    let acceptedNonce: Int
     let busy: Bool
     let onDraftChange: (String, String) -> Void
     let onSubmit: (String, String) -> Void
@@ -567,13 +593,14 @@ private struct ReplyComposer: View {
             Button("Reply") {
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
+                // Do not clear text before server acceptance; parent bumps acceptedNonce on confirmed save.
                 onSubmit(trimmed, requestId)
-                text = ""
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .onAppear { text = initialBody }
+        .onChange(of: acceptedNonce) { _, _ in text = "" }
     }
 }
