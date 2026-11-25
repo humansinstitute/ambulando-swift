@@ -222,8 +222,24 @@ struct OnboardingFlowView: View {
             Text("Finish the test payment in your browser, then come back. Setup only continues once the NStack itself confirms the payment; coming back or a browser message is not enough.")
                 .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             Button("Check payment now") { run { await onboarding.refresh() } }.buttonStyle(PrimaryButtonStyle()).disabled(busy)
-            Button("Reopen payment page") { run { await onboarding.continueToPayment { app.openCheckout($0) } } }.disabled(busy)
+            Button("Reopen payment page") { run { await onboarding.continueToPayment { app.openCheckout($0) } } }.disabled(busy || snap.paymentBlock != nil)
+            paymentHold
             Button("Cancel this setup", role: .destructive) { run { await onboarding.cancelSetup() } }.disabled(busy)
+        }
+    }
+
+    /// What NStack holds for this setup when this device cannot just continue it, and the one explicit way to let it go. Closing asks NStack's
+    /// provider to settle or expire the payment; nothing is cleared here until NStack confirms, and a payment that was made funds the setup.
+    @ViewBuilder private var paymentHold: some View {
+        if let block = snap.paymentBlock {
+            Label(block.message, systemImage: "exclamationmark.triangle").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+                .accessibilityIdentifier("onboarding.paymentBlock")
+        }
+        if snap.canReleasePayment {
+            Button("Close this payment to change how I pay") { run { await onboarding.releasePayment() } }.disabled(busy)
+                .accessibilityIdentifier("onboarding.releasePayment")
+            Text("Only do this if you have not paid. NStack checks with the payment provider first: a payment that went through continues your setup, and one it cannot confirm stays open.")
+                .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
         }
     }
 
@@ -235,7 +251,7 @@ struct OnboardingFlowView: View {
             } else {
                 Text("The invoice has not been received yet. Asking again reuses the same request, so it never creates a second invoice.")
                     .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
-                Button("Get the invoice") { run { await onboarding.continueToLightning() } }.buttonStyle(PrimaryButtonStyle()).disabled(busy)
+                Button("Get the invoice") { run { await onboarding.continueToLightning() } }.buttonStyle(PrimaryButtonStyle()).disabled(busy || snap.paymentBlock != nil)
                     .accessibilityIdentifier("onboarding.getInvoice")
             }
             Text("Setup only continues once the NStack itself confirms the payment. A wallet saying \"paid\", coming back to the app or time passing is not confirmation.")
@@ -243,8 +259,9 @@ struct OnboardingFlowView: View {
             Button("Check payment now") { run { await onboarding.refresh() } }.buttonStyle(PrimaryButtonStyle()).disabled(busy)
                 .accessibilityIdentifier("onboarding.checkLightning")
             if snap.lightning == nil || snap.lightning?.state.verifiedClosedUnpaid == true {
-                Button("Get a new invoice") { run { await onboarding.continueToLightning() } }.disabled(busy)
+                Button("Get a new invoice") { run { await onboarding.continueToLightning() } }.disabled(busy || snap.paymentBlock != nil)
             }
+            paymentHold
             Button("Cancel this setup", role: .destructive) { run { await onboarding.cancelSetup() } }.disabled(busy)
         }
     }

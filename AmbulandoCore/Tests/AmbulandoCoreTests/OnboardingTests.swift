@@ -552,8 +552,10 @@ final class OnboardingTests: XCTestCase {
         let fresh = try await OnboardingFixture.controller(t, signer: makeIdentity(), store: MemoryOnboardingDraftStore())
         let snap = await fresh.load()
         XCTAssertEqual(snap.intent?.id, t.intents[0].id)
-        XCTAssertEqual(snap.phase, .form, "resumed, but the user must review again before any payment step")
+        XCTAssertEqual(snap.phase, .awaitingPayment, "NStack holds this intent's card order, so the new device resumes it instead of starting another")
+        XCTAssertEqual(snap.draft.checkoutOrderId, t.orderRows.first?.id)
         XCTAssertEqual(t.intents.count, 1)
+        XCTAssertEqual(t.orderRows.count, 1)
     }
 
     func testDuplicateProvisionTapsAndRelaunchIssueOneServerRequest() async throws {

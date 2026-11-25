@@ -26,6 +26,8 @@ public struct OnboardingDraft: Codable, Equatable, Sendable {
     /// The payment method that has been started for this intent ("card" or "lightning"), saved before the first request of that method. While
     /// it is set no other method is started: either one may have produced a payable order, and NStack alone says when it is closed.
     public var paymentMethod: String?
+    /// Absent in older card-only drafts: a reviewed intent may already have an unanswered checkout, so migration binds it conservatively.
+    public var paymentMethodTracked: Bool?
     /// Lightning operation key and the quote NStack bound to it. The key is saved before the quote request and replayed on every retry and
     /// relaunch; it is replaced only after NStack reports the quote expired or cancelled (a verified unpaid end).
     public var lightningKey: String?
@@ -33,6 +35,7 @@ public struct OnboardingDraft: Codable, Equatable, Sendable {
 
     public init(origin: String, signerNpub: String, createKey: String, checkoutKey: String) {
         self.origin = origin; self.signerNpub = signerNpub; self.createKey = createKey; self.checkoutKey = checkoutKey
+        paymentMethodTracked = true
     }
 
     public static func digest(name: String, fundingCents: Int, agentOfferId: String?, agentDailyCapCents: Int?) -> String {

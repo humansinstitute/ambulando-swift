@@ -15,6 +15,10 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
         /// Repeat top-ups need a provisioned account.
         case accountNotProvisioned
         case tooManyOpenQuotes
+        /// NStack holds more than one, or an unverifiable, payment for this setup; both payment methods stay closed until support resolves it.
+        case paymentNeedsSupport
+        /// This NStack has no way to close a payment from the app; the payment and its keys stay as they were.
+        case releaseUnavailable
     }
     public let kind: Kind
     public let status: Int?
@@ -41,6 +45,9 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
         case (_, "too_many_open_intents"): kind = .tooManyIntents
         case (_, "stale_revision"): kind = .staleRevision
         case (_, "idempotency_conflict"): kind = .idempotencyConflict
+        case (_, "payment_attempt_outstanding"): kind = .paymentMethodLocked
+        case (_, "payment_attempt_ambiguous"): kind = .paymentNeedsSupport
+        case (_, "intent_amount_changed"): kind = .staleRevision
         case (_, "intent_not_found"), (_, "quote_not_found"): kind = .notFound
         case (_, "account_not_found"), (_, "account_not_provisioned"): kind = .accountNotProvisioned
         case (429, _), (_, "too_many_open_topup_quotes"): kind = .tooManyOpenQuotes
@@ -83,6 +90,8 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
         case .hostedBackupRequired: HostedBackup.requirementNotice
         case .paymentMethodLocked: "A payment is already open for this. Finish it, or wait until the NStack confirms it closed, before choosing another way to pay."
         case .accountNotProvisioned: "Top-ups open once your first workspace has been created on this NStack."
+        case .paymentNeedsSupport: "NStack could not confirm a single payment for this setup. Do not pay again; your setup is saved. Check again later or contact NStack support."
+        case .releaseUnavailable: "This NStack cannot close a payment from the app. The payment is kept; let it finish or expire, then check the status."
         case .tooManyOpenQuotes: "There are too many unpaid Lightning invoices open. Let them expire or finish them first, then try again."
         case .persistence: "This device could not save your setup progress, so no new step was started. Free some space, then check the status and try again."
         }
@@ -263,7 +272,18 @@ public struct OnboardingAPI: Sendable {
     }
     /// The USD amount is the intent's server-held funding; the body carries only the operation key. A replay of the same key returns the same quote.
     public func lightningQuote(_ intentId: String, idempotencyKey: String) async throws -> LightningQuote {
-        try decode(LightningQuote.self, try await send("POST", try Self.intentPath(intentId, "/lightning/quote"), body: ["idempotency_key": idempotencyKey]), key: "quote")
+        try await lightningQuoteResult(intentId, idempotencyKey: idempotencyKey).quote
+    }
+    /// `reused` is true when NStack returned the intent's existing canonical quote for a key it had not seen (another device or a lost key).
+    public func lightningQuoteResult(_ intentId: String, idempotencyKey: String) async throws -> (quote: LightningQuote, reused: Bool) {
+        let data = try await send("POST", try Self.intentPath(intentId, "/lightning/quote"), body: ["idempotency_key": idempotencyKey])
+        let reused = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["reused"] as? Bool ?? false
+        return (try decode(LightningQuote.self, data, key: "quote"), reused)
+    }
+    /// Asks NStack to settle or expire/cancel the intent's outstanding payment at the provider. The returned intent's hint stays present when
+    /// that could not be verified; nothing is cleared client-side from this call alone.
+    public func releasePaymentAttempt(_ id: String) async throws -> OnboardingIntent {
+        try decode(OnboardingIntent.self, try await send("POST", try Self.intentPath(id, "/payment-attempt/release")), key: "intent")
     }
     /// The server re-polls its provider; this client supplies no settlement evidence.
     public func refreshLightningQuote(_ intentId: String, quoteId: String) async throws -> (quote: LightningQuote, intent: OnboardingIntent) {

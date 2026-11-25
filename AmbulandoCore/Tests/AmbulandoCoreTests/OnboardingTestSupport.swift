@@ -33,6 +33,17 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
     var checkoutAmountOffset = 0
     var checkoutRefusal: String?
     var checkoutOrders: [String: String] = [:]    // idempotency key -> order id
+    /// Card orders as the server holds them; the canonical-attempt rules read these, not the key table above.
+    struct Order { var id: String; var intentId: String; var cents: Int; var state = "open" }   // open | paid | expired
+    var orderRows: [Order] = []
+    /// What the provider would verify when the owner asks to release the outstanding attempt.
+    enum ReleaseVerdict { case expire, paid, unverified }
+    var releaseVerdict = ReleaseVerdict.expire
+    var releaseRouteMounted = true
+    /// An older NStack omits `payment_attempt` entirely.
+    var reportsPaymentAttempt = true
+    /// Edits the hint exactly as it goes on the wire (wrong amount, foreign quote, unknown state ...).
+    var attemptTamper: (@Sendable (inout [String: Any]) -> Void)?
     var failures: [String: [Error]] = [:]         // "METHOD path-suffix" -> queued transport errors (before the server acts)
     var dropResponses: [String: Int] = [:]        // server acts, then the answer is lost
     var provisionFailures = 0
@@ -72,6 +83,7 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
 
     func fund(_ intentId: String) { lock.withLock {
         guard let i = intents.firstIndex(where: { $0.id == intentId }) else { return }
+        for o in orderRows.indices where orderRows[o].intentId == intentId && orderRows[o].state == "open" { orderRows[o].state = "paid" }
         intents[i].funded = true; intents[i].status = "funded"; intents[i].revision += 1
     } }
     /// The provider-verified outcome of a quote (what the server's own refresh poll would learn). Funds the intent / credits the account on settle.
@@ -145,6 +157,37 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
             return error(404, "not_found")
         }
     }
+    /// A card order the provider later reports expired.
+    func expireOrder(_ id: String) { lock.withLock { if let o = orderRows.firstIndex(where: { $0.id == id }) { orderRows[o].state = "expired" } } }
+
+    private static let outstandingQuoteStates = ["issuing", "open", "late_payment", "mismatch"]
+    private func outstanding(_ intentId: String) -> (orders: [Order], quotes: [Quote]) {
+        (orderRows.filter { $0.intentId == intentId && $0.state == "open" }, quotes.filter { $0.intentId == intentId && Self.outstandingQuoteStates.contains($0.state) })
+    }
+    /// The contract's owner-only `payment_attempt` (tower src/services/onboarding-payment-attempt.ts `paymentAttemptDto`).
+    func attemptHint(_ intentId: String) -> Any {
+        let (orders, qs) = outstanding(intentId)
+        let created = "2026-11-24T00:00:00.000Z"
+        var dto: [String: Any]
+        switch (orders.count, qs.count) {
+        case (0, 0): return NSNull()
+        case (1, 0):
+            dto = ["method": "card", "state": "open", "resume": "checkout", "order_id": orders[0].id, "quote_id": NSNull(), "amount_cents": orders[0].cents, "created_at": created, "quote": NSNull(), "count": 1]
+        case (0, 1):
+            let q = qs[0]
+            dto = ["method": "lightning", "state": q.state == "issuing" ? "issuing" : q.state == "open" ? "open" : "needs_support",
+                   "resume": q.state == "issuing" || q.state == "open" ? "lightning_quote" : "support", "order_id": NSNull(), "quote_id": q.id,
+                   "amount_cents": q.cents, "created_at": created, "quote": quoteJSON(q), "count": 1]
+        default:
+            dto = ["method": NSNull(), "state": "ambiguous", "resume": "support", "order_id": NSNull(), "quote_id": NSNull(), "amount_cents": NSNull(), "created_at": created, "quote": NSNull(), "count": orders.count + qs.count]
+        }
+        attemptTamper?(&dto)
+        return dto
+    }
+    private func conflict(_ code: String, _ intentId: String) -> (Data, HTTPURLResponse, Bool) {
+        reply(409, ["code": code, "error": code, "payment_attempt": attemptHint(intentId)])
+    }
+
     func bumpRevision(_ intentId: String) { lock.withLock { if let i = intents.firstIndex(where: { $0.id == intentId }) { intents[i].revision += 1 } } }
 
     func view(_ i: Intent) -> [String: Any] {
@@ -154,12 +197,14 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
                      "default_daily_cap_cents": o.cap, "max_daily_cap_cents": o.max, "daily_cap_cents": i.cap ?? o.cap]
         }
         let steps = Dictionary(uniqueKeysWithValues: i.steps.map { ($0, ["completed_at": "2026-11-24T00:00:00.000Z"]) })
-        return ["version": 1, "id": i.id, "account_id": "acct-" + i.owner.suffix(6), "status": i.status, "revision": i.revision,
+        var view: [String: Any] = ["version": 1, "id": i.id, "account_id": "acct-" + i.owner.suffix(6), "status": i.status, "revision": i.revision,
                 "workspace_name": i.name, "agent": agent, "agent_state": i.offerId == nil ? "none" : (i.steps.contains("agent") ? "provisioned" : "selected_not_provisioned"),
                 "funding_cents": i.funding, "return_state": NSNull(), "funded": i.funded, "funded_at": i.funded ? "2026-11-24T00:00:00.000Z" : NSNull(),
                 "funding_reversed": i.reversed, "steps": steps, "last_error": i.lastError as Any? ?? NSNull(),
                 "workspace_id": i.workspaceId as Any? ?? NSNull(), "provisioned_at": i.status == "provisioned" ? "2026-11-24T00:00:00.000Z" : NSNull(),
                 "intro_ends_at": NSNull(), "created_at": "2026-11-24T00:00:00.000Z", "updated_at": "2026-11-24T00:00:00.000Z"]
+        if reportsPaymentAttempt { view["payment_attempt"] = attemptHint(i.id) }
+        return view
     }
 
     private func reply(_ status: Int, _ body: Any) -> (Data, HTTPURLResponse, Bool) { (try! JSONSerialization.data(withJSONObject: body), HTTPURLResponse(url: URL(string: origin)!, statusCode: status, httpVersion: nil, headerFields: nil)!, false) }
@@ -266,7 +311,12 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
             guard intents[index].revision == body["expected_revision"] as? Int else { return error(409, "stale_revision") }
             guard ["open", "funded"].contains(intents[index].status) else { return error(409, "intent_not_editable") }
             if let n = body["workspace_name"] as? String { intents[index].name = n }
-            if let f = body["funding_cents"] as? Int { if intents[index].status != "open" { return error(409, "funding_locked") }; intents[index].funding = f }
+            if let f = body["funding_cents"] as? Int {
+                if intents[index].status != "open" { return error(409, "funding_locked") }
+                let held = outstanding(intents[index].id)
+                if f != intents[index].funding, !held.orders.isEmpty || !held.quotes.isEmpty { return conflict("payment_attempt_outstanding", intents[index].id) }
+                intents[index].funding = f
+            }
             if body.keys.contains("agent_offer_id") {
                 if let o = body["agent_offer_id"] as? String {
                     guard let found = offers.first(where: { $0.id == o }) else { return error(409, "agent_offer_unavailable") }
@@ -279,8 +329,19 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
             if let code = checkoutRefusal { return error(400, code) }
             guard Set(body.keys) == ["idempotency_key", "return_url"], let k = body["idempotency_key"] as? String, intents[index].status == "open" else { return error(409, "intent_not_open") }
             if intents[index].identityOrigin == "new", !hosted.values.contains(where: { $0.owner == owner }) { return error(409, "identity_backup_required") }
-            let order = checkoutOrders[k] ?? UUID().uuidString.lowercased(); checkoutOrders[k] = order
-            return reply(201, ["order_id": order, "checkout_url": checkoutURL, "mode": checkoutMode, "amount_cents": intents[index].funding + checkoutAmountOffset])
+            if let prior = checkoutOrders[k] {
+                return reply(201, ["order_id": prior, "checkout_url": checkoutURL, "mode": checkoutMode, "amount_cents": intents[index].funding + checkoutAmountOffset])
+            }
+            // One canonical outstanding attempt per intent: reuse a card order, refuse another method or ambiguity before any provider call.
+            let held = outstanding(intents[index].id)
+            if held.orders.count + held.quotes.count > 1 { return conflict("payment_attempt_ambiguous", intents[index].id) }
+            if !held.quotes.isEmpty { return conflict("payment_attempt_outstanding", intents[index].id) }
+            if let canonical = held.orders.first {
+                return reply(200, ["order_id": canonical.id, "checkout_url": checkoutURL, "mode": checkoutMode, "amount_cents": canonical.cents + checkoutAmountOffset, "reused": true])
+            }
+            let order = UUID().uuidString.lowercased(); checkoutOrders[k] = order
+            orderRows.append(Order(id: order, intentId: intents[index].id, cents: intents[index].funding))
+            return reply(201, ["order_id": order, "checkout_url": checkoutURL, "mode": checkoutMode, "amount_cents": intents[index].funding + checkoutAmountOffset, "reused": false])
         case ("POST", "lightning"):
             let sub = parts.count > 3 ? parts[3] : ""
             if sub == "quote" {
@@ -288,6 +349,10 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
                 guard Set(body.keys) == ["idempotency_key"], let k = (body["idempotency_key"] as? String).flatMap({ $0.range(of: "^[a-zA-Z0-9_-]{8,100}$", options: .regularExpression) != nil ? $0 : nil }) else { return error(400, "invalid_quote_request") }
                 if let prior = quotes.first(where: { $0.owner == owner && $0.key == k }) { return prior.intentId == intents[index].id ? reply(201, ["quote": quoteJSON(prior)]) : error(409, "idempotency_conflict") }
                 guard intents[index].status == "open" else { return error(409, "intent_not_open") }
+                let held = outstanding(intents[index].id)
+                if held.orders.count + held.quotes.count > 1 { return conflict("payment_attempt_ambiguous", intents[index].id) }
+                if !held.orders.isEmpty { return conflict("payment_attempt_outstanding", intents[index].id) }
+                if let canonical = held.quotes.first { return reply(200, ["quote": quoteJSON(canonical), "reused": true]) }
                 if intents[index].identityOrigin == "new", !hosted.values.contains(where: { $0.owner == owner }) { return error(409, "identity_backup_required") }
                 let q = makeQuote(owner: owner, intent: intents[index].id, key: k, cents: intents[index].funding); quotes.append(q)
                 return reply(201, ["quote": quoteJSON(q)])
@@ -297,6 +362,20 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
                 return reply(200, ["quote": quoteJSON(q), "intent": view(intents[index])])
             }
             return error(404, "not_found")
+        case ("POST", "payment-attempt"):
+            guard releaseRouteMounted else { return (Data("404 Not Found".utf8), HTTPURLResponse(url: URL(string: origin)!, statusCode: 404, httpVersion: nil, headerFields: nil)!, false) }
+            guard parts.count == 4, parts[3] == "release", body.isEmpty else { return error(404, "not_found") }
+            switch releaseVerdict {
+            case .expire:
+                for o in orderRows.indices where orderRows[o].intentId == intents[index].id && orderRows[o].state == "open" { orderRows[o].state = "expired" }
+                for q in quotes.indices where quotes[q].intentId == intents[index].id && Self.outstandingQuoteStates.contains(quotes[q].state) { quotes[q].state = "expired" }
+            case .paid:
+                for o in orderRows.indices where orderRows[o].intentId == intents[index].id && orderRows[o].state == "open" { orderRows[o].state = "paid" }
+                for q in quotes.indices where quotes[q].intentId == intents[index].id && Self.outstandingQuoteStates.contains(quotes[q].state) { quotes[q].state = "settled" }
+                intents[index].funded = true; intents[index].status = "funded"; intents[index].revision += 1
+            case .unverified: break
+            }
+            return reply(200, ["intent": view(intents[index])])
         case ("POST", "cancel"):
             if intents[index].status == "cancelled" { return reply(200, ["intent": view(intents[index])]) }
             guard intents[index].status == "open" else { return error(409, "intent_not_cancellable") }

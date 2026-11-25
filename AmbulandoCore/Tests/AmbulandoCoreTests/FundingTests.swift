@@ -176,6 +176,27 @@ final class FundingTests: XCTestCase {
         XCTAssertEqual(t2.checkoutOrders.count, 1)
     }
 
+    func testOlderCardOnlyDraftCannotSwitchAfterAnUnansweredCheckout() async throws {
+        let t = tower(), store = MemoryOnboardingDraftStore()
+        let identity = try await makeIdentity()
+        let (c, _) = try await ready(t, store: store, signer: identity)
+        t.dropResponses["/checkout"] = 1
+        let lost = await c.continueToPayment()
+        var legacy = lost.draft
+        legacy.paymentMethod = nil; legacy.paymentMethodTracked = nil
+        try store.save(legacy) // the old schema had the intent and replay key, but no method tracking
+        let resumed = try await OnboardingFixture.controller(t, signer: identity, store: store, returnURL: nil)
+        _ = await resumed.load()
+        let blocked = await resumed.continueToLightning()
+        XCTAssertEqual(blocked.failure?.kind, .paymentMethodLocked)
+        XCTAssertEqual(t.count("POST", suffix: "/lightning/quote"), 0)
+        let card = await resumed.continueToPayment()
+        XCTAssertEqual(card.draft.checkoutKey, legacy.checkoutKey)
+        XCTAssertNotNil(card.checkoutURL)
+        XCTAssertEqual(t.checkoutOrders.count, 1)
+        XCTAssertEqual(card.draft.paymentMethodTracked, true)
+    }
+
     func testUnavailableNeverProvesAnInvoiceWasNotIssued() async throws {
         let t = tower()
         let (c, _) = try await ready(t)

@@ -34,6 +34,8 @@ final class OnboardingModel {
     func refresh() async { snapshot = await controller.refresh() }
     func provision() async { snapshot = await controller.provision() }
     func cancelSetup() async { snapshot = await controller.cancelSetup() }
+    /// The user's explicit request to close an unpaid payment so another method can be chosen. Never called automatically.
+    func releasePayment() async { snapshot = await controller.releasePayment() }
     func finish() async { snapshot = await controller.finish() }
     func editAgain() async { snapshot = await controller.reopenForEditing() }
     func paymentReturned(_ url: URL?) async { snapshot = await controller.paymentReturned(url) }
