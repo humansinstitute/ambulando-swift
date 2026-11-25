@@ -24,6 +24,7 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
     var offers: [Offer] = []
     var rolloutEnabled = true
     var deploymentConfig: [String: Any]?
+    var lightningServing = true
     var inviteCodes: [String: Int] = [:]          // code -> max admissions
     var seats: [String: Set<String>] = [:]        // code -> owner npubs
     var accounts: Set<String> = []
@@ -38,6 +39,21 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
     var descriptorOrigin: String?
     var provisionDelay: TimeInterval = 0
     var hook: (@Sendable (Seen) -> Void)?
+    /// Lightning quote as `quoteView` reports it. `evidence` is test-only server state (what the fixture provider would observe).
+    struct Quote { var id = UUID().uuidString.lowercased(); var owner: String; var intentId: String?; var key: String; var cents: Int; var state = "open"
+                   var sats: Int; var invoice: String; var hash: String; var expires: String }
+    struct TopupOrder { var id: String; var owner: String; var cents: Int; var returnURL: String; var open = true }
+    struct Credit { var id = UUID().uuidString.lowercased(); var cents: Int; var method: String }
+    var quotes: [Quote] = []
+    var quoteTTL: TimeInterval = 600
+    var satsPerCent = 25
+    var invoiceAmountOffset = 0                    // makes the invoice name a different amount than the quote (a hostile or buggy provider)
+    var quoteAmountOffset = 0
+    var provisionedOwners: Set<String> = []
+    var topupOrders: [String: TopupOrder] = [:]    // idempotency key -> order
+    var topupCredits: [String: [Credit]] = [:]     // owner -> credits
+    var accountFunding: Any?
+    var accountLifecycle: Any?
     var hosted: [String: HostedRow] = [:]
     var hostedMounted = true
     /// The server's accepted scrypt cost range; the real contract is 16...18, tests lower it to keep debug builds fast.
@@ -53,6 +69,75 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
         guard let i = intents.firstIndex(where: { $0.id == intentId }) else { return }
         intents[i].funded = true; intents[i].status = "funded"; intents[i].revision += 1
     } }
+    /// The provider-verified outcome of a quote (what the server's own refresh poll would learn). Funds the intent / credits the account on settle.
+    func resolveQuote(_ id: String, to state: String) { lock.withLock {
+        guard let q = quotes.firstIndex(where: { $0.id == id }) else { return }
+        quotes[q].state = state
+        guard state == "settled" else { return }
+        if let intent = quotes[q].intentId, let i = intents.firstIndex(where: { $0.id == intent }) {
+            intents[i].funded = true; intents[i].status = "funded"; intents[i].revision += 1
+        } else { topupCredits[quotes[q].owner, default: []].append(Credit(cents: quotes[q].cents, method: "lightning")) }
+    } }
+    func settleTopupOrder(_ key: String) { lock.withLock {
+        guard var o = topupOrders[key] else { return }
+        o.open = false; topupOrders[key] = o; topupCredits[o.owner, default: []].append(Credit(cents: o.cents, method: "stripe"))
+    } }
+    func expireTopupOrder(_ key: String) { lock.withLock { topupOrders[key]?.open = false } }
+    func provision(_ owner: String) { lock.withLock { provisionedOwners.insert(owner) } }
+
+    private func quoteJSON(_ q: Quote) -> [String: Any] {
+        ["id": q.id, "intent_id": q.intentId as Any? ?? NSNull(), "state": q.state, "amount_cents": q.cents + quoteAmountOffset, "amount_sats": q.sats, "invoice": q.invoice, "payment_hash": q.hash,
+         "expires_at": q.expires, "rate": ["source": "fixture-fx", "quoted_at": "2026-11-24T00:00:00.000Z"]]
+    }
+    private func makeQuote(owner: String, intent: String?, key: String, cents: Int) -> Quote {
+        let sats = cents * satsPerCent
+        let named = (sats + invoiceAmountOffset) * 10
+        let charset = Array("qpzry9x8gf2tvdw0s3jn54khce6mua7l")
+        let tail = String((0..<50).map { charset[($0 * 7 + sats) % charset.count] })
+        let hash = SHA256Hex.of("fixture-hash-\(key)-\(cents)")
+        let expires = ISO8601DateFormatter().string(from: Date().addingTimeInterval(quoteTTL))
+        return Quote(owner: owner, intentId: intent, key: key, cents: cents, sats: sats, invoice: "lnbc\(named)n1" + tail, hash: hash, expires: expires)
+    }
+    private func topupRoute(_ method: String, _ rest: String, _ body: [String: Any], _ owner: String) -> (Data, HTTPURLResponse, Bool) {
+        if !accounts.contains(owner) { return error(404, "account_not_found") }
+        if !provisionedOwners.contains(owner) { return error(409, "account_not_provisioned") }
+        if method != "GET", !rolloutEnabled { return error(503, "onboarding_rollout_disabled") }
+        let keyOK = { (v: Any?) -> String? in (v as? String).flatMap { $0.range(of: "^[a-zA-Z0-9_-]{8,100}$", options: .regularExpression) != nil ? $0 : nil } }
+        switch (method, rest) {
+        case ("GET", "/topups"):
+            let credited = (topupCredits[owner] ?? []).map { ["settlement_id": $0.id, "method": $0.method, "amount_cents": $0.cents, "amount_usd": String(format: "%d.%02d", $0.cents / 100, $0.cents % 100), "settled_at": "2026-11-24T00:00:00.000Z"] as [String: Any] }
+            let pendingQuotes = quotes.filter { $0.owner == owner && $0.intentId == nil && ["open", "late_payment", "mismatch"].contains($0.state) }
+                .map { ["quote_id": $0.id, "state": $0.state, "amount_cents": $0.cents, "amount_sats": $0.sats, "invoice": $0.invoice, "payment_hash": $0.hash, "expires_at": $0.expires] as [String: Any] }
+            let orders = topupOrders.values.filter { $0.owner == owner && $0.open }.map { ["order_id": $0.id, "amount_cents": $0.cents, "created_at": "2026-11-24T00:00:00.000Z"] as [String: Any] }
+            return reply(200, ["credited": credited, "pending_lightning": pendingQuotes, "pending_checkout": orders])
+        case ("POST", "/topups/checkout"):
+            guard Set(body.keys) == ["idempotency_key", "return_url", "amount_cents"], let k = keyOK(body["idempotency_key"]), let url = body["return_url"] as? String,
+                  let cents = body["amount_cents"] as? Int, (2100...1_000_000).contains(cents) else { return error(400, "invalid_checkout") }
+            if let prior = topupOrders[k] {
+                guard prior.cents == cents, prior.returnURL == url else { return error(409, "idempotency_conflict") }
+                return reply(201, ["order_id": prior.id, "checkout_url": checkoutURL, "mode": checkoutMode, "amount_cents": prior.cents])
+            }
+            let order = TopupOrder(id: UUID().uuidString.lowercased(), owner: owner, cents: cents, returnURL: url)
+            topupOrders[k] = order
+            return reply(201, ["order_id": order.id, "checkout_url": checkoutURL, "mode": checkoutMode, "amount_cents": cents + checkoutAmountOffset])
+        case ("POST", "/topups/lightning/quote"):
+            guard lightningServing else { return error(503, "lightning_unavailable") }
+            guard Set(body.keys) == ["idempotency_key", "amount_cents"], let k = keyOK(body["idempotency_key"]), let cents = body["amount_cents"] as? Int, (2100...1_000_000).contains(cents) else { return error(400, "invalid_quote_request") }
+            if let prior = quotes.first(where: { $0.owner == owner && $0.key == k }) {
+                return prior.intentId == nil && prior.cents == cents ? reply(201, ["quote": quoteJSON(prior)]) : error(409, "idempotency_conflict")
+            }
+            if quotes.filter({ $0.owner == owner && $0.intentId == nil && $0.state == "open" }).count >= 5 { return error(429, "too_many_open_topup_quotes") }
+            let q = makeQuote(owner: owner, intent: nil, key: k, cents: cents); quotes.append(q)
+            return reply(201, ["quote": quoteJSON(q)])
+        default:
+            let parts = rest.split(separator: "/").map(String.init)
+            if method == "POST", parts.count == 5, parts[1] == "lightning", parts[2] == "quotes", parts[4] == "refresh" {
+                guard let q = quotes.first(where: { $0.id == parts[3] && $0.owner == owner && $0.intentId == nil }) else { return error(404, "quote_not_found") }
+                return reply(200, ["quote": quoteJSON(q)])
+            }
+            return error(404, "not_found")
+        }
+    }
     func bumpRevision(_ intentId: String) { lock.withLock { if let i = intents.firstIndex(where: { $0.id == intentId }) { intents[i].revision += 1 } } }
 
     func view(_ i: Intent) -> [String: Any] {
@@ -127,7 +212,10 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
             return deploymentConfig.map { reply(200, $0) } ?? error(404, "not_found")
         }
         if method == "POST", rest == "/account" { accounts.insert(owner); return reply(200, ["account": account(owner)]) }
-        if method == "GET", rest == "/account" { return reply(200, ["account": accounts.contains(owner) ? account(owner) as Any : NSNull(), "funding": NSNull()]) }
+        if method == "GET", rest == "/account" {
+            return reply(200, ["account": accounts.contains(owner) ? account(owner) as Any : NSNull(), "funding": accountFunding ?? NSNull(), "lifecycle": accountLifecycle ?? NSNull()])
+        }
+        if rest.hasPrefix("/topups") { return topupRoute(method, rest, body, owner) }
         if method == "GET", rest == "/agent-offers" {
             return reply(200, ["offers": offers.map { ["id": $0.id, "template": "assistant", "model_ref": "fixture-model", "rate_version": "v1", "default_daily_cap_cents": $0.cap, "max_daily_cap_cents": $0.max] as [String: Any] }])
         }
@@ -184,6 +272,22 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
             if intents[index].identityOrigin == "new", !hosted.values.contains(where: { $0.owner == owner }) { return error(409, "identity_backup_required") }
             let order = checkoutOrders[k] ?? UUID().uuidString.lowercased(); checkoutOrders[k] = order
             return reply(201, ["order_id": order, "checkout_url": checkoutURL, "mode": checkoutMode, "amount_cents": intents[index].funding + checkoutAmountOffset])
+        case ("POST", "lightning"):
+            let sub = parts.count > 3 ? parts[3] : ""
+            if sub == "quote" {
+                guard lightningServing else { return error(503, "lightning_unavailable") }
+                guard Set(body.keys) == ["idempotency_key"], let k = (body["idempotency_key"] as? String).flatMap({ $0.range(of: "^[a-zA-Z0-9_-]{8,100}$", options: .regularExpression) != nil ? $0 : nil }) else { return error(400, "invalid_quote_request") }
+                if let prior = quotes.first(where: { $0.owner == owner && $0.key == k }) { return prior.intentId == intents[index].id ? reply(201, ["quote": quoteJSON(prior)]) : error(409, "idempotency_conflict") }
+                guard intents[index].status == "open" else { return error(409, "intent_not_open") }
+                if intents[index].identityOrigin == "new", !hosted.values.contains(where: { $0.owner == owner }) { return error(409, "identity_backup_required") }
+                let q = makeQuote(owner: owner, intent: intents[index].id, key: k, cents: intents[index].funding); quotes.append(q)
+                return reply(201, ["quote": quoteJSON(q)])
+            }
+            if sub == "quotes", parts.count == 6, parts[5] == "refresh" {
+                guard let q = quotes.first(where: { $0.id == parts[4] && $0.intentId == intents[index].id && $0.owner == owner }) else { return error(404, "quote_not_found") }
+                return reply(200, ["quote": quoteJSON(q), "intent": view(intents[index])])
+            }
+            return error(404, "not_found")
         case ("POST", "cancel"):
             if intents[index].status == "cancelled" { return reply(200, ["intent": view(intents[index])]) }
             guard intents[index].status == "open" else { return error(409, "intent_not_cancellable") }

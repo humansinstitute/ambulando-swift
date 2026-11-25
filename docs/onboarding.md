@@ -11,7 +11,7 @@ This slice is **workspace-only and test-mode**. See "Known gaps" before treating
 NStack `/api/v4/onboarding` (tower `docs/contract/onboarding-v1.md`, `src/routes/onboarding.ts`, `src/services/onboarding.ts`),
 human direct-signature NIP-98 only. Native uses: `GET/POST /account`, `GET /agent-offers`, `GET/POST /intents`,
 `GET /intents/{id}`, `POST /intents/{id}/options|cancel|checkout|provision`. It does **not** call `GET /invites/{code}`
-(the code would sit in a URL path), the Lightning routes (no provider exists) or any `/admin` route.
+(the code would sit in a URL path), any `/admin` route. Lightning and top-ups are described in "Lightning and repeat top-ups" below.
 
 * Every mutation sends a JSON body, at least `{}`: the Tower's strict check requires a NIP-98 `payload` hash even on
   bodiless actions. Reads send none.
@@ -118,8 +118,49 @@ swift-sodium 0.9.1 (the first choice) cannot do it: its `Clibsodium.xcframework`
 No live NStack (the hosted-backup service was a committed contract, not a running service, when this was written), no real Stripe checkout, no
 iPhone/iPad build or run, no device. The Mac Debug target builds. See the handoff for the dated list.
 
+## Lightning and repeat top-ups (source; no live NStack, wallet or payment)
+
+Contracts read from tower `src/routes/onboarding.ts`, `services/hosting-lightning.ts`, `services/hosting-topup.ts`, `docs/contract/funding-reversals-v1.md`,
+`hosting-lightning-receiver-v1.md`, `onboarding-v1.md` (Tower HEAD `1250578`). Real receiving is disabled and unconfigured on NStack; nothing here was exercised
+against a provider, mint, FX source or real payment.
+
+| Call | Body (exact) | Result used |
+| --- | --- | --- |
+| `POST /intents/{id}/lightning/quote` | `{idempotency_key}` | `{quote}`: `id, intent_id, state, amount_cents, amount_sats, invoice, payment_hash, expires_at, rate{source,quoted_at}` |
+| `POST /intents/{id}/lightning/quotes/{quoteId}/refresh` | `{}` | `{quote, intent}` (server re-polls its provider; the client supplies no evidence) |
+| `GET /topups` | none | `{credited[], pending_lightning[], pending_checkout[]}` |
+| `POST /topups/checkout` | `{idempotency_key, return_url, amount_cents}` | `{order_id, checkout_url, mode, amount_cents}` |
+| `POST /topups/lightning/quote` | `{idempotency_key, amount_cents}` | `{quote}` with `intent_id: null` |
+| `POST /topups/lightning/quotes/{quoteId}/refresh` | `{}` | `{quote}` |
+| `GET /config` | none | `lightning.available`, `funding.topup_min_cents/topup_max_cents`, `card.*` (unchanged) |
+| `GET /account` | none | `account`, `funding` (reversal debt / open adjustments), `lifecycle` |
+
+**Intent Lightning** (`OnboardingController.continueToLightning`). Lightning is offered only when the signed config says `onboarding_enabled` and
+`lightning.available`; an older NStack (no config) or a disabled one leaves it off and sends nothing. The USD amount is the intent's server-held figure;
+the quote must be for this intent and equal that amount, or it is never shown. The invoice's own human-readable amount, when it names one, must equal the
+quoted sats (`PayableInvoice`); the wallet verifies the checksum and signature. Screen: USD, sats, rate source and time, stated expiry, QR, copy and an
+explicit "Open in wallet" (`lightning:` URL built from the shown invoice). Wallet return, "paid" in a wallet, the clock and the quote state alone never
+fund; only the server intent (`funded && !funding_reversed`) does, learned from the refresh response or `GET /intents/{id}`.
+
+* **One payment per setup.** `paymentMethod`, `lightningKey` and the quote id are saved before the request that can make an invoice. While a method is
+  bound the other is refused locally (`paymentMethodLocked`) with nothing sent. A definite refusal made before any order (`lightning_unavailable`, 4xx) frees it;
+  a lost or untrusted answer keeps the key and method, and the same key is replayed on retry and relaunch. A relaunch re-reads the quote through the refresh route.
+  Funding cannot be edited once a card order or Lightning key exists.
+* **Verified ends only.** `expired`/`cancelled` (provider-verified) release the key and method so a new invoice or card becomes possible. An unpaid mint quote stays
+  `open` past its expiry (the receiver has no cancel): the screen says not to pay it and that NStack has not confirmed it closed, and never asks for a second invoice.
+  `late_payment`, `mismatch` and unknown states show the quote reference for support, keep the lock and are never offered as payable. No refund payout exists on the receiver and none is invented.
+* The hosted-backup gate, expected signer and `identity_origin: "new"` rules are shared with card; credit survives a failed provisioning step (no second invoice, no checkout).
+
+**Top-ups** (`TopupController`, Settings > Connection > "Add credit to your account"). Server minimum US$21, presets 21 / 50 / 100, custom up to the
+server's bound (from `config.funding.topup_*_cents` when published, else the documented US$21 to US$10,000). No fee, subscription, automatic top-up, workspace, seat or
+introduction. The account summary (balance, reversal debt, lifecycle read-only days) is read from `GET /account`; nothing is converted or invented. Card needs
+`card.available`, test mode and a server-approved `return_urls` entry from the same signed config; there is no build-time allowlist. The Stripe URL must be https on stripe.com,
+mode `test` and the amount must equal the request before it opens. One attempt is open per (origin, signer): its key, amount and return address are saved before the request, replayed
+unchanged after any failure or relaunch, and closed only by NStack's word (the order no longer listed, or a quote `settled`/`expired`/`cancelled`; late or mismatched
+quotes are shown for support). Credit appears only as a listed settlement.
+
 ## Known gaps
 
 See the handoff for the dated list. In short: the PIN vault is not an `ncryptsec` and is not a substitute for the backups above; Lightning
-is shown unavailable, agents and General are not provisioned by the backend yet, the return URL needs real configuration, no
+and top-ups are source-complete but not validated against a live NStack, agents and General are not provisioned by the backend yet, the return URL needs real configuration, no
 invitation deep-link format exists in NStack, and nothing was exercised against a live Tower, a real Stripe test checkout or a device.

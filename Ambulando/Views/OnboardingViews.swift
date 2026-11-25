@@ -191,27 +191,60 @@ struct OnboardingFlowView: View {
             Text("Payment method").font(.amb(.subheadline).weight(.semibold))
             ForEach(snap.paymentOptions, id: \.method) { option in
                 VStack(alignment: .leading, spacing: 2) {
-                    Label(option.label, systemImage: option.available ? "creditcard" : "nosign").foregroundStyle(option.available ? Amb.foreground : Amb.mutedForeground)
+                    Label(option.label, systemImage: option.method == .lightning ? (option.available ? "bolt" : "nosign") : (option.available ? "creditcard" : "nosign"))
+                        .foregroundStyle(option.available ? Amb.foreground : Amb.mutedForeground)
                     if let reason = option.unavailableReason { Text(reason).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground) }
                 }
             }
+            Text("Choosing a method starts one payment for this setup. Another method opens only after NStack confirms the first is closed.")
+                .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+            Button("Edit") { run { await onboarding.editAgain() } }.disabled(busy)
             HStack {
-                Button("Edit") { run { await onboarding.editAgain() } }.disabled(busy)
-                Button("Confirm and open payment") { run { await onboarding.continueToPayment { app.openCheckout($0) } } }
+                Button("Pay by card") { run { await onboarding.continueToPayment { app.openCheckout($0) } } }
                     .buttonStyle(PrimaryButtonStyle())
                     .disabled(busy || !snap.paymentOptions.contains { $0.method == .card && $0.available })
                     .accessibilityIdentifier("onboarding.pay")
+                Button("Pay with Lightning") { run { await onboarding.continueToLightning() } }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(busy || !snap.paymentOptions.contains { $0.method == .lightning && $0.available })
+                    .accessibilityIdentifier("onboarding.payLightning")
             }
         }
     }
 
-    private var awaiting: some View {
+    @ViewBuilder private var awaiting: some View {
+        if snap.draft.paymentMethod == "lightning" || snap.draft.lightningKey != nil { awaitingLightning } else { awaitingCard }
+    }
+
+    private var awaitingCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Waiting for payment confirmation").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
             Text("Finish the test payment in your browser, then come back. Setup only continues once the NStack itself confirms the payment; coming back or a browser message is not enough.")
                 .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
             Button("Check payment now") { run { await onboarding.refresh() } }.buttonStyle(PrimaryButtonStyle()).disabled(busy)
             Button("Reopen payment page") { run { await onboarding.continueToPayment { app.openCheckout($0) } } }.disabled(busy)
+            Button("Cancel this setup", role: .destructive) { run { await onboarding.cancelSetup() } }.disabled(busy)
+        }
+    }
+
+    private var awaitingLightning: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Pay with Lightning").font(Amb.editorial).foregroundStyle(Amb.itemHeading)
+            if let quote = snap.lightning {
+                LightningQuoteCard(quote: quote, invoice: snap.lightningInvoice, usdLabel: OnboardingFunding.label(cents: quote.amount_cents), open: { app.openWallet($0) })
+            } else {
+                Text("The invoice has not been received yet. Asking again reuses the same request, so it never creates a second invoice.")
+                    .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+                Button("Get the invoice") { run { await onboarding.continueToLightning() } }.buttonStyle(PrimaryButtonStyle()).disabled(busy)
+                    .accessibilityIdentifier("onboarding.getInvoice")
+            }
+            Text("Setup only continues once the NStack itself confirms the payment. A wallet saying \"paid\", coming back to the app or time passing is not confirmation.")
+                .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+            Button("Check payment now") { run { await onboarding.refresh() } }.buttonStyle(PrimaryButtonStyle()).disabled(busy)
+                .accessibilityIdentifier("onboarding.checkLightning")
+            if snap.lightning == nil || snap.lightning?.state.verifiedClosedUnpaid == true {
+                Button("Get a new invoice") { run { await onboarding.continueToLightning() } }.disabled(busy)
+            }
             Button("Cancel this setup", role: .destructive) { run { await onboarding.cancelSetup() } }.disabled(busy)
         }
     }

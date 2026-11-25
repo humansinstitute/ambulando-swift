@@ -23,6 +23,13 @@ public struct OnboardingDraft: Codable, Equatable, Sendable {
     /// Digest of the choices the user confirmed on the review screen. Checkout needs it to equal the intent's own choices.
     public var reviewedDigest: String?
     public var checkoutOrderId: String?
+    /// The payment method that has been started for this intent ("card" or "lightning"), saved before the first request of that method. While
+    /// it is set no other method is started: either one may have produced a payable order, and NStack alone says when it is closed.
+    public var paymentMethod: String?
+    /// Lightning operation key and the quote NStack bound to it. The key is saved before the quote request and replayed on every retry and
+    /// relaunch; it is replaced only after NStack reports the quote expired or cancelled (a verified unpaid end).
+    public var lightningKey: String?
+    public var lightningQuoteId: String?
 
     public init(origin: String, signerNpub: String, createKey: String, checkoutKey: String) {
         self.origin = origin; self.signerNpub = signerNpub; self.createKey = createKey; self.checkoutKey = checkoutKey

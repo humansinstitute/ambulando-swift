@@ -51,6 +51,11 @@ public struct OnboardingSnapshot: Equatable, Sendable {
     public var checkoutURL: URL?
     public var paymentOptions: [OnboardingPaymentOption] = []
     public var landing: OnboardingLanding?
+    /// The Lightning quote NStack last reported for this intent (validated against the intent's own amount) and the invoice it permits showing.
+    public var lightning: LightningQuote?
+    public var lightningInvoice: PayableInvoice?
+    /// Which method has been started for this intent, if any. While set, the other method is refused.
+    public var startedMethod: OnboardingPaymentOption.Method?
     public var busy = false
     /// Whether a newly created identity may start paid setup. Checked before any request is built, signed or saved.
     public var backupGate: PaymentBackupGate = .allowed
@@ -71,6 +76,7 @@ public actor OnboardingController {
     private let signerNpub: String
     private let store: OnboardingDraftStore
     private var returnURL: URL?
+    private var lightningOffered = false
     private let configuredReturnURL: URL?
     private let makeKey: @Sendable () -> String
     private let backupGate: (@Sendable () async -> PaymentBackupGate)?
@@ -90,7 +96,7 @@ public actor OnboardingController {
         let draft = store.load(origin: origin.description, signerNpub: signerNpub)
             ?? OnboardingDraft(origin: origin.description, signerNpub: signerNpub, createKey: makeKey(), checkoutKey: makeKey())
         state = OnboardingSnapshot(draft: draft)
-        state.paymentOptions = Self.options(returnURL: self.returnURL, paymentBlocked: false)
+        state.paymentOptions = Self.options(returnURL: self.returnURL, paymentBlocked: false, lightningOffered: false, started: nil)
     }
 
     public static let randomKey: @Sendable () -> String = {
@@ -110,8 +116,9 @@ public actor OnboardingController {
         return url
     }
 
-    static func options(returnURL: URL?, paymentBlocked: Bool) -> [OnboardingPaymentOption] {
-        let card: OnboardingPaymentOption
+    static func options(returnURL: URL?, paymentBlocked: Bool, lightningOffered: Bool, started: OnboardingPaymentOption.Method?) -> [OnboardingPaymentOption] {
+        let locked = "A payment is already open for this setup. Finish it, or wait until the NStack confirms it closed, before choosing another way to pay."
+        var card: OnboardingPaymentOption
         if returnURL == nil {
             card = .init(method: .card, available: false, label: "Card (test mode)", unavailableReason: "Card payments are unavailable right now. Your setup is saved; try again later or contact your inviter.")
         } else if paymentBlocked {
@@ -119,7 +126,12 @@ public actor OnboardingController {
         } else {
             card = .init(method: .card, available: true, label: "Card (Stripe test mode; no real money)", unavailableReason: nil)
         }
-        return [card, .init(method: .lightning, available: false, label: "Lightning", unavailableReason: "No Lightning provider is connected to NStack yet.")]
+        var lightning: OnboardingPaymentOption = lightningOffered
+            ? .init(method: .lightning, available: true, label: "Lightning (invoice in sats; the US$ amount is fixed by NStack)", unavailableReason: nil)
+            : .init(method: .lightning, available: false, label: "Lightning", unavailableReason: "Lightning is not available on this NStack right now.")
+        if let started, started != .card, card.available { card = .init(method: .card, available: false, label: card.label, unavailableReason: locked) }
+        if let started, started != .lightning, lightning.available { lightning = .init(method: .lightning, available: false, label: lightning.label, unavailableReason: locked) }
+        return [card, lightning]
     }
 
     public func snapshot() -> OnboardingSnapshot { state }
@@ -146,12 +158,13 @@ public actor OnboardingController {
         catch { return fail(.unavailable(.originRejected(error.localizedDescription)), nil) }
         do {
             if let config = try await api.deploymentConfig() {
-                returnURL = config.onboarding_enabled && config.card.available && config.card.mode == "test"
-                    ? config.card.return_urls.compactMap { URL(string: $0).flatMap(Self.approvedReturn) }.first : nil
-            } else { returnURL = configuredReturnURL }
+                returnURL = config.approvedCardReturn
+                lightningOffered = config.lightningOffered
+            } else { returnURL = configuredReturnURL; lightningOffered = false }
             state.account = try await api.account()
             state.offers = (try? await api.agentOffers()) ?? []
             try await resumeIntent()
+            try await resumeLightning()
         } catch { return failed(error) }
         loaded = true
         return settle()
@@ -167,6 +180,15 @@ public actor OnboardingController {
         } else if let active = try await api.intents().first(where: { [.open, .funded, .provisioning].contains($0.status) }) {
             try adopt(active)
         }
+    }
+
+    /// After a relaunch, an open quote is re-read from the server's own provider poll. A key without a quote (a lost issue response) is
+    /// replayed only when the user asks, with the same key.
+    private func resumeLightning() async throws {
+        guard let intent = state.intent, intent.status == .open, let quoteId = state.draft.lightningQuoteId else { return }
+        let result = try await api.refreshLightningQuote(intent.id, quoteId: quoteId)
+        try adopt(result.intent)
+        try applyQuote(result.quote, for: result.intent)
     }
 
     // MARK: Form
@@ -230,6 +252,7 @@ public actor OnboardingController {
         case .localBackupRequired: return settle(OnboardingFailure(kind: .backupRequired))
         case .hostedBackupRequired: return settle(OnboardingFailure(kind: .hostedBackupRequired))
         }
+        if state.draft.paymentMethod == "lightning" { return settle(OnboardingFailure(kind: .paymentMethodLocked)) }
         guard state.draft.reviewedDigest == state.draft.formDigest, validateForm() == nil else { return settle(OnboardingFailure(kind: .validation, code: "review_required")) }
         do {
             try persist()                // keys, form and bindings on disk before any account, create, update or checkout request
@@ -280,7 +303,7 @@ public actor OnboardingController {
         var changed = false
         if name != intent.workspace_name { update.workspaceName = name; changed = true }
         if d.fundingCents != intent.funding_cents {
-            if intent.status != .open || d.checkoutOrderId != nil { throw OnboardingFailure(kind: .notEditable, code: "funding_locked") }
+            if intent.status != .open || d.checkoutOrderId != nil || d.paymentMethod != nil || d.lightningKey != nil { throw OnboardingFailure(kind: .notEditable, code: "funding_locked") }
             update.fundingCents = d.fundingCents; changed = true
         }
         if d.agentOfferId != intent.agent?.id || (d.agentOfferId != nil && d.agentDailyCapCents != nil && d.agentDailyCapCents != intent.agent?.daily_cap_cents) {
@@ -303,14 +326,33 @@ public actor OnboardingController {
         guard intent.status == .open else { throw OnboardingFailure(kind: .notEditable, code: "intent_not_open") }
         guard let returnURL else { throw OnboardingFailure(kind: .paymentUnavailable, code: "no_return_url") }
         guard state.draft.reviewedDigest == Self.intentDigest(intent) else { throw OnboardingFailure(kind: .validation, code: "review_required") }
-        try persist()                       // checkout key and review binding durable before the request that can create a payable order
-        let checkout = try await api.checkout(intent.id, idempotencyKey: state.draft.checkoutKey, returnURL: returnURL)
+        guard state.draft.paymentMethod != "lightning" else { throw OnboardingFailure(kind: .paymentMethodLocked) }
+        state.draft.paymentMethod = "card"
+        try persist()                       // checkout key, method and review binding durable before the request that can create a payable order
+        let checkout: OnboardingCheckout
+        do { checkout = try await api.checkout(intent.id, idempotencyKey: state.draft.checkoutKey, returnURL: returnURL) }
+        catch {
+            // A definite refusal created no order, so the method is free again; an unknown outcome keeps it (the key is replayed).
+            if Self.rejectedBeforeAnyOrder(error) { state.draft.paymentMethod = nil; try? persist() }
+            throw error
+        }
         guard checkout.mode == "test", checkout.amount_cents == intent.funding_cents, let url = Self.safeCheckoutURL(checkout.checkout_url) else {
             throw OnboardingFailure(kind: .paymentUnavailable, code: "unexpected_checkout")
         }
         state.draft.checkoutOrderId = checkout.order_id
         try persist()                       // the binding must be durable before the browser is opened
         state.checkoutURL = url
+    }
+
+    /// A response that proves NStack refused before it made any payable order (card order or Lightning quote). Everything else may have
+    /// created one whose answer was lost or not trusted, so its operation key and method stay bound.
+    static func rejectedBeforeAnyOrder(_ error: Error) -> Bool {
+        guard let failure = error as? OnboardingFailure else { return false }
+        switch failure.kind {
+        case .paymentUnavailable: return !(failure.code ?? "").hasPrefix("unexpected_")
+        case .validation, .hostedBackupRequired, .notEditable, .rolloutDisabled, .signerRefused, .backendMissing, .fundingReversed, .tooManyOpenQuotes, .accountNotProvisioned: return true
+        default: return false
+        }
     }
 
     /// Stripe-hosted https only; never a link the Tower (or a man in the middle) could use to send the user elsewhere.
@@ -322,6 +364,68 @@ public actor OnboardingController {
 
     static func intentDigest(_ i: OnboardingIntent) -> String {
         OnboardingDraft.digest(name: i.workspace_name, fundingCents: i.funding_cents, agentOfferId: i.agent?.id, agentDailyCapCents: i.agent?.daily_cap_cents)
+    }
+
+    // MARK: Lightning
+
+    /// After review: make sure the server holds the intent, then request (or replay) the Lightning quote for the intent's own USD amount.
+    /// The operation key and the method are saved before the request; a lost answer is recovered by replaying the same key.
+    @discardableResult public func continueToLightning() async -> OnboardingSnapshot {
+        await coalesced("pay") { await $0.doLightning() }
+    }
+
+    private func doLightning() async -> OnboardingSnapshot {
+        state.failure = nil; state.notice = nil; state.checkoutURL = nil
+        guard await signerMatches() else { return fail(.unavailable(.signerMismatch), nil) }
+        state.backupGate = await backupGate?() ?? .allowed
+        switch state.backupGate {
+        case .allowed: break
+        case .localBackupRequired: return settle(OnboardingFailure(kind: .backupRequired))
+        case .hostedBackupRequired: return settle(OnboardingFailure(kind: .hostedBackupRequired))
+        }
+        if state.draft.paymentMethod == "card" { return settle(OnboardingFailure(kind: .paymentMethodLocked)) }
+        guard lightningOffered else { return settle(OnboardingFailure(kind: .paymentUnavailable, code: "lightning_unavailable")) }
+        guard state.draft.reviewedDigest == state.draft.formDigest, validateForm() == nil else { return settle(OnboardingFailure(kind: .validation, code: "review_required")) }
+        do {
+            try persist()
+            try await ensureIntent()
+            guard let intent = state.intent else { return settle() }
+            if intent.fundingConfirmed { return settle() }
+            guard intent.status == .open else { throw OnboardingFailure(kind: .notEditable, code: "intent_not_open") }
+            guard state.draft.reviewedDigest == Self.intentDigest(intent) else { throw OnboardingFailure(kind: .validation, code: "review_required") }
+            var d = state.draft
+            if d.lightningKey == nil { d.lightningKey = makeKey() }
+            d.paymentMethod = "lightning"
+            state.draft = d
+            try persist()                   // key and method durable before the request that can create a payable invoice
+            let quote: LightningQuote
+            do { quote = try await api.lightningQuote(intent.id, idempotencyKey: d.lightningKey!) }
+            catch {
+                if Self.rejectedBeforeAnyOrder(error) { state.draft.paymentMethod = nil; try? persist() }
+                throw error
+            }
+            try applyQuote(quote, for: intent)
+        } catch { return failed(error) }
+        return settle()
+    }
+
+    /// Accepts a quote only if it is this intent's, for exactly the intent's own USD amount and the quote already bound to this draft. The
+    /// binding is saved before anything is shown. An `expired` or `cancelled` quote is the provider's verified unpaid end: only then are the
+    /// key and method released, so a new invoice or the card method becomes possible.
+    private func applyQuote(_ quote: LightningQuote, for intent: OnboardingIntent) throws {
+        guard quote.intent_id == intent.id, quote.amount_cents == intent.funding_cents,
+              state.draft.lightningQuoteId == nil || state.draft.lightningQuoteId == quote.id else {
+            throw OnboardingFailure(kind: .paymentUnavailable, code: "unexpected_quote")
+        }
+        if state.draft.lightningQuoteId == nil { state.draft.lightningQuoteId = quote.id; try persist() }
+        state.lightning = quote
+        if quote.state.verifiedClosedUnpaid {
+            state.draft.lightningKey = nil; state.draft.lightningQuoteId = nil; state.draft.paymentMethod = nil
+            try persist()
+            state.notice = "NStack confirmed that invoice can no longer be paid. You can ask for a new one or pay another way."
+        } else if quote.state == .open, PayableInvoice(quote) == nil {
+            throw OnboardingFailure(kind: .paymentUnavailable, code: "unexpected_quote")
+        }
     }
 
     // MARK: Payment return and refresh
@@ -350,7 +454,16 @@ public actor OnboardingController {
     private func doRefresh() async -> OnboardingSnapshot {
         guard await signerMatches() else { return fail(.unavailable(.signerMismatch), nil) }
         guard let id = state.draft.intentId else { return settle() }
-        do { try adopt(try await api.intent(id)) } catch { return failed(error) }
+        do {
+            if let quoteId = state.draft.lightningQuoteId, state.intent?.status != .funded, state.intent?.status != .provisioned, state.intent?.status != .provisioning {
+                // An open Lightning quote: the server re-polls its own provider and returns the quote with the intent it may have funded.
+                let result = try await api.refreshLightningQuote(id, quoteId: quoteId)
+                try adopt(result.intent)
+                try applyQuote(result.quote, for: result.intent)
+            } else {
+                try adopt(try await api.intent(id))
+            }
+        } catch { return failed(error) }
         return settle()
     }
 
@@ -393,7 +506,7 @@ public actor OnboardingController {
     public func finish() -> OnboardingSnapshot {
         store.clear(origin: state.draft.origin, signerNpub: signerNpub)
         state.draft = OnboardingDraft(origin: state.draft.origin, signerNpub: signerNpub, createKey: makeKey(), checkoutKey: makeKey())
-        state.intent = nil; state.checkoutURL = nil
+        state.intent = nil; state.checkoutURL = nil; state.lightning = nil
         return settle()
     }
 
@@ -422,6 +535,7 @@ public actor OnboardingController {
         var d = state.draft
         if intent.status == .cancelled {
             d.intentId = nil; d.intentRevision = nil; d.checkoutOrderId = nil; d.reviewedDigest = nil
+            d.paymentMethod = nil; d.lightningKey = nil; d.lightningQuoteId = nil; state.lightning = nil
             d.createKey = makeKey(); d.createDigest = nil; d.checkoutKey = makeKey()
             state.intent = intent
         } else {
@@ -438,6 +552,7 @@ public actor OnboardingController {
     private func dropIntent(note: String) throws {
         var d = state.draft
         d.intentId = nil; d.intentRevision = nil; d.checkoutOrderId = nil; d.reviewedDigest = nil
+        d.paymentMethod = nil; d.lightningKey = nil; d.lightningQuoteId = nil; state.lightning = nil
         d.createKey = makeKey(); d.createDigest = nil; d.checkoutKey = makeKey()
         state.draft = d; state.intent = nil; state.notice = note; try persist()
     }
@@ -478,15 +593,17 @@ public actor OnboardingController {
             default: break
             }
         }
-        state.paymentOptions = Self.options(returnURL: returnURL, paymentBlocked: blocked)
         let d = state.draft
+        state.startedMethod = d.paymentMethod.flatMap(OnboardingPaymentOption.Method.init(rawValue:))
+        state.paymentOptions = Self.options(returnURL: returnURL, paymentBlocked: blocked, lightningOffered: lightningOffered, started: state.startedMethod)
+        state.lightningInvoice = state.lightning.flatMap(PayableInvoice.init)
         if let intent = state.intent {
             switch intent.status {
             case .cancelled: state.phase = .cancelled
             case .provisioned: state.phase = .provisioned
             case .provisioning: state.phase = .provisioning
             case .funded: state.phase = intent.fundingConfirmed ? .readyToProvision : .awaitingPayment
-            case .open: state.phase = (d.checkoutOrderId != nil || state.checkoutURL != nil) ? .awaitingPayment : (d.reviewedDigest == d.formDigest ? .review : .form)
+            case .open: state.phase = (d.checkoutOrderId != nil || state.checkoutURL != nil || d.lightningKey != nil) ? .awaitingPayment : (d.reviewedDigest == d.formDigest ? .review : .form)
             }
         } else {
             state.phase = d.reviewedDigest != nil && d.reviewedDigest == d.formDigest ? .review : .form

@@ -53,6 +53,7 @@ struct SettingsView: View {
                         ConnectionStatusRow()
                         Button("Refresh now") { model.refresh(force: true) }.disabled(model.identity.npub == nil)
                         if !Product.isGrandparentChat { OnboardingEntry(origin: connection.origin) }
+                        if !Product.isGrandparentChat { TopupEntry(origin: connection.origin) }
                         Button("Disconnect and clear local data", role: .destructive) {
                             Task { unsent = await model.unsentCount(); confirmDisconnect = true }
                         }

@@ -10,6 +10,11 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
         case validation, provisioningFailed, server, network, malformed, persistence
         /// A newly created identity has not completed its required backups; nothing was sent.
         case backupRequired, hostedBackupRequired
+        /// Funding for this setup or top-up was already started with another method (or another amount); nothing new was sent.
+        case paymentMethodLocked
+        /// Repeat top-ups need a provisioned account.
+        case accountNotProvisioned
+        case tooManyOpenQuotes
     }
     public let kind: Kind
     public let status: Int?
@@ -36,7 +41,10 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
         case (_, "too_many_open_intents"): kind = .tooManyIntents
         case (_, "stale_revision"): kind = .staleRevision
         case (_, "idempotency_conflict"): kind = .idempotencyConflict
-        case (_, "intent_not_found"): kind = .notFound
+        case (_, "intent_not_found"), (_, "quote_not_found"): kind = .notFound
+        case (_, "account_not_found"), (_, "account_not_provisioned"): kind = .accountNotProvisioned
+        case (429, _), (_, "too_many_open_topup_quotes"): kind = .tooManyOpenQuotes
+        case (_, "invalid_quote_request"), (_, "invalid_checkout"): kind = .validation
         case (_, "funding_required"): kind = .fundingRequired
         case (_, "funding_reversed"): kind = .fundingReversed
         case (_, "checkout_outstanding"): kind = .checkoutOutstanding
@@ -73,6 +81,9 @@ public struct OnboardingFailure: Error, Equatable, Sendable, LocalizedError {
         case .malformed: "NStack sent an unexpected answer."
         case .backupRequired: "Save and confirm an encrypted backup of your new identity first (Settings > Identity backup)."
         case .hostedBackupRequired: HostedBackup.requirementNotice
+        case .paymentMethodLocked: "A payment is already open for this. Finish it, or wait until the NStack confirms it closed, before choosing another way to pay."
+        case .accountNotProvisioned: "Top-ups open once your first workspace has been created on this NStack."
+        case .tooManyOpenQuotes: "There are too many unpaid Lightning invoices open. Let them expire or finish them first, then try again."
         case .persistence: "This device could not save your setup progress, so no new step was started. Free some space, then check the status and try again."
         }
     }
@@ -109,9 +120,29 @@ public struct OnboardingDeploymentConfig: Decodable, Sendable {
         public let mode: String?
         public let return_urls: [String]
     }
+    public struct Funding: Decodable, Sendable {
+        public let min_cents: Int?
+        public let max_cents: Int?
+        public let topup_min_cents: Int?
+        public let topup_max_cents: Int?
+    }
+    public struct Lightning: Decodable, Sendable { public let available: Bool }
     public let version: Int
     public let onboarding_enabled: Bool
     public let card: Card
+    public let funding: Funding?
+    public let lightning: Lightning?
+
+    /// Card checkout is offered only for an enabled onboarding, available card, test mode and a safe server-approved return address.
+    var approvedCardReturn: URL? {
+        onboarding_enabled && card.available && card.mode == "test"
+            ? card.return_urls.compactMap { URL(string: $0).flatMap(OnboardingController.approvedReturn) }.first : nil
+    }
+    var lightningOffered: Bool { onboarding_enabled && lightning?.available == true }
+    var topupLimits: TopupLimits {
+        guard let lo = funding?.topup_min_cents, let hi = funding?.topup_max_cents, lo >= 1, hi >= lo else { return .documented }
+        return TopupLimits(minCents: lo, maxCents: hi)
+    }
 }
 
 public struct OnboardingAPI: Sendable {
@@ -152,6 +183,17 @@ public struct OnboardingAPI: Sendable {
         } catch let failure as OnboardingFailure { throw failure } catch { throw OnboardingFailure(kind: .malformed) }
     }
 
+    /// The account plus the server's reversal-debt and lifecycle projections from the same read. Missing blocks stay `nil`.
+    public func accountOverview() async throws -> OnboardingAccountOverview {
+        let data = try await send("GET", Self.base + "/account")
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw OnboardingFailure(kind: .malformed) }
+        func block<T: Decodable>(_ key: String, _ type: T.Type) -> T? {
+            guard let value = object[key], !(value is NSNull), let raw = try? JSONSerialization.data(withJSONObject: value) else { return nil }
+            return try? JSONDecoder().decode(T.self, from: raw)
+        }
+        let account: OnboardingAccount? = (object["account"] is NSNull || object["account"] == nil) ? nil : try decode(OnboardingAccount.self, data, key: "account")
+        return OnboardingAccountOverview(account: account, funding: block("funding", FundingReversalSummary.self), lifecycle: block("lifecycle", AccountLifecycle.self))
+    }
     public func account() async throws -> OnboardingAccount? {
         let data = try await send("GET", Self.base + "/account")
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw OnboardingFailure(kind: .malformed) }
@@ -211,5 +253,37 @@ public struct OnboardingAPI: Sendable {
     }
     public func provision(_ id: String) async throws -> OnboardingIntent {
         try decode(OnboardingIntent.self, try await send("POST", try Self.intentPath(id, "/provision")), key: "intent")
+    }
+
+    // MARK: Lightning (intent funding)
+
+    static func quotePath(_ intentId: String, _ quoteId: String) throws -> String {
+        guard UUID(uuidString: quoteId) != nil, quoteId == quoteId.lowercased() else { throw TowerError.unsafePath }
+        return try intentPath(intentId, "/lightning/quotes/\(quoteId)/refresh")
+    }
+    /// The USD amount is the intent's server-held funding; the body carries only the operation key. A replay of the same key returns the same quote.
+    public func lightningQuote(_ intentId: String, idempotencyKey: String) async throws -> LightningQuote {
+        try decode(LightningQuote.self, try await send("POST", try Self.intentPath(intentId, "/lightning/quote"), body: ["idempotency_key": idempotencyKey]), key: "quote")
+    }
+    /// The server re-polls its provider; this client supplies no settlement evidence.
+    public func refreshLightningQuote(_ intentId: String, quoteId: String) async throws -> (quote: LightningQuote, intent: OnboardingIntent) {
+        let data = try await send("POST", try Self.quotePath(intentId, quoteId))
+        return (try decode(LightningQuote.self, data, key: "quote"), try decode(OnboardingIntent.self, data, key: "intent"))
+    }
+
+    // MARK: Repeat account top-ups
+
+    public func topups() async throws -> TopupList { try decode(TopupList.self, try await send("GET", Self.base + "/topups")) }
+    public func topupCheckout(idempotencyKey: String, returnURL: URL, amountCents: Int) async throws -> OnboardingCheckout {
+        try decode(OnboardingCheckout.self, try await send("POST", Self.base + "/topups/checkout",
+                                                           body: ["idempotency_key": idempotencyKey, "return_url": returnURL.absoluteString, "amount_cents": amountCents]))
+    }
+    public func topupQuote(idempotencyKey: String, amountCents: Int) async throws -> LightningQuote {
+        try decode(LightningQuote.self, try await send("POST", Self.base + "/topups/lightning/quote",
+                                                       body: ["idempotency_key": idempotencyKey, "amount_cents": amountCents]), key: "quote")
+    }
+    public func refreshTopupQuote(_ quoteId: String) async throws -> LightningQuote {
+        guard UUID(uuidString: quoteId) != nil, quoteId == quoteId.lowercased() else { throw TowerError.unsafePath }
+        return try decode(LightningQuote.self, try await send("POST", Self.base + "/topups/lightning/quotes/\(quoteId)/refresh"), key: "quote")
     }
 }
