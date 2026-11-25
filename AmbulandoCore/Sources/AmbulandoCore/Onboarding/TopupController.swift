@@ -115,10 +115,14 @@ public actor TopupController {
             else { try applyQuote(try await api.topupQuote(idempotencyKey: attempt.key, amountCents: attempt.amountCents), for: attempt) }
         case .card:
             if let orderId = attempt.orderId {
-                // NStack lists an order only while it is neither fulfilled nor terminal; absence is its word that nothing is payable any more.
+                // A bounded or older-server list can omit an order that is still payable. Only explicit completeness makes absence authoritative.
                 let list = try await api.topups()
                 if !list.pending_checkout.contains(where: { $0.order_id == orderId }) {
-                    try closeAttempt("That card payment is no longer open at NStack. If you paid, the credit appears in your credited top-ups once NStack has verified it.")
+                    if list.pending_checkout_complete {
+                        try closeAttempt("That card payment is no longer open at NStack. If you paid, the credit appears in your credited top-ups once NStack has verified it.")
+                    } else {
+                        state.notice = "NStack has not confirmed whether this payment is still open. Its waiting list may be incomplete. Keep checking or reopen the same payment; a new attempt stays locked."
+                    }
                 }
             } else if let url = attempt.returnURL.flatMap(URL.init(string:)) {
                 try await openCheckout(attempt, returnURL: url)

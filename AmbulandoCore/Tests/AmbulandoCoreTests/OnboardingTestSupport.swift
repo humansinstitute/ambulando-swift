@@ -31,6 +31,7 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
     var checkoutURL = "https://checkout.stripe.com/c/pay/cs_test_fixture"
     var checkoutMode = "test"
     var checkoutAmountOffset = 0
+    var checkoutRefusal: String?
     var checkoutOrders: [String: String] = [:]    // idempotency key -> order id
     var failures: [String: [Error]] = [:]         // "METHOD path-suffix" -> queued transport errors (before the server acts)
     var dropResponses: [String: Int] = [:]        // server acts, then the answer is lost
@@ -53,6 +54,8 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
     var quoteAmountOffset = 0
     var provisionedOwners: Set<String> = []
     var topupOrders: [String: TopupOrder] = [:]    // idempotency key -> order
+    var pendingCheckoutComplete: Bool? = true
+    var hiddenPendingCheckoutOrderIds: Set<String> = []
     var topupCredits: [String: [Credit]] = [:]     // owner -> credits
     var accountFunding: Any?
     var accountLifecycle: Any?
@@ -110,8 +113,10 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
             let credited = (topupCredits[owner] ?? []).map { ["settlement_id": $0.id, "method": $0.method, "amount_cents": $0.cents, "amount_usd": String(format: "%d.%02d", $0.cents / 100, $0.cents % 100), "settled_at": "2026-11-24T00:00:00.000Z"] as [String: Any] }
             let pendingQuotes = quotes.filter { $0.owner == owner && $0.intentId == nil && ["open", "late_payment", "mismatch"].contains($0.state) }
                 .map { ["quote_id": $0.id, "state": $0.state, "amount_cents": $0.cents, "amount_sats": $0.sats, "invoice": $0.invoice, "payment_hash": $0.hash, "expires_at": $0.expires] as [String: Any] }
-            let orders = topupOrders.values.filter { $0.owner == owner && $0.open }.map { ["order_id": $0.id, "amount_cents": $0.cents, "created_at": "2026-11-24T00:00:00.000Z"] as [String: Any] }
-            return reply(200, ["credited": credited, "pending_lightning": pendingQuotes, "pending_checkout": orders])
+            let orders = topupOrders.values.filter { $0.owner == owner && $0.open && !hiddenPendingCheckoutOrderIds.contains($0.id) }.map { ["order_id": $0.id, "amount_cents": $0.cents, "created_at": "2026-11-24T00:00:00.000Z"] as [String: Any] }
+            var result: [String: Any] = ["credited": credited, "pending_lightning": pendingQuotes, "pending_checkout": orders]
+            if let complete = pendingCheckoutComplete { result["pending_checkout_complete"] = complete }
+            return reply(200, result)
         case ("POST", "/topups/checkout"):
             guard Set(body.keys) == ["idempotency_key", "return_url", "amount_cents"], let k = keyOK(body["idempotency_key"]), let url = body["return_url"] as? String,
                   let cents = body["amount_cents"] as? Int, (2100...1_000_000).contains(cents) else { return error(400, "invalid_checkout") }
@@ -271,6 +276,7 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
             intents[index].revision += 1
             return reply(200, ["intent": view(intents[index])])
         case ("POST", "checkout"):
+            if let code = checkoutRefusal { return error(400, code) }
             guard Set(body.keys) == ["idempotency_key", "return_url"], let k = body["idempotency_key"] as? String, intents[index].status == "open" else { return error(409, "intent_not_open") }
             if intents[index].identityOrigin == "new", !hosted.values.contains(where: { $0.owner == owner }) { return error(409, "identity_backup_required") }
             let order = checkoutOrders[k] ?? UUID().uuidString.lowercased(); checkoutOrders[k] = order

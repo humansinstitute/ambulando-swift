@@ -174,6 +174,17 @@ public struct TopupList: Sendable, Equatable, Decodable {
     public let credited: [TopupCredit]
     public let pending_lightning: [TopupPendingQuote]
     public let pending_checkout: [TopupPendingCheckout]
+    /// Absence from a bounded page proves nothing unless NStack explicitly says the pending set is complete.
+    public let pending_checkout_complete: Bool
+
+    private enum CodingKeys: String, CodingKey { case credited, pending_lightning, pending_checkout, pending_checkout_complete }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        credited = try c.decode([TopupCredit].self, forKey: .credited)
+        pending_lightning = try c.decode([TopupPendingQuote].self, forKey: .pending_lightning)
+        pending_checkout = try c.decode([TopupPendingCheckout].self, forKey: .pending_checkout)
+        pending_checkout_complete = (try? c.decode(Bool.self, forKey: .pending_checkout_complete)) ?? false
+    }
 }
 
 /// Top-up amounts. The server minimum and the processor bound come from the signed config when it publishes them; otherwise the documented

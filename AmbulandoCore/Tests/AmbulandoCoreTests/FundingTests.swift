@@ -176,16 +176,52 @@ final class FundingTests: XCTestCase {
         XCTAssertEqual(t2.checkoutOrders.count, 1)
     }
 
-    func testDefiniteRefusalFreesTheMethodButAnUnknownOutcomeDoesNot() async throws {
+    func testUnavailableNeverProvesAnInvoiceWasNotIssued() async throws {
         let t = tower()
         let (c, _) = try await ready(t)
         t.lightningServing = false                                  // NStack answers 503 lightning_unavailable before making any quote
         let refused = await c.continueToLightning()
         XCTAssertEqual(refused.failure?.kind, .paymentUnavailable)
-        XCTAssertNil(refused.draft.paymentMethod)
-        t.lightningServing = true
+        XCTAssertEqual(refused.draft.paymentMethod, "lightning")
+        let key = try XCTUnwrap(refused.draft.lightningKey)
         let card = await c.continueToPayment()
-        XCTAssertNotNil(card.checkoutURL, "the card path remains usable")
+        XCTAssertEqual(card.failure?.kind, .paymentMethodLocked)
+        XCTAssertEqual(t.count("POST", suffix: "/checkout"), 0)
+        t.lightningServing = true
+        let retry = await c.continueToLightning()
+        XCTAssertEqual(retry.draft.lightningKey, key)
+        XCTAssertEqual(t.quotes.count, 1)
+    }
+
+    func testAReplayRefusalDoesNotEraseAnEarlierUncertainCheckout() async throws {
+        let t = tower()
+        let (c, _) = try await ready(t)
+        t.dropResponses["/checkout"] = 1
+        let lost = await c.continueToPayment()
+        XCTAssertEqual(lost.failure?.kind, .network)
+        XCTAssertEqual(lost.draft.paymentMethod, "card")
+        let key = lost.draft.checkoutKey
+        XCTAssertEqual(t.checkoutOrders.count, 1)
+        t.checkoutRefusal = "return_url_not_allowed"
+        let refused = await c.continueToPayment()
+        XCTAssertEqual(refused.failure?.kind, .paymentUnavailable)
+        XCTAssertEqual(refused.draft.paymentMethod, "card", "a refusal on this retry cannot erase an order the earlier request may have created")
+        XCTAssertEqual(refused.draft.checkoutKey, key)
+        let switched = await c.continueToLightning()
+        XCTAssertEqual(switched.failure?.kind, .paymentMethodLocked)
+        XCTAssertEqual(t.count("POST", suffix: "/lightning/quote"), 0)
+        t.checkoutRefusal = nil
+        let resumed = await c.continueToPayment()
+        XCTAssertNotNil(resumed.checkoutURL)
+        XCTAssertEqual(t.checkoutOrders.count, 1)
+    }
+
+    func testUnknownValidationAndUnavailableErrorsAreNotCreationProof() {
+        for failure in [OnboardingFailure(kind: .paymentUnavailable, status: 503, code: "lightning_unavailable"),
+                        OnboardingFailure(kind: .validation, status: 400, code: "unknown_provider_error"),
+                        OnboardingFailure(kind: .paymentUnavailable, status: 503, code: "stripe_mode_mismatch")] {
+            XCTAssertFalse(OnboardingController.rejectedBeforeAnyOrder(failure))
+        }
     }
 
     func testFundingComesOnlyFromTheServersIntentNotFromWalletReturnOrQuoteHints() async throws {
@@ -651,6 +687,46 @@ final class FundingTests: XCTestCase {
             XCTAssertEqual(snap.failure?.code, "unexpected_checkout")
             XCTAssertNotNil(snap.attempt, "the order may exist: the key stays for replay")
         }
+    }
+
+    func testTruncatedOrOlderServerListCannotCloseAPayableCardAttempt() async throws {
+        for completeness in [false, nil] as [Bool?] {
+            let s = try await topup()
+            _ = await s.controller.load()
+            let started = await s.controller.startCard(amountCents: 2100)
+            let attempt = try XCTUnwrap(started.attempt)
+            let orderId = try XCTUnwrap(attempt.orderId)
+            s.tower.hiddenPendingCheckoutOrderIds.insert(orderId)
+            s.tower.pendingCheckoutComplete = completeness
+            let unknown = await s.controller.refresh()
+            XCTAssertEqual(unknown.attempt, attempt)
+            XCTAssertNotNil(unknown.notice)
+            XCTAssertTrue(s.tower.topupOrders[attempt.key]?.open == true)
+            let blocked = await s.controller.startCard(amountCents: 5000)
+            XCTAssertEqual(blocked.failure?.kind, .paymentMethodLocked)
+            XCTAssertEqual(s.tower.topupOrders.count, 1)
+            // Only an explicitly complete response after the actual order ended permits a new key.
+            s.tower.expireTopupOrder(attempt.key)
+            s.tower.hiddenPendingCheckoutOrderIds.remove(orderId)
+            s.tower.pendingCheckoutComplete = true
+            let closed = await s.controller.refresh()
+            XCTAssertNil(closed.attempt)
+            XCTAssertEqual(closed.list?.credited.count, 0)
+            let next = await s.controller.startCard(amountCents: 5000)
+            XCTAssertNotEqual(next.attempt?.key, attempt.key)
+        }
+    }
+
+    func testPendingCheckoutCompletenessRequiresAnExplicitBoolean() throws {
+        var body: [String: Any] = ["credited": [], "pending_lightning": [], "pending_checkout": []]
+        let decode = { try JSONDecoder().decode(TopupList.self, from: JSONSerialization.data(withJSONObject: body)) }
+        XCTAssertFalse(try decode().pending_checkout_complete)
+        for value in ["true", 1, NSNull()] as [Any] {
+            body["pending_checkout_complete"] = value
+            XCTAssertFalse(try decode().pending_checkout_complete)
+        }
+        body["pending_checkout_complete"] = true
+        XCTAssertTrue(try decode().pending_checkout_complete)
     }
 
     func testCardOrderClosureIsNotClaimedAsCredit() async throws {

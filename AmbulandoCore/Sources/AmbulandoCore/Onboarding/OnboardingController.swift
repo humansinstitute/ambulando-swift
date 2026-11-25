@@ -327,13 +327,14 @@ public actor OnboardingController {
         guard let returnURL else { throw OnboardingFailure(kind: .paymentUnavailable, code: "no_return_url") }
         guard state.draft.reviewedDigest == Self.intentDigest(intent) else { throw OnboardingFailure(kind: .validation, code: "review_required") }
         guard state.draft.paymentMethod != "lightning" else { throw OnboardingFailure(kind: .paymentMethodLocked) }
+        let previouslySubmitted = state.draft.paymentMethod == "card" || state.draft.checkoutOrderId != nil
         state.draft.paymentMethod = "card"
         try persist()                       // checkout key, method and review binding durable before the request that can create a payable order
         let checkout: OnboardingCheckout
         do { checkout = try await api.checkout(intent.id, idempotencyKey: state.draft.checkoutKey, returnURL: returnURL) }
         catch {
             // A definite refusal created no order, so the method is free again; an unknown outcome keeps it (the key is replayed).
-            if Self.rejectedBeforeAnyOrder(error) { state.draft.paymentMethod = nil; try? persist() }
+            if !previouslySubmitted && Self.rejectedBeforeAnyOrder(error) { state.draft.paymentMethod = nil; try? persist() }
             throw error
         }
         guard checkout.mode == "test", checkout.amount_cents == intent.funding_cents, let url = Self.safeCheckoutURL(checkout.checkout_url) else {
@@ -348,11 +349,12 @@ public actor OnboardingController {
     /// created one whose answer was lost or not trusted, so its operation key and method stay bound.
     static func rejectedBeforeAnyOrder(_ error: Error) -> Bool {
         guard let failure = error as? OnboardingFailure else { return false }
-        switch failure.kind {
-        case .paymentUnavailable: return !(failure.code ?? "").hasPrefix("unexpected_")
-        case .validation, .hostedBackupRequired, .notEditable, .rolloutDisabled, .signerRefused, .backendMissing, .fundingReversed, .tooManyOpenQuotes, .accountNotProvisioned: return true
-        default: return false
-        }
+        // Generic unavailable, validation and server errors can follow provider issuance or a persisted quote.
+        // Only these exact service refusals precede creation, and callers may use them only on a first submission.
+        return ["invalid_checkout", "return_url_not_allowed", "invalid_return_url", "invalid_quote_request",
+                "too_many_open_topup_quotes", "account_not_found", "account_not_provisioned", "intent_not_found",
+                "intent_not_open", "onboarding_rollout_disabled", "identity_backup_required", "stripe_unconfigured",
+                "stripe_live_rollout_blocked"].contains(failure.code ?? "")
     }
 
     /// Stripe-hosted https only; never a link the Tower (or a man in the middle) could use to send the user elsewhere.
@@ -394,6 +396,7 @@ public actor OnboardingController {
             guard intent.status == .open else { throw OnboardingFailure(kind: .notEditable, code: "intent_not_open") }
             guard state.draft.reviewedDigest == Self.intentDigest(intent) else { throw OnboardingFailure(kind: .validation, code: "review_required") }
             var d = state.draft
+            let previouslySubmitted = d.paymentMethod == "lightning" || d.lightningKey != nil
             if d.lightningKey == nil { d.lightningKey = makeKey() }
             d.paymentMethod = "lightning"
             state.draft = d
@@ -401,7 +404,7 @@ public actor OnboardingController {
             let quote: LightningQuote
             do { quote = try await api.lightningQuote(intent.id, idempotencyKey: d.lightningKey!) }
             catch {
-                if Self.rejectedBeforeAnyOrder(error) { state.draft.paymentMethod = nil; try? persist() }
+                if !previouslySubmitted && Self.rejectedBeforeAnyOrder(error) { state.draft.paymentMethod = nil; try? persist() }
                 throw error
             }
             try applyQuote(quote, for: intent)
