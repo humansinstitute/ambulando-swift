@@ -951,6 +951,20 @@ struct Composer: View {
         model.connection?.id == target.connectionId && workspace.id == target.workspaceId &&
         model.selectedWorkspaceId == workspace.id && model.identity.npub == model.connection?.signerNpub
     }
+    #elseif os(iOS)
+    @State private var showingVoice = false
+    @State private var voice = PhoneVoiceRecorder()
+    @State private var voiceOrigin: PhoneVoiceAuthority?
+    @State private var voiceTarget: ChatTarget?
+    private var voiceAuthority: PhoneVoiceAuthority {
+        PhoneVoiceAuthority(connection: model.connection?.id, workspace: model.selectedWorkspaceId,
+                          app: workspace.appNpub, signer: model.identity.npub, unlocked: model.isUnlocked)
+    }
+    private var voiceAllowed: Bool {
+        editing == nil && model.isUnlocked && model.uploads != nil && composer?.target == target &&
+        model.connection?.id == target.connectionId && workspace.id == target.workspaceId &&
+        model.selectedWorkspaceId == workspace.id && model.identity.npub == model.connection?.signerNpub
+    }
     #endif
 
     /// The `@` lookahead as on the web: people and agents from the directory, and documents, tasks, conversations,
@@ -1026,6 +1040,29 @@ struct Composer: View {
             #if os(macOS)
             if showingVoice, editing == nil {
                 MacVoiceRecorderView(recorder: voice) { url in
+                    guard voiceAllowed, voiceOrigin == voiceAuthority, voiceTarget == target,
+                          let composer, composer.target == voiceTarget else {
+                        voice.discard(); showingVoice = false; return false
+                    }
+                    guard let bytes = try? Data(contentsOf: url) else {
+                        voice.notice = "Could not read the recording. Try playing it or record again."; return false
+                    }
+                    let provider = NSItemProvider()
+                    provider.suggestedName = url.lastPathComponent
+                    provider.registerDataRepresentation(forTypeIdentifier: "public.mpeg-4-audio", visibility: .all) { completion in
+                        completion(bytes, nil); return nil
+                    }
+                    let tokens = pasteItems([provider])
+                    guard !tokens.isEmpty else { voice.notice = "Connect and unlock this workspace before attaching. Your clip is kept here."; return false }
+                    composer.text += "\n" + tokens.joined(separator: "\n") + "\n"
+                    showingVoice = false
+                    return true
+                }
+                Button("Cancel recording") { voice.discard(); showingVoice = false }.padding(.bottom, 8)
+            }
+            #elseif os(iOS)
+            if showingVoice, editing == nil {
+                PhoneVoiceRecorderView(recorder: voice) { url in
                     guard voiceAllowed, voiceOrigin == voiceAuthority, voiceTarget == target,
                           let composer, composer.target == voiceTarget else {
                         voice.discard(); showingVoice = false; return false
@@ -1142,7 +1179,7 @@ struct Composer: View {
             }
         }
         .task(id: editing?.id) {
-            #if os(macOS)
+            #if os(macOS) || os(iOS)
             if editing != nil { voice.discard(); showingVoice = false }
             #endif
             guard let editing else { revisionComposer = nil; return }
@@ -1158,13 +1195,13 @@ struct Composer: View {
             dismissedAt = nil; highlighted = 0; focused = true
         }
         .onChange(of: target) { _, _ in
-            #if os(macOS)
+            #if os(macOS) || os(iOS)
             voice.discard(); showingVoice = false
             #endif
             revisionComposer?.saveNow()
             editing = nil
         }
-        #if os(macOS)
+        #if os(macOS) || os(iOS)
         .onChange(of: voiceAuthority) { _, _ in voice.discard(); showingVoice = false }
         .onChange(of: voiceAllowed) { _, allowed in
             if !allowed { voice.discard(); showingVoice = false }
@@ -1206,11 +1243,18 @@ struct Composer: View {
         .onDisappear {
             #if os(macOS)
             voice.discard()
+            #elseif os(iOS)
+            voice.suspend()
             #endif
             if let replyComposer { model.uploads?.detach(replyComposer); replyComposer.saveNow() }
             revisionComposer?.saveNow()
         }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { composer?.saveNow() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { composer?.saveNow() }
+            #if os(iOS)
+            if phase == .background { voice.suspend() }
+            #endif
+        }
         .onChange(of: model.chatPath) { _, _ in composer?.saveNow() }
     }
 
@@ -1230,6 +1274,19 @@ struct Composer: View {
         .accessibilityLabel("Attach photos")
         .accessibilityIdentifier("composer.photo")
         .iconButton()
+        #if os(iOS)
+        Button {
+            showingVoice.toggle()
+            if showingVoice { voiceOrigin = voiceAuthority; voiceTarget = target }
+            else { voice.suspend() }
+        } label: {
+            Image(systemName: "mic").font(.body.weight(.semibold)).frame(width: 34, height: 32)
+        }
+        .accessibilityLabel("Record voice")
+        .accessibilityIdentifier("composer.voice")
+        .disabled(!voiceAllowed || model.uploads?.uploads(for: target).contains(where: \.isActive) == true)
+        .iconButton()
+        #endif
         #if os(macOS)
         Button {
             showingVoice.toggle()

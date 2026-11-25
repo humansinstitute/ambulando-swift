@@ -20,13 +20,15 @@ selection, destinations and accessibility labels stay available. See
 [navigation layout and platform gaps](docs/navigation-strip.md#compact-inline-mac-navigation-source-build-123).
 Source/build validation is separate from installation on Pete's MacBook.
 
-## Voice recording (Mac source build 115)
+## Voice recording (Mac source 115, iPhone/iPad source 116)
 
 The composer microphone button offers a real input-level meter, microphone choice
 and a recorded-input label. Stop to play, cancel or attach the clip, then use the
 existing Send flow. See [recording behavior and limits](docs/voice-recording.md).
-Mac transcription and iPhone recording remain explicit gaps. Source/build
-validation is separate from installation and testing on Pete’s MacBook.
+iPhone/iPad source adds the same controls using AVAudioSession routing and a single
+AVAudioRecorder; see [iPhone behavior and validation limits](docs/iphone-voice-recording.md).
+Native transcription remains unavailable. iPhone full-build/UI/device acceptance is
+open; pushed source is separate from installation, TestFlight and physical testing.
 
 ## Optional Chat navigation (Mac source build 114, iPhone/iPad source build 115)
 

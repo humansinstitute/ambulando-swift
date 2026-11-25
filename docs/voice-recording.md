@@ -29,8 +29,8 @@ Attach recording copies the bytes into the existing composer file-upload path.
 Upload placeholders, retry, target-bound drafts and explicit Send retain their
 existing behavior. Attachment failure keeps the review clip. This Mac client has
 no transcription pipeline: recordings are file attachments.
-No backend route or service change is required. iPhone recording remains a parity
-gap and is not delivered by this Mac implementation.
+No backend route or service change is required. Separate iPhone/iPad source parity
+and its open device/build acceptance are described in [iPhone recording](iphone-voice-recording.md).
 
 Validation: compile the Mac target and run `scripts/tests/mac-voice-recording.swift`
 with the recorder source. The standalone check uses generated audio and does not
