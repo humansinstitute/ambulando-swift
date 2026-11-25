@@ -39,6 +39,8 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
     var descriptorOrigin: String?
     var provisionDelay: TimeInterval = 0
     var hook: (@Sendable (Seen) -> Void)?
+    /// Awaited after the server has acted and before the answer is returned: lets a test hold one response while other calls are made.
+    var responseGate: (@Sendable (Seen) async -> Void)?
     /// Lightning quote as `quoteView` reports it. `evidence` is test-only server state (what the fixture provider would observe).
     struct Quote { var id = UUID().uuidString.lowercased(); var owner: String; var intentId: String?; var key: String; var cents: Int; var state = "open"
                    var sats: Int; var invoice: String; var hash: String; var expires: String }
@@ -199,6 +201,7 @@ final class FakeOnboardingTower: HTTPTransport, @unchecked Sendable {
         if lock.withLock({ () -> Bool in if let n = dropResponses.first(where: { key.hasSuffix($0.key) && $0.value > 0 }) { dropResponses[n.key] = n.value - 1; return true }; return false }) {
             throw URLError(.networkConnectionLost)
         }
+        if let gate = responseGate { await gate(record) }
         if provisionDelay > 0, path.hasSuffix("/provision") { try await Task.sleep(for: .seconds(provisionDelay)) }
         return (data, response)
     }

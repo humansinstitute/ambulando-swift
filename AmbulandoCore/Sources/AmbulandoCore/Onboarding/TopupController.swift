@@ -62,6 +62,8 @@ public actor TopupController {
     private var draft: TopupDraft
     private let draftUnreadable: Bool
     private var inflight: [String: Task<TopupSnapshot, Never>] = [:]
+    /// Tail of the serial queue every operation joins, so no response from one operation is applied while another is mid-flight.
+    private var tail: Task<Void, Never>?
 
     public init(origin: TowerOrigin, signerNpub: String, signer: EventSigner, transport: HTTPTransport, store: TopupDraftStore,
                 backupGate: (@Sendable () async -> PaymentBackupGate)? = nil, makeKey: @escaping @Sendable () -> String = OnboardingController.randomKey) {
@@ -214,6 +216,7 @@ public actor TopupController {
 
     private func openCheckout(_ attempt: TopupAttempt, returnURL: URL) async throws {
         let checkout = try await api.topupCheckout(idempotencyKey: attempt.key, returnURL: returnURL, amountCents: attempt.amountCents)
+        guard draft.attempt?.key == attempt.key else { return }
         guard checkout.mode == "test", checkout.amount_cents == attempt.amountCents, let url = OnboardingController.safeCheckoutURL(checkout.checkout_url) else {
             throw OnboardingFailure(kind: .paymentUnavailable, code: "unexpected_checkout")
         }
@@ -225,6 +228,7 @@ public actor TopupController {
     /// Accepts a quote only for this attempt's own amount and as an account (non-intent) quote; closes the attempt only on a state NStack's
     /// provider verified. `settled` is NStack's word; the credit itself is read back from the list.
     private func applyQuote(_ quote: LightningQuote, for attempt: TopupAttempt) throws {
+        guard draft.attempt?.key == attempt.key else { return }     // that attempt is no longer the open one: its late answer changes nothing
         guard quote.intent_id == nil, quote.amount_cents == attempt.amountCents, attempt.quoteId == nil || attempt.quoteId == quote.id else {
             throw OnboardingFailure(kind: .paymentUnavailable, code: "unexpected_quote")
         }
@@ -262,7 +266,9 @@ public actor TopupController {
 
     private func coalesced(_ name: String, _ work: @escaping @Sendable (TopupController) async -> TopupSnapshot) async -> TopupSnapshot {
         if let running = inflight[name] { return await running.value }
-        let task = Task { await work(self) }
+        let previous = tail
+        let task = Task { await previous?.value; return await work(self) }
+        tail = Task { _ = await task.value }
         inflight[name] = task
         state.busy = true
         let result = await task.value

@@ -454,6 +454,35 @@ final class FundingTests: XCTestCase {
         XCTAssertEqual(tower.quotes.count, 1, "no second payable invoice")
     }
 
+    /// A held server answer must not let another operation class run, or apply its own answer, in the middle of it.
+    func testDelayedResponseSerializesOperationsAcrossClasses() async throws {
+        let s = try await topup()
+        _ = await s.controller.load()
+        let started = await s.controller.startLightning(amountCents: 2100)
+        let key = try XCTUnwrap(started.attempt?.key)
+        let quoteId = try XCTUnwrap(started.attempt?.quoteId)
+        s.tower.lock.withLock { for i in s.tower.quotes.indices where s.tower.quotes[i].id == quoteId { s.tower.quotes[i].state = "expired" } }
+        let held = HeldResponse()
+        defer { held.release() }
+        s.tower.responseGate = { seen in if seen.path.hasSuffix("/refresh") { await held.hold() } }
+        let refresh = Task { await s.controller.refresh() }
+        try await held.waitUntilHeld()
+        let mark = s.tower.requests.count
+        // The terminal answer is held in transit; other operation classes must wait before reading or changing the attempt.
+        let load = Task { await s.controller.load() }
+        let again = Task { await s.controller.startLightning(amountCents: 5000) }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(s.tower.requests.count, mark, "later operations wait: nothing new reaches the server while the older answer is pending")
+        held.release()
+        _ = await refresh.value; _ = await load.value; let last = await again.value
+        let after = await s.controller.snapshot()
+        XCTAssertNil(after.attempt?.key == key ? after.attempt : nil, "the expired invoice's attempt was closed once, by the refresh that saw it")
+        XCTAssertNil(last.failure?.kind == .paymentMethodLocked ? last.failure : nil, "the new start ran after the close, not against a stale open attempt")
+        XCTAssertEqual(after.attempt?.amountCents, 5000)
+        XCTAssertEqual(s.tower.quotes.filter { $0.state == "open" }.count, 1, "exactly one payable invoice")
+        XCTAssertEqual((try s.store.load(origin: s.tower.origin, signerNpub: s.owner))?.attempt?.amountCents, 5000)
+    }
+
     func testAbsentDraftIsNotAnError() async throws {
         let store = FileTopupDraftStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("topup-none-\(UUID().uuidString)"))
         XCTAssertNil(try store.load(origin: "https://a.example", signerNpub: "npub1x"))
@@ -720,4 +749,22 @@ private final class FailingTopupStore: TopupDraftStore, @unchecked Sendable {
     struct Disk: Error {}
     func load(origin: String, signerNpub: String) throws -> TopupDraft? { nil }
     func save(_ draft: TopupDraft) throws { throw Disk() }
+}
+
+private final class HeldResponse: @unchecked Sendable {
+    private let lock = NSLock()
+    private var heldFlag = false
+    private var released = false
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+    func hold() async {
+        await withCheckedContinuation { c in lock.withLock { heldFlag = true; if released { c.resume() } else { continuations.append(c) } } }
+    }
+    func waitUntilHeld() async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !lock.withLock({ heldFlag }) {
+            guard ContinuousClock.now < deadline else { throw NSError(domain: "HeldResponseTimeout", code: 1) }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+    func release() { lock.withLock { released = true; continuations.forEach { $0.resume() }; continuations = [] } }
 }
