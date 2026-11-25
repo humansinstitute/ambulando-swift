@@ -20,9 +20,30 @@ final class MemorySecretStore: VaultSecretStore, @unchecked Sendable {
     func write(_ data: Data) throws { lock.withLock { value = data; writes += 1 } }
 }
 
+/// Every test runner owns a separate root. XCTest workers can run concurrently,
+/// and fixtures stay alive until process exit (including asynchronous tests).
+/// Forced termination cannot run cleanup; post-work cleanup must remove only
+/// abandoned run roots after checking their owner process has exited.
+private final class TestTemporaryDirectories: @unchecked Sendable {
+    static let shared = TestTemporaryDirectories()
+    let root: URL
+
+    private init() {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ambulando-tests", isDirectory: true)
+            .appendingPathComponent("run-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)", isDirectory: true)
+        // Framework-independent: XCTest, Swift Testing and direct helper users.
+        atexit { TestTemporaryDirectories.shared.cleanup() }
+    }
+
+    private func cleanup() {
+        // Only this process's unique root; never sweep another runner's fixtures.
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
 func temporaryDirectory(_ name: String = #function) -> URL {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("ambulando-tests", isDirectory: true)
+    let url = TestTemporaryDirectories.shared.root
         .appendingPathComponent(name.filter { $0.isLetter || $0.isNumber } + "-" + UUID().uuidString, isDirectory: true)
     try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
