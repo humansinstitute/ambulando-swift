@@ -135,11 +135,15 @@ struct HTMLArtefactReviewView: View {
         }
         .onChange(of: boundaryKey) { _, _ in
             payload = nil
+            selectedVersionId = nil
             commentList = nil
+            commentsBusy = false
             drafts = [:]
             replyAcceptedNonce = [:]
             pendingTarget = nil
             focusedThreadId = nil
+            editingCommentId = nil
+            editBodyText = ""
             anchorMatches = [:]
             commentsError = nil
         }
@@ -454,7 +458,19 @@ struct HTMLArtefactReviewView: View {
             commentsError = nil
         } catch is CancellationError {}
         catch {
-            if boundaryKey == capturedBoundary { commentsError = error.localizedDescription }
+            guard boundaryKey == capturedBoundary else { return }
+            if case TowerError.http(let status, _, _) = error, status == 403 || status == 404 {
+                commentList = nil
+                pendingTarget = nil
+                focusedThreadId = nil
+                editingCommentId = nil
+                editBodyText = ""
+                anchorMatches = [:]
+                drafts = [:]
+                commentsError = "Comments are unavailable for this artefact."
+            } else {
+                commentsError = error.localizedDescription
+            }
         }
     }
 
@@ -462,7 +478,7 @@ struct HTMLArtefactReviewView: View {
         guard let sync = model.sync, let c = model.connection else { return }
         let capturedBoundary = boundaryKey
         let capturedStore = draftStore
-        commentsBusy = true; commentsError = nullError
+        commentsBusy = true; commentsError = nil
         defer { if boundaryKey == capturedBoundary { commentsBusy = false } }
         do {
             _ = try await sync.createFileComment(c, workspace, fileId: file.id, body: body, fileVersionId: versionId, anchor: anchor, clientRequestId: requestId)
@@ -498,41 +514,45 @@ struct HTMLArtefactReviewView: View {
         }
     }
 
-    private var nullError: String? { nil }
-
     private func toggleResolve(_ comment: FileCommentRecord) async {
         guard let sync = model.sync, let c = model.connection else { return }
+        let capturedBoundary = boundaryKey
         commentsBusy = true; commentsError = nil
-        defer { commentsBusy = false }
+        defer { if boundaryKey == capturedBoundary { commentsBusy = false } }
         do {
             _ = try await sync.updateFileComment(c, workspace, fileId: file.id, commentId: comment.id, rowVersion: comment.rowVersion, commentStatus: comment.isResolved ? "open" : "resolved")
+            guard boundaryKey == capturedBoundary else { return }
             await loadComments()
         } catch {
-            commentsError = error.localizedDescription
+            if boundaryKey == capturedBoundary { commentsError = error.localizedDescription }
         }
     }
 
     private func editComment(_ comment: FileCommentRecord, body: String) async {
         guard let sync = model.sync, let c = model.connection else { return }
+        let capturedBoundary = boundaryKey
         commentsBusy = true; commentsError = nil
-        defer { commentsBusy = false }
+        defer { if boundaryKey == capturedBoundary { commentsBusy = false } }
         do {
             _ = try await sync.updateFileComment(c, workspace, fileId: file.id, commentId: comment.id, rowVersion: comment.rowVersion, body: body)
+            guard boundaryKey == capturedBoundary else { return }
             await loadComments()
         } catch {
-            commentsError = error.localizedDescription
+            if boundaryKey == capturedBoundary { commentsError = error.localizedDescription }
         }
     }
 
     private func deleteComment(_ comment: FileCommentRecord) async {
         guard let sync = model.sync, let c = model.connection else { return }
+        let capturedBoundary = boundaryKey
         commentsBusy = true; commentsError = nil
-        defer { commentsBusy = false }
+        defer { if boundaryKey == capturedBoundary { commentsBusy = false } }
         do {
             try await sync.deleteFileComment(c, workspace, fileId: file.id, commentId: comment.id, rowVersion: comment.rowVersion)
+            guard boundaryKey == capturedBoundary else { return }
             await loadComments()
         } catch {
-            commentsError = error.localizedDescription
+            if boundaryKey == capturedBoundary { commentsError = error.localizedDescription }
         }
     }
 }
