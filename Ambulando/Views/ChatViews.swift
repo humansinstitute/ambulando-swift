@@ -358,7 +358,7 @@ struct ThreadView: View {
     #if os(macOS)
     @State private var artefacts = MacThreadArtefacts()
     var body: some View {
-        MacThreadArtefactLayout(state: artefacts, workspace: workspace, store: store) { conversation }
+        MacThreadArtefactLayout(state: artefacts, target: target, workspace: workspace, store: store) { conversation }
     }
     #else
     var body: some View { conversation }
@@ -378,6 +378,11 @@ struct ThreadView: View {
                 .font(.amb(.subheadline).weight(.semibold))
             if onBack != nil { Text(snapshot.value.title).font(.amb(.subheadline)).lineLimit(1) }
             #if os(macOS)
+            Button { artefacts.browsing = true } label: { Image(systemName: "plus.rectangle.on.rectangle") }
+                .buttonStyle(.borderless).help("Browse existing Docs and artefacts")
+                .accessibilityLabel("Browse artefacts")
+                .accessibilityIdentifier("thread.artefacts.browse")
+                .disabled(artefacts.busy)
             if !artefacts.shown, artefacts.tabs.contains(where: \.open) {
                 Button("Artefacts", systemImage: "sidebar.right") { artefacts.shown = true }
                     .accessibilityIdentifier("thread.artefacts.reopen")

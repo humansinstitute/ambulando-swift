@@ -136,6 +136,7 @@ struct HTMLArtefactReviewView: View {
         #if os(macOS)
         .onAppear {
             threadTab?.title = file.displayName
+            threadTab?.icon = ArtefactType.html.icon
             threadTab?.validate = { reference in
                 !editingSource && payload?.versionId == reference.revision && failure == nil
             }

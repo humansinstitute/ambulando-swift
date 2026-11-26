@@ -1,8 +1,23 @@
-# Mac thread artefact workspace (source build 133)
+# Mac thread artefact workspace (source build 134)
 
-A Doc/File reference in an open Mac conversation opens a retained workspace beside chat.
+Use **Browse artefacts** (+) in the conversation header, including when there are no tabs
+or the workspace is hidden. The + beside the workspace tabs opens the same native picker.
+Search titles and filter Documents, Whiteboards or HTML. The picker defaults to the actual
+conversation channel, independently of the global sidebar context. Its channel menu labels
+the scope and channel and can show all authorised channels in the current workspace.
+It reads at most 500 saved Docs and 500 Files in the selected channel (or across the
+workspace for All channels) using the existing store queries and sync;
+labels need no downloads. Only supported File types and discovered channels are included.
+Locked, loading, empty, no-match and read failure states are explicit; Refresh retries the
+existing list sync, whose failures remain visible. This is a saved-record picker, not a URL
+or external web browser. Cancel leaves tabs and selection unchanged. Choosing a record
+opens/focuses its real panel tab and dismisses the picker. Existing historical selections
+stay pinned, including after closing and reopening a retained tab. Channel selection
+restarts the bounded query; a workspace, connection or identity change dismisses the picker.
+
+A Doc/File reference in an open Mac conversation also opens a retained workspace beside chat.
 Chat starts at roughly one third of the available width. Drag the divider to resize it.
-Labelled tabs scroll horizontally; opening the same reference focuses its existing tab.
+Compact type icons, bounded single-line titles, rounded selected backgrounds and an accent underline identify tabs. Close controls retain a predictable position; hover, keyboard focus and accessibility labels remain available. Tabs scroll horizontally; selection and window resizing reveal the chosen tab. The +, expand and hide controls remain outside the scroll area. Opening the same reference focuses its existing tab.
 Expand the workspace, restore the split, or hide/reopen it without replacing the composer
 or mounted editors. Closing a tab first saves its pending content; failures retain the tab
 and explain how to retry. The optional separate-window action is not added to thread tabs.
@@ -72,5 +87,7 @@ keys/digests. The isolated Mac test harness can be run with:
   -AmbulandoMacThreadRegression -AmbulandoMacThreadArtefactsCheck
 ```
 
-It uses real AppKit/SwiftUI/WebKit views with synthetic Tower routes. Its injected network
-failure and programmatic tab opening are simulated inputs, not live-account evidence.
+It uses real AppKit/SwiftUI/WebKit views with synthetic Tower routes. It exercises the native picker entry points, search/no-match, cancel, board/HTML opening,
+pinned revision refocus, close failure retention and many-tab narrow layout. Its injected
+network failure, sample records and synthetic editing peer are simulated inputs, not
+live-account evidence. Send uses the actual native composer and synthetic Tower readback.

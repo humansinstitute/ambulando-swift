@@ -24,6 +24,9 @@ enum MacThreadArtefactFixture {
     static func handle(_ request: URLRequest) -> (Int, Any)? {
         guard enabled, let url = request.url, request.httpMethod == "GET" else { return nil }
         let base = "/api/v4/flightdeck-pg/workspaces/\(FixtureTower.studio)/files/"
+        if url.path == "/api/v4/flightdeck-pg/workspaces/\(FixtureTower.studio)/channels/\(FixtureTower.generalChannel)/files" {
+            return (200, ["files": [row(board), row(html)], "next_cursor": NSNull()])
+        }
         if [base + board, base + html].contains(url.path) {
             return (200, ["file": row(url.lastPathComponent)])
         }
@@ -57,7 +60,17 @@ extension MacThreadRegression {
         model.focusThread(focus)
         for _ in 0..<50 { if MacThreadArtefacts.testingState != nil { break }; await settle() }
         guard let state = MacThreadArtefacts.testingState else { throw Failure(description: "mounted thread workspace") }
-        state.open(kind: "file", id: f.board)
+        try require(state.tabs.isEmpty, "conversation starts without artefact tabs")
+        try press(window, "thread.artefacts.browse"); await settle()
+        guard let picker = window.attachedSheet else { throw Failure(description: "native browser sheet") }
+        await settle()
+        try require(find(picker, "thread.artefacts.browser.row.\(f.board)") != nil, "board enumerated without opening content")
+        try snapshot(picker, model: model, name: "mac134-picker")
+        try press(picker, "thread.artefacts.browser.cancel"); await settle()
+        try require(state.tabs.isEmpty && state.selected == nil && !state.shown, "cancel leaves empty workspace unchanged")
+        try press(window, "thread.artefacts.browse"); await settle()
+        guard let boardPicker = window.attachedSheet else { throw Failure(description: "board picker") }
+        try press(boardPicker, "thread.artefacts.browser.row.\(f.board)"); await settle()
         for _ in 0..<100 {
             if let prepare = state.tabs.first?.prepare, (try? await prepare()) != nil { break }
             await settle()
@@ -66,7 +79,9 @@ extension MacThreadRegression {
         _ = try await boardPrepare()
         let reply = try textView(window)
         try require(reply.string == "change this", "draft retained on open")
-        state.open(kind: "file", id: f.html)
+        try press(window, "thread.artefacts.add"); await settle()
+        guard let htmlPicker = window.attachedSheet else { throw Failure(description: "HTML picker") }
+        try press(htmlPicker, "thread.artefacts.browser.row.\(f.html)"); await settle()
         for _ in 0..<100 {
             if let tab = state.tabs.last, let prepare = tab.prepare, (try? await prepare()) != nil { break }
             await settle()
@@ -79,6 +94,27 @@ extension MacThreadRegression {
         guard let htmlPrepare = state.tabs.last?.prepare else { throw Failure(description: "HTML version callback") }
         let historicalHTML = try await htmlPrepare()
         try require(historicalHTML.historical && historicalHTML.revision == f.htmlV1, "native version menu pins historical HTML")
+        try press(window, "thread.artefacts.add"); await settle()
+        guard let existingPicker = window.attachedSheet else { throw Failure(description: "existing picker") }
+        try click(existingPicker, "thread.artefacts.browser.search")
+        guard let searchEditor = existingPicker.firstResponder as? NSTextView else { throw Failure(description: "native search editor") }
+        searchEditor.insertText("no-matching-title-134", replacementRange: NSRange(location: 0, length: searchEditor.string.utf16.count))
+        await settle()
+        try require(containsText(existingPicker, "No matching artefacts"), "native title search no matches")
+        try snapshot(existingPicker, model: model, name: "mac134-no-matches")
+        try press(existingPicker, "thread.artefacts.browser.cancel"); await settle()
+        try require(state.selected == f.html && state.tabs.count == 2, "cancel leaves selection unchanged")
+        try press(window, "thread.artefacts.add"); await settle()
+        guard let refocusPicker = window.attachedSheet else { throw Failure(description: "refocus picker") }
+        try press(refocusPicker, "thread.artefacts.browser.row.\(f.html)"); await settle()
+        let refocusedHTML = try await htmlPrepare()
+        try require(refocusedHTML == historicalHTML && state.tabs.count == 2, "browser deduplicates without resetting pinned revision")
+        let choice = try await scopeChoice(store, workspace.id)
+        let sample = DocsSnapshot(files: files, choice: choice)
+        try require(MacThreadArtefactBrowser.rows(sample, channel: FixtureTower.generalChannel, search: "architecture", type: .whiteboard).count == 1, "scope/search/type intersection")
+        try require(MacThreadArtefactBrowser.rows(sample, channel: "foreign-channel", search: "", type: nil).isEmpty, "foreign channel excluded")
+        var denied = sample; denied.choice.channels = []
+        try require(MacThreadArtefactBrowser.rows(denied, channel: "", search: "", type: nil).isEmpty, "undiscovered channels excluded")
         try require(state.tabs.count == 2, "two retained tabs")
         try snapshot(window, model: model, name: "mac-thread-artefacts-before-tab")
         try press(window, "thread.artefacts.tab.\(f.board)"); await settle()
@@ -99,6 +135,8 @@ extension MacThreadRegression {
         // Failure injection exercises the real host send barrier, without claiming a live network denial.
         let savedPrepare = boardTab.prepare
         boardTab.prepare = { throw URLError(.notConnectedToInternet) }
+        state.close(boardTab); await settle()
+        try require(boardTab.open && state.failure != nil, "close failure retains tab")
         do { _ = try await state.prepare(target: target); throw Failure(description: "offline barrier accepted") }
         catch is URLError {}
         try require(state.failure != nil && reply.string == "change this", "failed save retains actionable draft")
@@ -154,6 +192,33 @@ extension MacThreadRegression {
         guard let canonical = fixture.tower.boards.currentBytes(f.board) else { throw Failure(description: "saved board bytes") }
         try require(String(decoding: canonical, as: UTF8.self).contains("threadSendAcceptance"), "exact saved board contains final edit")
         print("AGENT_CONTEXT_BASE64 \(sent.raw.base64EncodedString())")
+        let realTabs = state.tabs
+        for index in 0..<12 {
+            let tab = MacThreadArtefactTab(kind: "doc", id: "layout-\(index)")
+            tab.title = "A very long document title for architecture and planning \(index)"
+            state.tabs.append(tab)
+        }
+        state.tabs = Array(state.tabs.dropFirst(realTabs.count)) + realTabs
+        state.selected = f.board
+        await settle()
+        for (index, tab) in state.tabs.filter({ $0.id.hasPrefix("layout-") }).enumerated() {
+            tab.title = "A very long document title for architecture and planning \(index)"
+        }
+        state.selected = f.html
+        window.setContentSize(NSSize(width: 1440, height: 900)); await settle()
+        try snapshot(window, model: model, name: "mac134-tabs-wide")
+        window.setContentSize(NSSize(width: 1000, height: 700)); await settle()
+        try require(find(window, "thread.artefacts.add") != nil, "plus remains reachable in narrow many-tab strip")
+        try snapshot(window, model: model, name: "mac134-tabs-narrow")
+        let priorAppearance = UserDefaults.standard.string(forKey: "appearance")
+        let priorWindowAppearance = window.appearance
+        UserDefaults.standard.set("dark", forKey: "appearance")
+        window.appearance = NSAppearance(named: .darkAqua); await settle()
+        try snapshot(window, model: model, name: "mac134-tabs-narrow-dark")
+        UserDefaults.standard.set(priorAppearance, forKey: "appearance")
+        window.appearance = priorWindowAppearance
+        state.tabs = realTabs; state.selected = f.html
+        window.setFrame(old, display: true); await settle()
         try snapshot(window, model: model, name: "mac-thread-artefacts")
         print("PASS: actual AppKit thread, two editor tabs, exact context, tab focus, close/reopen identity, expand, resize and failure draft preservation; synthetic Tower and injected failure")
     }

@@ -383,6 +383,7 @@ struct FileArtefactView: View {
         #if os(macOS)
         .onChange(of: session?.key, initial: true) { _, _ in
             threadTab?.title = file.displayName
+            threadTab?.icon = type.icon
             if let session {
                 threadTab?.checkpoint = { await session.controller.checkpoint() }
                 threadTab?.validate = { await session.controller.matchesChatRevision($0) }
