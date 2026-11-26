@@ -154,3 +154,52 @@ test('golden: emoji lengths are UTF-16 like Android; damaged known fields are re
     expect(() => lib.parse(Buffer.from(JSON.stringify(copy)))).toThrow();
   }
 });
+
+// Focus order: the same fixture is asserted by AmbulandoCore's GoalFocusTests and Android's core/goals tests.
+const focus = JSON.parse(readFileSync(new URL('../../docs/fixtures/goals/focus-order-v1.json', import.meta.url)));
+const focusItem = it => ({ id: it.id, goal: lib.parse(Buffer.from(JSON.stringify(it.goal))) });
+
+test('focus ranks: alphabet, validity, keys between and rebalance keys match the shared fixture', () => {
+  expect(lib.FOCUS_DIGITS).toBe(focus.digits);
+  expect(lib.MAX_RANK).toBe(focus.max_length);
+  for (const v of focus.valid) expect(lib.validRank(v)).toBe(true);
+  for (const v of focus.invalid) expect(lib.validRank(v)).toBe(false);
+  for (const { a, b, key } of focus.between) {
+    expect(lib.keyBetween(a, b)).toBe(key);
+    if (a !== null) expect(a < key).toBe(true);
+    if (b !== null) expect(key < b).toBe(true);
+  }
+  for (const { a, b } of focus.between_errors) expect(() => lib.keyBetween(a, b)).toThrow();
+  for (const { n, keys } of focus.even_keys) {
+    expect(lib.evenKeys(n)).toEqual(keys);
+    expect(keys.every(lib.validRank) && keys.every((k, i) => i === 0 || keys[i - 1] < k)).toBe(true);
+  }
+});
+
+test('focus order and move plans match the shared fixture', () => {
+  expect(lib.focusOrder(focus.order.items.map(focusItem)).map(i => i.id)).toEqual(focus.order.expected);
+  for (const m of focus.moves) {
+    const items = lib.focusOrder(m.items.map(focusItem));
+    expect([m.name, lib.planMove(items, m.id, m.to_index)]).toEqual([m.name, m.writes]);
+    // Applying the writes produces the requested order.
+    const byId = new Map(items.map(i => [i.id, i]));
+    for (const w of m.writes) { const it = byId.get(w.id); byId.set(w.id, { ...it, goal: lib.applyEdit(it.goal, { op: 'set_focus_rank', expected: w.expected, value: w.value }) }); }
+    const wanted = items.filter(i => i.id !== m.id); wanted.splice(Math.min(m.to_index, wanted.length), 0, items.find(i => i.id === m.id));
+    expect([m.name, lib.focusOrder([...byId.values()]).map(i => i.id)]).toEqual([m.name, wanted.map(i => i.id)]);
+  }
+});
+
+test('set_focus_rank is an expectation-checked edit that keeps the field in place', () => {
+  const c = focus.canonical;
+  const set = (bytes, expected, value) => lib.encode(lib.applyEdit(lib.parse(Buffer.from(bytes)), { op: 'set_focus_rank', expected, value })).toString();
+  expect(set(c.before, c.set.expected, c.set.value)).toBe(c.set.after);
+  expect(set(c.set.after, c.move.expected, c.move.value)).toBe(c.move.after);
+  expect(set(c.set.after, c.clear.expected, c.clear.value)).toBe(c.clear.after);
+  expect(lib.encode(lib.parse(Buffer.from(c.invalid_kept.bytes))).toString()).toBe(c.invalid_kept.round_trip);
+  expect(lib.focusRank(lib.parse(Buffer.from(c.invalid_kept.bytes)))).toBe(null);
+  expect(set(c.invalid_kept.bytes, null, 'V')).toBe(c.invalid_kept.replaced);
+  expect(() => set(c.stale.bytes, c.stale.expected, c.stale.value)).toThrow(/order was changed elsewhere/);
+  expect(() => set(c.invalid_value.bytes, c.invalid_value.expected, c.invalid_value.value)).toThrow(/focus rank is invalid/);
+  const archived = { ...lib.parse(Buffer.from(c.before)), status: 'archived' };
+  expect(() => lib.applyEdit(archived, { op: 'set_focus_rank', expected: null, value: 'V' })).toThrow(/archived/);
+});

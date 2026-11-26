@@ -177,6 +177,19 @@ export function applyEdit(goal, edit) {
       if (goal.links.some(l => l.type === link.type && l.record_id === link.record_id)) return goal;
       return validate({ ...goal, links: [...goal.links, link] });
     }
+    case 'set_focus_rank': {
+      // Focus order lives in the optional `focus_rank` field (see focusOrder). It stays in the unknown-field area so
+      // clients that predate it keep it byte for byte.
+      editable(goal);
+      const value = edit.value ?? null;
+      if (value !== null && !validRank(value)) throw invalid('A focus rank is invalid.');
+      const current = focusRank(goal);
+      if (current === value) return goal;
+      if (current !== (edit.expected ?? null)) throw conflict('The goal order was changed elsewhere.');
+      const out = { ...goal };
+      if (value === null) delete out.focus_rank; else out.focus_rank = value;
+      return out;
+    }
     case 'unlink': editable(goal); return { ...goal, links: goal.links.filter(l => !(l.type === edit.type && l.record_id === String(edit.record_id ?? '').toLowerCase())) };
     default: throw invalid(`Unknown edit "${edit.op}".`);
   }
@@ -225,4 +238,107 @@ export function isGoalFile(file) {
   const type = String(file?.content_type ?? file?.current_version?.content_type ?? '').split(';')[0].trim().toLowerCase();
   // A soft-deleted File keeps record_state=active and gets deleted_at, so any non-null deleted_at is a tombstone.
   return !file?.archived_at && (file?.deleted_at ?? null) === null && file?.record_state !== 'deleted' && file?.record_state !== 'archived' && type === MIME && file?.metadata?.goal?.schema_version === VERSION;
+}
+
+// Focus order. A goal may carry `focus_rank`: a fractional-index key of 1–64 characters from FOCUS_DIGITS (ASCII order)
+// not ending in the lowest digit. Keys compare by code unit; a key exists strictly between any two distinct keys, so a
+// move usually rewrites only the moved goal (more when unranked goals above it must be ranked first, or on a rebalance;
+// see planMove). Each write is one expectation-checked set_focus_rank edit. Anything else in `focus_rank` (wrong type, bad character, too long) reads
+// as unranked and is kept untouched until a valid rank replaces it. Shared fixture: docs/fixtures/goals/focus-order-v1.json.
+export const FOCUS_DIGITS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+export const MAX_RANK = 64;
+const RANK = /^[0-9A-Za-z]{0,63}[1-9A-Za-z]$/;
+
+export const validRank = value => typeof value === 'string' && RANK.test(value);
+export const focusRank = goal => (validRank(goal.focus_rank) ? goal.focus_rank : null);
+
+/**
+ * A key strictly between `a` and `b` (`null` = no bound). Port of the midpoint of David Greenspan's
+ * "Implementing Fractional Indexing" (MIT `fractional-indexing`), without its integer header so every key is a plain
+ * fraction. The Swift (GoalFocus.swift) and Kotlin ports must return the same keys; the fixture pins them.
+ */
+export function keyBetween(a, b) {
+  const lo = a ?? '';
+  if ((lo !== '' && !validRank(lo)) || (b != null && !validRank(b))) throw invalid('A focus rank is invalid.');
+  if (b != null && lo >= b) throw invalid('Focus ranks are out of order.');
+  return midpoint(lo, b ?? null);
+}
+
+function midpoint(a, b) {
+  if (b !== null) {
+    let n = 0;
+    while ((a[n] ?? '0') === b[n]) n++;
+    if (n > 0) return b.slice(0, n) + midpoint(a.slice(n), b.slice(n));
+  }
+  const da = a ? FOCUS_DIGITS.indexOf(a[0]) : 0;
+  const db = b !== null ? FOCUS_DIGITS.indexOf(b[0]) : FOCUS_DIGITS.length;
+  if (db - da > 1) return FOCUS_DIGITS[Math.floor((da + db + 1) / 2)];
+  if (b !== null && b.length > 1) return b.slice(0, 1);
+  return FOCUS_DIGITS[da] + midpoint(a.slice(1), null);
+}
+
+/** `n` evenly spaced short keys, in order: the rebalance used when no key fits (ties, or a key would exceed MAX_RANK). */
+export function evenKeys(n) {
+  const base = FOCUS_DIGITS.length;
+  let width = 1;
+  while (base ** width - 1 < n) width++;
+  const span = base ** width;
+  return Array.from({ length: n }, (_, j) => {
+    let v = Math.floor(((j + 1) * span) / (n + 1)), key = '';
+    for (let i = 0; i < width; i++) { key = FOCUS_DIGITS[v % base] + key; v = Math.floor(v / base); }
+    return key.replace(/0+$/, '');
+  });
+}
+
+const STATUS_RANK = { active: 0, completed: 1, archived: 2 };
+const asciiFold = s => s.replace(/[A-Z]/g, c => String.fromCharCode(c.charCodeAt(0) + 32));
+const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+
+/**
+ * The one goal order on every client, for `{ id, goal }` items: status (active, completed, archived); then ranked goals
+ * by `focus_rank`, before unranked ones; unranked by target date (none last), then name with only A–Z folded; equal keys
+ * by file id. Every comparison is by UTF-16 code unit, so Swift, Kotlin and JS agree.
+ */
+export function compareFocus(a, b) {
+  const ra = focusRank(a.goal), rb = focusRank(b.goal);
+  return cmp(STATUS_RANK[a.goal.status] ?? 3, STATUS_RANK[b.goal.status] ?? 3)
+    || cmp(ra === null ? 1 : 0, rb === null ? 1 : 0)
+    || (ra !== null && rb !== null ? cmp(ra, rb) : 0)
+    || (ra === null ? cmp(a.goal.target_date ?? '9999-12-31', b.goal.target_date ?? '9999-12-31') || cmp(asciiFold(a.goal.name), asciiFold(b.goal.name)) : 0)
+    || cmp(a.id, b.id);
+}
+export const focusOrder = items => [...items].sort(compareFocus);
+
+/**
+ * The rank writes that move goal `id` to `toIndex` in `items` (one status group, already in focusOrder). Returns
+ * `[{ id, expected, value }]`, top first; each becomes a `set_focus_rank` edit on that goal.
+ * - Usually one write: a key between the new neighbours.
+ * - Ranked goals sort before unranked ones, so placing a goal below an unranked goal first ranks the unranked goals
+ *   above it, in their current order.
+ * - Neighbours with equal keys (two devices picked the same key) or a key longer than MAX_RANK rebalance: every goal
+ *   from the top through the last ranked one (or the moved goal) gets evenKeys, writing only the keys that change.
+ */
+export function planMove(items, id, toIndex) {
+  const moving = items.find(i => i.id === id);
+  if (!moving) throw conflict('That goal was removed elsewhere.');
+  const rest = items.filter(i => i.id !== id);
+  const at = Math.min(Math.max(toIndex, 0), rest.length);
+  const next = [...rest.slice(0, at), moving, ...rest.slice(at)];
+  if (next.every((item, n) => item.id === items[n].id)) return [];
+  const ranks = next.map(i => focusRank(i.goal));
+  const writes = [];
+  let lo = null, fits = true;
+  for (let n = 0; n <= at; n++) {
+    if (n < at && ranks[n] !== null) { lo = ranks[n]; continue; }
+    const hi = n === at && n + 1 < next.length ? ranks[n + 1] : null;
+    if (hi !== null && lo !== null && lo >= hi) { fits = false; break; }
+    const key = keyBetween(lo, hi);
+    if (key.length > MAX_RANK) { fits = false; break; }
+    writes.push({ id: next[n].id, expected: ranks[n], value: key });
+    lo = key;
+  }
+  if (fits) return writes;
+  const last = Math.max(at, ranks.reduce((m, r, n) => (r !== null ? n : m), -1));
+  const keys = evenKeys(last + 1);
+  return next.slice(0, last + 1).flatMap((item, n) => (ranks[n] === keys[n] ? [] : [{ id: item.id, expected: ranks[n], value: keys[n] }]));
 }

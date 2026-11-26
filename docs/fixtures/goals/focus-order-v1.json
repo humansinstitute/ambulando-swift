@@ -1,0 +1,1480 @@
+{
+ "about": "Goal focus order (focus_rank), shared by AmbulandoCore GoalFocus, scripts/goals-lib.mjs and Android core/goals. See docs/goals.md.",
+ "digits": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+ "max_length": 64,
+ "valid": [
+  "1",
+  "V",
+  "z",
+  "0V",
+  "Zz",
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ ],
+ "invalid": [
+  "",
+  "0",
+  "V0",
+  "a b",
+  "é",
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  7,
+  null,
+  true,
+  [
+   "V"
+  ],
+  {
+   "v": "V"
+  }
+ ],
+ "between": [
+  {
+   "a": null,
+   "b": null,
+   "key": "V"
+  },
+  {
+   "a": "V",
+   "b": null,
+   "key": "l"
+  },
+  {
+   "a": null,
+   "b": "1",
+   "key": "0V"
+  },
+  {
+   "a": null,
+   "b": "V",
+   "key": "G"
+  },
+  {
+   "a": "a",
+   "b": "b",
+   "key": "aV"
+  },
+  {
+   "a": "az",
+   "b": "b",
+   "key": "azV"
+  },
+  {
+   "a": "V",
+   "b": "k",
+   "key": "d"
+  },
+  {
+   "a": "0V",
+   "b": "1",
+   "key": "0l"
+  },
+  {
+   "a": "y",
+   "b": "z",
+   "key": "yV"
+  },
+  {
+   "a": "z",
+   "b": null,
+   "key": "zV"
+  },
+  {
+   "a": "zz",
+   "b": null,
+   "key": "zzV"
+  },
+  {
+   "a": "1",
+   "b": "11",
+   "key": "10V"
+  },
+  {
+   "a": "A",
+   "b": "a",
+   "key": "N"
+  },
+  {
+   "a": "9",
+   "b": "A",
+   "key": "9V"
+  }
+ ],
+ "between_errors": [
+  {
+   "a": "V",
+   "b": "V"
+  },
+  {
+   "a": "k",
+   "b": "V"
+  },
+  {
+   "a": "V0",
+   "b": null
+  },
+  {
+   "a": "",
+   "b": "V0"
+  },
+  {
+   "a": "a-b",
+   "b": null
+  },
+  {
+   "a": null,
+   "b": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  }
+ ],
+ "even_keys": [
+  {
+   "n": 1,
+   "keys": [
+    "V"
+   ]
+  },
+  {
+   "n": 2,
+   "keys": [
+    "K",
+    "f"
+   ]
+  },
+  {
+   "n": 3,
+   "keys": [
+    "F",
+    "V",
+    "k"
+   ]
+  },
+  {
+   "n": 61,
+   "keys": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h",
+    "i",
+    "j",
+    "k",
+    "l",
+    "m",
+    "n",
+    "o",
+    "p",
+    "q",
+    "r",
+    "s",
+    "t",
+    "u",
+    "v",
+    "w",
+    "x",
+    "y",
+    "z"
+   ]
+  },
+  {
+   "n": 62,
+   "keys": [
+    "0z",
+    "1y",
+    "2x",
+    "3w",
+    "4v",
+    "5u",
+    "6t",
+    "7s",
+    "8r",
+    "9q",
+    "Ap",
+    "Bo",
+    "Cn",
+    "Dm",
+    "El",
+    "Fk",
+    "Gj",
+    "Hi",
+    "Ih",
+    "Jg",
+    "Kf",
+    "Le",
+    "Md",
+    "Nc",
+    "Ob",
+    "Pa",
+    "QZ",
+    "RY",
+    "SX",
+    "TW",
+    "UV",
+    "VU",
+    "WT",
+    "XS",
+    "YR",
+    "ZQ",
+    "aP",
+    "bO",
+    "cN",
+    "dM",
+    "eL",
+    "fK",
+    "gJ",
+    "hI",
+    "iH",
+    "jG",
+    "kF",
+    "lE",
+    "mD",
+    "nC",
+    "oB",
+    "pA",
+    "q9",
+    "r8",
+    "s7",
+    "t6",
+    "u5",
+    "v4",
+    "w3",
+    "x2",
+    "y1",
+    "z"
+   ]
+  },
+  {
+   "n": 100,
+   "keys": [
+    "0c",
+    "1E",
+    "1q",
+    "2S",
+    "34",
+    "3g",
+    "4I",
+    "4u",
+    "5W",
+    "68",
+    "6k",
+    "7M",
+    "7y",
+    "8a",
+    "9C",
+    "9o",
+    "AR",
+    "B3",
+    "Bf",
+    "CH",
+    "Ct",
+    "DV",
+    "E7",
+    "Ej",
+    "FL",
+    "Fx",
+    "GZ",
+    "HB",
+    "Hn",
+    "IP",
+    "J1",
+    "Jd",
+    "KF",
+    "Ks",
+    "LU",
+    "M6",
+    "Mi",
+    "NK",
+    "Nw",
+    "OY",
+    "PA",
+    "Pm",
+    "QO",
+    "R",
+    "Rc",
+    "SE",
+    "Sq",
+    "TS",
+    "U4",
+    "Ug",
+    "VJ",
+    "Vv",
+    "WX",
+    "X9",
+    "Xl",
+    "YN",
+    "Yz",
+    "Zb",
+    "aD",
+    "ap",
+    "bR",
+    "c3",
+    "cf",
+    "dH",
+    "dt",
+    "eV",
+    "f7",
+    "fk",
+    "gM",
+    "gy",
+    "ha",
+    "iC",
+    "io",
+    "jQ",
+    "k2",
+    "ke",
+    "lG",
+    "ls",
+    "mU",
+    "n6",
+    "ni",
+    "oK",
+    "ow",
+    "pY",
+    "qB",
+    "qn",
+    "rP",
+    "s1",
+    "sd",
+    "tF",
+    "tr",
+    "uT",
+    "v5",
+    "vh",
+    "wJ",
+    "wv",
+    "xX",
+    "y9",
+    "yl",
+    "zN"
+   ]
+  }
+ ],
+ "order": {
+  "items": [
+   {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "Zebra unranked late",
+     "description": "d",
+     "status": "active",
+     "checkpoints": [],
+     "links": [],
+     "target_date": "2027-05-01"
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "alpha unranked no date",
+     "description": "d",
+     "status": "active",
+     "checkpoints": [],
+     "links": []
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000003",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "Beta unranked no date",
+     "description": "d",
+     "status": "active",
+     "checkpoints": [],
+     "links": []
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000004",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "ranked k",
+     "description": "d",
+     "status": "active",
+     "checkpoints": [],
+     "links": [],
+     "focus_rank": "k"
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000005",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "ranked V",
+     "description": "d",
+     "status": "active",
+     "checkpoints": [],
+     "links": [],
+     "focus_rank": "V"
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000006",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "tie V higher id",
+     "description": "d",
+     "status": "active",
+     "checkpoints": [],
+     "links": [],
+     "focus_rank": "V"
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000007",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "invalid rank number",
+     "description": "d",
+     "status": "active",
+     "checkpoints": [],
+     "links": [],
+     "focus_rank": 7,
+     "target_date": "2027-01-01"
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000008",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "invalid rank trailing zero",
+     "description": "d",
+     "status": "active",
+     "checkpoints": [],
+     "links": [],
+     "focus_rank": "V0",
+     "target_date": "2027-01-01"
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000009",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "completed ranked first",
+     "description": "d",
+     "status": "completed",
+     "checkpoints": [],
+     "links": [],
+     "focus_rank": "1"
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000010",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "archived",
+     "description": "d",
+     "status": "archived",
+     "checkpoints": [],
+     "links": [],
+     "focus_rank": "0V"
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000011",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "ranked lowercase a",
+     "description": "d",
+     "status": "active",
+     "checkpoints": [],
+     "links": [],
+     "focus_rank": "a"
+    }
+   },
+   {
+    "id": "00000000-0000-4000-8000-000000000012",
+    "goal": {
+     "schema": "ambulando.goal",
+     "schema_version": 1,
+     "name": "ranked upper Z",
+     "description": "d",
+     "status": "active",
+     "checkpoints": [],
+     "links": [],
+     "focus_rank": "Z"
+    }
+   }
+  ],
+  "expected": [
+   "00000000-0000-4000-8000-000000000005",
+   "00000000-0000-4000-8000-000000000006",
+   "00000000-0000-4000-8000-000000000012",
+   "00000000-0000-4000-8000-000000000011",
+   "00000000-0000-4000-8000-000000000004",
+   "00000000-0000-4000-8000-000000000007",
+   "00000000-0000-4000-8000-000000000008",
+   "00000000-0000-4000-8000-000000000001",
+   "00000000-0000-4000-8000-000000000002",
+   "00000000-0000-4000-8000-000000000003",
+   "00000000-0000-4000-8000-000000000009",
+   "00000000-0000-4000-8000-000000000010"
+  ]
+ },
+ "moves": [
+  {
+   "name": "to top",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "a",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "F"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "b",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "c",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "k"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000003",
+   "to_index": 0,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "expected": "k",
+     "value": "8"
+    }
+   ]
+  },
+  {
+   "name": "to bottom",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "a",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "F"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "b",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "c",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "k"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000001",
+   "to_index": 2,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "expected": "F",
+     "value": "s"
+    }
+   ]
+  },
+  {
+   "name": "between ranked",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "a",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "F"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "b",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "c",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "k"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000001",
+   "to_index": 1,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "expected": "F",
+     "value": "d"
+    }
+   ]
+  },
+  {
+   "name": "unchanged position",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "a",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "F"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "b",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "c",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "k"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000002",
+   "to_index": 1,
+   "writes": []
+  },
+  {
+   "name": "unranked to just below the ranked prefix",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "r1",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "u1",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-01-01"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "u2",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-02-01"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000003",
+   "to_index": 1,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "expected": null,
+     "value": "l"
+    }
+   ]
+  },
+  {
+   "name": "below an unranked goal ranks the goals above it",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "r1",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "u1",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-01-01"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "u2",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-02-01"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000002",
+   "to_index": 2,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "expected": null,
+     "value": "l"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "expected": null,
+     "value": "t"
+    }
+   ]
+  },
+  {
+   "name": "all unranked, third to top",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "one",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-01-01"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "two",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-02-01"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "three",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-03-01"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000003",
+   "to_index": 0,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "expected": null,
+     "value": "V"
+    }
+   ]
+  },
+  {
+   "name": "all unranked, first to bottom",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "one",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-01-01"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "two",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-02-01"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "three",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-03-01"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000001",
+   "to_index": 2,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "expected": null,
+     "value": "V"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "expected": null,
+     "value": "l"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "expected": null,
+     "value": "t"
+    }
+   ]
+  },
+  {
+   "name": "all unranked, bottom to middle ranks the prefix",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "one",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-01-01"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "two",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-02-01"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "three",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-03-01"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000003",
+   "to_index": 1,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "expected": null,
+     "value": "V"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "expected": null,
+     "value": "l"
+    }
+   ]
+  },
+  {
+   "name": "ranked prefix, unranked moved below another unranked",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "r1",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "u1",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-01-01"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "u2",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-02-01"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000004",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "u3",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-03-01"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000004",
+   "to_index": 2,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "expected": null,
+     "value": "l"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000004",
+     "expected": null,
+     "value": "t"
+    }
+   ]
+  },
+  {
+   "name": "to top above equal keys",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "a",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "b",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000002",
+   "to_index": 0,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "expected": "V",
+     "value": "G"
+    }
+   ]
+  },
+  {
+   "name": "exhausted after the last ranked goal rebalances",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "a",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "b",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "c",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-01-01"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000004",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "d",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "target_date": "2027-02-01"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000004",
+   "to_index": 2,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "expected": "V",
+     "value": "F"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "expected": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+     "value": "V"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000004",
+     "expected": null,
+     "value": "k"
+    }
+   ]
+  },
+  {
+   "name": "equal neighbour keys rebalance",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "a",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "b",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "c",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "k"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000003",
+   "to_index": 1,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "expected": "V",
+     "value": "F"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "expected": "k",
+     "value": "V"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "expected": "V",
+     "value": "k"
+    }
+   ]
+  },
+  {
+   "name": "exhausted key rebalances",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "a",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "b",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V000000000000000000000000000000000000000000000000000000000000001"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "c",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "k"
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000003",
+   "to_index": 1,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "expected": "V",
+     "value": "F"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "expected": "k",
+     "value": "V"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "expected": "V000000000000000000000000000000000000000000000000000000000000001",
+     "value": "k"
+    }
+   ]
+  },
+  {
+   "name": "rebalance keeps unranked tail unranked",
+   "items": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "a",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "b",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "V"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "c",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": [],
+      "focus_rank": "k"
+     }
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000004",
+     "goal": {
+      "schema": "ambulando.goal",
+      "schema_version": 1,
+      "name": "u",
+      "description": "d",
+      "status": "active",
+      "checkpoints": [],
+      "links": []
+     }
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000003",
+   "to_index": 1,
+   "writes": [
+    {
+     "id": "00000000-0000-4000-8000-000000000001",
+     "expected": "V",
+     "value": "F"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000003",
+     "expected": "k",
+     "value": "V"
+    },
+    {
+     "id": "00000000-0000-4000-8000-000000000002",
+     "expected": "V",
+     "value": "k"
+    }
+   ]
+  }
+ ],
+ "canonical": {
+  "before": "{\"future\":true,\"schema\":\"ambulando.goal\",\"schema_version\":1,\"name\":\"n\",\"description\":\"d\",\"status\":\"active\",\"checkpoints\":[],\"links\":[]}",
+  "set": {
+   "expected": null,
+   "value": "V",
+   "after": "{\"future\":true,\"focus_rank\":\"V\",\"schema\":\"ambulando.goal\",\"schema_version\":1,\"name\":\"n\",\"description\":\"d\",\"status\":\"active\",\"checkpoints\":[],\"links\":[]}"
+  },
+  "move": {
+   "expected": "V",
+   "value": "k",
+   "after": "{\"future\":true,\"focus_rank\":\"k\",\"schema\":\"ambulando.goal\",\"schema_version\":1,\"name\":\"n\",\"description\":\"d\",\"status\":\"active\",\"checkpoints\":[],\"links\":[]}"
+  },
+  "clear": {
+   "expected": "V",
+   "value": null,
+   "after": "{\"future\":true,\"schema\":\"ambulando.goal\",\"schema_version\":1,\"name\":\"n\",\"description\":\"d\",\"status\":\"active\",\"checkpoints\":[],\"links\":[]}"
+  },
+  "invalid_kept": {
+   "bytes": "{\"focus_rank\":{\"x\":1},\"schema\":\"ambulando.goal\",\"schema_version\":1,\"name\":\"n\",\"description\":\"d\",\"status\":\"active\",\"checkpoints\":[],\"links\":[]}",
+   "round_trip": "{\"focus_rank\":{\"x\":1},\"schema\":\"ambulando.goal\",\"schema_version\":1,\"name\":\"n\",\"description\":\"d\",\"status\":\"active\",\"checkpoints\":[],\"links\":[]}",
+   "rank": null,
+   "replaced": "{\"focus_rank\":\"V\",\"schema\":\"ambulando.goal\",\"schema_version\":1,\"name\":\"n\",\"description\":\"d\",\"status\":\"active\",\"checkpoints\":[],\"links\":[]}"
+  },
+  "stale": {
+   "bytes": "{\"future\":true,\"focus_rank\":\"V\",\"schema\":\"ambulando.goal\",\"schema_version\":1,\"name\":\"n\",\"description\":\"d\",\"status\":\"active\",\"checkpoints\":[],\"links\":[]}",
+   "expected": "F",
+   "value": "k",
+   "error": "conflict"
+  },
+  "invalid_value": {
+   "bytes": "{\"future\":true,\"schema\":\"ambulando.goal\",\"schema_version\":1,\"name\":\"n\",\"description\":\"d\",\"status\":\"active\",\"checkpoints\":[],\"links\":[]}",
+   "expected": null,
+   "value": "V0",
+   "error": "invalid"
+  }
+ }
+}

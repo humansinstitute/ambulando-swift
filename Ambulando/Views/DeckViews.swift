@@ -28,7 +28,11 @@ struct DeckView: View {
 
     var body: some View {
         #if os(macOS)
-        MacDeckDashboard(workspace: workspace, store: store).navigationTitle("Deck")
+        if model.deckSurface == .home && model.context == .home {
+            HomeView(workspace: workspace, store: store).navigationTitle("Home")
+        } else {
+            MacDeckDashboard(workspace: workspace, store: store).navigationTitle("Deck")
+        }
         #else
         let cards = cards
         VStack(spacing: 0) {
@@ -1112,7 +1116,7 @@ private struct MacDeckLaunchers: Equatable, Sendable {
     var people = PeopleDirectory()
 }
 
-private struct MacDeckWelcome: View {
+struct MacDeckWelcome: View {
     @Environment(AppModel.self) private var model
     let workspace: WorkspaceRecord
     let store: LocalStore

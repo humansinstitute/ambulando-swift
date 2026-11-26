@@ -19,7 +19,9 @@ final class GoalsModel {
     private(set) var unreadable: [UnreadableGoal] = []
     /// Plain-language reason the last load failed; the previous goals stay visible.
     private(set) var error: String?
-    @ObservationIgnored private var refreshing = false
+    /// The load in progress. It is not tied to the view that started it, so a view that disappears (or is rebuilt)
+    /// mid-load does not cancel it, and callers that arrive meanwhile wait for its result instead of being skipped.
+    @ObservationIgnored private var inflight: Task<Void, Never>?
 
     init(boundary: WorkspaceBoundary, service: GoalsService, isCurrent: @escaping @MainActor (WorkspaceBoundary) -> Bool) {
         self.boundary = boundary; self.service = service; self.isCurrent = isCurrent
@@ -34,18 +36,36 @@ final class GoalsModel {
         goals.filter { $0.goal.links.contains { $0.type == type && $0.recordId == recordId.lowercased() } }
     }
 
+    /// The latest refresh outcomes (newest last, at most 12), for diagnosing a load that never finishes. Not shown.
+    @ObservationIgnored private(set) var refreshLog: [String] = []
+    private func note(_ outcome: String) {
+        refreshLog.append(outcome)
+        if refreshLog.count > 12 { refreshLog.removeFirst() }
+    }
+
     func refresh() async {
-        guard !refreshing else { return }
-        refreshing = true; loading = true
-        defer { refreshing = false; loading = false }
+        if let inflight { note("joined"); await inflight.value; return }
+        note("start")
+        let load = Task { await self.load() }
+        inflight = load
+        await load.value
+        inflight = nil
+    }
+
+    private func load() async {
+        loading = true
+        defer { loading = false }
         do {
             let snapshot = try await service.load()
-            guard isCurrent(boundary) else { return }
+            guard isCurrent(boundary) else { note("dropped-not-current"); return }
             space = snapshot.space; goals = snapshot.goals; unreadable = snapshot.unreadable; error = nil; loaded = true
+            note("loaded")
         } catch is CancellationError {
+            note("cancelled")
         } catch {
-            guard isCurrent(boundary) else { return }
+            guard isCurrent(boundary) else { note("dropped-not-current"); return }
             self.error = Self.message(error)
+            note("failed")
         }
     }
 
@@ -82,6 +102,28 @@ final class GoalsModel {
         return saved
     }
 
+    /// A focus reorder is saving; further moves wait for it so each plan starts from saved ranks.
+    private(set) var moving = false
+
+    /// Moves an active goal to `toIndex` among the active goals in focus order with the fewest rank edits
+    /// (`GoalFocus.planMove`, saved by `GoalsService.move`). On a refusal the move stops, the earlier writes stay (each
+    /// leaves a valid order), the goals are reloaded and a readable message says how much was saved.
+    func move(_ fileId: String, toIndex: Int) async -> String? {
+        guard !moving else { return nil }
+        moving = true
+        defer { moving = false }
+        do {
+            let active = GoalFocus.order(goals.filter { $0.goal.status == .active })
+            let saved = try await service.move(try GoalFocus.planMove(active, id: fileId, toIndex: toIndex))
+            if isCurrent(boundary) { saved.forEach(publish) }
+            return nil
+        } catch {
+            if let failed = error as? GoalFocusMoveFailed, isCurrent(boundary) { failed.saved.forEach(publish) }
+            await refresh()
+            return Self.message(error)
+        }
+    }
+
     /// Re-reads one goal (e.g. after a conflict or an agent edit).
     func reload(_ fileId: String) async {
         guard let fresh = try? await service.read(fileId), isCurrent(boundary) else { return }
@@ -102,6 +144,7 @@ final class GoalsModel {
         switch error {
         case let e as GoalError: e.localizedDescription
         case let e as GoalSaveFailed: e.message
+        case let e as GoalFocusMoveFailed: e.errorDescription ?? e.reason
         case let e as BoardEditError: e.localizedDescription
         case TowerError.http(let status, _, _) where status == 403: "You don’t have access to change goals here."
         case TowerError.http(let status, _, _) where status == 404: "This is no longer available to you."

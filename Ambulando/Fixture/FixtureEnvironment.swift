@@ -365,6 +365,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     let labWork: SampleWorkTower
     /// Context Tree, canvases, boards, agents, Toolbox and pins (shared with the core tests); the lab workspace has none.
     let surfaces: SampleSurfaceTower
+    /// The sample identity's private Goals space, only with `-AmbulandoFixtureGoals` (Home and Goals checks).
+    let goals: SampleGoalsTower?
     let labSurfaces: SampleSurfaceTower
     /// Board File versions (list, read, save with a stale-base check) and their canvas projection.
     let trustNapplet = NappletTrustFixture()
@@ -413,6 +415,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         labSurfaces = SampleSurfaceTower(workspaceId: Self.lab, file: file.deletingLastPathComponent().appendingPathComponent("fixture-surfaces-lab.json"))
         boards = SampleBoardTower(workspaceId: Self.studio, file: file.deletingLastPathComponent().appendingPathComponent("fixture-boards.json"))
         notifications = SampleNotificationTower(workspaceId: Self.studio, file: file.deletingLastPathComponent().appendingPathComponent("fixture-notifications.json"))
+        goals = ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureGoals")
+            ? SampleGoalsTower(workspaceId: Self.studio, scopeId: Self.uuid(1, "f1c7a0a1"), channelId: Self.uuid(2, "f1c7a0a1"), agentNpub: Self.rick, owner: { "" })
+            : nil
         // Pins and references resolve against the sample tasks, documents and channels the other routes serve.
         let work = work
         boards.objectBytes = { id in work.completedObjectBytes(id) }
@@ -430,6 +435,11 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             if id.hasPrefix("f1c7bbbb") { return ["title": "Conversation", "channel_id": Self.generalChannel, "scope_id": Self.scopeAmbulando] }
             return nil
         }
+        if let goals {
+            goals.owner = { [unowned self] in self.actorNpub }
+            goals.objectBytes = { id in work.completedObjectBytes(id) }
+            Self.seedGoals(goals)
+        }
         if let data = try? Data(contentsOf: file), let saved = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             posted = (saved["posted"] as? [[String: Any]]) ?? []
             eventLog = (saved["events"] as? [[String: Any]]) ?? []
@@ -443,6 +453,32 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     }
 
     static func uuid(_ n: Int, _ prefix: String) -> String { String(format: "\(prefix)-0000-4000-8000-%012d", n) }
+
+    /// Five generic goals: three ranked (in focus), two unranked, with dated checkpoints for the briefing.
+    static func seedGoals(_ tower: SampleGoalsTower) {
+        func goal(_ name: String, _ description: String, start: String? = nil, target: String? = nil, rank: String? = nil,
+                  _ checkpoints: [(String, String?, Bool)] = []) -> Goal {
+            var g = Goal(name: name, description: description, startDate: start, targetDate: target,
+                         checkpoints: checkpoints.enumerated().map { GoalCheckpoint(id: "cp-\($0.offset + 1)", title: $0.element.0, date: $0.element.1, reached: $0.element.2) })
+            if let rank { g.extra = .object([(GoalFocus.field, .string(rank))]) }
+            return g
+        }
+        tower.seed(goal("Ship Ambulando", "Make Ambulando the place I use every day to talk with my agents and move work forward.",
+                        start: "2026-11-26", target: "2026-12-18", rank: "V",
+                        [("Agree on the first version", "2026-11-26", true), ("Use it daily on Android", "2026-12-05", false), ("Ready for the first users", "2026-12-18", false)]),
+                   id: uuid(11, "f1c7a0a1"))
+        tower.seed(goal("Run a half marathon", "Build up steadily and finish feeling strong.", start: "2026-11-01", target: "2027-04-12", rank: "l",
+                        [("Run 10 km", "2026-11-20", false), ("Run 15 km", "2027-01-31", false), ("Race day", "2027-04-12", false)]),
+                   id: uuid(12, "f1c7a0a1"))
+        tower.seed(goal("Learn to sail", "Complete a beginner course and a first day trip.", start: "2027-03-01", target: "2027-06-30", rank: "t",
+                        [("Book the course", "2027-03-05", true), ("Pass the theory test", nil, false), ("Sail a day trip", nil, false)]),
+                   id: uuid(13, "f1c7a0a1"))
+        tower.seed(goal("Read twelve books", "One book a month, mostly fiction.", target: "2027-11-30"), id: uuid(14, "f1c7a0a1"))
+        tower.seed(goal("Tidy the garden", "Clear the beds and plant for spring."), id: uuid(15, "f1c7a0a1"))
+        // A deleted goal: never listed, and a mention of it must not open as a goal.
+        tower.seed(goal("Old plan", "Replaced by newer goals."), id: uuid(16, "f1c7a0a1"))
+        tower.softDelete(uuid(16, "f1c7a0a1"))
+    }
     /// Seeded history spans three days (general #1–13, #14–26, the rest), so chat shows its date separators.
     private static func time(_ n: Int) -> String {
         let day = n <= 13 ? 21 : n <= 26 ? 22 : 23
@@ -546,6 +582,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         }
         guard request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Nostr ") == true else { return (401, ["code": "unauthorized"]) }
         if offline { throw URLError(.notConnectedToInternet) }
+        if let goals, let handled = try goals.handle(request) { return handled }
         if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureAdmin") {
             administration.seedMembers([member(actorNpub, "You (sample identity)", "human"), member(Self.ana, "Ana", "human"), member(Self.rick, "Rick", "agent")])
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureGroups") {
@@ -678,6 +715,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     private func scopeRows(_ w: String) -> [[String: Any]] {
         var base = w == Self.studio ? [scope(Self.scopeAmbulando, w, "Ambulando"), scope(Self.scopeOps, w, "Operations")]
                                     : [scope(Self.scopeResearch, w, "Research")]
+        if w == Self.studio, let goals { base.append(goals.scopeRow) }
         // Direct messages live in their own scope (kind dm) on a Tower that provisions one; opt-in so other checks keep their layout.
         if w == Self.studio, ProcessInfo.processInfo.arguments.contains("-AmbulandoFixtureDMs") || NappletTrustFixture.enabled {
             var dm = scope(Self.scopeDMs, w, "DMs"); dm["kind"] = "dm"; base.append(dm)
@@ -1316,7 +1354,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         ["id": id, "workspace_id": w, "scope_id": s, "name": name, "kind": "channel", "position": position, "row_version": 1, "updated_at": "2026-10-01T00:00:00.000Z"]
     }
     private func member(_ npub: String, _ name: String?, _ kind: String) -> [String: Any] {
-        ["actor": ["actor_id": (ProcessInfo.processInfo.arguments.contains("-AmbulandoCommentAvatarCheck") && npub == actorNpub ? "f1c70000-0000-4000-8000-0000000000e1" : UUID().uuidString.lowercased()), "npub": npub, "kind": kind, "display_name": name.map { $0 as Any } ?? NSNull()]]
+        ["actor": ["actor_id": goals?.actorId(for: npub) ?? (ProcessInfo.processInfo.arguments.contains("-AmbulandoCommentAvatarCheck") && npub == actorNpub ? "f1c70000-0000-4000-8000-0000000000e1" : UUID().uuidString.lowercased()), "npub": npub, "kind": kind, "display_name": name.map { $0 as Any } ?? NSNull()]]
     }
     private func thread(for root: [String: Any]) -> [String: Any] {
         let edit = manageMap("threadTitles")[root["thread_id"] as? String ?? ""]

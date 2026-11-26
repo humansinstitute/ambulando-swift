@@ -27,11 +27,8 @@ public struct GoalsService: Sendable {
         self.api = api; self.workspaceId = workspaceId; self.appNpub = appNpub; self.viewer = viewer; self.identity = identity
     }
 
-    public static func order(_ a: GoalDocument, _ b: GoalDocument) -> Bool {
-        let x = (a.goal.status.rank, a.goal.targetDate ?? "9999-12-31", a.goal.name.lowercased(), a.id)
-        let y = (b.goal.status.rank, b.goal.targetDate ?? "9999-12-31", b.goal.name.lowercased(), b.id)
-        return x < y
-    }
+    /// Focus order (`GoalFocus`), shared with Android and the agent tool.
+    public static func order(_ a: GoalDocument, _ b: GoalDocument) -> Bool { GoalFocus.precedes(a, b) }
 
     private func requireSigner() async throws {
         do { try await identity.requireSigner(npub: viewer) } catch { throw BoardEditError.locked }
@@ -64,6 +61,16 @@ public struct GoalsService: Sendable {
             do { try await identity.requireSigner(npub: signer) } catch { throw BoardEditError.locked }
         })
         return try await GoalEditor.edit(transport, fileId: fileId, edits: edits)
+    }
+
+    /// Saves a focus move write by write; see `GoalEditor.move`.
+    public func move(_ writes: [GoalFocus.Write]) async throws -> [GoalDocument] {
+        try await requireSigner()
+        let signer = viewer, identity = identity
+        let transport = api.goalTransport(workspaceId: workspaceId, appNpub: appNpub, requireSigner: {
+            do { try await identity.requireSigner(npub: signer) } catch { throw BoardEditError.locked }
+        })
+        return try await GoalEditor.move(transport, writes: writes)
     }
 
     public func setUp(scopeId: String, agentActorIds: [String]) async throws -> ChannelRecord {

@@ -357,6 +357,11 @@ struct ComposerTextView: NSViewRepresentable {
     var insertion: Binding<String?>? = nil
     /// Optional caret observation for content-field mention completion; chat retains its existing behavior.
     var selection: Binding<NSRange>? = nil
+    /// A multiline field in a form: Return is a newline, ⌘Return runs `onSubmit`, Tab and Shift-Tab move focus, and
+    /// Escape runs `onCancel`. Chat keeps its composer keys.
+    var formField = false
+    var onCancel: (() -> Void)? = nil
+    var identifier = "composer.field"
     /// Read while the parent draws, so a text size change (`TextScale`) reaches `updateNSView`.
     private let textScale = TextScale.shared.factor
 
@@ -383,7 +388,7 @@ struct ComposerTextView: NSViewRepresentable {
         view.isVerticallyResizable = true
         view.isHorizontallyResizable = false
         view.autoresizingMask = [.width]
-        view.setAccessibilityIdentifier("composer.field")
+        view.setAccessibilityIdentifier(identifier)
         view.string = text
         view.placeholder = placeholder
         view.registerForDraggedTypes([.fileURL, .png, .tiff])
@@ -520,6 +525,19 @@ struct ComposerTextView: NSViewRepresentable {
                 default: nil
                 }
                 if let key, onKey(key) { return true }
+            }
+            if parent.formField, !view.hasMarkedText() {
+                switch selector {
+                case #selector(NSResponder.insertTab(_:)): view.window?.selectNextKeyView(nil); return true
+                case #selector(NSResponder.insertBacktab(_:)): view.window?.selectPreviousKeyView(nil); return true
+                case #selector(NSResponder.cancelOperation(_:)):
+                    guard let onCancel = parent.onCancel else { return false }
+                    onCancel(); return true
+                case #selector(NSResponder.insertNewline(_:)):
+                    guard NSApp.currentEvent?.modifierFlags.contains(.command) == true, let onSubmit = parent.onSubmit else { return false }
+                    onSubmit(); return true
+                default: return false
+                }
             }
             guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
             let flags = NSApp.currentEvent?.modifierFlags ?? []

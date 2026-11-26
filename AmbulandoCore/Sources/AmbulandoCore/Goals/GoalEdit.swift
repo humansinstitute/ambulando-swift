@@ -21,6 +21,8 @@ public enum GoalEdit: Sendable, Equatable {
     case link(GoalLink)
     /// Removes only the reference; the source record, its location and its access are untouched.
     case unlink(GoalLinkType, recordId: String)
+    /// Sets or clears the goal's focus rank (see `GoalFocus`); `expected` is the valid rank the editor saw, or `nil`.
+    case setFocusRank(expected: String?, value: String?)
 
     public func apply(to goal: Goal) throws -> Goal {
         switch self {
@@ -83,6 +85,13 @@ public enum GoalEdit: Sendable, Equatable {
             try goal.requireEditable()
             var out = goal; out.links.removeAll { $0.type == type && $0.recordId == recordId.lowercased() }
             return out
+        case .setFocusRank(let expected, let value):
+            try goal.requireEditable()
+            if let value, !GoalFocus.isValid(value) { throw GoalError.invalid("A focus rank is invalid.") }
+            let current = GoalFocus.rank(goal)
+            if current == value { return goal }
+            guard current == expected else { throw GoalError.conflict("The goal order was changed elsewhere.") }
+            return GoalFocus.setting(goal, value)
         }
     }
 

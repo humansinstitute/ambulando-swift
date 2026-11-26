@@ -81,8 +81,10 @@ try {
     need('channel'); const c = await client();
     const files = (await listAll(c, `${c.root}/channels/${options.channel}/files`, 'files')).filter(lib.isGoalFile);
     const goals = [];
-    for (const f of files) { try { const g = await readGoal(c, f.id); goals.push({ file_id: f.id, version_id: g.versionId, ...summary(g.goal) }); } catch (e) { goals.push({ file_id: f.id, unreadable: e.message }); } }
-    out({ goals });
+    const read = [], unreadable = [];
+    for (const f of files) { try { const g = await readGoal(c, f.id); read.push({ id: f.id, versionId: g.versionId, goal: g.goal }); } catch (e) { unreadable.push({ file_id: f.id, unreadable: e.message }); } }
+    // Focus order, as Home shows it; move a goal with set_focus_rank edits (docs/goals.md, "Focus order").
+    out({ goals: [...lib.focusOrder(read).map(g => ({ file_id: g.id, version_id: g.versionId, focus_rank: lib.focusRank(g.goal), ...summary(g.goal) })), ...unreadable] });
   } else if (command === 'show') {
     need('file'); const g = await readGoal(await client(), options.file); out({ file_id: g.file.id, channel_id: g.file.channel_id, version_id: g.versionId, goal: g.goal });
   } else if (command === 'create') {
@@ -100,7 +102,21 @@ try {
     const edits = JSON.parse(options.ops); if (!Array.isArray(edits) || !edits.length) throw new Error('--ops must be a non-empty JSON array');
     const result = await editGoal(c, options.workspace, options.file, edits);
     out({ file_id: options.file, version_id: result.versionId, changed: result.changed, goal: result.goal });
-  } else throw new Error('Usage: goals.mjs space|setup|list|show|create|edit --workspace <id> … (see docs/goals.md)');
+  } else if (command === 'move') {
+    // Moves an active goal to --to (0 = top of Home) with the fewest set_focus_rank edits; each is expectation-checked,
+    // so a concurrent reorder stops with a conflict (exit 3) and the earlier writes stay valid. Re-run `list` and retry.
+    need('channel', 'file', 'to'); const c = await client();
+    const files = (await listAll(c, `${c.root}/channels/${options.channel}/files`, 'files')).filter(lib.isGoalFile);
+    const active = [];
+    for (const f of files) { try { const g = await readGoal(c, f.id); if (g.goal.status === 'active') active.push({ id: f.id, goal: g.goal }); } catch { /* unreadable goals are not ordered */ } }
+    const writes = lib.planMove(lib.focusOrder(active), options.file, Number(options.to));
+    const saved = [];
+    for (const w of writes) {
+      try { await editGoal(c, options.workspace, w.id, [{ op: 'set_focus_rank', expected: w.expected, value: w.value }]); saved.push(w); }
+      catch (e) { e.message = `Saved ${saved.length} of ${writes.length} order changes; stopped: ${e.message}`; throw e; }
+    }
+    out({ moved: options.file, writes });
+  } else throw new Error('Usage: goals.mjs space|setup|list|show|create|edit|move --workspace <id> … (see docs/goals.md)');
 } catch (error) {
   console.error(error.kind === 'conflict' ? `Conflict: ${error.message}` : error.message);
   process.exitCode = error.kind === 'conflict' || error.status === 409 ? 3 : 1;

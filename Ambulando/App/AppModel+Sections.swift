@@ -4,6 +4,9 @@ import Foundation
 /// The web app's sections, in its mobile bottom-bar order (sol `index.html` `.mobile-section-switcher`): Deck, Chat,
 /// Tasks, Docs, Files, Agents and Context (optional, off by default as on the web), Toolbox. Every section reads the
 /// shared Workspace → Scope → Channel context except Toolbox (the member's own WApps).
+/// See `AppModel.deckSurface`.
+enum DeckSurface: Equatable { case home, dashboard }
+
 enum AppMode: String, CaseIterable, Codable {
     case deck, chat, tasks, docs, files, agents, context, toolbox
 
@@ -117,11 +120,11 @@ extension AppModel {
         if fileNappletNavigation?({ self.chooseInSidebar(next) }) == true { return }
         let destination: AppMode = isCurrentViewLocked ? mode : .deck
         selectContext(next)
-        if destination == .deck { deckPath = []; deckInboxRequests &+= 1 }
+        if destination == .deck { deckPath = []; deckInboxRequests &+= 1; deckSurface = next == .home ? .home : .dashboard }
         mode = destination
     }
 
-    /// Explicit workspace Home shortcut; unlike a sidebar choice it always opens Deck.
+    /// Explicit workspace Home shortcut; unlike a sidebar choice it always opens Home (goals, briefing, latest chats).
     func showWorkspaceHome() {
         if fileNappletNavigation?({ self.showWorkspaceHome() }) == true { return }
         lockedView = nil
@@ -130,7 +133,19 @@ extension AppModel {
     }
 
     var workspaceHomeSelected: Bool {
-        mode == .deck && context == .home && deckPath.isEmpty && focusedThread == nil
+        mode == .deck && deckSurface == .home && context == .home && focusedThread == nil
+    }
+
+    /// Whether the Deck section (the dashboard, not Home) is showing.
+    var deckDashboardSelected: Bool { mode == .deck && !workspaceHomeSelected }
+
+    /// The Deck section button: the dashboard for the current context; again while showing it returns to its root.
+    func showDeckDashboard() {
+        if fileNappletNavigation?({ self.showDeckDashboard() }) == true { return }
+        if deckDashboardSelected { popToRoot(.deck); return }
+        if mode == .deck { deckPath = [] }
+        deckSurface = .dashboard
+        show(.deck)
     }
 
     /// Only visible navigation participates: live query/profile/data changes must retain strip position.

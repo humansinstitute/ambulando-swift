@@ -200,6 +200,9 @@ private struct GoalsSetupView: View {
 
 /// Name, description and optional dates. Creating saves a new goal; editing saves only the fields that changed, each
 /// against the value this form opened with, so another device's or an agent's change to a different field survives.
+/// Labels sit above bordered fields (a grouped Form puts the label left and the value right-aligned on the Mac). Keys:
+/// focus starts in Name; Return there moves to the description, where Return is a newline; Tab and Shift-Tab move
+/// between fields; ⌘Return saves; Escape cancels.
 struct GoalFormSheet: View {
     let goals: GoalsModel
     let existing: GoalDocument?
@@ -213,35 +216,102 @@ struct GoalFormSheet: View {
     @State private var target = Date()
     @State private var busy = false
     @State private var error: String?
+    @State private var descriptionFocused = false
+    @FocusState private var nameFocused: Bool
+
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmedDescription: String { description.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var startValue: String? { hasStart ? GoalFormat.string(from: start) : nil }
+    private var targetValue: String? { hasTarget ? GoalFormat.string(from: target) : nil }
+    private var datesProblem: String? {
+        if let startValue, let targetValue, targetValue < startValue { return "The target date is before the start date." }
+        return nil
+    }
+    /// Why Save is unavailable, or nil when the goal can be saved.
+    private var blocker: String? {
+        if trimmedName.isEmpty { return "Add a name." }
+        if trimmedName.utf16.count > Goal.maxName { return "The name is too long." }
+        if trimmedDescription.isEmpty { return "Describe what you want to achieve." }
+        if trimmedDescription.utf16.count > Goal.maxDescription { return "The description is too long." }
+        return datesProblem
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            Form {
-                TextField("Name", text: $name).accessibilityIdentifier("goal.form.name")
-                Section("Goal") {
-                    TextField("What do you want to achieve?", text: $description, axis: .vertical).lineLimit(3...8).accessibilityIdentifier("goal.form.description")
+            Text(existing == nil ? "New goal" : "Edit goal")
+                .font(.amb(.title3).weight(.semibold)).foregroundStyle(Amb.itemHeading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 4)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    GoalFormField(label: "Name", count: trimmedName.utf16.count, limit: Goal.maxName) {
+                        TextField("Name", text: $name, prompt: Text("e.g. Ship Ambulando"))
+                            .labelsHidden().textFieldStyle(.roundedBorder).font(.amb(.body))
+                            .focused($nameFocused)
+                            .onSubmit { descriptionFocused = true }
+                            .accessibilityIdentifier("goal.form.name")
+                    }
+                    GoalFormField(label: "Description", count: trimmedDescription.utf16.count, limit: Goal.maxDescription) {
+                        descriptionEditor
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Dates (optional)").font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.itemHeading)
+                        HStack(alignment: .top, spacing: 24) {
+                            GoalDateField(label: "Start date", on: $hasStart, date: $start, identifier: "goal.form.start")
+                            GoalDateField(label: "Target date", on: $hasTarget, date: $target, identifier: "goal.form.target")
+                            Spacer(minLength: 0)
+                        }
+                        if let datesProblem {
+                            Text(datesProblem).font(.amb(.footnote)).foregroundStyle(Amb.destructive).accessibilityIdentifier("goal.form.datesProblem")
+                        }
+                    }
+                    if let error { Notice(tone: .error, text: error) }
                 }
-                Section("Dates (optional)") {
-                    Toggle("Start date", isOn: $hasStart)
-                    if hasStart { DatePicker("Starts", selection: $start, displayedComponents: .date) }
-                    Toggle("Target date", isOn: $hasTarget)
-                    if hasTarget { DatePicker("Target", selection: $target, displayedComponents: .date) }
-                }
-                if let error { Notice(tone: .error, text: error) }
+                .padding(.horizontal, 24).padding(.vertical, 12)
             }
-            .formStyle(.grouped)
-            HStack {
+            Divider()
+            HStack(spacing: 12) {
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
+                if let blocker, !busy {
+                    Text(blocker).font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground).lineLimit(1).accessibilityIdentifier("goal.form.blocker")
+                }
+                if busy { ProgressView().controlSize(.small) }
                 Button(existing == nil ? "Create goal" : "Save") { save() }
-                    .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent).disabled(busy)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .buttonStyle(.borderedProminent).disabled(busy || blocker != nil)
+                    .help("⌘Return")
                     .accessibilityIdentifier("goal.form.save")
-            }.padding()
+            }
+            .padding(.horizontal, 24).padding(.vertical, 14)
         }
+        .background(Amb.background)
         #if os(macOS)
-        .frame(minWidth: 460, minHeight: 440)
+        .frame(width: 540)
+        .frame(minHeight: 460)
         #endif
-        .onAppear(perform: load)
+        .onAppear {
+            load()
+            DispatchQueue.main.async { nameFocused = true }
+        }
+    }
+
+    @ViewBuilder private var descriptionEditor: some View {
+        #if os(macOS)
+        ComposerTextView(text: $description, focused: $descriptionFocused, placeholder: "What do you want to achieve?",
+                         plainKeyboard: false, onPasteItems: { _ in [] }, onSubmit: { if blocker == nil && !busy { save() } },
+                         fixedHeight: 112 * TextScale.shared.factor, formField: true, onCancel: { dismiss() },
+                         identifier: "goal.form.description")
+            .frame(height: 112 * TextScale.shared.factor)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+            .overlay(RoundedRectangle(cornerRadius: Amb.radiusControl)
+                .stroke(descriptionFocused ? Amb.primary : Amb.border, lineWidth: descriptionFocused ? 2 : 1))
+        #else
+        TextField("Description", text: $description, prompt: Text("What do you want to achieve?"), axis: .vertical)
+            .lineLimit(4...10).labelsHidden().textFieldStyle(.roundedBorder)
+            .accessibilityIdentifier("goal.form.description")
+        #endif
     }
 
     private func load() {
@@ -252,8 +322,9 @@ struct GoalFormSheet: View {
     }
 
     private func save() {
+        guard !busy, blocker == nil else { return }
         busy = true; error = nil
-        let startValue = hasStart ? GoalFormat.string(from: start) : nil, targetValue = hasTarget ? GoalFormat.string(from: target) : nil
+        let startValue = startValue, targetValue = targetValue
         Task {
             defer { busy = false }
             do {
@@ -276,6 +347,57 @@ struct GoalFormSheet: View {
                 self.error = GoalsModel.message(error)
                 if existing != nil, error is GoalError { await goals.reload(existing!.id) }
             }
+        }
+    }
+}
+
+/// A form label above its field, with a character count once the value nears its limit.
+private struct GoalFormField<Field: View>: View {
+    let label: String
+    var count = 0
+    var limit = 0
+    @ViewBuilder var field: Field
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.itemHeading)
+                Spacer()
+                if limit > 0, count > limit * 3 / 4 {
+                    Text("\(count)/\(limit)").font(.amb(.caption)).monospacedDigit()
+                        .foregroundStyle(count > limit ? Amb.destructive : Amb.mutedForeground)
+                }
+            }
+            field
+        }
+    }
+}
+
+/// An optional date: a checkbox to include it and a date control that is always enabled, so the keyboard reaches it
+/// (macOS leaves checkboxes out of Tab unless Full Keyboard Access is on). Changing the date includes it; it reads as
+/// unset (dimmed) until then.
+private struct GoalDateField: View {
+    let label: String
+    @Binding var on: Bool
+    @Binding var date: Date
+    let identifier: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(label, isOn: $on)
+                #if os(macOS)
+                .toggleStyle(.checkbox)
+                #endif
+                .font(.amb(.body)).accessibilityIdentifier("\(identifier).include")
+            DatePicker(label, selection: $date, displayedComponents: .date)
+                .labelsHidden()
+                #if os(macOS)
+                .datePickerStyle(.field)
+                #endif
+                .opacity(on ? 1 : 0.5)
+                .onChange(of: date) { _, _ in on = true }
+                .accessibilityHint(on ? "" : "Not set. Changing the date includes it.")
+                .accessibilityIdentifier(identifier)
         }
     }
 }

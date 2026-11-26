@@ -157,7 +157,11 @@ struct FileDetailView: View {
 
     var body: some View {
         Group {
-            if renderArtefact, let file = snapshot.value.file, let type = ArtefactType.file(file) {
+            if renderArtefact, let file = snapshot.value.file, GoalFiles.isGoal(file) {
+                // A goal File (for example one an agent created, opened from a mention) opens as the goal, not its JSON.
+                // Reads and edits still go through Tower as this identity.
+                GoalDetailView(fileId: file.id, workspace: workspace, store: store)
+            } else if renderArtefact, let file = snapshot.value.file, let type = ArtefactType.file(file) {
                 FileArtefactView(file: file, type: type, workspace: workspace)
             } else { detail }
         }

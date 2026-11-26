@@ -171,6 +171,9 @@ final class AppModel {
     /// Navigation inside each section other than Chat (Chat keeps `chatPath`). Kept while the app runs, so switching
     /// sections returns to the same screen; a workspace switch or a new sidebar choice starts the context-bound ones over.
     var deckPath: [WorkRoute] = []
+    /// What Deck's root shows on the Mac: the personal Home (globe, or Home in the sidebar) or the Deck dashboard (the
+    /// Deck section). Both share `deckPath`, so Back from a record returns to the surface it was opened from.
+    var deckSurface: DeckSurface = .home
     var tasksPath: [WorkRoute] = []
     var docsPath: [WorkRoute] = []
     var filesPath: [WorkRoute] = []

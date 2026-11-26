@@ -90,6 +90,41 @@ public enum GoalEditor {
         }
         throw GoalSaveFailed(message: "This goal is being changed elsewhere. Try again in a moment.", retryable: true)
     }
+
+    /// Saves a focus move (`GoalFocus.planMove`) one goal at a time, top first. Each write is that goal's own
+    /// expectation-checked `setFocusRank` saved against its current version (a lost race re-applies only that write to
+    /// the new head, and only while the rank it expected still holds). The first refusal stops the move: later writes
+    /// are not attempted and the plan is never retried as a whole. `GoalFocusMoveFailed` reports what was saved; every
+    /// intermediate state is a valid order, so the caller reloads and shows it.
+    public static func move(_ transport: GoalTransport, writes: [GoalFocus.Write], attempts: Int = 4) async throws -> [GoalDocument] {
+        var saved: [GoalDocument] = []
+        for write in writes {
+            do { saved.append(try await edit(transport, fileId: write.id, edits: [write.edit], attempts: attempts)) }
+            catch is CancellationError { throw CancellationError() }
+            catch { throw GoalFocusMoveFailed(saved: saved, total: writes.count, underlying: error) }
+        }
+        return saved
+    }
+}
+
+/// A focus move stopped at a refused write; `saved` were written before it, nothing after it was attempted.
+public struct GoalFocusMoveFailed: LocalizedError, Sendable {
+    public let saved: [GoalDocument]
+    public let total: Int
+    public let reason: String
+
+    init(saved: [GoalDocument], total: Int, underlying: Error) {
+        self.saved = saved; self.total = total
+        reason = switch underlying {
+        case let e as GoalError: e.localizedDescription
+        case let e as GoalSaveFailed: e.message
+        default: underlying.localizedDescription
+        }
+    }
+
+    public var errorDescription: String? {
+        saved.isEmpty ? reason : "Saved \(saved.count) of \(total) order changes. \(reason)"
+    }
 }
 
 extension TowerAPI {

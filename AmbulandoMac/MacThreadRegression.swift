@@ -91,6 +91,9 @@ enum MacThreadRegression {
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacNavigationStripCheck") {
                 try await navigationStripCheck(window, model: model); fflush(stdout); exit(0)
             }
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacGoalsHomeCheck") {
+                try await goalsHomeCheck(window, model: model); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDMProfileCheck") {
                 try await dmProfileCheck(window, model: model); fflush(stdout); exit(0)
             }

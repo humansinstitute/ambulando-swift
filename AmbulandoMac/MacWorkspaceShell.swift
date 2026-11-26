@@ -166,8 +166,9 @@ struct MacSectionBar: View {
                                           selected: model.workspaceHomeSelected) { model.showWorkspaceHome() }]
         items += sections.map { section in
             MacNavigationControl(id: "section.\(section.rawValue)", title: section.title, image: section.systemImage,
-                                 selected: model.mode == section) {
-                if model.mode == section { model.popToRoot(section) } else { model.show(section) }
+                                 selected: section == .deck ? model.deckDashboardSelected : model.mode == section) {
+                if section == .deck { model.showDeckDashboard() }
+                else if model.mode == section { model.popToRoot(section) } else { model.show(section) }
             }
         }
         return items

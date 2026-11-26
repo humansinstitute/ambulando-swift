@@ -1,4 +1,4 @@
-# Goals (Mac source build 136)
+# Goals (Mac source build 138)
 
 A personal goal has a name, a description, optional date-only start and target dates, an ordered timeline of
 checkpoints and links to existing chats, tasks, documents and files. Progress is "checkpoints reached"; nothing is
@@ -40,6 +40,42 @@ description 2000, checkpoint title 120 / description 500, 100 checkpoints, 500 l
 `docs/fixtures/goals/android-written-v1.json` (Android shape with unknown fields) and `agent-written-v1.json`
 (canonical bytes the agent tool writes); both are read by the Swift and JS tests.
 
+### Focus order (`focus_rank`)
+
+Home shows goals in *focus order*, and the owner reorders them to choose which three are in focus. The order is part of
+each goal, not a separate catalogue: no new record type, endpoint or backend change.
+
+- **Field**: optional top-level `focus_rank`, a string of 1–64 characters from
+  `0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz` (ASCII order) that does not end in `0`. It is a
+  fractional index: keys compare by code unit, and a key exists strictly between any two distinct keys.
+- **Placement**: it is carried in the unknown-field area, so a client that predates it (Android 88, Mac 136, older agent
+  tools) preserves it byte for byte, and new clients write it in the same position (in place when present, otherwise
+  after the other unknown top-level fields).
+- **Invalid values** (wrong type, other characters, trailing `0`, longer than 64) read as *unranked* and are kept untouched
+  until a valid rank replaces them. They never make a goal unreadable.
+- **Comparator** (the same on every client and in `goals.mjs list`): status (active, completed, archived); then ranked
+  goals by `focus_rank`, before unranked goals; unranked goals by `target_date` (none last), then `name` with only A–Z
+  folded to lower case; finally the File id. Every comparison is by UTF-16 code unit. Equal ranks are ordered by File id.
+- **Keys**: `keyBetween(a, b)` is the midpoint of David Greenspan's "Implementing Fractional Indexing" (the MIT
+  `fractional-indexing` package) without its integer header. Midpoint digit is `floor((a + b + 1) / 2)`.
+- **Moving** a goal within one status group (`planMove`) writes, top first:
+  - usually one goal: a key between its new neighbours;
+  - when it is placed below an unranked goal, the unranked goals above it first, each after the previous key, in their
+    current order (ranked goals always sort before unranked ones). New goals are not ranked when created.
+  - **Rebalance**: if the neighbours' keys are equal (two devices picked the same key) or the new key would exceed 64
+    characters, every goal from the top through the last ranked goal (or the moved goal) gets evenly spaced short keys,
+    writing only those that change. Keys only grow when many moves land in the same gap, so this is rare.
+- **Conflicts**: each write is the ordinary expectation-checked edit `set_focus_rank` (`expected` = the valid rank the
+  mover saw, or `null`; `value` = the new key, or `null` to clear), saved with the existing File compare-and-swap loop. An
+  edit already in effect is accepted. If another device moved the same goal, the edit stops with "The goal order was
+  changed elsewhere" and saves nothing; a deleted or inaccessible goal stops it the same way. The move stops at the first
+  refused write: later writes are not attempted and the plan is never retried as a whole. Earlier writes stay (every
+  intermediate state is a valid order); the client reloads and reports "Saved n of m order changes". Archived goals
+  are not reordered.
+- Shared fixture: `docs/fixtures/goals/focus-order-v1.json` (alphabet, valid/invalid values, keys, rebalance keys,
+  comparator, move plans, canonical bytes, conflicts). Swift `GoalFocusTests`, JS `goals-lib.test.mjs` and Android
+  `core/goals` tests assert the same values.
+
 ## Access
 
 - The owner and the agents the owner chooses. Agents get `contribute` through explicit channel grants; the app's Goals
@@ -54,6 +90,15 @@ description 2000, checkpoint title 120 / description 500, 100 checkpoints, 500 l
 ## Mac
 
 - **Home → Goals** in the sidebar (row under Home) opens the list on Deck; Deck also has a Goals card of active goals.
+- **Home** (globe, or Home in the sidebar) shows goals in focus order: three full cards, the fourth quieter, then "Show all
+  goals"; drag, a card's menu or its accessibility actions reorder (see Focus order). Beside them, Daily Briefing restates
+  saved dates and checkpoints only ("Agent briefings aren't available yet") and Latest shows the five most recent chats.
+  The Deck section keeps the dashboard.
+- **Goal form keys**: focus starts in Name; Return there moves to Description, where Return is a newline; Tab and
+  Shift-Tab move between Name, Description and the two date controls; ⌘Return saves; Escape cancels. Date controls are
+  always in the Tab order and changing one includes that date. The "include" checkboxes follow the macOS keyboard
+  navigation setting: with Full Keyboard Access off they are reached by pointer, so clearing a date from the keyboard
+  alone needs that setting on.
 - The list groups Active / Completed / Archived, shows progress and target date, and refreshes every 30 s while open
   (agents edit too).
 - A goal shows name, description, dates, the timeline (click the dot to mark reached/unreached; menu to edit, reorder,
@@ -84,7 +129,9 @@ bun scripts/goals.mjs edit   --workspace W --file F --ops '[{"op":"set_reached",
 Ops (each states what it expects to replace): `set_name`, `set_description`, `set_start_date`, `set_target_date`
 (`expected`,`value`); `set_status` (`expected`,`value`); `add_checkpoint` (`checkpoint{id?,title,date?,description?}`,`after?`);
 `update_checkpoint` (`id`,`expected{title,date,description}`,`value{…}`); `set_reached` (`id`,`expected`,`reached`);
-`remove_checkpoint`; `move_checkpoint` (`id`,`to_index`); `link` / `unlink` (`type`,`record_id`,`channel_id?`).
+`remove_checkpoint`; `move_checkpoint` (`id`,`to_index`); `link` / `unlink` (`type`,`record_id`,`channel_id?`);
+`set_focus_rank` (`expected`,`value`). `list` returns goals in focus order with their `focus_rank`;
+`move --workspace W --channel C --file F --to N` moves an active goal to position N (0 = top) with the fewest rank edits.
 Before saving, every *newly* linked target is read from its own typed route (`threads`, `tasks`, `docs`, `files`) as the
 signing identity: it must be readable, not deleted or archived, in this workspace, and its authoritative channel must
 equal a supplied `channel_id`. A denied, missing, foreign or mismatched target refuses the whole edit (exit 1) with one
@@ -93,6 +140,28 @@ and `unlink` never needs source access. A soft-deleted goal file (`deleted_at` s
 `active`) is not a goal on any client.
 Exit 3 means a conflict (expectation no longer holds, or the goal is archived): re-read with `show`, decide, retry.
 Read the goal first and send what you saw as `expected`; never copy a version id to force a write.
+To hand a goal to a person, mention or link its File (the goal's `file_id`): Mac opens a goal File as the goal view, not
+its JSON, through the reader's own access; a deleted goal or one the reader cannot open never opens as a goal.
+
+## Verification (Mac source build 138)
+
+- `swift test --filter Goal` (AmbulandoCore): 39 tests pass, including the shared focus-order fixture (keys, rebalance,
+  comparator, 15 move plans, canonical bytes), move saving that stops at the first refused write (stale rank, deleted
+  goal), and the Daily Briefing facts. `bun test scripts/tests`: 23 pass (same fixture). Full AmbulandoCore suite: only
+  the three known `duplicate column name: artefact_context` migration failures, unchanged from HEAD.
+- Native check on the isolated Test app with the sample Goals space (`-AmbulandoFixtureGoals`, `SampleGoalsTower`):
+  `-AmbulandoFixtureReset -AmbulandoFixtureGoals -AmbulandoMacThreadRegression -AmbulandoMacGoalsHomeCheck`
+  (add `-AmbulandoMacGoalsFormOnly` for the form alone, `-AmbulandoMacGoalsHomeReadyOnly` for first-launch Home loading).
+  It drives real AppKit key events and checks: Home shows goals on first launch without leaving it; focus order, three in
+  focus plus a peek and "Show all"; narrow layout; a reorder writes one goal; Deck stays the dashboard; a goal opens its
+  detail; a file mention of a goal opens the goal, a deleted or unreadable one does not; form focus, Return, Tab order
+  with dates unset and set (each native date field takes Tab through its own parts), keyboard-set dates, invalid dates,
+  ⌘Return from the description and a date, Escape; the caret drawn (window pixels) and contrasting in light and dark
+  (the app's own Appearance setting). `-AmbulandoMacNavigationStripCheck` passes with Home as its own surface.
+- First-launch fix: a Goals refresh started by a view that was then rebuilt was cancelled, and the rebuilt view's refresh
+  was skipped as busy, so Home stayed "Loading goals…". `GoalsModel.refresh` now runs one load not tied to the calling
+  view and later callers join it; the per-workspace current check is unchanged.
+- Not verified: the Mac app on Pete's MacBook against the live Goals channel, and iPhone/web (no change there).
 
 ## Verification (Mac source build 135; build 136 changes noted)
 
