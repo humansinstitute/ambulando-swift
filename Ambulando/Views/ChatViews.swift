@@ -359,13 +359,17 @@ struct ThreadView: View {
     @State private var artefacts = MacThreadArtefacts()
     @Environment(\.macThreadArtefactsInParentHeader) private var artefactsInParentHeader
     var body: some View {
-        MacThreadArtefactLayout(state: artefacts, target: target, workspace: workspace, store: store) { conversation }
+        MacThreadArtefactLayout(state: artefacts, target: target, workspace: workspace, store: store) { conversation(artefacts: artefacts) }
     }
     #else
-    var body: some View { conversation }
+    @Environment(\.macThreadArtefactsInParentHeader) private var artefactsInParentHeader
+    var body: some View {
+        PhoneThreadArtefactHost(target: target, workspace: workspace, store: store) { state in conversation(artefacts: state) }
+            .id([target.connectionId, target.workspaceId, target.channelId, target.threadId ?? "", model.selectedWorkspaceBoundary?.id ?? "unbound"].joined(separator: ":"))
+    }
     #endif
 
-    @ViewBuilder private var conversation: some View {
+    @ViewBuilder private func conversation(artefacts: MacThreadArtefacts) -> some View {
         #if os(macOS)
         let _ = MacHangDiagnostics.shared.mark("thread.body")
         #endif
@@ -393,11 +397,12 @@ struct ThreadView: View {
                     Button("Artefacts", systemImage: "sidebar.right") { artefacts.shown = true }
                         .accessibilityIdentifier("thread.artefacts.reopen")
                 }
+                #else
+                if !artefactsInParentHeader { PhoneThreadArtefactsButton(state: artefacts) }
                 #endif
                 if onBack != nil { ThreadHeaderMenu(context: snapshot.value.menu, workspace: workspace, title: snapshot.value.title) }
             }
         }.padding(.horizontal, 16).padding(.vertical, 8).background(Amb.card)
-        #if os(macOS)
         if artefacts.membershipPending {
             ProgressView("Updating thread attachments…").controlSize(.small).padding(6)
                 .accessibilityIdentifier("thread.artefacts.pending")
@@ -408,7 +413,6 @@ struct ThreadView: View {
                 Button("Dismiss") { artefacts.failure = nil }
             }.padding(8).accessibilityIdentifier("thread.artefacts.failure")
         }
-        #endif
         Divider()
         ScrollView {
             ThreadMessageStack {
@@ -972,10 +976,8 @@ extension ComposerModel: UploadTokenHost {
 }
 
 struct Composer: View {
-    #if os(macOS)
     @Environment(\.macThreadArtefacts) private var artefacts
     @State private var preparingArtefacts = false
-    #endif
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     let target: ChatTarget
@@ -1096,6 +1098,9 @@ struct Composer: View {
     var body: some View {
         VStack(spacing: 0) {
             WorkspaceComposerContext(workspace: workspace, connectionId: target.connectionId)
+            #if os(iOS)
+            if editing == nil, let artefacts { PhoneThreadArtefactTarget(state: artefacts) }
+            #endif
             if let editing {
                 HStack {
                     Label("Editing message", systemImage: "pencil")
@@ -1230,9 +1235,7 @@ struct Composer: View {
             .padding(.horizontal, 10).padding(.vertical, 8)
         }
         .disabled(savingRevision)
-        #if os(macOS)
         .disabled(preparingArtefacts)
-        #endif
         .background(Amb.card)
         // Reserve the compose controls and suggestion viewport before the history takes remaining space.
         .layoutPriority(1)
@@ -1410,9 +1413,7 @@ struct Composer: View {
     }
 
     private var canSend: Bool {
-        #if os(macOS)
         guard !voice.busy, !preparingArtefacts else { return false }
-        #endif
         guard let composer else { return false }
         // A pasted item still uploading (or failed) holds its placeholder in the text: nothing is sent until it is resolved.
         guard !UploadToken.contains(in: composer.text) else { return false }
@@ -1496,7 +1497,6 @@ struct Composer: View {
         if editing != nil { finishRevision(save: true); return }
         guard canSend, let composer, let outbox = model.outbox, let connection = model.connection,
               connection.id == target.connectionId, workspace.id == target.workspaceId else { return }
-        #if os(macOS)
         guard !preparingArtefacts else { return }
         preparingArtefacts = true
         Task { @MainActor in
@@ -1509,9 +1509,7 @@ struct Composer: View {
                 await composer.waitForPendingSend()
             } catch { /* The workspace displays the actionable failure; draft stays untouched. */ }
         }
-        #else
-        composer.send(with: outbox, connection: connection, workspace: workspace, onEnqueued: onEnqueued)
-        #endif
+
     }
 }
 

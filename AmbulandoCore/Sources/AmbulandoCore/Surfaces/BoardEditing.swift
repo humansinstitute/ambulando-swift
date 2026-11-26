@@ -500,7 +500,7 @@ public actor BoardController {
 
     /// Publishes the draft as a new version against the version it started from. A stale base keeps the draft.
     @discardableResult
-    public func save(summary: String = "", preservingHistoricalSelection: Bool = false) async -> Bool {
+    public func save(summary: String = "", preservingHistoricalSelection: Bool = false, preservingRecovery: Bool = false) async -> Bool {
         guard !saving, base != nil, state.save != .saving else { return false }
         saving = true
         defer { saving = false }
@@ -541,7 +541,7 @@ public actor BoardController {
                 #if os(macOS)
                 await fail(error, preservingDraft: true)
                 #else
-                await fail(error)
+                await fail(error, preservingDraft: preservingRecovery)
                 #endif
             default:
                 emit { $0.save = .error; $0.error = "The board could not be saved. Your draft is kept. \(error.localizedDescription)" }
@@ -557,10 +557,11 @@ public actor BoardController {
 
     /// Thread Send barrier: flush the live page, publish dirty content, then return only the confirmed revision.
     /// Historical selections remain pinned and never publish. A concurrent edit during publish refuses Send.
-    public func prepareChatRevision() async throws -> ArtefactChatReference {
+    public func prepareChatRevision(preservingRecovery: Bool = false) async throws -> ArtefactChatReference {
+        guard !preservingRecovery || state.conflicts == 0 else { throw ArtefactChatContext.ContextError.unresolved }
         guard await checkpoint(), state.status == .ready else { throw ArtefactChatContext.ContextError.unresolved }
         if state.dirty {
-            guard await save(preservingHistoricalSelection: true) else { throw ArtefactChatContext.ContextError.unresolved }
+            guard await save(preservingHistoricalSelection: true, preservingRecovery: preservingRecovery) else { throw ArtefactChatContext.ContextError.unresolved }
         }
         guard !state.dirty, state.save != .saving else { throw ArtefactChatContext.ContextError.unresolved }
         let revision = viewing?.versionId ?? base?.versionId ?? ""

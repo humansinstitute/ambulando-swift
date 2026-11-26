@@ -362,8 +362,8 @@ struct UploadSheet: View {
 
 /// Every channel, chat and personal pin File route opens the same saved artefact.
 struct FileArtefactView: View {
-    #if os(macOS)
     @Environment(\.macThreadArtefactTab) private var threadTab
+    #if os(macOS)
     @Environment(\.macArtefactSession) private var macSession
     #endif
     @Environment(AppModel.self) private var model
@@ -384,16 +384,27 @@ struct FileArtefactView: View {
             } else if let error { EmptyNote(title: "Artefact unavailable", systemImage: "lock", detail: error) }
             else { ProgressView("Loading artefact…").frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
-        #if os(macOS)
         .onChange(of: session?.key, initial: true) { _, _ in
             threadTab?.title = file.displayName
             threadTab?.icon = type.icon
             if let session {
                 threadTab?.checkpoint = { await session.controller.checkpoint() }
                 threadTab?.validate = { await session.controller.matchesChatRevision($0) }
+                #if os(macOS)
                 threadTab?.prepare = { try await session.controller.prepareChatRevision() }
+                #else
+                threadTab?.prepare = { try await session.controller.prepareChatRevision(preservingRecovery: true) }
+                #endif
             }
+            #if os(macOS)
             macSession?.checkpoint = { [weak session] in await session?.controller.checkpoint() ?? true }
+            #endif
+        }
+        #if os(iOS)
+        .onChange(of: session?.state, initial: true) { _, state in
+            if let state {
+                threadTab?.revisionLabel = state.viewingVersionId.isEmpty ? "v\(state.baseVersionNumber)" : "v\(state.viewingVersionNumber) · Read-only · Pinned"
+            }
         }
         #endif
         .sheet(isPresented: $exportingOriginal) {

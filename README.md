@@ -12,6 +12,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## iPhone/iPad thread artefacts (source build 117)
+
+Header-only artefact browsing/switching/removal and Discuss context reuse the Mac
+workspace state and existing editors. Shared membership uses existing thread CAS;
+Send saves first and freezes exact revision metadata in the durable outbox.
+[Behavior, focused checks and remaining gaps](docs/phone-thread-artefacts.md).
+Whole-thread reopen pin/viewport restoration and full iPhone build/UI/device
+acceptance remain unresolved. Mac source build stays 138.
+
 ## Chat conversation inbox (Mac source build 131)
 
 Chat adds a compact conversation inbox, combined All/Unread/Mine filters and local

@@ -4,9 +4,7 @@ import SwiftUI
 /// Channel-owned HTML artefact viewer with compact control-bar version switcher and
 /// shared PostgreSQL threaded visual comments (desktop right-click Add comment).
 struct HTMLArtefactReviewView: View {
-    #if os(macOS)
     @Environment(\.macThreadArtefactTab) private var threadTab
-    #endif
     @Environment(AppModel.self) private var model
     let file: FileRecord
     let workspace: WorkspaceRecord
@@ -133,7 +131,6 @@ struct HTMLArtefactReviewView: View {
         .sheet(isPresented: $editingSource, onDismiss: { reloadNonce += 1 }) {
             HTMLSourceSheet(file: file, workspace: workspace)
         }
-        #if os(macOS)
         .onAppear {
             threadTab?.title = file.displayName
             threadTab?.icon = ArtefactType.html.icon
@@ -160,6 +157,12 @@ struct HTMLArtefactReviewView: View {
                 // The loaded immutable revision, never a fresh head inferred at Send time.
                 return ArtefactChatReference(kind: "file", recordID: file.id, revision: payload.versionId,
                     historical: payload.versionId != payload.currentVersionId, digest: payload.digest.isEmpty ? nil : payload.digest)
+            }
+        }
+        #if os(iOS)
+        .onChange(of: payload, initial: true) { _, payload in
+            if let payload {
+                threadTab?.revisionLabel = "v\(payload.versionNumber)" + (payload.versionId == payload.currentVersionId ? "" : " · Read-only · Pinned")
             }
         }
         #endif
@@ -244,11 +247,7 @@ struct HTMLArtefactReviewView: View {
                 Button("Refresh comments", systemImage: "arrow.clockwise") { commentsReload += 1 }
                 Divider()
                 Button("Edit source…", systemImage: "chevron.left.forwardslash.chevron.right") { editingSource = true }
-                    #if os(macOS)
                     .disabled(!model.isUnlocked || (threadTab != nil && !isViewingLatest))
-                    #else
-                    .disabled(!model.isUnlocked)
-                    #endif
             } label: {
                 Image(systemName: "ellipsis.circle")
             }

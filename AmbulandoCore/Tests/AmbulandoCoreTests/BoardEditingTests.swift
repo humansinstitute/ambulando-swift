@@ -80,6 +80,30 @@ import Testing
         #expect(await board.current.dirty)
     }
 
+    @Test func mobileChatBarrierRequiresExplicitSaveAfterOverlappingMerge() async throws {
+        let store = Store(Self.sceneJSON([Self.element("a", version: 1)])), outbox = Outbox(), local = drafts()
+        defer { try? FileManager.default.removeItem(at: local.directory) }
+        let board = controller(store, drafts: local, outbox: outbox)
+        await board.attach("mobile", send: outbox.send)
+        await board.sync(reference(store), title: "Plan")
+        await board.receive("mobile", change([Self.element("a", version: 2, extra: ["x": 30])]))
+        store.external(Self.sceneJSON([Self.element("a", version: 3, extra: ["x": 90])]))
+        await board.detach("mobile") // no mounted page needs a flush in this controller-only check
+        await board.mergeLatest()
+        #expect(await board.current.conflicts > 0)
+        let head = store.head.id
+        do {
+            _ = try await board.prepareChatRevision(preservingRecovery: true)
+            Issue.record("Unreviewed overlap must not publish or enter Send")
+        } catch { }
+        #expect(store.head.id == head)
+        #expect(await board.current.dirty)
+        #expect(local.load("a1b2c3d4-0000-4000-8000-000000000001") != nil)
+        #expect(await board.save(), "An explicit reviewed Save remains available")
+        let ref = try await board.prepareChatRevision(preservingRecovery: true)
+        #expect(ref.revision == store.head.id)
+    }
+
     @Test func savePublishesAVersionKeepingUnknownFieldsAndReopens() async throws {
         let png = "data:image/png;base64,iVBORw0KGgo="
         let first = Self.sceneJSON([Self.element("a", version: 1, extra: ["customData": ["keep": true], "futureField": 42]),

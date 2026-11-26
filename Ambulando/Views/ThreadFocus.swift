@@ -265,9 +265,7 @@ private struct ThreadFocusContainer: View {
         #endif
     }
 
-    #if os(macOS)
     @State private var artefactOwner: MacThreadArtefacts?
-    #endif
     var body: some View {
         Group {
             if let focus = model.focusedThread {
@@ -293,7 +291,18 @@ private struct ThreadFocusContainer: View {
         // tapped in a thread left for Safari instead of opening a tab of the in-app browser.
         .environment(\.openURL, OpenURLAction { model.browser.handleLink($0) })
         #if os(iOS)
-        .presentationBackground { if card { ThreadFocusBackdrop { model.focusedThread = nil } } else { Amb.background } }
+        .onPreferenceChange(MacThreadArtefactOwnerKey.self) { artefactOwner = $0 }
+        .interactiveDismissDisabled()
+        .presentationBackground {
+            if card {
+                ThreadFocusBackdrop {
+                    Task { @MainActor in
+                        if let artefactOwner, !(await artefactOwner.checkpointAll()) { return }
+                        model.focusedThread = nil
+                    }
+                }
+            } else { Amb.background }
+        }
         // Links open in-app browser tabs above the thread (the shell's own browser cover cannot present over this one).
         .fullScreenCover(isPresented: Binding(get: { model.browser.presented }, set: { model.browser.presented = $0 })) {
             BrowserView().environment(model)
@@ -372,8 +381,8 @@ private struct ThreadFocusPanel: View {
     @State private var title = ""
     @State private var menu: ThreadMenuContext?
 
-    #if os(macOS)
     @State private var artefactOwner: MacThreadArtefacts?
+    #if os(macOS)
     @State private var expansionBeforeArtefact: Bool?
     #endif
     var body: some View {
@@ -383,9 +392,9 @@ private struct ThreadFocusPanel: View {
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Amb.background)
-        #if os(macOS)
         .environment(\.macThreadArtefactsInParentHeader, true)
         .onPreferenceChange(MacThreadArtefactOwnerKey.self) { artefactOwner = $0 }
+        #if os(macOS)
         .onPreferenceChange(MacThreadArtefactExpandedKey.self) { shown in
             if shown {
                 if expansionBeforeArtefact == nil { expansionBeforeArtefact = expanded }
@@ -444,6 +453,8 @@ private struct ThreadFocusPanel: View {
                 PinToggleButton(type: .thread, id: focus.threadId, workspace: workspace)
                 #if os(macOS)
                 if let artefactOwner { MacThreadArtefactsButton(state: artefactOwner) }
+                #else
+                if let artefactOwner { PhoneThreadArtefactsButton(state: artefactOwner) }
                 #endif
                 // Only this thread's own targets: a context left by another thread is never acted on.
                 ThreadHeaderMenu(context: menu?.threadId == focus.threadId ? menu : nil, workspace: workspace, title: title)
@@ -491,14 +502,10 @@ private struct ThreadFocusPanel: View {
     }
 
     private func close() {
-        #if os(macOS)
         Task { @MainActor in
             if let artefactOwner, !(await artefactOwner.checkpointAll()) { return }
             model.focusedThread = nil
         }
-        #else
-        model.focusedThread = nil
-        #endif
     }
 }
 

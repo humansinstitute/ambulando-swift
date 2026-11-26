@@ -210,11 +210,11 @@ struct DocumentSnapshot: Sendable, Equatable {
 /// A document opens in the user’s preferred mode, with comments in a sheet on iPhone/iPad
 /// and beside the page on Mac. Unset preferences open in View.
 struct DocumentView: View {
-    #if os(macOS)
     @State private var threadVersions: [DocumentVersion] = []
     @State private var threadVersion: DocumentVersion?
     @State private var threadVersionError: String?
     @Environment(\.macThreadArtefactTab) private var threadTab
+    #if os(macOS)
     @Environment(\.macDocumentSession) private var macSession
     @State private var macSurfaceId = UUID()
     private var windowScopeActive: Bool {
@@ -263,7 +263,6 @@ struct DocumentView: View {
         _wiki = State(initialValue: WikiLinkController(workspace: workspace, sourceDocId: docId, store: store))
     }
 
-    #if os(macOS)
     @ViewBuilder private var threadReader: some View {
             ZStack {
                 actionReader.opacity(threadVersion == nil ? 1 : 0).allowsHitTesting(threadVersion == nil)
@@ -302,6 +301,12 @@ struct DocumentView: View {
                     }
                 }
     }
+    #if os(iOS)
+    private func updateThreadRevisionLabel() {
+        if let version = threadVersion { threadTab?.revisionLabel = "v\(version.rowVersion) · Read-only · Pinned" }
+        else if let version = editor?.localBaseVersion ?? snapshot.value.doc?.rowVersion { threadTab?.revisionLabel = "v\(version)" }
+    }
+    #endif
     private func registerThreadTab() {
             threadTab?.detach = { editor?.detachFromThread() }
             threadTab?.reattach = { editor?.resumeAfterThreadReattach() }
@@ -360,14 +365,9 @@ struct DocumentView: View {
                 return try saved.chatReference(docID: docId, historical: false)
             }
     }
-    #endif
 
     @ViewBuilder private var platformReader: some View {
-        #if os(macOS)
         AnyView(threadReader)
-        #else
-        actionReader
-        #endif
     }
 
     private var canEdit: Bool {
@@ -393,9 +393,7 @@ struct DocumentView: View {
         .wikiSheets(wiki, workspace: workspace)
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 6) {
-                #if os(macOS)
                 threadRevisionControls
-                #endif
                 if let banner = wiki.banner {
                     HStack(alignment: .top) {
                         Notice(tone: wiki.bannerIsProblem ? .warning : .info, text: banner).accessibilityIdentifier("wiki.banner")
@@ -407,9 +405,15 @@ struct DocumentView: View {
             }
             .padding(.horizontal, 12).padding(.top, 6)
         }
+        .onAppear { registerThreadTab() }
+        #if os(iOS)
+        .onChange(of: snapshot.value.doc?.title, initial: true) { _, _ in threadTab?.title = snapshot.value.doc?.title ?? "Document" }
+        .onChange(of: threadVersion?.rowVersion, initial: true) { _, _ in updateThreadRevisionLabel() }
+        .onChange(of: editor?.localBaseVersion) { _, _ in updateThreadRevisionLabel() }
+        .onChange(of: snapshot.value.doc?.rowVersion) { _, _ in updateThreadRevisionLabel() }
+        #endif
         #if os(macOS)
         .onAppear {
-            registerThreadTab()
             macSession?.beforeClose = {
                 guard !actionsBusy else { return false }
                 if let openingEditor { await openingEditor.value }
@@ -672,11 +676,9 @@ struct DocumentView: View {
             wiki.editor = created
             wiki.beforeLeaving = { [weak created] in await created?.checkpoint() ?? true }
             editor = created
-            #if os(macOS)
             if threadTab?.attached == false { created.detachFromThread() }
             #if DEBUG
             threadTab?.testingDocument = created
-            #endif
             #endif
             created.holdLease()
         }
