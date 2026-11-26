@@ -91,3 +91,54 @@ It uses real AppKit/SwiftUI/WebKit views with synthetic Tower routes. It exercis
 pinned revision refocus, close failure retention and many-tab narrow layout. Its injected
 network failure, sample records and synthetic editing peer are simulated inputs, not
 live-account evidence. Send uses the actual native composer and synthetic Tower readback.
+
+## Shared thread membership (Mac source build 137)
+
+The existing canonical thread metadata PATCH now stores
+`ambulando_thread_artefacts: {"version":1,"items":[{"kind":"doc"|"file","id":"UUID"}]}`.
+The same format is consumed by Android. It contains at most 32 distinct native record/type
+identities; selection, pinned history, viewport, editor state and message dispatch snapshots
+remain separate. Unknown formats prevent membership edits while ordinary Chat stays usable.
+
+The header artefacts icon beside Pin opens the attached list and existing browser even when
+empty. Unopened shared members fetch only authorized source metadata for readable titles;
+they do not mount editors or enter Send context. New attachments accept nonarchived Docs and
+registered whiteboard/HTML Files; other file mentions keep their normal viewer route. Existing
+unsupported members remain removable without loading their content. Source ACL/revision/digest checks still apply
+when opening and capturing context. A reference grants no source access. A duplicate add
+focuses the retained editor without changing its historical revision.
+
+“Remove from thread” removes only the shared association. “Close local view” retains that
+association. Remote removal excludes the record from future Send, holds automatic Doc saving,
+and retains the mounted editor/local recovery. The recovery menu permits viewing it and an
+explicitly labelled source Save; removal itself never calls prepare/flush/publish. An already
+dispatched source write may finish. Re-adding a detached record does not automatically resume
+its recovery's publishing. Open recovery and use “Save to source and resume if attached”:
+that explicit action saves and verifies the source, rechecks canonical membership, then resumes
+normal editing/context only if the record is still attached.
+Already enqueued requests and retries retain their immutable exact revision snapshot.
+
+Each add/remove reads the actual canonical row version, preserves all unrelated metadata and
+reconciles bounded definitive 409 conflicts. A lost response, 5xx or malformed acknowledgement
+requires canonical readback. Satisfied intent is accepted. Unsatisfied intent on an advanced
+version reports uncertainty rather than replaying against a new base; a retry on the unchanged
+CAS base is safe. Store upserts reject older rows. Membership observes ordinary thread sync
+and refreshes on entry/resume; there is no second event stream or view polling timer.
+
+Migration supports only nonempty, source-verified local references while the canonical key is
+absent. An initialized empty key remains authoritative, including after last removal. The old
+Mac runtime did not persist its tabs to disk, so an upgrade cannot recover tabs that vanished
+when the old process exited. Live retained tabs can migrate; a fresh process has no legacy
+refs and does not initialize an empty key merely because that device has no tabs.
+
+Mac137 validation uses synthetic authorized routes and independent stores. This does not claim
+MacBook installation, live account interaction, or iPhone/web UI implementation. Shared core
+remains available to those clients; their membership UI still needs its own parity work.
+
+Mac137 validation passed 28 XCTest cases (including ten membership concurrency/schema/migration
+cases and fifteen outbox cases), 43 Goals/board/context tests, and twenty Goals script tests.
+The real AppKit/SwiftUI/WebKit synthetic fixture passed native picker/tab interactions, two-store
+discovery, source Save before Send, hidden exact metadata, dirty remote detach/re-add/explicit
+Save and resume, lazy unreadable and future-schema plain Chat, last removal, frozen request
+preservation and initial-absent legacy migration ordering. Test and universal Release builds
+are 137; this is local synthetic validation, not installation or live MacBook verification.

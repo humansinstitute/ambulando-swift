@@ -9,6 +9,13 @@ final class MacThreadArtefactTab: Identifiable {
     var title: String
     var icon = "doc"
     var open = true
+    var attached = true
+    @ObservationIgnored var detach: (() -> Void)?
+    @ObservationIgnored var reattach: (() -> Void)?
+    @ObservationIgnored var saveSource: (() async throws -> Void)?
+    #if DEBUG
+    @ObservationIgnored weak var testingDocument: DocEditorModel?
+    #endif
     @ObservationIgnored var validate: ((ArtefactChatReference) async -> Bool)?
     @ObservationIgnored var checkpoint: (() async -> Bool)?
     @ObservationIgnored var prepare: (() async throws -> ArtefactChatReference)?
@@ -24,16 +31,103 @@ final class MacThreadArtefacts: Equatable {
     var shown = false
     var expanded = false
     var busy = false
+    var membershipPending = false
     var failure: String?
+    var members: [ThreadArtefactMember] = []
+    var labels: [ThreadArtefactMember: String] = [:]
+    var membershipError: String?
+    var membershipVersion = 0
+    private var migrationChecked = false
+    private var canonicalInitialized = false
+    @ObservationIgnored var openFallback: ((String, String) -> Void)?
+    @ObservationIgnored var transport: ThreadArtefactMembershipSync.Transport?
+    var attachedTabs: [MacThreadArtefactTab] { tabs.filter { $0.attached } }
+    func observe(_ row: ThreadRecord) {
+        guard row.rowVersion >= membershipVersion else { return }
+        membershipVersion = row.rowVersion
+        do {
+            let incoming = try ThreadArtefactMembership.read(ThreadArtefactMembership.metadata(row))
+            membershipError = nil
+            // An initial absent observation must not destroy legacy refs before migration captures them.
+            if incoming == nil && !canonicalInitialized { return }
+            canonicalInitialized = true
+            members = incoming ?? []
+            for tab in tabs where tab.attached && !members.contains(where: { $0.kind == tab.kind && $0.id == tab.id }) {
+                tab.attached = false
+                // Stop automatic publication immediately, before any asynchronous local checkpoint.
+                tab.detach?()
+                if selected == tab.id { selected = nil; shown = false; expanded = false }
+            }
+        } catch { membershipError = error.localizedDescription }
+    }
+    func refresh() async {
+        guard let transport else { return }
+        do {
+            if !migrationChecked {
+                let legacy = try attachedTabs.map { try ThreadArtefactMember(kind: $0.kind, id: $0.id) }
+                observe(try await ThreadArtefactMembershipSync.migrate(legacy, transport: transport))
+                migrationChecked = true
+            } else { observe(try await transport.read()) }
+        }
+        catch { failure = "Could not refresh thread attachments: \(error.localizedDescription)" }
+    }
+    func remove(_ member: ThreadArtefactMember) {
+        guard !busy, membershipError == nil, let transport else { return }
+        busy = true; membershipPending = true; failure = nil
+        Task { @MainActor in
+            defer { busy = false; membershipPending = false }
+            do { observe(try await ThreadArtefactMembershipSync.change(member, adding: false, transport: transport)) }
+            catch { failure = "Remove was not confirmed: \(error.localizedDescription)"; await refresh() }
+        }
+    }
+    func show(_ tab: MacThreadArtefactTab) { selected = tab.id; shown = true }
+
     #if DEBUG
     static weak var testingState: MacThreadArtefacts?
     #endif
     func open(kind: String, id: String) {
         guard !busy else { return }
         let kind = kind == "document" ? "doc" : kind
-        if let tab = tabs.first(where: { $0.id == id && $0.kind == kind }) { tab.open = true }
-        else { tabs.append(MacThreadArtefactTab(kind: kind, id: id)) }
-        selected = id; shown = true
+        guard let transport else { failure = "Attachments are unavailable until this conversation is loaded."; return }
+        guard membershipError == nil else { failure = membershipError; return }
+        busy = true; membershipPending = true; failure = nil
+        Task { @MainActor in
+            defer { busy = false; membershipPending = false }
+            do {
+                let member = try ThreadArtefactMember(kind: kind, id: id)
+                let row = try await ThreadArtefactMembershipSync.change(member, adding: true, transport: transport)
+                observe(row)
+                guard members.contains(member) else { failure = "Attachment was removed elsewhere. Refresh before reopening."; return }
+                if let tab = tabs.first(where: { $0.id == member.id && $0.kind == member.kind && $0.attached }) {
+                    tab.open = true; show(tab)
+                } else if let tab = tabs.first(where: { $0.id == member.id && $0.kind == member.kind }) {
+                    // A re-add must not reactivate detached recovery's automatic publishing.
+                    tab.open = true; show(tab)
+                    failure = "Attachment added. Review detached recovery, then use Save to source and resume."
+                } else {
+                    let tab = MacThreadArtefactTab(kind: member.kind, id: member.id)
+                    tabs.append(tab); show(tab)
+                }
+            } catch ThreadArtefactMembership.Error.unsupported {
+                openFallback?(kind, id)
+            } catch { failure = "Attachment was not confirmed: \(error.localizedDescription)"; await refresh() }
+        }
+    }
+    func saveRecovery(_ tab: MacThreadArtefactTab) async {
+        guard !busy, !tab.attached, let transport else { return }
+        busy = true; failure = nil
+        defer { busy = false }
+        do {
+            guard let prepare = tab.prepare else { throw ArtefactChatContext.ContextError.unresolved }
+            // This explicit user action may publish. Observing detach or re-add never calls it.
+            if let save = tab.saveSource { try await save() }
+            let reference = try await prepare()
+            let row = try await transport.read(); observe(row)
+            if let validate = tab.validate, !(await validate(reference)) { throw ArtefactChatContext.ContextError.unresolved }
+            if members.contains(where: { $0.kind == tab.kind && $0.id == tab.id }), membershipError == nil {
+                tab.attached = true; tab.reattach?(); show(tab)
+            } else { failure = "Source saved. Recovery remains detached because this source is not attached to the thread." }
+        } catch { failure = "Source Save was not confirmed: \(error.localizedDescription). Recovery remains held." }
     }
     func close(_ tab: MacThreadArtefactTab) {
         guard !busy else { return }
@@ -42,7 +136,8 @@ final class MacThreadArtefacts: Equatable {
         Task { @MainActor in
             defer { busy = false }
             do {
-                if let prepare = tab.prepare { _ = try await prepare() }
+                if tab.attached, let prepare = tab.prepare { _ = try await prepare() }
+                else if let checkpoint = tab.checkpoint, !(await checkpoint()) { throw ArtefactChatContext.ContextError.unresolved }
                 tab.open = false
                 selected = tabs.first(where: \.open)?.id
                 if selected == nil { shown = false }
@@ -66,8 +161,8 @@ final class MacThreadArtefacts: Equatable {
     }
     func prepare(target: ChatTarget, holdForEnqueue: Bool = false) async throws -> Data? {
         guard !busy else { throw ArtefactChatContext.ContextError.unresolved }
-        guard let thread = target.threadId else { return nil }
-        let open = tabs.filter(\.open)
+        guard let thread = target.threadId, membershipError == nil else { return nil }
+        let open = tabs.filter { $0.open && $0.attached }
         // Hidden workspace has no visible artefact, but dirty open editors must still save.
         guard !open.isEmpty else { return nil }
         NSApp.keyWindow?.makeFirstResponder(nil)
@@ -83,6 +178,7 @@ final class MacThreadArtefacts: Equatable {
                 refs.append(try await prepare())
             }
             for (tab, reference) in zip(open, refs) {
+                guard tab.attached else { throw ArtefactChatContext.ContextError.unresolved }
                 preparingTitle = tab.title
                 if let validate = tab.validate, !(await validate(reference)) { throw ArtefactChatContext.ContextError.unresolved }
             }
@@ -123,6 +219,8 @@ struct MacThreadArtefactLayout<Content: View>: View {
     @State private var retainedWorkspaceWidth: CGFloat = 640
     @State private var retainedChatWidth: CGFloat = 360
     @State private var dragStart: CGFloat?
+    @State private var threadQuery = LiveQuery<ThreadRecord?>(initial: nil)
+    @Environment(\.scenePhase) private var phase
     var body: some View {
         GeometryReader { proxy in
             let chatWidth: CGFloat = state.expanded && state.shown ? 0 : state.shown ? max(280, min(proxy.size.width - 340, proxy.size.width * fraction)) : proxy.size.width
@@ -156,6 +254,26 @@ struct MacThreadArtefactLayout<Content: View>: View {
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacThreadArtefactsCheck") { MacThreadArtefacts.testingState = state }
         }
         #endif
+        .task(id: model.selectedWorkspaceBoundary?.id) {
+            guard let sync = model.sync, let connection = model.connection, let thread = target.threadId else { return }
+            state.openFallback = { kind, id in inheritedOpen(kind: kind, id: id) }
+            do { state.transport = try sync.threadMembershipTransport(connection, workspace, threadId: thread) }
+            catch { state.failure = error.localizedDescription; return }
+            threadQuery.start(store: store, matches: { $0.workspaceId == workspace.id && $0.table == .threads }) {
+                try await store.reader.thread(workspaceId: workspace.id, id: thread)
+            }
+            await state.refresh()
+        }
+        .task(id: state.members) {
+            guard let sync = model.sync, let connection = model.connection else { return }
+            for member in state.members {
+                do { state.labels[member] = try await sync.threadArtefactLabel(connection, workspace, member: member) }
+                catch { state.labels[member] = "Unavailable \(member.kind == "doc" ? "document" : "artefact")" }
+            }
+        }
+        .onChange(of: threadQuery.value, initial: true) { _, row in if let row { state.observe(row) } }
+        .onChange(of: phase) { _, phase in if phase == .active { Task { await state.refresh() } } }
+        .onDisappear { threadQuery.stop() }
         .sheet(isPresented: Bindable(state).browsing) {
             MacThreadArtefactBrowser(state: state, target: target, workspace: workspace, store: store)
         }
@@ -168,7 +286,7 @@ struct MacThreadArtefactLayout<Content: View>: View {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal) {
                         HStack(spacing: 4) {
-                            ForEach(state.tabs.filter(\.open)) { tab in
+                            ForEach(state.tabs.filter { $0.open && $0.attached }) { tab in
                                 MacThreadArtefactTabLabel(state: state, tab: tab).id(tab.id)
                             }
                         }.padding(2)
@@ -203,6 +321,20 @@ struct MacThreadArtefactLayout<Content: View>: View {
                     .accessibilityIdentifier("thread.artefacts.close")
             }.buttonStyle(.borderless).controlSize(.small).padding(6).background(Amb.card).disabled(state.busy)
             if let failure = state.failure { Text(failure).font(.caption).foregroundStyle(Amb.destructive).padding(8) }
+            if state.tabs.contains(where: { !$0.attached }) {
+                Menu("Detached recovery · automatic publishing held") {
+                    ForEach(state.tabs.filter { !$0.attached }) { tab in
+                        Button("Open recovery: \(tab.title)") { state.show(tab) }
+                    }
+                }.accessibilityIdentifier("thread.artefacts.recovery")
+            }
+            if let tab = state.tabs.first(where: { $0.id == state.selected && !$0.attached }) {
+                Text("Removed from thread. Local recovery retained; excluded from Send. Explicit source Save still publishes to the source.")
+                    .font(.caption).foregroundStyle(Amb.warning)
+                Button("Save to source and resume if attached") {
+                    Task { await state.saveRecovery(tab) }
+                }.accessibilityIdentifier("thread.artefacts.recovery.save")
+            }
             Text("Send includes exact saved revisions of open tabs. Unsaved changes must save first.")
                 .font(.caption).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 8)
             Divider()
@@ -262,6 +394,12 @@ private struct MacThreadArtefactTabLabel: View {
             if selected { Capsule().fill(Amb.primary).frame(height: 2).padding(.horizontal, 8) }
         }
         .onHover { hovering = $0 }
+        .contextMenu {
+            Button("Close local view") { state.close(tab) }
+            Button("Remove from thread", role: .destructive) {
+                if let member = try? ThreadArtefactMember(kind: tab.kind, id: tab.id) { state.remove(member) }
+            }.disabled(state.membershipError != nil || state.busy)
+        }
     }
 }
 
@@ -323,6 +461,25 @@ struct MacThreadArtefactBrowser: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Open artefact").font(.title2.weight(.semibold))
             Text("Browse existing Docs, whiteboards and HTML in this workspace.").foregroundStyle(.secondary)
+            if let error = state.membershipError { Text(error).foregroundStyle(Amb.warning) }
+            if let error = state.failure { Text(error).foregroundStyle(Amb.warning) }
+            if !state.members.isEmpty {
+                Text("Attached to this thread").font(.headline)
+                ScrollView {
+                    VStack {
+                        ForEach(state.members, id: \.identity) { member in
+                            HStack {
+                                Button(state.labels[member] ?? "Loading \(member.kind == "doc" ? "document" : "artefact")…") {
+                                    state.open(kind: member.kind, id: member.id)
+                                }.accessibilityIdentifier("thread.artefacts.attached.\(member.id)")
+                                Spacer()
+                                Button("Remove from thread", role: .destructive) { state.remove(member) }
+                                    .accessibilityIdentifier("thread.artefacts.remove.\(member.id)")
+                            }
+                        }
+                    }
+                }.frame(maxHeight: 130).disabled(state.busy || state.membershipError != nil)
+            }
             TextField("Search titles", text: $search).textFieldStyle(.roundedBorder)
                 .focused($searching).accessibilityIdentifier("thread.artefacts.browser.search")
             HStack {
@@ -394,7 +551,7 @@ struct MacThreadArtefactBrowser: View {
                     .accessibilityIdentifier("thread.artefacts.browser.cancel")
             }
         }.padding(20).frame(minWidth: 560, idealWidth: 660, minHeight: 460, idealHeight: 540)
-        .task { start(); refresh(); searching = true }
+        .task { start(); refresh(); await state.refresh(); searching = true }
         .onChange(of: channel) { _, _ in start(); refresh() }
         .onChange(of: boundaryValid) { _, valid in if !valid { query.stop(); dismiss() } }
         .onChange(of: model.isUnlocked) { _, unlocked in

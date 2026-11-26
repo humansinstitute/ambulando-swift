@@ -303,6 +303,15 @@ struct DocumentView: View {
                 }
     }
     private func registerThreadTab() {
+            threadTab?.detach = { editor?.detachFromThread() }
+            threadTab?.reattach = { editor?.resumeAfterThreadReattach() }
+            threadTab?.saveSource = {
+                if let openingEditor { await openingEditor.value }
+                if let editor {
+                    guard await editor.checkpoint() else { throw ArtefactChatContext.ContextError.unresolved }
+                    if editor.dirty, !(await editor.save()) { throw ArtefactChatContext.ContextError.unresolved }
+                }
+            }
             threadTab?.validate = { reference in
                 let current = threadVersion.map { String($0.rowVersion) } ?? editor?.localBaseVersion.map(String.init) ?? snapshot.value.doc.map { String($0.rowVersion) }
                 return current == reference.revision && editor?.dirty != true
@@ -330,12 +339,16 @@ struct DocumentView: View {
                     guard let doc = snapshot.value.doc, snapshot.value.hasBody else { throw ArtefactChatContext.ContextError.unresolved }
                     revision = doc.rowVersion
                 }
-                if let historical = threadVersion {
-                    return try historical.chatReference(docID: docId, historical: true)
-                }
                 // Existing Doc versions contain full immutable envelopes keyed by row_version, not File version UUIDs.
                 // Confirm the selected body is actually retrievable; mutable metadata alone is insufficient evidence.
                 let versions = try await saver.versions(connection, workspace, docId: docId)
+                if let historical = threadVersion {
+                    guard let verified = versions.first(where: { $0.rowVersion == historical.rowVersion }),
+                          try verified.chatReference(docID: docId, historical: true) == historical.chatReference(docID: docId, historical: true) else {
+                        throw ArtefactChatContext.ContextError.unresolved
+                    }
+                    return try verified.chatReference(docID: docId, historical: true)
+                }
                 guard let saved = versions.first(where: { $0.rowVersion == revision }) else {
                     throw ArtefactChatContext.ContextError.unresolved
                 }
@@ -654,6 +667,12 @@ struct DocumentView: View {
             wiki.editor = created
             wiki.beforeLeaving = { [weak created] in await created?.checkpoint() ?? true }
             editor = created
+            #if os(macOS)
+            if threadTab?.attached == false { created.detachFromThread() }
+            #if DEBUG
+            threadTab?.testingDocument = created
+            #endif
+            #endif
             created.holdLease()
         }
 

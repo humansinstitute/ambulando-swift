@@ -565,6 +565,11 @@ public actor BoardController {
         guard !state.dirty, state.save != .saving else { throw ArtefactChatContext.ContextError.unresolved }
         let revision = viewing?.versionId ?? base?.versionId ?? ""
         guard !revision.isEmpty else { throw ArtefactChatContext.ContextError.unresolved }
+        // Recheck source authorization at capture; a previously loaded cache grants no continued access.
+        let authorized = try await transport.versions()
+        guard let version = authorized.versions.first(where: { $0.id == revision }) else { throw ArtefactChatContext.ContextError.unresolved }
+        let verifiedBytes = try await transport.read(revision, version.sha256)
+        if let digest = cache[revision]?.digest, SHA256Hex.of(verifiedBytes) != digest { throw ArtefactChatContext.ContextError.unresolved }
         // The version menu may be cleared after Save. Keep the digest of the exact loaded/published bytes,
         // or reread this immutable version if its bounded cache entry was evicted.
         _ = try await readVersion(revision, sha256: state.versions.first(where: { $0.id == revision })?.sha256)

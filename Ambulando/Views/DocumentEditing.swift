@@ -62,6 +62,17 @@ final class DocEditorModel: UploadTokenHost {
     @ObservationIgnored private var observedLeaseId: String?
     private var authorityLost = false
     private var lifecyclePending = false
+    private(set) var threadDetached = false
+    /// A shared detach never flushes to the source. Explicit Save remains available.
+    func resumeAfterThreadReattach() { threadDetached = false; startAutosave() }
+    func detachFromThread() {
+        threadDetached = true
+        autosave?.cancel(); autosave = nil
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await checkpoint(); _ = await persistReview()
+        }
+    }
     @ObservationIgnored private var active = true
     @ObservationIgnored private var closed = false
     @ObservationIgnored private var autosave: Task<Void, Never>?
@@ -436,7 +447,7 @@ final class DocEditorModel: UploadTokenHost {
     }
 
     private func startAutosave() {
-        guard scopeActive, active, autosave == nil else { return }
+        guard !threadDetached, scopeActive, active, autosave == nil else { return }
         autosave = Task { [weak self] in
             let clock = ContinuousClock()
             var deadline = clock.now.advanced(by: .seconds(60))
@@ -445,7 +456,7 @@ final class DocEditorModel: UploadTokenHost {
                 deadline = deadline.advanced(by: .seconds(60))
                 guard let self, active else { return }
                 await reconcileRemote()
-                if dirty, !journal.pendingMergedSave, remoteVersion == nil, journal.previewText == nil, !authorityLost, !saving, !takingOver { _ = await save() }
+                if !threadDetached, dirty, !journal.pendingMergedSave, remoteVersion == nil, journal.previewText == nil, !authorityLost, !saving, !takingOver { _ = await save() }
             }
         }
     }
@@ -488,7 +499,7 @@ final class DocEditorModel: UploadTokenHost {
     func flush() async {
         _ = await checkpoint()
         await persistReview()
-        if dirty, !journal.pendingMergedSave, remoteVersion == nil, journal.previewText == nil, !authorityLost, !saving, !takingOver { _ = await save() }
+        if !threadDetached, dirty, !journal.pendingMergedSave, remoteVersion == nil, journal.previewText == nil, !authorityLost, !saving, !takingOver { _ = await save() }
     }
 
     private func inspectAuthority() async {

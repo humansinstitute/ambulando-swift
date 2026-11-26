@@ -1322,7 +1322,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         let edit = manageMap("threadTitles")[root["thread_id"] as? String ?? ""]
         return ["id": root["thread_id"]!, "workspace_id": root["workspace_id"]!, "channel_id": root["channel_id"]!, "source_message_id": root["id"]!,
                 "title": (edit?["title"] as? String) ?? MentionCodec.plain(root["body"] as? String ?? ""), "record_state": "active",
-                "row_version": (edit?["row_version"] as? Int) ?? 1, "updated_at": (edit?["updated_at"] as? String) ?? root["updated_at"]!]
+                "row_version": (edit?["row_version"] as? Int) ?? 1, "updated_at": (edit?["updated_at"] as? String) ?? root["updated_at"]!,
+                "metadata": edit?["metadata"] as? [String: Any] ?? [:]]
     }
 
     /// `PATCH …/threads/:t` as Tower answers it: a title change guarded by `row_version` (a stale one is a 409
@@ -1332,7 +1333,11 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         return lock.withLock {
             guard let root = allMessages().first(where: { $0["thread_id"] as? String == id && $0["id"] as? String == $0["thread_source_message_id"] as? String })
             else { return (404, ["code": "thread_not_found"]) }
-            let title = (body["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let existing = thread(for: root)
+            let title = (body["title"] as? String ?? existing["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if body["metadata"] != nil {
+                guard body["metadata"] is [String: Any], let version = body["row_version"] as? Int, version > 0 else { return (400, ["code": "validation_error"]) }
+            }
             guard !title.isEmpty, title.count <= 120 else { return (400, ["code": "validation_error"]) }
             if title.lowercased().contains("deny") { return (403, ["code": "forbidden", "error": "Permission denied"]) }
             let current = thread(for: root)["row_version"] as? Int ?? 1
@@ -1345,7 +1350,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             }
             if let sent = body["row_version"] as? Int, sent != current { return (409, ["code": "stale_row_version"]) }
             var edits = manageMap("threadTitles")
-            edits[id] = ["title": title, "row_version": current + 1, "updated_at": ISO8601DateFormatter.fixture.string(from: Date())]
+            edits[id] = ["title": title, "row_version": current + 1, "updated_at": ISO8601DateFormatter.fixture.string(from: Date()),
+                         "metadata": body["metadata"] as? [String: Any] ?? existing["metadata"] as? [String: Any] ?? [:]]
             managed["threadTitles"] = edits
             persistManaged()
             return (200, ["thread": thread(for: root)])

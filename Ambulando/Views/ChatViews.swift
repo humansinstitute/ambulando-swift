@@ -377,27 +377,40 @@ struct ThreadView: View {
             Text(model.navigation.value.channel(target.channelId).map { model.navigation.value.label($0) } ?? "Conversation")
                 .font(.amb(.subheadline).weight(.semibold))
             if onBack != nil { Text(snapshot.value.title).font(.amb(.subheadline)).lineLimit(1) }
-            #if os(macOS)
-            Button { artefacts.browsing = true } label: { Image(systemName: "plus.rectangle.on.rectangle") }
-                .buttonStyle(.borderless).help("Browse existing Docs and artefacts")
-                .accessibilityLabel("Browse artefacts")
-                .accessibilityIdentifier("thread.artefacts.browse")
-                .disabled(artefacts.busy)
-            if !artefacts.shown, artefacts.tabs.contains(where: \.open) {
-                Button("Artefacts", systemImage: "sidebar.right") { artefacts.shown = true }
-                    .accessibilityIdentifier("thread.artefacts.reopen")
-            }
-            #endif
             Spacer()
             ForEach(Array(snapshot.value.participants.prefix(5)), id: \.self) { npub in
                 PersonAvatar(person: snapshot.value.people.person(npub)).frame(width: 24, height: 24).clipped()
             }
-            if onBack != nil, let thread = target.threadId {
-                AddToGoalMenu(source: GoalSource(type: .chat, recordId: thread, channelId: target.channelId, workspace: workspace))
-                PinToggleButton(type: .thread, id: thread, workspace: workspace)
-                ThreadHeaderMenu(context: snapshot.value.menu, workspace: workspace, title: snapshot.value.title)
+            if let thread = target.threadId {
+                if onBack != nil {
+                    AddToGoalMenu(source: GoalSource(type: .chat, recordId: thread, channelId: target.channelId, workspace: workspace))
+                    PinToggleButton(type: .thread, id: thread, workspace: workspace)
+                }
+                #if os(macOS)
+                Button { artefacts.browsing = true } label: { Image(systemName: "square.stack") }
+                    .buttonStyle(.borderless).help("Thread artefacts (\(artefacts.members.count))")
+                    .accessibilityLabel("Thread artefacts (\(artefacts.members.count))")
+                    .accessibilityIdentifier("thread.artefacts.browse").disabled(artefacts.busy)
+                if !artefacts.shown, artefacts.tabs.contains(where: \.open) {
+                    Button("Artefacts", systemImage: "sidebar.right") { artefacts.shown = true }
+                        .accessibilityIdentifier("thread.artefacts.reopen")
+                }
+                #endif
+                if onBack != nil { ThreadHeaderMenu(context: snapshot.value.menu, workspace: workspace, title: snapshot.value.title) }
             }
         }.padding(.horizontal, 16).padding(.vertical, 8).background(Amb.card)
+        #if os(macOS)
+        if artefacts.membershipPending {
+            ProgressView("Updating thread attachments…").controlSize(.small).padding(6)
+                .accessibilityIdentifier("thread.artefacts.pending")
+        }
+        if let failure = artefacts.failure, !artefacts.shown {
+            HStack {
+                Text(failure).font(.caption).foregroundStyle(Amb.warning)
+                Button("Dismiss") { artefacts.failure = nil }
+            }.padding(8).accessibilityIdentifier("thread.artefacts.failure")
+        }
+        #endif
         Divider()
         ScrollView {
             ThreadMessageStack {

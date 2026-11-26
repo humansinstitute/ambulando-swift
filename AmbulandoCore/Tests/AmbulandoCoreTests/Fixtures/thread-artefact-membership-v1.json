@@ -1,0 +1,10 @@
+{
+  "absent": {"other_app": {"keep": true}},
+  "initialized_empty": {"other_app": {"keep": true}, "ambulando_thread_artefacts": {"version": 1, "items": []}},
+  "doc_board_html": {"other_app": {"keep": true}, "ambulando_thread_artefacts": {"version": 1, "items": [
+    {"kind": "doc", "id": "aaaaaaaa-0000-4000-8000-000000000001"},
+    {"kind": "file", "id": "aaaaaaaa-0000-4000-8000-000000000002"},
+    {"kind": "file", "id": "aaaaaaaa-0000-4000-8000-000000000003"}
+  ]}},
+  "future_version": {"ambulando_thread_artefacts": {"version": 2, "items": []}}
+}

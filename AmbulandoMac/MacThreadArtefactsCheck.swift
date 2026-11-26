@@ -60,16 +60,19 @@ extension MacThreadRegression {
         model.focusThread(focus)
         for _ in 0..<50 { if MacThreadArtefacts.testingState != nil { break }; await settle() }
         guard let state = MacThreadArtefacts.testingState else { throw Failure(description: "mounted thread workspace") }
-        try require(state.tabs.isEmpty, "conversation starts without artefact tabs")
+        try require(state.tabs.isEmpty && !state.shown, "zero attachments have no workspace tab bar")
+        try require(find(window, "thread.artefacts.browse") != nil, "zero attachments retain header artefacts icon")
         try press(window, "thread.artefacts.browse"); await settle()
         guard let picker = window.attachedSheet else { throw Failure(description: "native browser sheet") }
         await settle()
+        try await waitFor(picker, "thread.artefacts.browser.row.\(f.board)", "authorized board browser row")
         try require(find(picker, "thread.artefacts.browser.row.\(f.board)") != nil, "board enumerated without opening content")
         try snapshot(picker, model: model, name: "mac134-picker")
         try press(picker, "thread.artefacts.browser.cancel"); await settle()
         try require(state.tabs.isEmpty && state.selected == nil && !state.shown, "cancel leaves empty workspace unchanged")
         try press(window, "thread.artefacts.browse"); await settle()
         guard let boardPicker = window.attachedSheet else { throw Failure(description: "board picker") }
+        try await waitFor(boardPicker, "thread.artefacts.browser.row.\(f.board)", "authorized artefact browser row")
         try press(boardPicker, "thread.artefacts.browser.row.\(f.board)"); await settle()
         for _ in 0..<100 {
             if let prepare = state.tabs.first?.prepare, (try? await prepare()) != nil { break }
@@ -81,9 +84,10 @@ extension MacThreadRegression {
         try require(reply.string == "change this", "draft retained on open")
         try press(window, "thread.artefacts.add"); await settle()
         guard let htmlPicker = window.attachedSheet else { throw Failure(description: "HTML picker") }
+        try await waitFor(htmlPicker, "thread.artefacts.browser.row.\(f.html)", "authorized artefact browser row")
         try press(htmlPicker, "thread.artefacts.browser.row.\(f.html)"); await settle()
         for _ in 0..<100 {
-            if let tab = state.tabs.last, let prepare = tab.prepare, (try? await prepare()) != nil { break }
+            if !state.busy, let tab = state.tabs.first(where: { $0.id == f.html }), let prepare = tab.prepare, (try? await prepare()) != nil { break }
             await settle()
         }
         let context = try await state.prepare(target: target)
@@ -100,13 +104,16 @@ extension MacThreadRegression {
         guard let searchEditor = existingPicker.firstResponder as? NSTextView else { throw Failure(description: "native search editor") }
         searchEditor.insertText("no-matching-title-134", replacementRange: NSRange(location: 0, length: searchEditor.string.utf16.count))
         await settle()
+        try await waitForText(existingPicker, "No matching artefacts", "native title search no matches", seconds: 10)
         try require(containsText(existingPicker, "No matching artefacts"), "native title search no matches")
         try snapshot(existingPicker, model: model, name: "mac134-no-matches")
         try press(existingPicker, "thread.artefacts.browser.cancel"); await settle()
         try require(state.selected == f.html && state.tabs.count == 2, "cancel leaves selection unchanged")
         try press(window, "thread.artefacts.add"); await settle()
         guard let refocusPicker = window.attachedSheet else { throw Failure(description: "refocus picker") }
+        try await waitFor(refocusPicker, "thread.artefacts.browser.row.\(f.html)", "authorized artefact browser row")
         try press(refocusPicker, "thread.artefacts.browser.row.\(f.html)"); await settle()
+        try await membershipIdle(state)
         let refocusedHTML = try await htmlPrepare()
         try require(refocusedHTML == historicalHTML && state.tabs.count == 2, "browser deduplicates without resetting pinned revision")
         let choice = try await scopeChoice(store, workspace.id)
@@ -119,8 +126,8 @@ extension MacThreadRegression {
         try snapshot(window, model: model, name: "mac-thread-artefacts-before-tab")
         try press(window, "thread.artefacts.tab.\(f.board)"); await settle()
         try require(state.selected == f.board, "native tab button focuses board")
-        state.close(boardTab); await settle()
-        state.open(kind: "file", id: f.board); await settle()
+        state.close(boardTab); await settle(); try await membershipIdle(state)
+        state.open(kind: "file", id: f.board); await settle(); try await membershipIdle(state)
         try require(state.tabs.first === boardTab && state.tabs.count == 2, "close/reopen retains editor identity")
         try press(window, "thread.artefacts.close"); await settle()
         try require(!state.shown && reply.string == "change this", "close restores draft")
@@ -220,7 +227,173 @@ extension MacThreadRegression {
         state.tabs = realTabs; state.selected = f.html
         window.setFrame(old, display: true); await settle()
         try snapshot(window, model: model, name: "mac-thread-artefacts")
+        try await sharedMembershipCheck(window, model: model, state: state, target: target, boardTab: boardTab)
         print("PASS: actual AppKit thread, two editor tabs, exact context, tab focus, close/reopen identity, expand, resize and failure draft preservation; synthetic Tower and injected failure")
     }
+    static func membershipControlReady(_ window: NSWindow, _ id: String) async throws {
+        let deadline = Date().addingTimeInterval(10)
+        let selector = NSSelectorFromString("isAccessibilityEnabled")
+        while Date() < deadline {
+            if let node = find(window, id), node.responds(to: selector) {
+                typealias Enabled = @convention(c) (AnyObject, Selector) -> Bool
+                if unsafeBitCast(node.method(for: selector), to: Enabled.self)(node, selector) { return }
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        throw Failure(description: "Control remained disabled: \(id)")
+    }
+    static func membershipMessage(_ store: LocalStore, _ target: ChatTarget, body: String) async throws {
+        let deadline = Date().addingTimeInterval(12)
+        while Date() < deadline {
+            let rows = try await store.reader.threadMessages(workspaceId: target.workspaceId, threadId: target.threadId!, limit: 500)
+            if rows.contains(where: { $0.body == body }) { return }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        throw Failure(description: "Canonical message not acknowledged: \(body)")
+    }
+
+    static func membershipIdle(_ state: MacThreadArtefacts) async throws {
+        for _ in 0..<50 { if !state.busy { await settle(); return }; await settle() }
+        throw Failure(description: "Membership/editor command did not finish: \(state.failure ?? "pending")")
+    }
+
+    static func sharedMembershipCheck(_ window: NSWindow, model: AppModel, state: MacThreadArtefacts,
+                                      target: ChatTarget, boardTab: MacThreadArtefactTab) async throws {
+        guard let workspace = model.selectedWorkspace, let connection = model.connection, let sync = model.sync,
+              let store = model.store, let fixture = model.fixture, let saver = model.saver, let thread = target.threadId else {
+            throw Failure(description: "shared membership fixture")
+        }
+        let f = MacThreadArtefactFixture.self
+        let secondStore = try LocalStore(directory: fixture.directory.appendingPathComponent("independent-membership-store"))
+        _ = try await secondStore.writer.saveConnection(connection)
+        try await secondStore.writer.replaceWorkspaces(connectionId: connection.id, [workspace])
+        let secondSync = WorkspaceSync(store: secondStore, engine: sync.engine, identity: sync.identity, transport: sync.transport)
+        let peer = try secondSync.threadMembershipTransport(connection, workspace, threadId: thread)
+        let secondRow = try await peer.read()
+        let discovered = try ThreadArtefactMembership.read(ThreadArtefactMembership.metadata(secondRow)) ?? []
+        try require(Set(discovered.map(\.id)) == Set([f.board, f.html]), "independent store discovers shared board and HTML")
+        let htmlTab = state.tabs.first { $0.id == f.html }!
+        let historicalBefore = try await htmlTab.prepare!()
+        window.orderOut(nil); await settle()
+        window.makeKeyAndOrderFront(nil); await state.refresh(); await settle()
+        let historicalAfter = try await htmlTab.prepare!()
+        try require(historicalBefore == historicalAfter, "native window background/resume preserves historical pin")
+        let fresh = MacThreadArtefacts(); fresh.transport = peer; await fresh.refresh()
+        try require(fresh.members.count == 2 && fresh.tabs.isEmpty, "fresh client lists attachments without mounting editors")
+        let lazyContext = try await fresh.prepare(target: target)
+        try require(lazyContext == nil, "unopened members do not enter plain Chat context")
+        let title = try await secondSync.threadArtefactLabel(connection, workspace, member: discovered[0])
+        try require(title == "Architecture whiteboard", "fresh metadata label is readable without editor load")
+
+        // Seed an authorized Doc and open it through the actual native browser.
+        let docID = "f1c70000-0000-4000-8000-00000000af05"
+        let body = DocumentBody.newDocument(text: "Shared membership document")
+        _ = fixture.tower.work.seedDoc(id: docID, scope: FixtureTower.scopeAmbulando, channel: target.channelId,
+            title: "Shared membership document", body: body.bytes, contentType: body.contentType)
+        _ = try await saver.latest(connection, workspace, docId: docID)
+        try press(window, "thread.artefacts.add"); await settle()
+        guard let browser = window.attachedSheet else { throw Failure(description: "Doc add browser") }
+        for _ in 0..<30 { if find(browser, "thread.artefacts.browser.row.\(docID)") != nil { break }; await settle() }
+        try press(browser, "thread.artefacts.browser.row.\(docID)"); await settle()
+        for _ in 0..<50 { if state.tabs.contains(where: { $0.id == docID }) { break }; await settle() }
+        guard let docTab = state.tabs.first(where: { $0.id == docID }) else { throw Failure(description: "mounted Doc tab") }
+        try await waitFor(window, "doc.edit", "shared Doc reader")
+        try press(window, "doc.edit"); await settle()
+        for _ in 0..<50 { if docTab.testingDocument != nil { break }; await settle() }
+        guard let editor = docTab.testingDocument else { throw Failure(description: "real mounted Doc editor") }
+        editor.title = "Detached dirty recovery"
+        try require(await editor.checkpoint() && editor.dirty, "Doc dirty edit checkpointed")
+        let before = fixture.tower.work.doc(docID)?["row_version"] as? Int
+        let docMember = try ThreadArtefactMember(kind: "doc", id: docID)
+        _ = try await ThreadArtefactMembershipSync.change(docMember, adding: false, transport: peer)
+        await state.refresh(); await settle()
+        await editor.flush()
+        try require(!docTab.attached && editor.threadDetached && editor.dirty, "remote dirty detach holds Doc automatic publication")
+        try require(fixture.tower.work.doc(docID)?["row_version"] as? Int == before, "detach and flush never publish source")
+        let recovery = try await store.reader.docDraft(key: editor.draftKey)
+        try require(recovery?.title == "Detached dirty recovery", "detached recovery durable in local store")
+        let withoutDoc = try await state.prepare(target: target)
+        let refs = try JSONDecoder().decode(ArtefactChatContext.self, from: withoutDoc ?? Data())
+        try require(!refs.open.contains(where: { $0.recordID == docID }), "removed Doc excluded from future Send")
+        _ = try await ThreadArtefactMembershipSync.change(docMember, adding: true, transport: peer)
+        await state.refresh()
+        state.open(kind: "doc", id: docID); await settle(); try await membershipIdle(state)
+        try require(!docTab.attached && editor.dirty && editor.threadDetached, "acknowledged re-add keeps dirty recovery held")
+        try press(window, "thread.artefacts.recovery.save"); await settle(); try await membershipIdle(state)
+        try require(docTab.attached && !editor.dirty && !editor.threadDetached, "explicit source Save verifies and resumes attachment")
+        let discussed = try await state.prepare(target: target)
+        try require(String(decoding: discussed ?? Data(), as: UTF8.self).contains(docID), "reattached clean source usable in discussion")
+
+        // Freeze an exact request, then remove shared membership. No future capture changes that request.
+        let frozenItem = try await secondStore.writer.enqueueSend(target: target, origin: connection.origin,
+            signerNpub: connection.signerNpub, appNpub: workspace.appNpub, body: "Frozen membership test", mentions: [], artefactContext: discussed)
+        let frozen = try await OutboxRequest.build(frozenItem, signer: sync.identity)
+        _ = try await secondStore.writer.freezeOutbox(id: frozenItem.id, request: frozen)
+
+        // Simulate an independently attached source inaccessible to this fixture identity. No editor is opened.
+        let unreadable = try ThreadArtefactMember(kind: "file", id: "dead0000-0000-4000-8000-000000000001")
+        let base = try await peer.read()
+        let current = try ThreadArtefactMembership.read(ThreadArtefactMembership.metadata(base)) ?? []
+        _ = try await peer.write(base, ThreadArtefactMembership.replacing(ThreadArtefactMembership.metadata(base), with: current + [unreadable]))
+        await fresh.refresh()
+        let plain = try await fresh.prepare(target: target)
+        try require(plain == nil && fresh.tabs.isEmpty, "plain Chat usable with unreadable lazy member")
+        do { _ = try await secondSync.threadArtefactLabel(connection, workspace, member: unreadable); throw Failure(description: "unreadable member granted source access") }
+        catch let error as TowerError { if case .http(let status, _, _) = error { try require([403, 404].contains(status), "source ACL denied") } else { throw error } }
+
+        // Plain Chat uses the real composer with every source view closed and an unreadable member still attached.
+        for tab in state.tabs { tab.open = false }
+        state.shown = false
+        await state.refresh(); await settle()
+        try type(window, "Plain Chat with unreadable lazy member")
+        try await membershipControlReady(window, "composer.send")
+        try press(window, "composer.send")
+        try await membershipMessage(store, target, body: "Plain Chat with unreadable lazy member")
+        await settle()
+        let plainMessages = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: thread, limit: 500)
+        try require(plainMessages.contains(where: { $0.body == "Plain Chat with unreadable lazy member" }), "native plain Chat sends with unreadable lazy member")
+
+        // Real native Remove controls, including last removal; never delete source records.
+        await state.refresh(); state.shown = false
+        try press(window, "thread.artefacts.browse"); await settle()
+        guard let removalBrowser = window.attachedSheet else { throw Failure(description: "removal browser") }
+        for member in state.members {
+            try await membershipControlReady(removalBrowser, "thread.artefacts.remove.\(member.id)")
+            try press(removalBrowser, "thread.artefacts.remove.\(member.id)")
+            for _ in 0..<40 { if !state.busy && !state.members.contains(member) { break }; await settle() }
+            try require(!state.members.contains(member), "native shared removal acknowledged")
+        }
+        try press(removalBrowser, "thread.artefacts.browser.cancel"); await settle()
+        await fresh.refresh()
+        try require(state.members.isEmpty && fresh.members.isEmpty && !state.shown, "last removal shared and empty workspace hidden")
+        try require(find(window, "thread.artefacts.browse") != nil, "header browser remains at zero")
+        try require(fixture.tower.work.doc(docID) != nil && fixture.tower.boards.currentBytes(f.board) != nil, "removal never deletes sources")
+        let retained = try await secondStore.reader.outboxItem(id: frozenItem.id)
+        try require(retained?.request == frozen && retained?.artefactContext == discussed, "frozen request/context unchanged after shared removals")
+        let emptyBase = try await peer.read()
+        var unknown = try JSONSerialization.jsonObject(with: ThreadArtefactMembership.metadata(emptyBase)) as! [String: Any]
+        unknown[ThreadArtefactMembership.key] = ["version": 2, "items": []]
+        _ = try await peer.write(emptyBase, JSONSerialization.data(withJSONObject: unknown))
+        await state.refresh(); await settle()
+        try require(state.membershipError != nil, "future schema blocks membership changes")
+        try type(window, "Plain Chat with future membership schema")
+        try await membershipControlReady(window, "composer.send")
+        try press(window, "composer.send")
+        try await membershipMessage(store, target, body: "Plain Chat with future membership schema")
+        await settle()
+        let unknownMessages = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: thread, limit: 500)
+        try require(unknownMessages.contains(where: { $0.body == "Plain Chat with future membership schema" }), "future schema does not block ordinary native Chat")
+        // Initial absent observation must not race migration and detach retained legacy tabs.
+        let futureBase = try await peer.read()
+        let absent = try await peer.write(futureBase, Data("{\"other_app\":{\"keep\":true}}".utf8))
+        let legacyState = MacThreadArtefacts(); legacyState.transport = peer
+        let legacyTab = MacThreadArtefactTab(kind: "doc", id: docID); legacyState.tabs = [legacyTab]
+        legacyState.observe(absent)
+        try require(legacyTab.attached, "initial absent key preserves retained legacy tab before migration")
+        await legacyState.refresh()
+        try require(legacyState.members == [docMember] && legacyTab.attached, "nonempty verified legacy migration survives initial observation order")
+        print("PASS_SHARED_MEMBERSHIP: independent stores; readable lazy labels; Doc/board/HTML; native duplicate/remove-last; background/pin; dirty detach recovery hold; explicit Save/re-add/resume; unreadable plain Chat; frozen request")
+    }
+
 }
 #endif

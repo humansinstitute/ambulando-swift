@@ -155,6 +155,8 @@ struct HTMLArtefactReviewView: View {
                     try sourceDrafts.remove()
                 }
                 guard let payload, !payload.digest.isEmpty else { throw ArtefactChatContext.ContextError.unresolved }
+                let verified = try await sync.artefactHTMLPayload(connection, workspace, fileId: file.id, versionId: payload.versionId)
+                guard verified.digest == payload.digest, verified.versionId == payload.versionId else { throw ArtefactChatContext.ContextError.unresolved }
                 // The loaded immutable revision, never a fresh head inferred at Send time.
                 return ArtefactChatReference(kind: "file", recordID: file.id, revision: payload.versionId,
                     historical: payload.versionId != payload.currentVersionId, digest: payload.digest.isEmpty ? nil : payload.digest)
