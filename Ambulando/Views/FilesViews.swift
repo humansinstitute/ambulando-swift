@@ -359,6 +359,7 @@ struct UploadSheet: View {
 /// Every channel, chat and personal pin File route opens the same saved artefact.
 struct FileArtefactView: View {
     #if os(macOS)
+    @Environment(\.macThreadArtefactTab) private var threadTab
     @Environment(\.macArtefactSession) private var macSession
     #endif
     @Environment(AppModel.self) private var model
@@ -381,6 +382,12 @@ struct FileArtefactView: View {
         }
         #if os(macOS)
         .onChange(of: session?.key, initial: true) { _, _ in
+            threadTab?.title = file.displayName
+            if let session {
+                threadTab?.checkpoint = { await session.controller.checkpoint() }
+                threadTab?.validate = { await session.controller.matchesChatRevision($0) }
+                threadTab?.prepare = { try await session.controller.prepareChatRevision() }
+            }
             macSession?.checkpoint = { [weak session] in await session?.controller.checkpoint() ?? true }
         }
         #endif

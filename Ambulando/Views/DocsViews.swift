@@ -211,6 +211,10 @@ struct DocumentSnapshot: Sendable, Equatable {
 /// and beside the page on Mac. Unset preferences open in View.
 struct DocumentView: View {
     #if os(macOS)
+    @State private var threadVersions: [DocumentVersion] = []
+    @State private var threadVersion: DocumentVersion?
+    @State private var threadVersionError: String?
+    @Environment(\.macThreadArtefactTab) private var threadTab
     @Environment(\.macDocumentSession) private var macSession
     @State private var macSurfaceId = UUID()
     private var windowScopeActive: Bool {
@@ -259,6 +263,95 @@ struct DocumentView: View {
         _wiki = State(initialValue: WikiLinkController(workspace: workspace, sourceDocId: docId, store: store))
     }
 
+    #if os(macOS)
+    @ViewBuilder private var threadReader: some View {
+            ZStack {
+                actionReader.opacity(threadVersion == nil ? 1 : 0).allowsHitTesting(threadVersion == nil)
+                    .accessibilityHidden(threadVersion != nil)
+                if let version = threadVersion, let bytes = version.bytes {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Historical v\(version.rowVersion) · Read-only · Pinned").font(.caption)
+                            Text(version.title).font(.title2)
+                            RichBlocksView(blocks: DocumentRender.blocks(DocumentBody(bytes: bytes, contentType: version.contentType)), style: .document, workspace: workspace)
+                        }.padding()
+                    }.id(version.rowVersion)
+                }
+            }
+    }
+    @ViewBuilder private var threadRevisionControls: some View {
+                if threadTab != nil {
+                    HStack {
+                        Menu(threadVersion.map { "v\($0.rowVersion) · Read-only · Pinned" } ?? "Current editor") {
+                            Button("Current editor") { threadVersion = nil }
+                            ForEach(threadVersions) { version in
+                                Button("v\(version.rowVersion) · \(version.title)") { threadVersion = version }
+                                    .disabled(version.bytes == nil)
+                            }
+                        }
+                        Button("Refresh revisions") {
+                            Task {
+                                do {
+                                    guard let saver = model.saver, let c = model.connection else { return }
+                                    threadVersions = try await saver.versions(c, workspace, docId: docId)
+                                    threadVersionError = nil
+                                } catch { threadVersionError = error.localizedDescription }
+                            }
+                        }
+                        if let threadVersionError { Text(threadVersionError).font(.caption) }
+                    }
+                }
+    }
+    private func registerThreadTab() {
+            threadTab?.validate = { reference in
+                let current = threadVersion.map { String($0.rowVersion) } ?? editor?.localBaseVersion.map(String.init) ?? snapshot.value.doc.map { String($0.rowVersion) }
+                return current == reference.revision && editor?.dirty != true
+            }
+            threadTab?.checkpoint = {
+                if let openingEditor { await openingEditor.value }
+                guard let editor else { return true }
+                guard await editor.checkpoint() else { return false }
+                return await editor.persistReview()
+            }
+            threadTab?.prepare = {
+                guard !historyOpen, !actionsBusy, model.canRead, let saver = model.saver, let connection = model.connection else {
+                    throw ArtefactChatContext.ContextError.unresolved
+                }
+                if let openingEditor { await openingEditor.value }
+                let revision: Int
+                if let editor {
+                    guard await editor.checkpoint(), editor.remoteVersion == nil, editor.journal.previewText == nil, !editor.showingVersions else {
+                        throw ArtefactChatContext.ContextError.unresolved
+                    }
+                    if editor.dirty, !(await editor.save()) { throw ArtefactChatContext.ContextError.unresolved }
+                    guard let saved = editor.localBaseVersion else { throw ArtefactChatContext.ContextError.unresolved }
+                    revision = saved
+                } else {
+                    guard let doc = snapshot.value.doc, snapshot.value.hasBody else { throw ArtefactChatContext.ContextError.unresolved }
+                    revision = doc.rowVersion
+                }
+                if let historical = threadVersion {
+                    return try historical.chatReference(docID: docId, historical: true)
+                }
+                // Existing Doc versions contain full immutable envelopes keyed by row_version, not File version UUIDs.
+                // Confirm the selected body is actually retrievable; mutable metadata alone is insufficient evidence.
+                let versions = try await saver.versions(connection, workspace, docId: docId)
+                guard let saved = versions.first(where: { $0.rowVersion == revision }) else {
+                    throw ArtefactChatContext.ContextError.unresolved
+                }
+                return try saved.chatReference(docID: docId, historical: false)
+            }
+    }
+    #endif
+
+    @ViewBuilder private var platformReader: some View {
+        #if os(macOS)
+        AnyView(threadReader)
+        #else
+        actionReader
+        #endif
+    }
+
     private var canEdit: Bool {
         #if os(macOS)
         guard windowScopeActive else { return false }
@@ -271,7 +364,7 @@ struct DocumentView: View {
         // Observe the captured anchor before presenting the sheet; its first content must use this selection.
         let commentComposer = composer
         #endif
-        actionReader
+        platformReader
         #if os(macOS)
         .disabled(macSession?.closing == true)
         #endif
@@ -282,6 +375,9 @@ struct DocumentView: View {
         .wikiSheets(wiki, workspace: workspace)
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 6) {
+                #if os(macOS)
+                threadRevisionControls
+                #endif
                 if let banner = wiki.banner {
                     HStack(alignment: .top) {
                         Notice(tone: wiki.bannerIsProblem ? .warning : .info, text: banner).accessibilityIdentifier("wiki.banner")
@@ -295,6 +391,7 @@ struct DocumentView: View {
         }
         #if os(macOS)
         .onAppear {
+            registerThreadTab()
             macSession?.beforeClose = {
                 guard !actionsBusy else { return false }
                 if let openingEditor { await openingEditor.value }
@@ -309,7 +406,7 @@ struct DocumentView: View {
                 return true
             }
         }
-        .onChange(of: snapshot.value.doc?.title, initial: true) { _, _ in updateWindowTitle() }
+        .onChange(of: snapshot.value.doc?.title, initial: true) { _, _ in updateWindowTitle(); threadTab?.title = snapshot.value.doc?.title ?? "Document" }
         .onChange(of: model.identity) { _, _ in updateWindowTitle() }
         .onChange(of: editor != nil || openingEditor != nil, initial: true) { _, editing in
             if editing { macSession?.editingSurfaces.insert(macSurfaceId) }

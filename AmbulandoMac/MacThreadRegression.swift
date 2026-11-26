@@ -130,6 +130,9 @@ enum MacThreadRegression {
                 try await nip44Check(model: model)
                 print("PASS: native NIP44 bridge, synthetic private list and frame/document boundaries"); fflush(stdout); exit(0)
             }
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacThreadArtefactsCheck") {
+                try await threadArtefactsCheck(window, model: model); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacArtefactWindowCheck") {
                 try await artefactWindowCheck(window, model: model); fflush(stdout); exit(0)
             }

@@ -16,12 +16,14 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (118) |
+| Version | 0.1.0 (132) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
 | Data | `~/Library/Containers/studio.otherstuff.ambulando.mac/` (kept when the app is replaced or updated) |
 | Keychain | Login keychain, services `studio.otherstuff.ambulando.mac.identity-vault.v1`, `….session.v1` |
+
+Source build 132 adds the [Mac thread artefact workspace](mac-thread-artefacts.md), with retained tabs and save-before-send exact revision context. This is pushed-source functionality; installation and authenticated agent receipt require separate verification.
 
 Source build 118 re-orders the strip (sidebar control, then Home; no refresh control in the strip),
 opens sends once access is verified rather than after full event catch-up, and adds workspace state

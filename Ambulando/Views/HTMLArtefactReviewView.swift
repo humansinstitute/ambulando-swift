@@ -4,6 +4,9 @@ import SwiftUI
 /// Channel-owned HTML artefact viewer with compact control-bar version switcher and
 /// shared PostgreSQL threaded visual comments (desktop right-click Add comment).
 struct HTMLArtefactReviewView: View {
+    #if os(macOS)
+    @Environment(\.macThreadArtefactTab) private var threadTab
+    #endif
     @Environment(AppModel.self) private var model
     let file: FileRecord
     let workspace: WorkspaceRecord
@@ -44,6 +47,15 @@ struct HTMLArtefactReviewView: View {
     private var viewedVersionNumber: Int { payload?.versionNumber ?? 1 }
     private var isViewingLatest: Bool {
         selectedVersionId == nil || (payload?.currentVersionId != nil && selectedVersionId == payload?.currentVersionId)
+    }
+
+    private var versionLabel: String {
+        if isViewingLatest { return "v\(viewedVersionNumber)" }
+        #if os(macOS)
+        return "v\(viewedVersionNumber) · Read-only · Pinned"
+        #else
+        return "v\(viewedVersionNumber) · History"
+        #endif
     }
 
     private var visibleThreads: [FileCommentThread] {
@@ -121,6 +133,33 @@ struct HTMLArtefactReviewView: View {
         .sheet(isPresented: $editingSource, onDismiss: { reloadNonce += 1 }) {
             HTMLSourceSheet(file: file, workspace: workspace)
         }
+        #if os(macOS)
+        .onAppear {
+            threadTab?.title = file.displayName
+            threadTab?.validate = { reference in
+                !editingSource && payload?.versionId == reference.revision && failure == nil
+            }
+            threadTab?.prepare = {
+                guard !editingSource, failure == nil, model.canRead, let connection = model.connection,
+                      let boundary = model.selectedWorkspaceBoundary, let sync = model.sync else {
+                    throw ArtefactChatContext.ContextError.unresolved
+                }
+                let sourceDrafts = HTMLSourceDraftStore(directory: BoardRegistry.draftsDirectory(connection.id, dataDirectory: model.fixture?.directory),
+                    boundary: boundary, fileId: file.id, allowLegacy: model.fixture == nil)
+                if let draft = sourceDrafts.load() {
+                    try await sync.saveHTML(connection, workspace, fileId: file.id, base: draft.base, source: draft.source, title: file.displayName)
+                    guard model.selectedWorkspaceBoundary == boundary else { throw ArtefactChatContext.ContextError.unresolved }
+                    let loaded = try await sync.artefactHTMLPayload(connection, workspace, fileId: file.id, versionId: selectedVersionId)
+                    self.payload = loaded
+                    try sourceDrafts.remove()
+                }
+                guard let payload else { throw ArtefactChatContext.ContextError.unresolved }
+                // The loaded immutable revision, never a fresh head inferred at Send time.
+                return ArtefactChatReference(kind: "file", recordID: file.id, revision: payload.versionId,
+                    historical: payload.versionId != payload.currentVersionId)
+            }
+        }
+        #endif
         .task(id: boundaryKey + [selectedVersionId ?? "latest", String(reloadNonce)]) {
             await loadHTML()
         }
@@ -175,7 +214,7 @@ struct HTMLArtefactReviewView: View {
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Text(isViewingLatest ? "v\(viewedVersionNumber)" : "v\(viewedVersionNumber) · History")
+                        Text(versionLabel)
                             .font(.amb(.caption).weight(.medium))
                         Image(systemName: "chevron.down").font(.caption2)
                     }
@@ -202,7 +241,11 @@ struct HTMLArtefactReviewView: View {
                 Button("Refresh comments", systemImage: "arrow.clockwise") { commentsReload += 1 }
                 Divider()
                 Button("Edit source…", systemImage: "chevron.left.forwardslash.chevron.right") { editingSource = true }
+                    #if os(macOS)
+                    .disabled(!model.isUnlocked || (threadTab != nil && !isViewingLatest))
+                    #else
                     .disabled(!model.isUnlocked)
+                    #endif
             } label: {
                 Image(systemName: "ellipsis.circle")
             }

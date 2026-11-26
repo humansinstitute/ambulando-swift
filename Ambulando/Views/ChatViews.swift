@@ -355,7 +355,16 @@ struct ThreadView: View {
         _windowAnchor = State(initialValue: saved)
     }
 
+    #if os(macOS)
+    @State private var artefacts = MacThreadArtefacts()
     var body: some View {
+        MacThreadArtefactLayout(state: artefacts, workspace: workspace, store: store) { conversation }
+    }
+    #else
+    var body: some View { conversation }
+    #endif
+
+    @ViewBuilder private var conversation: some View {
         #if os(macOS)
         let _ = MacHangDiagnostics.shared.mark("thread.body")
         #endif
@@ -368,6 +377,12 @@ struct ThreadView: View {
             Text(model.navigation.value.channel(target.channelId).map { model.navigation.value.label($0) } ?? "Conversation")
                 .font(.amb(.subheadline).weight(.semibold))
             if onBack != nil { Text(snapshot.value.title).font(.amb(.subheadline)).lineLimit(1) }
+            #if os(macOS)
+            if !artefacts.shown, artefacts.tabs.contains(where: \.open) {
+                Button("Artefacts", systemImage: "sidebar.right") { artefacts.shown = true }
+                    .accessibilityIdentifier("thread.artefacts.reopen")
+            }
+            #endif
             Spacer()
             ForEach(Array(snapshot.value.participants.prefix(5)), id: \.self) { npub in
                 PersonAvatar(person: snapshot.value.people.person(npub)).frame(width: 24, height: 24).clipped()
@@ -855,6 +870,9 @@ final class ComposerModel {
         tail = Task { await previous?.value; await operation() }
     }
 
+    /// Hold a desktop editor barrier through the durable outbox insertion or draft restoration.
+    func waitForPendingSend() async { await tail?.value }
+
     private func scheduleSave() {
         guard !finished else { return }
         debounce?.cancel()
@@ -893,7 +911,7 @@ final class ComposerModel {
 
     /// Hands the composed text to the outbox (which clears the stored draft in the same transaction).
     func send(with outbox: OutboxSender, connection: ConnectionRecord, workspace: WorkspaceRecord,
-              onEnqueued: (@MainActor @Sendable (String) -> Void)? = nil) {
+              onEnqueued: (@MainActor @Sendable (String) -> Void)? = nil, contextSuffix: String = "") {
         debounce?.cancel()
         debounce = nil
         let text = text, mentions = mentions, target = target, attachments = attachments
@@ -904,7 +922,7 @@ final class ComposerModel {
         edited = false
         chain {
             do {
-                if let item = try await outbox.send(text: text, mentions: mentions, target: target, connection: connection, workspace: workspace, attachments: attachments) {
+                if let item = try await outbox.send(text: text + contextSuffix, mentions: mentions, target: target, connection: connection, workspace: workspace, attachments: attachments) {
                     await onEnqueued?(item.id)
                 }
             }
@@ -937,6 +955,10 @@ extension ComposerModel: UploadTokenHost {
 }
 
 struct Composer: View {
+    #if os(macOS)
+    @Environment(\.macThreadArtefacts) private var artefacts
+    @State private var preparingArtefacts = false
+    #endif
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     let target: ChatTarget
@@ -1191,6 +1213,9 @@ struct Composer: View {
             .padding(.horizontal, 10).padding(.vertical, 8)
         }
         .disabled(savingRevision)
+        #if os(macOS)
+        .disabled(preparingArtefacts)
+        #endif
         .background(Amb.card)
         // Reserve the compose controls and suggestion viewport before the history takes remaining space.
         .layoutPriority(1)
@@ -1369,7 +1394,7 @@ struct Composer: View {
 
     private var canSend: Bool {
         #if os(macOS)
-        guard !voice.busy else { return false }
+        guard !voice.busy, !preparingArtefacts else { return false }
         #endif
         guard let composer else { return false }
         // A pasted item still uploading (or failed) holds its placeholder in the text: nothing is sent until it is resolved.
@@ -1454,7 +1479,22 @@ struct Composer: View {
         if editing != nil { finishRevision(save: true); return }
         guard canSend, let composer, let outbox = model.outbox, let connection = model.connection,
               connection.id == target.connectionId, workspace.id == target.workspaceId else { return }
+        #if os(macOS)
+        guard !preparingArtefacts else { return }
+        preparingArtefacts = true
+        Task { @MainActor in
+            defer { preparingArtefacts = false; artefacts?.busy = false }
+            do {
+                let suffix = try await artefacts?.prepare(target: target, holdForEnqueue: true) ?? ""
+                guard model.connection?.id == connection.id, model.isUnlocked,
+                      model.selectedWorkspaceId == workspace.id else { return }
+                composer.send(with: outbox, connection: connection, workspace: workspace, onEnqueued: onEnqueued, contextSuffix: suffix)
+                await composer.waitForPendingSend()
+            } catch { /* The workspace displays the actionable failure; draft stays untouched. */ }
+        }
+        #else
         composer.send(with: outbox, connection: connection, workspace: workspace, onEnqueued: onEnqueued)
+        #endif
     }
 }
 

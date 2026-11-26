@@ -355,9 +355,9 @@ public actor BoardController {
         #endif
     }
 
-    private func fail(_ error: Error) async {
+    private func fail(_ error: Error, preservingDraft: Bool = false) async {
         if case .unavailable = BoardEditError.from(error) {
-            drafts.delete(fileId)
+            if !preservingDraft { drafts.delete(fileId) }
             cache.removeAll()
             base = nil; working = nil; viewing = nil
             emit { $0.status = .denied; $0.dirty = false; $0.save = .saved; $0.error = "Ask your workspace owner for access." }
@@ -500,7 +500,7 @@ public actor BoardController {
 
     /// Publishes the draft as a new version against the version it started from. A stale base keeps the draft.
     @discardableResult
-    public func save(summary: String = "") async -> Bool {
+    public func save(summary: String = "", preservingHistoricalSelection: Bool = false) async -> Bool {
         guard !saving, base != nil, state.save != .saving else { return false }
         saving = true
         defer { saving = false }
@@ -508,7 +508,7 @@ public actor BoardController {
             emit { $0.save = .error; $0.error = "An open board editor did not confirm its latest changes. Your draft is kept; try Save again." }
             return false
         }
-        guard viewing == nil else { emit { $0.error = "Return to the latest version before saving." }; return false }
+        guard viewing == nil || preservingHistoricalSelection else { emit { $0.error = "Return to the latest version before saving." }; return false }
         guard await transport.canSign() else { emit { $0.error = BoardEditError.locked.localizedDescription }; return false }
         guard state.canWrite else { emit { $0.error = "You can view this board but not save it." }; return false }
         guard state.dirty, let base, let scene = working else { emit { $0.notice = "No unsaved changes." }; return false }
@@ -538,12 +538,34 @@ public actor BoardController {
                     if let latest { $0.latestVersionId = latest.id; $0.latestVersionNumber = latest.number }
                 }
             case .unavailable:
+                #if os(macOS)
+                await fail(error, preservingDraft: true)
+                #else
                 await fail(error)
+                #endif
             default:
                 emit { $0.save = .error; $0.error = "The board could not be saved. Your draft is kept. \(error.localizedDescription)" }
             }
             return false
         }
+    }
+
+    public func matchesChatRevision(_ reference: ArtefactChatReference) -> Bool {
+        state.status == .ready && !state.dirty &&
+            reference.revision == (viewing?.versionId ?? base?.versionId ?? "")
+    }
+
+    /// Thread Send barrier: flush the live page, publish dirty content, then return only the confirmed revision.
+    /// Historical selections remain pinned and never publish. A concurrent edit during publish refuses Send.
+    public func prepareChatRevision() async throws -> ArtefactChatReference {
+        guard await checkpoint(), state.status == .ready else { throw ArtefactChatContext.ContextError.unresolved }
+        if state.dirty {
+            guard await save(preservingHistoricalSelection: true) else { throw ArtefactChatContext.ContextError.unresolved }
+        }
+        guard !state.dirty, state.save != .saving else { throw ArtefactChatContext.ContextError.unresolved }
+        let revision = viewing?.versionId ?? base?.versionId ?? ""
+        guard !revision.isEmpty else { throw ArtefactChatContext.ContextError.unresolved }
+        return ArtefactChatReference(kind: "file", recordID: fileId, revision: revision, historical: viewing != nil)
     }
 
     // MARK: Versions

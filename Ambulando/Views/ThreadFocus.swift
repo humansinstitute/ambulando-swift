@@ -265,6 +265,9 @@ private struct ThreadFocusContainer: View {
         #endif
     }
 
+    #if os(macOS)
+    @State private var artefactOwner: MacThreadArtefacts?
+    #endif
     var body: some View {
         Group {
             if let focus = model.focusedThread {
@@ -273,7 +276,13 @@ private struct ThreadFocusContainer: View {
                         ThreadFocusPanel(focus: focus, expanded: $expanded).id((model.selectedWorkspaceBoundary?.id ?? "unbound") + ":" + focus.id)
                     }
                     #if os(macOS)
-                    .background(ThreadFocusBackdrop { model.focusedThread = nil })
+                    .background(ThreadFocusBackdrop {
+                        Task { @MainActor in
+                            if let artefactOwner, !(await artefactOwner.checkpointAll()) { return }
+                            model.focusedThread = nil
+                        }
+                    })
+                    .onPreferenceChange(MacThreadArtefactOwnerKey.self) { artefactOwner = $0 }
                     #endif
                 } else {
                     ThreadFocusPanel(focus: focus, expanded: .constant(false)).id((model.selectedWorkspaceBoundary?.id ?? "unbound") + ":" + focus.id)
@@ -363,6 +372,10 @@ private struct ThreadFocusPanel: View {
     @State private var title = ""
     @State private var menu: ThreadMenuContext?
 
+    #if os(macOS)
+    @State private var artefactOwner: MacThreadArtefacts?
+    @State private var expansionBeforeArtefact: Bool?
+    #endif
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -370,6 +383,17 @@ private struct ThreadFocusPanel: View {
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Amb.background)
+        #if os(macOS)
+        .onPreferenceChange(MacThreadArtefactOwnerKey.self) { artefactOwner = $0 }
+        .onPreferenceChange(MacThreadArtefactExpandedKey.self) { shown in
+            if shown {
+                if expansionBeforeArtefact == nil { expansionBeforeArtefact = expanded }
+                expanded = true
+            } else if let previous = expansionBeforeArtefact {
+                expanded = previous; expansionBeforeArtefact = nil
+            }
+        }
+        #endif
         .onPreferenceChange(ThreadTitleKey.self) {
             #if os(macOS)
             MacHangDiagnostics.shared.mark("thread.titlePreference")
@@ -461,7 +485,16 @@ private struct ThreadFocusPanel: View {
         }
     }
 
-    private func close() { model.focusedThread = nil }
+    private func close() {
+        #if os(macOS)
+        Task { @MainActor in
+            if let artefactOwner, !(await artefactOwner.checkpointAll()) { return }
+            model.focusedThread = nil
+        }
+        #else
+        model.focusedThread = nil
+        #endif
+    }
 }
 
 /// The web's thread menu (sol `.thread-title-menu`) beside pin, full screen and close: Get it done and Copy message for

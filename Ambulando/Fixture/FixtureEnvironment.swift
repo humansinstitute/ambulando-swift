@@ -563,6 +563,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         if let handled = try runtimeNapplet.handle(request,actor:actorNpub) { return handled }
         if let handled = try genericNapplet.handle(request,actor:actorNpub) { return handled }
         if NappletTrustFixture.enabled, let handled = try trustNapplet.handle(request, actor: actorNpub) { return handled }
+        #if os(macOS) && DEBUG
+        if let handled = MacThreadArtefactFixture.handle(request) { return handled }
+        #endif
         // Surface routes first: their ownership is exact (board versions live under `/files/:f/versions/:v/object`).
         if let handled = try notifications.handle(request) {
             if request.httpMethod == "PATCH" || request.httpMethod == "POST" { lock.withLock { emitLocked(workspace: Self.studio, channel: nil, type: "notification_item", id: nil, rowVersion: nil, operation: "state"); persist() } }
