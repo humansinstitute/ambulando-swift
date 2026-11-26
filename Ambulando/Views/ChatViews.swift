@@ -44,6 +44,7 @@ struct ThreadSnapshot: Sendable, Equatable {
     var messages: [MessageRecord] = []
     var pending: [OutboxItem] = []
     var people = PeopleDirectory()
+    var participants: [String] = []
     var archived = false
     var extras = MessageExtras()
     var dayStarts: [String: ChatDay] = [:]
@@ -102,7 +103,7 @@ private struct NewestSentinel: View {
     private var anchors: [String: String] = [:]
 
     private static func key(_ target: ChatTarget) -> String? {
-        target.threadId.map { "\(target.connectionId):\(target.workspaceId):\($0)" }
+        "\(target.connectionId):\(target.workspaceId):\(target.threadId ?? "channel:" + target.channelId)"
     }
 
     func anchor(for target: ChatTarget) -> String? { Self.key(target).flatMap { anchors[$0] } }
@@ -213,6 +214,12 @@ struct ChannelView: View {
     @State private var limit = 150
     @State private var atNewest = true
     @State private var messageEdit: ChatMessageEdit?
+    @State private var resumeAt: String?
+
+    init(target: ChatTarget, workspace: WorkspaceRecord, store: LocalStore, pushed: Bool = true) {
+        self.target = target; self.workspace = workspace; self.store = store; self.pushed = pushed
+        _resumeAt = State(initialValue: ReadingPositions.shared.anchor(for: target))
+    }
 
     // One Messages view: every conversation is a card here, and one with replies opens its real thread (the web's
     // separate Threads list showed the same conversations again).
@@ -274,7 +281,7 @@ struct ChannelView: View {
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .modifier(FollowLatest(lastId: snapshot.value.pending.last?.id ?? snapshot.value.posts.last?.id,
-                               pendingCount: snapshot.value.pending.count, nearBottom: atNewest))
+                               pendingCount: snapshot.value.pending.count, nearBottom: atNewest, resumeAt: resumeAt))
         .scrollDismissesKeyboard(.interactively)
         .refreshable { model.openChannel(target.channelId, in: workspace, force: true) }
             // A stacked composer (not an inset) so keyboard avoidance shrinks the list itself and the newest
@@ -293,10 +300,13 @@ struct ChannelView: View {
     private var isUnlocked: Bool { if case .unlocked = model.identity { true } else { false } }
 
     private func start() {
-        let target = target, limit = limit, store = store, viewer = model.connection?.signerNpub
+        let target = target, limit = limit, store = store, viewer = model.connection?.signerNpub, resumeAt = resumeAt
         snapshot.start(store: store, matches: chatMatches(target.workspaceId)) {
             async let channel = store.reader.channel(workspaceId: target.workspaceId, id: target.channelId)
-            async let posts = store.reader.channelFeed(workspaceId: target.workspaceId, channelId: target.channelId, limit: limit)
+            let throughHit: Int
+            if let resumeAt { throughHit = try await store.reader.channelFeedLimit(workspaceId: target.workspaceId, channelId: target.channelId, through: resumeAt) }
+            else { throughHit = 0 }
+            async let posts = store.reader.channelFeed(workspaceId: target.workspaceId, channelId: target.channelId, limit: max(limit, throughHit))
             async let pending = store.reader.outbox(target: target)
             async let sync = store.reader.channelSync(workspaceId: target.workspaceId, channelId: target.channelId)
             async let directory = people(store, target)
@@ -322,6 +332,7 @@ struct ThreadView: View {
     let target: ChatTarget
     let workspace: WorkspaceRecord
     let store: LocalStore
+    var onBack: (() -> Void)?
     @State private var snapshot = LiveQuery<ThreadSnapshot>(initial: ThreadSnapshot())
     @State private var atNewest = true
     @State private var messageEdit: ChatMessageEdit?
@@ -333,7 +344,8 @@ struct ThreadView: View {
     /// The newest agent activity line shown at the end of the thread.
     @State private var activityTail = ""
 
-    init(target: ChatTarget, workspace: WorkspaceRecord, store: LocalStore) {
+    init(target: ChatTarget, workspace: WorkspaceRecord, store: LocalStore, onBack: (() -> Void)? = nil) {
+        self.onBack = onBack
         self.target = target
         self.workspace = workspace
         self.store = store
@@ -348,6 +360,24 @@ struct ThreadView: View {
         let _ = MacHangDiagnostics.shared.mark("thread.body")
         #endif
         VStack(spacing: 0) {
+        HStack(spacing: 8) {
+            if let onBack {
+                Button(action: onBack) { Label("Conversations", systemImage: "chevron.left") }
+                    .accessibilityIdentifier("chat.thread.back")
+            }
+            Text(model.navigation.value.channel(target.channelId).map { model.navigation.value.label($0) } ?? "Conversation")
+                .font(.amb(.subheadline).weight(.semibold))
+            if onBack != nil { Text(snapshot.value.title).font(.amb(.subheadline)).lineLimit(1) }
+            Spacer()
+            ForEach(Array(snapshot.value.participants.prefix(5)), id: \.self) { npub in
+                PersonAvatar(person: snapshot.value.people.person(npub)).frame(width: 24, height: 24).clipped()
+            }
+            if onBack != nil, let thread = target.threadId {
+                PinToggleButton(type: .thread, id: thread, workspace: workspace)
+                ThreadHeaderMenu(context: snapshot.value.menu, workspace: workspace, title: snapshot.value.title)
+            }
+        }.padding(.horizontal, 16).padding(.vertical, 8).background(Amb.card)
+        Divider()
         ScrollView {
             ThreadMessageStack {
                 if snapshot.value.hasEarlier { pageButton(earlier: true) }
@@ -475,6 +505,7 @@ struct ThreadView: View {
                 || (key.table == .access && (key.workspaceId == nil || key.workspaceId == target.workspaceId))
         }) {
             let historyLimit = 500
+            async let participantIds = store.reader.threadParticipantNpubs(workspaceId: target.workspaceId, threadId: threadId)
             async let thread = store.reader.thread(workspaceId: target.workspaceId, id: threadId)
             async let messages = store.reader.threadMessages(workspaceId: target.workspaceId, threadId: threadId, limit: historyLimit)
             async let pageRows = store.reader.threadMessagePage(workspaceId: target.workspaceId, threadId: threadId, anchor: anchor,
@@ -491,7 +522,7 @@ struct ThreadView: View {
             let days = ChatDay.breaks(rows, id: \.id, time: \.createdAt)
             return ThreadSnapshot(order: window.order, windowStart: window.start, hasEarlier: window.hasEarlier, hasNewer: window.hasNewer,
                                   pageIdentity: page, title: String(title.prefix(60)), messages: rows, pending: try await pending,
-                                  people: try await directory, archived: record?.archived ?? false, extras: extras,
+                                  people: try await directory, participants: try await participantIds, archived: record?.archived ?? false, extras: extras,
                                   dayStarts: days.starts, lastDay: days.last,
                                   menu: ThreadMenuContext(threadId: threadId, channelId: target.channelId, record: record, history: history,
                                                           historyComplete: history.count < historyLimit))
@@ -531,6 +562,7 @@ struct PostRow: View {
 }
 
 struct MessageRow: View {
+    @Environment(AppModel.self) private var model
     let message: MessageRecord
     let people: PeopleDirectory
     var bodyOverride: String?
@@ -553,8 +585,10 @@ struct MessageRow: View {
         // of being read as a single combined label.
         let interactive = !display.attachments.isEmpty || (bodyOverride == nil && (display.blocks.map(RichBlocksInfo.hasControls) ?? false))
         let sender = sender
+        let mine = message.senderNpub != nil && message.senderNpub == model.identity.npub
         HStack(alignment: .top, spacing: 10) {
-            PersonAvatar(person: sender)
+            if mine { Spacer(minLength: 40) }
+            if !mine { PersonAvatar(person: sender) }
             VStack(alignment: .leading, spacing: messageHeaderSpacing) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(sender.name).font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
@@ -577,7 +611,8 @@ struct MessageRow: View {
                     }
                 }
             }
-            Spacer(minLength: 0)
+            if mine { PersonAvatar(person: sender) }
+            if !mine { Spacer(minLength: 40) }
         }
         #if os(macOS)
         // Desktop messages get room to breathe; the iPhone keeps its compact rows.

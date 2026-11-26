@@ -7,7 +7,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("autopilotAdministrationOrigin") private var autopilotAdministrationOrigin = ""
     @AppStorage("appearance") private var appearance = AppearancePreference.system.rawValue
-    @AppStorage(AppMode.chatPreference) private var showChat = false
+    @AppStorage(AppMode.chatPreference) private var showChat = true
     @AppStorage(AppMode.agentsPreference) private var showAgents = false
     @AppStorage(AppMode.contextPreference) private var showContext = false
     @State private var showWorkspaceManagement = false

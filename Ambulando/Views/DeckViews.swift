@@ -365,6 +365,7 @@ struct DeckInboxCard: View {
             if let scope = model.directMessageCreationScope { newDirectScope = scope; return }
             if let onNewThread { onNewThread(); return }
             #if os(macOS)
+            model.threadCreationFromChat = false
             model.composingThread = true
             #else
             composingThread = true

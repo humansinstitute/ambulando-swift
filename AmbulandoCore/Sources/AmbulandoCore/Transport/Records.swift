@@ -140,7 +140,7 @@ public struct MessageRecord: Sendable, Equatable, Identifiable {
         threadId = (dto.owning_thread_id ?? dto.thread_id)?.lowercased(); threadSourceId = dto.thread_source_message_id?.lowercased()
         body = dto.body ?? ""; senderNpub = dto.sender_npub; senderLabel = dto.created_by_actor_label; clientRequestId = dto.client_request_id
         createdAt = dto.created_at ?? ""; updatedAt = dto.updated_at ?? createdAt; rowVersion = dto.row_version ?? 0
-        deleted = dto.record_state == "deleted"; self.raw = raw
+        deleted = ["deleted", "access_removed", "revoked"].contains(dto.record_state ?? "") || (((try? JSONSerialization.jsonObject(with: raw)) as? [String: Any])?["deleted_at"] as? String != nil); self.raw = raw
     }
 
     public init(workspaceId: String, id: String, channelId: String, threadId: String? = nil, threadSourceId: String? = nil, body: String,
@@ -183,7 +183,7 @@ public struct ThreadRecord: Sendable, Equatable, Identifiable {
         guard UUID(uuidString: dto.id) != nil, UUID(uuidString: dto.channel_id) != nil else { throw TowerError.malformed("thread") }
         workspaceId = dto.workspace_id.lowercased(); id = dto.id.lowercased(); channelId = dto.channel_id.lowercased()
         sourceMessageId = dto.source_message_id?.lowercased(); title = dto.title; latest = dto.latest
-        archived = dto.record_state == "archived"; deleted = dto.record_state == "deleted"
+        archived = dto.record_state == "archived"; deleted = ["deleted", "access_removed", "revoked"].contains(dto.record_state ?? "") || (((try? JSONSerialization.jsonObject(with: raw)) as? [String: Any])?["deleted_at"] as? String != nil)
         rowVersion = dto.row_version ?? 0; updatedAt = dto.updated_at ?? ""; self.raw = raw
     }
 

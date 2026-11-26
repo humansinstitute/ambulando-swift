@@ -115,6 +115,25 @@ enum SearchIndex {
         """)
     }
 
+    static func installThreadTitles(_ db: SQLiteConnection) throws {
+        let exists = try db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'search_index'")
+        guard try exists.step() else { return }
+        try db.execute("""
+        UPDATE messages SET deleted = 1 WHERE json_valid(raw) AND (json_extract(raw, '$.record_state') IN ('deleted', 'access_removed', 'revoked') OR json_extract(raw, '$.deleted_at') IS NOT NULL);
+        UPDATE threads SET deleted = 1 WHERE json_valid(raw) AND (json_extract(raw, '$.record_state') IN ('deleted', 'access_removed', 'revoked') OR json_extract(raw, '$.deleted_at') IS NOT NULL);
+        CREATE TRIGGER IF NOT EXISTS search_threads_ai AFTER INSERT ON threads WHEN new.deleted = 0 BEGIN
+          INSERT INTO search_index(workspace_id, kind, record_id, title, body) VALUES(new.workspace_id, 'thread', new.id, coalesce(new.title, ''), ''); END;
+        CREATE TRIGGER IF NOT EXISTS search_threads_au AFTER UPDATE ON threads BEGIN
+          DELETE FROM search_index WHERE workspace_id = old.workspace_id AND kind = 'thread' AND record_id = old.id;
+          INSERT INTO search_index(workspace_id, kind, record_id, title, body) SELECT new.workspace_id, 'thread', new.id, coalesce(new.title, ''), '' WHERE new.deleted = 0; END;
+        CREATE TRIGGER IF NOT EXISTS search_threads_ad AFTER DELETE ON threads BEGIN
+          DELETE FROM search_index WHERE workspace_id = old.workspace_id AND kind = 'thread' AND record_id = old.id; END;
+        DELETE FROM search_index WHERE kind = 'thread';
+        INSERT INTO search_index(workspace_id, kind, record_id, title, body)
+          SELECT workspace_id, 'thread', id, coalesce(title, ''), '' FROM threads WHERE deleted = 0;
+        """)
+    }
+
     /// FTS5 query from user text: each word is a quoted prefix term, so punctuation cannot inject syntax.
     static func ftsQuery(_ text: String) -> String? {
         let words = text.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init).filter { !$0.isEmpty }.prefix(8)
@@ -758,7 +777,7 @@ extension StoreReader {
         guard trimmed.count >= 2 else { return [] }
         var hits: [(kind: String, id: String)] = []
         if hasFTS, let query = SearchIndex.ftsQuery(trimmed) {
-            let s = try db.prepare("SELECT kind, record_id FROM search_index WHERE search_index MATCH ? AND workspace_id = ? ORDER BY rank LIMIT ?")
+            let s = try db.prepare("SELECT kind, record_id FROM search_index WHERE search_index MATCH ? AND workspace_id = ? AND kind <> 'thread' ORDER BY rank LIMIT ?")
             try s.bind([.text(query), .text(workspaceId), .int(Int64(limit))])
             while try s.step() { hits.append((s.text(0)!, s.text(1)!)) }
         } else {

@@ -12,6 +12,15 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Chat conversation inbox (Mac source build 130)
+
+Chat adds a compact conversation inbox, combined All/Unread/Mine filters and local
+SQLite search across titles and replies, including quoted phrases and title/body
+fields. Inbox results open the existing reader inline at the matching message;
+Deck and explicit links retain their focused presentation. Saved navigation choices
+are preserved. See [behavior, coverage and validation limits](docs/chat-inbox.md).
+Source delivery is separate from installation and live-account acceptance.
+
 ## Compact Mac navigation (source build 123)
 
 The Mac section strip shows small icons beside their names on one line, with

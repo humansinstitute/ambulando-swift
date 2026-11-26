@@ -10,7 +10,7 @@ struct MacWorkspaceShell: View {
     @Environment(MacUI.self) private var ui
     @Environment(\.openWindow) private var openWindow
     @SceneStorage("shell.tab") private var storedMode = AppMode.chat.rawValue
-    @AppStorage(AppMode.chatPreference) private var showChat = false
+    @AppStorage(AppMode.chatPreference) private var showChat = true
     @AppStorage(AppMode.agentsPreference) private var showAgents = false
     @AppStorage(AppMode.contextPreference) private var showContext = false
 

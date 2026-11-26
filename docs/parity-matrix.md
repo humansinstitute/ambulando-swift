@@ -167,3 +167,13 @@ of saved recovery drafts. Restore preserves current work as recoverable history 
 to publish. Comparison shows full versions rather than a line diff. PDF uses A4 pagination and the bundled renderer;
 unsupported/missing images fail explicitly. See [document actions and export limits](document-actions.md).
 Source/build checks are separate from installation and real-account acceptance; Android remains deferred.
+
+
+## Chat inbox and indexed conversation search (Mac source 130)
+
+Mac source adds the conversation inbox and inline thread reader described in
+[Chat inbox](chat-inbox.md). Android is the primary parallel delivery surface.
+Web/iPhone parity remains pending approved nightly catch-up; shared Swift compile
+checks do not establish iPhone delivery. Offline coverage is cache-bound, title
+metadata is capped by the existing listing, and dense Markdown-page responsiveness
+remains an explicit acceptance gap. No backend or shared-contract change is implied.

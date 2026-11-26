@@ -137,6 +137,8 @@ final class AppModel {
     }
     /// Mac: the New thread composer is open over the current section (a window-filling modal, like the focused thread).
     var composingThread = false
+    var threadCreationFromChat = false
+    var chatCreatedThread: ThreadFocus?
     /// Mac recovery: keep the saved conversation available without mounting its content during startup.
     /// This is presentation state only; the persisted route and every composer draft remain untouched.
     var restoredThread: ThreadFocus?

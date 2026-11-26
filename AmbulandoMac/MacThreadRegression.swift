@@ -83,6 +83,9 @@ enum MacThreadRegression {
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacChatVisibilityCheck") {
                 try await chatVisibilityCheck(window, model: model); fflush(stdout); exit(0)
             }
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacConversationInboxCheck") {
+                try await conversationInboxCheck(window, model: model); fflush(stdout); exit(0)
+            }
             // Existing interaction scenarios explicitly exercise the optional Chat button.
             UserDefaults.standard.set(true, forKey: AppMode.chatPreference)
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacNavigationStripCheck") {
@@ -1113,7 +1116,8 @@ enum MacThreadRegression {
         }
         let defaults = UserDefaults.standard
         let resume = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacChatVisibilityResume")
-        try require(defaults.bool(forKey: AppMode.chatPreference) == resume, "default hidden / saved ON survives process relaunch")
+        if !resume { defaults.set(false, forKey: AppMode.chatPreference); await settle() }
+        try require(defaults.bool(forKey: AppMode.chatPreference) == resume, "explicit saved OFF / saved ON survives process relaunch")
         try require((find(window, "section.chat") != nil) == resume, "actual navigation reflects launch preference")
         try require(menuHasChat() == resume, "Go menu reflects launch preference")
         if resume {
@@ -1151,6 +1155,8 @@ enum MacThreadRegression {
             await settle()
             try require(model.mode == .chat, "restored Chat button accepts real clicks at narrow/wide widths")
         }
+        model.chatPath = [.channel(workspaceId: FixtureTower.studio, channelId: FixtureTower.generalChannel)]
+        await settle()
         try type(window, "Chat visibility retained draft")
         await settle()
         defaults.set(false, forKey: AppMode.chatPreference)
@@ -1179,7 +1185,7 @@ enum MacThreadRegression {
         try require(defaults.bool(forKey: AppMode.chatPreference), "Settings restores ON after hidden conversation")
         defaults.synchronize()
         settings.orderOut(nil)
-        print("PASS Chat visibility: default hidden, actual Settings switch, narrow/wide mouse clicks, current channel draft, explicit thread entry and retained reply; ON saved for relaunch")
+        print("PASS Chat visibility: explicit saved hidden, actual Settings switch, narrow/wide mouse clicks, current channel draft, explicit thread entry and retained reply; ON saved for relaunch")
     }
 
     static func navigationStripCheck(_ window: NSWindow, model: AppModel) async throws {

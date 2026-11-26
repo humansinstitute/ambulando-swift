@@ -60,6 +60,27 @@ extension WorkspaceSync {
         let threads = try await api.threads(workspaceId: workspace.id, appNpub: workspace.appNpub, channelId: channelId)
         try Task.checkCancellation()
         try await store.writer.upsertThreads(workspaceId: workspace.id, threads.threads)
+        if fromStart {
+            // The catalogue is capped; explicit history download also refreshes metadata for older known threads.
+            // Sequential reads bound concurrency, and the existing job cancellation/errors remain authoritative.
+            let listed = Set(threads.threads.map(\.id))
+            for id in try await store.reader.cachedThreadIds(workspaceId: workspace.id, channelId: channelId) where !listed.contains(id) {
+                try Task.checkCancellation()
+                do {
+                    let record = try await api.thread(workspaceId: workspace.id, appNpub: workspace.appNpub, threadId: id)
+                    guard record.id == id, record.workspaceId == workspace.id, record.channelId == channelId else {
+                        throw TowerError.malformed("thread metadata identity")
+                    }
+                    try Task.checkCancellation()
+                    try await store.writer.upsertThreads(workspaceId: workspace.id, [record])
+                } catch TowerError.http(let status, let code, _) where (status == 403 || status == 404)
+                    && ["thread_not_found", "forbidden", "not_found", "access_denied"].contains(code ?? "") {
+                    // An authenticated record denial removes only this thread's cached content, through the
+                    // existing live-tombstone transaction. Drafts, pending sends and foreign-owned rows survive.
+                    _ = try await store.writer.applyTombstones(workspaceId: workspace.id, [.thread(id)])
+                }
+            }
+        }
     }
 
     /// Opening a thread fetches that thread's messages directly (user priority), independent of channel catch-up.

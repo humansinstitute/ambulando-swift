@@ -312,7 +312,7 @@ struct HTMLArtefactReviewView: View {
                     Button(label) {
                         selectedVersionId = thread.originVersionId == payload?.currentVersionId ? nil : thread.originVersionId
                     }
-                    .buttonStyle(.link)
+                    .artefactReviewLinkStyle()
                     .font(.amb(.caption2))
                 }
             }
@@ -329,7 +329,7 @@ struct HTMLArtefactReviewView: View {
                             let next = (focusThreadNonce?.1 ?? 0) + 1
                             focusThreadNonce = (root.id, next)
                         }
-                        .buttonStyle(.link)
+                        .artefactReviewLinkStyle()
                         .font(.amb(.caption2))
                     } else if matched == false {
                         Text("Target detached in v\(viewedVersionNumber)")
@@ -358,18 +358,18 @@ struct HTMLArtefactReviewView: View {
                 if root.canResolve {
                     Button(root.isResolved ? "Reopen" : "Resolve") {
                         Task { await toggleResolve(root) }
-                    }.buttonStyle(.link).font(.amb(.caption)).disabled(commentsBusy)
+                    }.artefactReviewLinkStyle().font(.amb(.caption)).disabled(commentsBusy)
                 }
                 if root.canEdit && editingCommentId != root.id {
                     Button("Edit") {
                         editingCommentId = root.id
                         editBodyText = root.body
-                    }.buttonStyle(.link).font(.amb(.caption)).disabled(commentsBusy)
+                    }.artefactReviewLinkStyle().font(.amb(.caption)).disabled(commentsBusy)
                 }
                 if root.canDelete {
                     Button("Delete") {
                         Task { await deleteComment(root) }
-                    }.buttonStyle(.link).font(.amb(.caption)).disabled(commentsBusy)
+                    }.artefactReviewLinkStyle().font(.amb(.caption)).disabled(commentsBusy)
                 }
             }
 
@@ -573,7 +573,7 @@ private struct NewCommentComposer: View {
             HStack {
                 Text("Comment on \(target.targetSummary())").font(.amb(.caption).weight(.semibold)).lineLimit(2)
                 Spacer()
-                Button("Clear", action: onCancel).buttonStyle(.link).font(.amb(.caption))
+                Button("Clear", action: onCancel).artefactReviewLinkStyle().font(.amb(.caption))
             }
             TextField("Add feedback…", text: $text, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
@@ -622,5 +622,16 @@ private struct ReplyComposer: View {
         }
         .onAppear { text = initialBody }
         .onChange(of: acceptedNonce) { _, _ in text = "" }
+    }
+}
+
+// LinkButtonStyle is macOS-only; shared artefact controls retain native button interaction on iOS.
+private extension View {
+    @ViewBuilder func artefactReviewLinkStyle() -> some View {
+        #if os(macOS)
+        self.buttonStyle(.link)
+        #else
+        self.buttonStyle(.borderless)
+        #endif
     }
 }

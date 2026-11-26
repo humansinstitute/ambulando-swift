@@ -325,12 +325,15 @@ private struct NewThreadContainer: View {
                 ModalCard(expanded: expanded) {
                     DeckThreadComposer(workspace: workspace, store: store, expanded: $expanded, onCreated: { focus in
                         model.composingThread = false
-                        model.focusThread(focus)
+                        if model.threadCreationFromChat { model.chatCreatedThread = focus }
+                        else { model.focusThread(focus) }
+                        model.threadCreationFromChat = false
                     })
                 }
             }
         }
         .background(ThreadFocusBackdrop { model.composingThread = false })
+        .onDisappear { model.threadCreationFromChat = false }
         .environment(\.openURL, OpenURLAction { model.browser.handleLink($0) })
     }
 }
@@ -464,7 +467,7 @@ private struct ThreadFocusPanel: View {
 /// The web's thread menu (sol `.thread-title-menu`) beside pin, full screen and close: Get it done and Copy message for
 /// the first message, the thread's Autopilot Link and FD Ref, and Delete message for its author, with the same rules as
 /// the message menu, and Rename thread (Tower decides who may rename). Archiving a thread stays on the web.
-private struct ThreadHeaderMenu: View {
+struct ThreadHeaderMenu: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openURL) private var openURL
     let context: ThreadMenuContext?

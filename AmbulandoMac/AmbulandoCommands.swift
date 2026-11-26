@@ -6,7 +6,7 @@ struct AmbulandoCommands: Commands {
     let model: AppModel
     let ui: MacUI
     private let textScale = TextScale.shared
-    @AppStorage(AppMode.chatPreference) private var showChat = false
+    @AppStorage(AppMode.chatPreference) private var showChat = true
     @AppStorage(AppMode.agentsPreference) private var showAgents = false
     @AppStorage(AppMode.contextPreference) private var showContext = false
 

@@ -60,7 +60,7 @@ public struct ConnectionRecord: Sendable, Equatable, Identifiable, Codable {
 }
 
 enum Schema {
-    static let version = 10
+    static let version = 11
 
     static func migrate(_ db: SQLiteConnection) throws {
         let current = try db.userVersion
@@ -156,6 +156,7 @@ enum Schema {
                 END;
                 """)
             }
+            if current < 11 { try SearchIndex.installThreadTitles(db) }
             try db.execute("PRAGMA user_version = \(version)")
         }
     }

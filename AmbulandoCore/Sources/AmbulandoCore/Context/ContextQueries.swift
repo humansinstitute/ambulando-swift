@@ -115,19 +115,19 @@ extension StoreReader {
         ),
         stats AS (
           SELECT ids.id AS id,
-            (SELECT COUNT(*) FROM messages m WHERE m.workspace_id = ?1 AND m.thread_id = ids.id AND m.deleted = 0) AS total,
-            (SELECT MAX(m.created_at) FROM messages m WHERE m.workspace_id = ?1 AND m.thread_id = ids.id AND m.deleted = 0) AS last_at
+            (SELECT COUNT(*) FROM messages m WHERE m.workspace_id = ?1 AND (m.thread_id = ids.id OR EXISTS (SELECT 1 FROM thread_membership tm WHERE tm.workspace_id = m.workspace_id AND tm.thread_id = ids.id AND tm.message_id = m.id)) AND m.deleted = 0) AS total,
+            (SELECT MAX(m.created_at) FROM messages m WHERE m.workspace_id = ?1 AND (m.thread_id = ids.id OR EXISTS (SELECT 1 FROM thread_membership tm WHERE tm.workspace_id = m.workspace_id AND tm.thread_id = ids.id AND tm.message_id = m.id)) AND m.deleted = 0) AS last_at
           FROM ids
         )
-        SELECT stats.id, t.title, t.archived, stats.total, stats.last_at,
-          (SELECT body FROM messages m WHERE m.workspace_id = ?1 AND m.thread_id = stats.id AND m.deleted = 0 ORDER BY created_at, id LIMIT 1),
-          (SELECT COALESCE(sender_label, sender_npub) FROM messages m WHERE m.workspace_id = ?1 AND m.thread_id = stats.id AND m.deleted = 0 ORDER BY created_at, id LIMIT 1),
-          (SELECT body FROM messages m WHERE m.workspace_id = ?1 AND m.thread_id = stats.id AND m.deleted = 0 ORDER BY created_at DESC, id DESC LIMIT 1),
-          (SELECT sender_npub FROM messages m WHERE m.workspace_id = ?1 AND m.thread_id = stats.id AND m.deleted = 0 ORDER BY created_at DESC, id DESC LIMIT 1),
-          (SELECT sender_npub FROM messages m WHERE m.workspace_id = ?1 AND m.thread_id = stats.id AND m.deleted = 0 ORDER BY created_at, id LIMIT 1)
+        SELECT stats.id, t.title, t.archived, stats.total, COALESCE(stats.last_at, t.latest, t.updated_at),
+          (SELECT body FROM messages m WHERE m.workspace_id = ?1 AND (m.thread_id = stats.id OR EXISTS (SELECT 1 FROM thread_membership tm WHERE tm.workspace_id = m.workspace_id AND tm.thread_id = stats.id AND tm.message_id = m.id)) AND m.deleted = 0 ORDER BY created_at, id LIMIT 1),
+          (SELECT COALESCE(sender_label, sender_npub) FROM messages m WHERE m.workspace_id = ?1 AND (m.thread_id = stats.id OR EXISTS (SELECT 1 FROM thread_membership tm WHERE tm.workspace_id = m.workspace_id AND tm.thread_id = stats.id AND tm.message_id = m.id)) AND m.deleted = 0 ORDER BY created_at, id LIMIT 1),
+          (SELECT body FROM messages m WHERE m.workspace_id = ?1 AND (m.thread_id = stats.id OR EXISTS (SELECT 1 FROM thread_membership tm WHERE tm.workspace_id = m.workspace_id AND tm.thread_id = stats.id AND tm.message_id = m.id)) AND m.deleted = 0 ORDER BY created_at DESC, id DESC LIMIT 1),
+          (SELECT sender_npub FROM messages m WHERE m.workspace_id = ?1 AND (m.thread_id = stats.id OR EXISTS (SELECT 1 FROM thread_membership tm WHERE tm.workspace_id = m.workspace_id AND tm.thread_id = stats.id AND tm.message_id = m.id)) AND m.deleted = 0 ORDER BY created_at DESC, id DESC LIMIT 1),
+          (SELECT sender_npub FROM messages m WHERE m.workspace_id = ?1 AND (m.thread_id = stats.id OR EXISTS (SELECT 1 FROM thread_membership tm WHERE tm.workspace_id = m.workspace_id AND tm.thread_id = stats.id AND tm.message_id = m.id)) AND m.deleted = 0 ORDER BY created_at, id LIMIT 1)
         FROM stats LEFT JOIN threads t ON t.workspace_id = ?1 AND t.id = stats.id
-        WHERE stats.total >= ?4
-        ORDER BY stats.last_at DESC, stats.id LIMIT ?3
+        WHERE stats.total >= ?4 AND coalesce(t.deleted, 0) = 0
+        ORDER BY COALESCE(stats.last_at, t.latest, t.updated_at) DESC, stats.id LIMIT ?3
         """)
         try s.bind([.text(workspaceId), .text(channelId), .int(Int64(limit)), .int(Int64(minimumMessages))])
         var rows: [ThreadSummary] = []
