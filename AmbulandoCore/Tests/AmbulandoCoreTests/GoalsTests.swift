@@ -237,7 +237,7 @@ import Testing
 
     static func members(workspace: String) -> [MemberRecord] {
         [MemberRecord(workspaceId: workspace, actorId: ownerActor, npub: owner, kind: "human", displayName: "Pete"),
-         MemberRecord(workspaceId: workspace, actorId: agentActor, npub: "npub1" + String(repeating: "p", count: 58), kind: "agent", displayName: "Rick"),
+         MemberRecord(workspaceId: workspace, actorId: agentActor, npub: "npub1" + String(repeating: "p", count: 58), kind: "agent", displayName: "Agent"),
          MemberRecord(workspaceId: workspace, actorId: otherActor, npub: "npub1" + String(repeating: "z", count: 58), kind: "human", displayName: "Sam")]
     }
 
@@ -335,13 +335,13 @@ import Testing
         #expect(try Goal.parse(edited.encode()) == edited)
     }
 
-    /// Bytes the JS agent tool really wrote to the live Goals channel (archived, three checkpoints, one reached).
+    /// Canonical bytes as the JS agent tool writes them (archived, three checkpoints, one reached).
     @Test func agentWrittenLiveGoalOpensOnMac() throws {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("docs/fixtures/goals/agent-written-live-v1.json")
+            .appendingPathComponent("docs/fixtures/goals/agent-written-v1.json")
         let bytes = try Data(contentsOf: url)
         let goal = try Goal.parse(bytes)
-        #expect(goal.status == .archived && goal.checkpoints.map(\.id) == ["cp-a", "cp-b", "cp-c"] && goal.checkpoints[0].reached && goal.startDate == "2026-11-26")
+        #expect(goal.status == .archived && goal.checkpoints.map(\.id) == ["cp-a", "cp-b", "cp-c"] && goal.checkpoints[0].reached && goal.startDate == "2027-03-01")
         #expect(String(decoding: goal.encode(), as: UTF8.self) == String(decoding: bytes, as: UTF8.self))
         #expect(throws: GoalError.self) { try GoalEdit.setName(expected: goal.name, value: "x").apply(to: goal) }
         #expect(try GoalEdit.setStatus(expected: .archived, value: .active).apply(to: goal).checkpoints == goal.checkpoints)
@@ -375,8 +375,8 @@ import Testing
 /// The wire path through `TowerAPI` against Tower's response shapes as seen live (a File read carries
 /// `current_version: null` plus `current_version_id`; versions come from the list route).
 @Suite struct GoalWireTests {
-    static let workspace = "2e5caefd-dd65-45d2-b747-ee874e8e5fc9", channel = "de618067-bf70-47d5-8cd7-8b40a40ba486"
-    static let file = "3e82ab7b-98f5-47f4-ad87-4657799429c5", head = "ada5aa93-d07d-4988-96ca-85f1f547ebe5", app = "npub1hd37reqgfcnz3pvzj4grknd2nkzc94p9ercmunrxx22razr2rfxsw6dns5"
+    static let workspace = "aaaaaaaa-0000-4000-8000-000000000001", channel = "bbbbbbbb-0000-4000-8000-000000000001"
+    static let file = "cccccccc-0000-4000-8000-000000000001", head = "dddddddd-0000-4000-8000-000000000001", app = "npub1appexample"
 
     final class Tower: @unchecked Sendable {
         let lock = NSLock()
@@ -384,6 +384,8 @@ import Testing
         var saveStatus = 201
         var recordedHash: String?
         var rowHash: String?
+        /// Live soft delete shape: the row stays `record_state: active` and gains `deleted_at`.
+        var deletedAt: String?
         var uploaded: Data?
         var completed = false
         init(_ goal: Goal) { bytes = goal.encode() }
@@ -391,7 +393,7 @@ import Testing
         func fileRow() -> [String: Any] {
             ["id": GoalWireTests.file, "workspace_id": GoalWireTests.workspace, "channel_id": GoalWireTests.channel, "current_version_id": GoalWireTests.head,
              "display_name": "g.goal.json", "content_type": Goal.mime, "metadata": ["goal": ["schema_version": 1]], "row_version": 3, "record_state": "active",
-             "current_version": NSNull(), "created_at": "2026-11-26T07:30:00.000Z", "updated_at": "2026-11-26T07:30:00.000Z"]
+             "current_version": NSNull(), "deleted_at": deletedAt as Any? ?? NSNull(), "created_at": "2026-11-26T07:30:00.000Z", "updated_at": "2026-11-26T07:30:00.000Z"]
         }
 
         func handle(_ request: URLRequest) throws -> (Int, Any) {
@@ -443,6 +445,15 @@ import Testing
         let doc = try await api.readGoal(workspaceId: Self.workspace, appNpub: Self.app, file: files[0])
         #expect(doc.versionId == Self.head && doc.goal.name == "Ship the beta")
         #expect(try await api.readGoal(workspaceId: Self.workspace, appNpub: Self.app, fileId: Self.file).goal == doc.goal)
+    }
+
+    /// Tower's soft delete leaves `record_state: active` and sets `deleted_at`; such a goal must vanish from lists and refuse reads.
+    @Test func aSoftDeletedGoalIsNotAnActiveGoal() async throws {
+        let tower = Tower(try GoalsTests.goal())
+        tower.lock.withLock { tower.deletedAt = "2026-11-26T08:00:00.000Z" }
+        let api = try await Self.api(tower)
+        #expect(try await api.goalFiles(workspaceId: Self.workspace, appNpub: Self.app, channelId: Self.channel).isEmpty)
+        await #expect(throws: GoalError.self) { try await api.readGoal(workspaceId: Self.workspace, appNpub: Self.app, fileId: Self.file) }
     }
 
     @Test func aVersionWhoseBytesDoNotMatchItsHashIsRefused() async throws {

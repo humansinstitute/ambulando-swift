@@ -223,5 +223,6 @@ export function isOwnedChannel(channel, owner) {
 
 export function isGoalFile(file) {
   const type = String(file?.content_type ?? file?.current_version?.content_type ?? '').split(';')[0].trim().toLowerCase();
-  return !file?.archived_at && file?.record_state !== 'deleted' && file?.record_state !== 'archived' && type === MIME && file?.metadata?.goal?.schema_version === VERSION;
+  // A soft-deleted File keeps record_state=active and gets deleted_at, so any non-null deleted_at is a tombstone.
+  return !file?.archived_at && (file?.deleted_at ?? null) === null && file?.record_state !== 'deleted' && file?.record_state !== 'archived' && type === MIME && file?.metadata?.goal?.schema_version === VERSION;
 }

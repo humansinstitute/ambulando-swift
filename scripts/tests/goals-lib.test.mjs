@@ -119,6 +119,9 @@ test('only current goal files count', () => {
   expect(lib.isGoalFile({ ...file, content_type: 'application/json' })).toBe(false);
   expect(lib.isGoalFile({ ...file, metadata: { goal: { schema_version: 2 } } })).toBe(false);
   expect(lib.isGoalFile({ ...file, record_state: 'deleted' })).toBe(false);
+  // Live soft delete: record_state stays active, deleted_at is set.
+  expect(lib.isGoalFile({ ...file, record_state: 'active', deleted_at: '2026-11-26T08:00:00.000Z' })).toBe(false);
+  expect(lib.isGoalFile({ ...file, record_state: 'active', deleted_at: null })).toBe(true);
 });
 
 // The goal as Android writes it, shared with AmbulandoCore's GoalGoldenFixtureTests.

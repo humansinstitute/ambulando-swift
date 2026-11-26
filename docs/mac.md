@@ -16,14 +16,14 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (135) |
+| Version | 0.1.0 (136) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
 | Data | `~/Library/Containers/studio.otherstuff.ambulando.mac/` (kept when the app is replaced or updated) |
 | Keychain | Login keychain, services `studio.otherstuff.ambulando.mac.identity-vault.v1`, `….session.v1` |
 
-Source build 135 adds personal [Goals](goals.md): a Goals row under Home in the sidebar, a Goals card on Deck, a goal view with an editable checkpoint timeline and associated work, and “Add to goal” on tasks, documents, files and conversations. This is pushed-source functionality; installation and live use on the MacBook need separate verification.
+Source build 136 hardens Goals: a soft-deleted goal file (`deleted_at` set) is no longer treated as live, and the agent helper checks every newly linked record against its own source route before saving. Source build 135 adds personal [Goals](goals.md): a Goals row under Home in the sidebar, a Goals card on Deck, a goal view with an editable checkpoint timeline and associated work, and “Add to goal” on tasks, documents, files and conversations. This is pushed-source functionality; installation and live use on the MacBook need separate verification.
 
 Source build 134 adds a native searchable artefact picker from the conversation header or the workspace + button and compact, scrollable tabs. It preserves retained editors and pinned revisions. Source build 133 corrects context to structured dispatch metadata; build 132 adds the [Mac thread artefact workspace](mac-thread-artefacts.md), with retained tabs and save-before-send exact revision context. This is pushed-source functionality; installation and authenticated agent receipt require separate verification.
 

@@ -1,4 +1,4 @@
-# Goals (Mac source build 135)
+# Goals (Mac source build 136)
 
 A personal goal has a name, a description, optional date-only start and target dates, an ordered timeline of
 checkpoints and links to existing chats, tasks, documents and files. Progress is "checkpoints reached"; nothing is
@@ -37,8 +37,8 @@ Goals use existing generic Tower contracts only. NStack gets no Goals endpoint o
 `status` is `active|completed|archived`; link `type` is `chat|task|doc|file` (a chat link's `record_id` is the thread id).
 Dates are `yyyy-MM-dd`, validated, target not before start. Limits (UTF-16 units, as Android counts): name 120,
 description 2000, checkpoint title 120 / description 500, 100 checkpoints, 500 links, 256 KiB. Shared fixtures:
-`docs/fixtures/goals/android-written-v1.json` (Android shape with unknown fields) and `agent-written-live-v1.json`
-(bytes the agent tool wrote to the live channel); both are read by the Swift and JS tests.
+`docs/fixtures/goals/android-written-v1.json` (Android shape with unknown fields) and `agent-written-v1.json`
+(canonical bytes the agent tool writes); both are read by the Swift and JS tests.
 
 ## Access
 
@@ -85,19 +85,25 @@ Ops (each states what it expects to replace): `set_name`, `set_description`, `se
 (`expected`,`value`); `set_status` (`expected`,`value`); `add_checkpoint` (`checkpoint{id?,title,date?,description?}`,`after?`);
 `update_checkpoint` (`id`,`expected{title,date,description}`,`value{…}`); `set_reached` (`id`,`expected`,`reached`);
 `remove_checkpoint`; `move_checkpoint` (`id`,`to_index`); `link` / `unlink` (`type`,`record_id`,`channel_id?`).
+Before saving, every *newly* linked target is read from its own typed route (`threads`, `tasks`, `docs`, `files`) as the
+signing identity: it must be readable, not deleted or archived, in this workspace, and its authoritative channel must
+equal a supplied `channel_id`. A denied, missing, foreign or mismatched target refuses the whole edit (exit 1) with one
+generic message that carries nothing from the record; nothing is uploaded. Links already on the goal are not re-checked,
+and `unlink` never needs source access. A soft-deleted goal file (`deleted_at` set while `record_state` is still
+`active`) is not a goal on any client.
 Exit 3 means a conflict (expectation no longer holds, or the goal is archived): re-read with `show`, decide, retry.
 Read the goal first and send what you saw as `expected`; never copy a version id to force a write.
 
-## Verification (Mac source build 135)
+## Verification (Mac source build 135; build 136 changes noted)
 
-- `swift test --filter Goal` (AmbulandoCore): 28 tests, pass. Covers format, strict typing, UTF-16 limits, edits, the
+- `swift test --filter Goal` (AmbulandoCore): 29 tests, pass (build 136 adds the soft-delete wire test). Covers format, strict typing, UTF-16 limits, edits, the
   compare-and-swap loop against an in-memory File, the grants safety rule, Tower response shapes (including the live
   `current_version: null` File read), 409/403/503/hash-mismatch saves and a locked identity.
-- `bun test scripts/tests/goals-lib.test.mjs`: 11 tests, pass (same fixtures, same canonical bytes as Swift).
-- Live (agent tool as the Rick broker identity, existing channel `de618067…` in the Home scope): grants verify as
+- `bun test scripts/tests`: 20 tests, pass: `goals-lib` (same fixtures, same canonical bytes as Swift) and `goals-ops` (link preflight against a fake Tower client).
+- Live (agent tool as a broker identity holding a grant on an existing owner-private Goals channel): grants verify as
   owner + agent only; create, three checkpoints, two concurrent edits both kept, a stale base refused with 409
   `stale_base_version`, a contradicting edit exits 3 with nothing saved, complete → reopen → archive, and an edit on an
-  archived goal refused. The resulting goal is archived and named "Goals write probe (safe to remove)".
+  archived goal refused. The temporary probe goal was archived and then removed by its operator.
 - Not verified live: the Mac app itself against the live channel as the owner (needs Pete's identity on the MacBook), a
   negative test with an unauthorized member (unit-tested only), and iOS (the iOS SDK is not installed on this build Mac).
 

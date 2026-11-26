@@ -2,10 +2,10 @@
 // Agent operations for Ambulando Goals over existing generic Tower contracts (channels, grants, Files). No keys held:
 // requests are signed by the Autopilot capability broker (`wingman-capability.ts nip98`), as the artefact helpers do.
 // Format and edit rules live in goals-lib.mjs and match the Android and Mac clients. See docs/goals.md.
-import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import * as lib from './goals-lib.mjs';
+import { editGoal, fileName, readGoal as readGoalFile } from './goals-ops.mjs';
 
 const [command, ...rest] = process.argv.slice(2);
 const options = {};
@@ -20,8 +20,6 @@ async function client() {
   c.root = `/api/v4/flightdeck-pg/workspaces/${encodeURIComponent(options.workspace)}`;
   return c;
 }
-
-const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 
 /** Every page of a list route; a full page without a cursor is an error, never "the rest is empty". */
 async function listAll(c, pathname, key) {
@@ -48,22 +46,8 @@ async function findSpace(c, owner) {
   return verdict.safe ? { state: 'ready', channel: { id: found[0].id, name: found[0].name, scope_id: found[0].scope_id }, members } : { state: 'unsafe', reason: verdict.reason, channel_id: found[0].id };
 }
 
-async function readGoal(c, fileId) {
-  const { file } = await c.getFile(fileId);
-  if (!lib.isGoalFile(file)) throw new Error('This file is not a goal.');
-  // Tower returns the current version as an id (the embedded `current_version` is null on a File read), so read the
-  // version list for the head and its hash, then fetch exactly that version's bytes.
-  const history = await c.listVersions(fileId);
-  const versionId = history.current_version_id ?? file.current_version_id;
-  const version = history.versions?.find(v => v.id === versionId);
-  if (!versionId || !version) throw new Error('Goal has no current version.');
-  if (version.size_bytes > lib.MAX_BYTES) throw new Error('This goal is too large to read.');
-  const bytes = await c.readVersionBytes(fileId, versionId);
-  if (version.sha256_hex && version.sha256_hex.toLowerCase() !== sha(bytes)) throw new Error('Goal digest mismatch.');
-  return { file, versionId, goal: lib.parse(bytes) };
-}
+const readGoal = readGoalFile;
 
-const fileName = goal => `${goal.name.replace(/[\u0000-\u001f\u007f/\\]/g, ' ').trim().slice(0, 80) || 'Goal'}.goal.json`;
 const out = value => console.log(JSON.stringify(value, null, 2));
 const summary = g => ({ name: g.name, status: g.status, target_date: g.target_date ?? null, checkpoints_reached: g.checkpoints.filter(c => c.reached).length, checkpoints: g.checkpoints.length, links: g.links.length });
 
@@ -114,18 +98,7 @@ try {
     // [{"op":"set_reached","id":"a","expected":false,"reached":true},{"op":"link","type":"task","record_id":"<uuid>"}]
     need('file', 'ops'); const c = await client();
     const edits = JSON.parse(options.ops); if (!Array.isArray(edits) || !edits.length) throw new Error('--ops must be a non-empty JSON array');
-    const store = {
-      read: async () => { const g = await readGoal(c, options.file); return { versionId: g.versionId, goal: g.goal }; },
-      save: async (base, bytes) => {
-        const objectId = await c.uploadObject({ bytes, contentType: lib.MIME, fileName: fileName(lib.parse(bytes)) });
-        try {
-          const r = await c.createVersion(options.file, { base_version_id: base, storage_object_id: objectId, client_mutation_id: crypto.randomUUID() });
-          const recorded = r?.version?.sha256_hex; if (recorded && recorded.toLowerCase() !== sha(bytes)) throw new Error('Saved goal did not match what was sent; reload to check.');
-          return { saved: r.version.id };
-        } catch (e) { if (e.status === 409 && String(e.code).includes('stale')) return { conflict: true }; throw e; }
-      },
-    };
-    const result = await lib.editWithRetry(store, edits);
+    const result = await editGoal(c, options.workspace, options.file, edits);
     out({ file_id: options.file, version_id: result.versionId, changed: result.changed, goal: result.goal });
   } else throw new Error('Usage: goals.mjs space|setup|list|show|create|edit --workspace <id> … (see docs/goals.md)');
 } catch (error) {

@@ -24,7 +24,9 @@ public enum GoalFiles {
     public static func isGoal(_ file: FileRecord) -> Bool {
         let raw = (try? JSONSerialization.jsonObject(with: file.raw)) as? [String: Any] ?? [:]
         let meta = (raw["metadata"] as? [String: Any])?[metadataKey] as? [String: Any]
-        return !file.archived && raw["record_state"] as? String != "deleted"
+        // A soft-deleted File stays record_state=active with deleted_at set, so any non-null deleted_at is a tombstone.
+        let deletedAt = raw["deleted_at"]
+        return !file.archived && raw["record_state"] as? String != "deleted" && (deletedAt == nil || deletedAt is NSNull)
             && file.contentType?.split(separator: ";").first.map({ $0.trimmingCharacters(in: .whitespaces).lowercased() }) == Goal.mime
             && flexibleInt(meta?["schema_version"]) == Goal.version
     }
