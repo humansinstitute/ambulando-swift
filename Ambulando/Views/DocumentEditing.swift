@@ -63,13 +63,31 @@ final class DocEditorModel: UploadTokenHost {
     private var authorityLost = false
     private var lifecyclePending = false
     private(set) var threadDetached = false
+    private(set) var persistedPublishingHold = false
+    var automaticPublishingHeld: Bool { threadDetached || persistedPublishingHold }
+    private func refreshPublishingHold() async -> Bool {
+        do { persistedPublishingHold = try await store.reader.documentAutomaticPublishingHeld(key: draftKey) }
+        catch { persistedPublishingHold = true; setStatus("Could not verify local recovery hold. Automatic publishing remains paused.", .warning) }
+        return automaticPublishingHeld
+    }
+    private func releasePublishingHoldAfterExplicitSave(expectedGeneration: String?) async {
+        do {
+            _ = try await store.writer.releaseDocumentAutomaticPublishingHold(key: draftKey, expectedGeneration: expectedGeneration)
+            _ = await refreshPublishingHold()
+            if persistedPublishingHold { setStatus("Source saved; newer local recovery remains held for explicit review.", .warning) }
+            startAutosave()
+        } catch { persistedPublishingHold = true; setStatus("Source saved; automatic publishing remains held until local recovery state can be updated.", .warning) }
+    }
     /// A shared detach never flushes to the source. Explicit Save remains available.
     func resumeAfterThreadReattach() { threadDetached = false; startAutosave() }
     func detachFromThread() {
-        threadDetached = true
+        threadDetached = true; persistedPublishingHold = true
         autosave?.cancel(); autosave = nil
+        setStatus("Detached recovery. Automatic publishing is held; review and use explicit Save to source when ready.", .warning)
         Task { [weak self] in
             guard let self else { return }
+            do { try await store.writer.holdDocumentAutomaticPublishing(key: draftKey, renew: true) }
+            catch { setStatus("Detached recovery is held in this editor; its durable hold could not be stored. Keep this editor open and retry saving locally.", .error) }
             _ = await checkpoint(); _ = await persistReview()
         }
     }
@@ -169,6 +187,9 @@ final class DocEditorModel: UploadTokenHost {
             try? await store.writer.saveDocumentReview(journal, key: draftKey)
         }
         restorePreview()
+        if await refreshPublishingHold() {
+            setStatus("Detached recovery. Automatic publishing is held; review and use explicit Save to source when ready.", .warning)
+        }
         loading = false
         if let payload { page?.load(payload) }
     }
@@ -447,7 +468,7 @@ final class DocEditorModel: UploadTokenHost {
     }
 
     private func startAutosave() {
-        guard !threadDetached, scopeActive, active, autosave == nil else { return }
+        guard !automaticPublishingHeld, scopeActive, active, autosave == nil else { return }
         autosave = Task { [weak self] in
             let clock = ContinuousClock()
             var deadline = clock.now.advanced(by: .seconds(60))
@@ -456,7 +477,7 @@ final class DocEditorModel: UploadTokenHost {
                 deadline = deadline.advanced(by: .seconds(60))
                 guard let self, active else { return }
                 await reconcileRemote()
-                if !threadDetached, dirty, !journal.pendingMergedSave, remoteVersion == nil, journal.previewText == nil, !authorityLost, !saving, !takingOver { _ = await save() }
+                if !threadDetached, dirty, !journal.pendingMergedSave, remoteVersion == nil, journal.previewText == nil, !authorityLost, !saving, !takingOver { _ = await save(automatic: true) }
             }
         }
     }
@@ -499,7 +520,7 @@ final class DocEditorModel: UploadTokenHost {
     func flush() async {
         _ = await checkpoint()
         await persistReview()
-        if !threadDetached, dirty, !journal.pendingMergedSave, remoteVersion == nil, journal.previewText == nil, !authorityLost, !saving, !takingOver { _ = await save() }
+        if !threadDetached, dirty, !journal.pendingMergedSave, remoteVersion == nil, journal.previewText == nil, !authorityLost, !saving, !takingOver { _ = await save(automatic: true) }
     }
 
     private func inspectAuthority() async {
@@ -1044,7 +1065,7 @@ final class DocEditorModel: UploadTokenHost {
     /// Capture before comments take focus; save first so the anchor refers to canonical content.
     func commentAnchor(_ selected: DocumentAnchor) async -> DocumentAnchor? {
         if let now = await page?.snapshot() { pageChanged(now) }
-        if dirty, !(await save()) { return nil }
+        if dirty, !(await save(automatic: true)) { return nil }
         guard let cached = try? await store.reader.docBody(workspaceId: workspace.id, docId: doc.id) else { return nil }
         let body = DocumentBody(bytes: cached.bytes, contentType: cached.contentType)
         if let state = body.editorState, DocumentAnchors.selectedText(selected, in: state) == selected.quote {
@@ -1083,6 +1104,10 @@ final class DocEditorModel: UploadTokenHost {
     private func persistSnapshot(state draftState: DocDraft.State) async -> (DocDraft, UInt64)? {
         if pageReady, let now = await page?.snapshot(), now != content { pageChanged(now) }
         guard !closed, let body, let base, dirty else { return nil }
+        if threadDetached {
+            do { try await store.writer.holdDocumentAutomaticPublishing(key: draftKey); persistedPublishingHold = true }
+            catch { setStatus("Local recovery hold could not be stored. Keep this editor open.", .error); return nil }
+        } else { _ = await refreshPublishingHold() }
         let revision = editRevision
         let mode = mode, content = content, original = original, title = title, sourceBytes = sourceBytes
         let identity = (connection.id, workspace.id, doc.id)
@@ -1114,7 +1139,8 @@ final class DocEditorModel: UploadTokenHost {
                   self.base?.sha == base.sha, self.base?.object == base.object else { return nil }
             let draft = DocDraft(connectionId: identity.0, workspaceId: identity.1, docId: identity.2, title: title,
                                  body: bytes.0, contentType: bytes.1, baseRowVersion: base.rowVersion, baseSha256: base.sha,
-                                 baseStorageObjectId: base.object, state: draftState)
+                                 baseStorageObjectId: base.object, state: automaticPublishingHeld ? .recovery : draftState,
+                                 lastError: automaticPublishingHeld ? "Detached recovery; automatic publishing held. Use explicit Save to source." : nil)
             do { try await store.writer.saveDocDraft(draft) } catch {
                 setStatus("Your edits could not be stored on this \(Device.name): \(error.localizedDescription)", .error)
                 return nil
@@ -1125,7 +1151,9 @@ final class DocEditorModel: UploadTokenHost {
     }
 
     /// Saves through Tower (lease, expected version). True when Tower made it the canonical version.
-    func save() async -> Bool {
+    func save(automatic: Bool = false) async -> Bool {
+        let reviewedHold = try? await store.reader.documentPublishingHoldGeneration(key: draftKey)
+        if automatic, await refreshPublishingHold() { return false }
         guard !lifecyclePending else { return false }
         guard scopeActive, !closed, !saving, !takingOver, !reconciling, !permissionDenied, let saver = self.saver else { return false }
         saving = true
@@ -1158,9 +1186,13 @@ final class DocEditorModel: UploadTokenHost {
         }
         guard !UploadToken.contains(in: uploadText) else { setStatus(ComposerUploadError.unresolved.localizedDescription, .warning); return false }
         guard let (draft, submittedRevision) = await persistSnapshot(state: .editing) else {
-            if !dirty { setStatus("No changes to save.", .info) }
+            if !dirty {
+                setStatus("No changes to save.", .info)
+                if !automatic { await releasePublishingHoldAfterExplicitSave(expectedGeneration: reviewedHold) }
+            }
             return !dirty
         }
+        if automatic, await refreshPublishingHold() { return false }
         setStatus("Saving…", .info)
         let result = await saver.save(draft, connection: connection, workspace: workspace, editorSessionId: editorSessionId)
         guard !closed else { return false } // Saver already finished its exact durable snapshot; no retired-model writes.
@@ -1177,7 +1209,10 @@ final class DocEditorModel: UploadTokenHost {
             if dirty {
                 _ = await persistDraft(state: .editing)
                 setStatus("Latest edits saved locally; earlier changes synced.", .info)
-            } else { setStatus("Saved.", .success) }
+            } else {
+                setStatus("Saved.", .success)
+                if !automatic { await releasePublishingHoldAfterExplicitSave(expectedGeneration: reviewedHold) }
+            }
             return !dirty
         case .recovery(_, let message):
             if let fresh = try? await saver.latest(connection, workspace, docId: doc.id) { observeRemote(fresh.doc, fresh.body) }
@@ -1200,12 +1235,14 @@ final class DocEditorModel: UploadTokenHost {
 
     /// Drops the local draft (the user chose the stored version over their unsaved edit).
     func discardDraft() async {
+        let reviewedHold = try? await store.reader.documentPublishingHoldGeneration(key: draftKey)
         debounce?.cancel()
         editRevision &+= 1 // Fence detached encoders already in flight before the explicit discard.
         if let retained = try? await store.reader.docDraft(key: draftKey) {
             _ = try? await store.writer.deleteDocDraft(ifUnchanged: retained)
         }
         dirty = false
+        await releasePublishingHoldAfterExplicitSave(expectedGeneration: reviewedHold)
     }
 
     /// The edit as text, for "Copy my text" when a save could not go through.

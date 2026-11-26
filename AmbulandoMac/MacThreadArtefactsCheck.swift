@@ -61,7 +61,10 @@ extension MacThreadRegression {
         for _ in 0..<50 { if MacThreadArtefacts.testingState != nil { break }; await settle() }
         guard let state = MacThreadArtefacts.testingState else { throw Failure(description: "mounted thread workspace") }
         try require(state.tabs.isEmpty && !state.shown, "zero attachments have no workspace tab bar")
-        try require(find(window, "thread.artefacts.browse") != nil, "zero attachments retain header artefacts icon")
+        try await waitFor(window, "thread.artefacts.browse", "zero attachment header icon")
+        guard let pin = find(window, "pin.toggle"), let artefactsIcon = find(window, "thread.artefacts.browse") else { throw Failure(description: "Pin and artefacts header controls") }
+        try require(abs(frame(of: pin).midY - frame(of: artefactsIcon).midY) < 4 && frame(of: artefactsIcon).minX >= frame(of: pin).maxX - 2,
+            "artefacts icon is beside Pin in the actual outer header at zero")
         try press(window, "thread.artefacts.browse"); await settle()
         guard let picker = window.attachedSheet else { throw Failure(description: "native browser sheet") }
         await settle()
@@ -253,7 +256,13 @@ extension MacThreadRegression {
     }
 
     static func membershipIdle(_ state: MacThreadArtefacts) async throws {
-        for _ in 0..<50 { if !state.busy { await settle(); return }; await settle() }
+        await Task.yield()
+        for _ in 0..<50 {
+            if !state.busy {
+                await settle()
+                if !state.busy { return }
+            } else { await settle() }
+        }
         throw Failure(description: "Membership/editor command did not finish: \(state.failure ?? "pending")")
     }
 
@@ -312,6 +321,22 @@ extension MacThreadRegression {
         try require(fixture.tower.work.doc(docID)?["row_version"] as? Int == before, "detach and flush never publish source")
         let recovery = try await store.reader.docDraft(key: editor.draftKey)
         try require(recovery?.title == "Detached dirty recovery", "detached recovery durable in local store")
+        try require(recovery?.state == .recovery, "detached checkpoint never resets recovery to editing")
+        try require(try await store.reader.documentAutomaticPublishingHeld(key: editor.draftKey), "detached source has durable automatic-publish hold")
+        let cachedDoc = try await store.reader.doc(workspaceId: workspace.id, id: docID)!
+        let globalEditor = DocEditorModel(doc: cachedDoc, workspace: workspace, store: store, connection: connection, app: model)
+        await globalEditor.load(); globalEditor.setActive(true)
+        try require(globalEditor.automaticPublishingHeld && globalEditor.title == "Detached dirty recovery", "global Docs restores held recovery")
+        await globalEditor.flush()
+        try require(!(await globalEditor.save(automatic: true)), "global Docs cannot automatically publish held recovery")
+        let reopenedStore = try LocalStore(directory: URL(fileURLWithPath: store.path).deletingLastPathComponent())
+        let relaunchedEditor = DocEditorModel(doc: cachedDoc, workspace: workspace, store: reopenedStore, connection: connection, app: model)
+        await relaunchedEditor.load()
+        try require(relaunchedEditor.automaticPublishingHeld, "reopened database/editor restores durable hold")
+        await relaunchedEditor.flush()
+        try require(!(await relaunchedEditor.save(automatic: true)), "relaunch cannot automatically publish recovery")
+        try require(fixture.tower.work.doc(docID)?["row_version"] as? Int == before, "global and relaunched automatic entrypoints never publish source")
+        globalEditor.close(); relaunchedEditor.close()
         let withoutDoc = try await state.prepare(target: target)
         let refs = try JSONDecoder().decode(ArtefactChatContext.self, from: withoutDoc ?? Data())
         try require(!refs.open.contains(where: { $0.recordID == docID }), "removed Doc excluded from future Send")
@@ -321,6 +346,16 @@ extension MacThreadRegression {
         try require(!docTab.attached && editor.dirty && editor.threadDetached, "acknowledged re-add keeps dirty recovery held")
         try press(window, "thread.artefacts.recovery.save"); await settle(); try await membershipIdle(state)
         try require(docTab.attached && !editor.dirty && !editor.threadDetached, "explicit source Save verifies and resumes attachment")
+        try require(!(try await store.reader.documentAutomaticPublishingHeld(key: editor.draftKey)), "confirmed explicit source Save releases durable recovery hold")
+        let savedDocVersion = fixture.tower.work.doc(docID)?["row_version"] as? Int
+        _ = try await ThreadArtefactMembershipSync.change(docMember, adding: false, transport: peer)
+        await state.refresh()
+        _ = try await ThreadArtefactMembershipSync.change(docMember, adding: true, transport: peer)
+        await state.refresh(); state.open(kind: "doc", id: docID); try await membershipIdle(state)
+        try press(window, "thread.artefacts.recovery.save"); try await membershipIdle(state)
+        print("CLEAN_RESUME_STATE attached=\(docTab.attached) held=\(editor.automaticPublishingHeld) busy=\(state.busy) failure=\(state.failure ?? "none")")
+        try require(docTab.attached && !editor.automaticPublishingHeld, "clean detached recovery also resumes after explicit verification")
+        try require(fixture.tower.work.doc(docID)?["row_version"] as? Int == savedDocVersion, "clean explicit resume creates no source version")
         let discussed = try await state.prepare(target: target)
         try require(String(decoding: discussed ?? Data(), as: UTF8.self).contains(docID), "reattached clean source usable in discussion")
 

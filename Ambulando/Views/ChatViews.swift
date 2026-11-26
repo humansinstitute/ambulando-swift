@@ -357,6 +357,7 @@ struct ThreadView: View {
 
     #if os(macOS)
     @State private var artefacts = MacThreadArtefacts()
+    @Environment(\.macThreadArtefactsInParentHeader) private var artefactsInParentHeader
     var body: some View {
         MacThreadArtefactLayout(state: artefacts, target: target, workspace: workspace, store: store) { conversation }
     }
@@ -387,10 +388,7 @@ struct ThreadView: View {
                     PinToggleButton(type: .thread, id: thread, workspace: workspace)
                 }
                 #if os(macOS)
-                Button { artefacts.browsing = true } label: { Image(systemName: "square.stack") }
-                    .buttonStyle(.borderless).help("Thread artefacts (\(artefacts.members.count))")
-                    .accessibilityLabel("Thread artefacts (\(artefacts.members.count))")
-                    .accessibilityIdentifier("thread.artefacts.browse").disabled(artefacts.busy)
+                if !artefactsInParentHeader { MacThreadArtefactsButton(state: artefacts) }
                 if !artefacts.shown, artefacts.tabs.contains(where: \.open) {
                     Button("Artefacts", systemImage: "sidebar.right") { artefacts.shown = true }
                         .accessibilityIdentifier("thread.artefacts.reopen")

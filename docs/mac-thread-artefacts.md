@@ -110,7 +110,10 @@ focuses the retained editor without changing its historical revision.
 
 “Remove from thread” removes only the shared association. “Close local view” retains that
 association. Remote removal excludes the record from future Send, holds automatic Doc saving,
-and retains the mounted editor/local recovery. The recovery menu permits viewing it and an
+and retains the mounted editor/local recovery. A separate per-source local recovery hold survives
+checkpoints, ordinary review-journal writes, standalone Docs and database/editor reopen. Automatic
+save and flush recheck it; only a confirmed explicit source Save or deliberate discard releases it.
+Release atomically checks the reviewed hold generation and absence of a newer retained draft. The recovery menu permits viewing it and an
 explicitly labelled source Save; removal itself never calls prepare/flush/publish. An already
 dispatched source write may finish. Re-adding a detached record does not automatically resume
 its recovery's publishing. Open recovery and use “Save to source and resume if attached”:
@@ -135,10 +138,12 @@ Mac137 validation uses synthetic authorized routes and independent stores. This 
 MacBook installation, live account interaction, or iPhone/web UI implementation. Shared core
 remains available to those clients; their membership UI still needs its own parity work.
 
-Mac137 validation passed 28 XCTest cases (including ten membership concurrency/schema/migration
-cases and fifteen outbox cases), 43 Goals/board/context tests, and twenty Goals script tests.
+Mac137 validation passed 33 XCTest cases (including twelve membership concurrency/schema/migration/recovery-hold
+cases, three document-save races and fifteen outbox cases), 43 Goals/board/context tests, and twenty Goals script tests.
 The real AppKit/SwiftUI/WebKit synthetic fixture passed native picker/tab interactions, two-store
 discovery, source Save before Send, hidden exact metadata, dirty remote detach/re-add/explicit
 Save and resume, lazy unreadable and future-schema plain Chat, last removal, frozen request
-preservation and initial-absent legacy migration ordering. Test and universal Release builds
+preservation and initial-absent legacy migration ordering. The expanded fixture also checks actual
+Pin/icon header geometry, held recovery through standalone Docs and database/editor reopen,
+explicit dirty Save, and clean reattachment with no extra source version. Test and universal Release builds
 are 137; this is local synthetic validation, not installation or live MacBook verification.

@@ -309,7 +309,12 @@ struct DocumentView: View {
                 if let openingEditor { await openingEditor.value }
                 if let editor {
                     guard await editor.checkpoint() else { throw ArtefactChatContext.ContextError.unresolved }
-                    if editor.dirty, !(await editor.save()) { throw ArtefactChatContext.ContextError.unresolved }
+                    if editor.dirty || editor.automaticPublishingHeld {
+                        guard await editor.save() else { throw ArtefactChatContext.ContextError.unresolved }
+                    }
+                } else if snapshot.value.draft != nil {
+                    // Do not claim that recovery was saved while it has not been opened for review.
+                    throw ArtefactChatContext.ContextError.unresolved
                 }
             }
             threadTab?.validate = { reference in
@@ -332,7 +337,7 @@ struct DocumentView: View {
                     guard await editor.checkpoint(), editor.remoteVersion == nil, editor.journal.previewText == nil, !editor.showingVersions else {
                         throw ArtefactChatContext.ContextError.unresolved
                     }
-                    if editor.dirty, !(await editor.save()) { throw ArtefactChatContext.ContextError.unresolved }
+                    if editor.dirty, !(await editor.save(automatic: true)) { throw ArtefactChatContext.ContextError.unresolved }
                     guard let saved = editor.localBaseVersion else { throw ArtefactChatContext.ContextError.unresolved }
                     revision = saved
                 } else {

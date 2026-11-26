@@ -59,6 +59,40 @@ private actor MembershipServer {
     let doc = try! ThreadArtefactMember(kind: "doc", id: "aaaaaaaa-0000-4000-8000-000000000001")
     let file = try! ThreadArtefactMember(kind: "file", id: "aaaaaaaa-0000-4000-8000-000000000002")
     func members(_ row: ThreadRecord) throws -> [ThreadArtefactMember]? { try ThreadArtefactMembership.read(ThreadArtefactMembership.metadata(row)) }
+    func testDurablePublishingHoldSurvivesStaleReviewAndDatabaseReopen() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LocalStore(directory: directory)
+        let key = "connection:workspace:doc", other = "connection:workspace:other"
+        let generation = try await store.writer.holdDocumentAutomaticPublishing(key: key)
+        try await store.writer.saveDocumentReview(DocumentReviewJournal(), key: key)
+        let reopened = try LocalStore(directory: directory)
+        let held = try await reopened.reader.documentAutomaticPublishingHeld(key: key)
+        let unrelated = try await reopened.reader.documentAutomaticPublishingHeld(key: other)
+        XCTAssertTrue(held); XCTAssertFalse(unrelated)
+        try await reopened.writer.releaseDocumentAutomaticPublishingHold(key: key, expectedGeneration: generation)
+        let released = try await store.reader.documentAutomaticPublishingHeld(key: key)
+        XCTAssertFalse(released)
+    }
+    func testAtomicPublishingHoldReleasePreservesNewerDraftAndGeneration() async throws {
+        let h = try await ChatHarness.make()
+        let draft = DocDraft(connectionId: h.connection.id, workspaceId: h.workspace.id, docId: doc.id, title: "Newer recovery",
+            body: Data("recovery".utf8), contentType: "text/plain", baseRowVersion: 1, baseSha256: String(repeating: "a", count: 64),
+            baseStorageObjectId: UUID().uuidString.lowercased(), state: .recovery)
+        let first = try await h.store.writer.holdDocumentAutomaticPublishing(key: draft.key, renew: true)
+        try await h.store.writer.saveDocDraft(draft)
+        let retained = try await h.store.writer.releaseDocumentAutomaticPublishingHold(key: draft.key, expectedGeneration: first)
+        XCTAssertFalse(retained)
+        try await h.store.writer.deleteDocDraft(key: draft.key, workspaceId: h.workspace.id)
+        let second = try await h.store.writer.holdDocumentAutomaticPublishing(key: draft.key, renew: true)
+        XCTAssertNotEqual(first, second)
+        let stale = try await h.store.writer.releaseDocumentAutomaticPublishingHold(key: draft.key, expectedGeneration: first)
+        XCTAssertFalse(stale)
+        let held = try await h.store.reader.documentAutomaticPublishingHeld(key: draft.key)
+        XCTAssertTrue(held)
+        let released = try await h.store.writer.releaseDocumentAutomaticPublishingHold(key: draft.key, expectedGeneration: second)
+        XCTAssertTrue(released)
+    }
     func testNewAttachmentsRejectUnsupportedAndArchivedSourcesButLabelsStayLazy() async throws {
         let h = try await ChatHarness.make()
         let fileID = file.id, docID = doc.id

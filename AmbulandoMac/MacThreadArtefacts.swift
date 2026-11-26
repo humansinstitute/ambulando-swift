@@ -204,6 +204,17 @@ struct MacThreadArtefactExpandedKey: PreferenceKey {
 extension EnvironmentValues {
     @Entry var macThreadArtefacts: MacThreadArtefacts? = nil
     @Entry var macThreadArtefactTab: MacThreadArtefactTab? = nil
+    @Entry var macThreadArtefactsInParentHeader = false
+}
+
+struct MacThreadArtefactsButton: View {
+    let state: MacThreadArtefacts
+    var body: some View {
+        Button { state.browsing = true } label: { Image(systemName: "square.stack") }
+            .buttonStyle(.borderless).help("Thread artefacts (\(state.members.count))")
+            .accessibilityLabel("Thread artefacts (\(state.members.count))")
+            .accessibilityIdentifier("thread.artefacts.browse").disabled(state.busy)
+    }
 }
 
 /// Keep both conversation and editor trees mounted across tab/visibility changes.

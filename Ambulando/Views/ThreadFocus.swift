@@ -384,6 +384,7 @@ private struct ThreadFocusPanel: View {
         }
         .background(Amb.background)
         #if os(macOS)
+        .environment(\.macThreadArtefactsInParentHeader, true)
         .onPreferenceChange(MacThreadArtefactOwnerKey.self) { artefactOwner = $0 }
         .onPreferenceChange(MacThreadArtefactExpandedKey.self) { shown in
             if shown {
@@ -441,6 +442,9 @@ private struct ThreadFocusPanel: View {
             if let workspace = model.selectedWorkspace, workspace.id == focus.workspaceId {
                 AddToGoalMenu(source: GoalSource(type: .chat, recordId: focus.threadId, channelId: focus.channelId, workspace: workspace))
                 PinToggleButton(type: .thread, id: focus.threadId, workspace: workspace)
+                #if os(macOS)
+                if let artefactOwner { MacThreadArtefactsButton(state: artefactOwner) }
+                #endif
                 // Only this thread's own targets: a context left by another thread is never acted on.
                 ThreadHeaderMenu(context: menu?.threadId == focus.threadId ? menu : nil, workspace: workspace, title: title)
             }

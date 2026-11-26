@@ -248,3 +248,41 @@ public enum DocumentReviewDiff {
         return result
     }
 }
+
+extension StoreReader {
+    /// Per-source local recovery authority, separate from mutable review snapshots.
+    public func documentPublishingHoldGeneration(key: String) throws -> String? {
+        try state("doc.autopublish-hold.v1:" + key)
+    }
+    public func documentAutomaticPublishingHeld(key: String) throws -> Bool {
+        try documentPublishingHoldGeneration(key: key) != nil
+    }
+}
+extension StoreWriter {
+    /// New detach observations renew the generation; checkpoints merely ensure a hold exists.
+    @discardableResult
+    public func holdDocumentAutomaticPublishing(key: String, renew: Bool = false) async throws -> String {
+        let stateKey = "doc.autopublish-hold.v1:" + key
+        let generation: String = try db.transaction {
+            let read = try db.prepare("SELECT value FROM app_state WHERE key = ?")
+            try read.bind([.text(stateKey)])
+            if !renew, try read.step(), let current = read.text(0) { return current }
+            let value = UUID().uuidString.lowercased()
+            try db.prepare("INSERT INTO app_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+                .run([.text(stateKey), .text(value)])
+            return value
+        }
+        await emit([ChangeKey(.appState)])
+        return generation
+    }
+    /// One SQL statement fences both a newer detach generation and any newer retained draft.
+    @discardableResult
+    public func releaseDocumentAutomaticPublishingHold(key: String, expectedGeneration: String?) async throws -> Bool {
+        guard let expectedGeneration else { return false }
+        try db.prepare("DELETE FROM app_state WHERE key = ? AND value = ? AND NOT EXISTS (SELECT 1 FROM doc_drafts WHERE key = ?)")
+            .run([.text("doc.autopublish-hold.v1:" + key), .text(expectedGeneration), .text(key)])
+        let released = db.changes > 0
+        if released { await emit([ChangeKey(.appState)]) }
+        return released
+    }
+}
