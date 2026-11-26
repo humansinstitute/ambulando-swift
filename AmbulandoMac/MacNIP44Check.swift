@@ -98,6 +98,51 @@ extension MacThreadRegression {
         try require(tab.documentId != oldDocument && broker.current == nil, "real WebKit commit cancels previous document approval")
         print("NIP44_DOCUMENT_PASS actual navigation commit cancels pending request")
 
+        // Persist through the production LocalStore writer and reconstruct a new browser host.
+        var rememberedPrompts = 0
+        let rememberApprovals = Task { @MainActor in
+            while !Task.isCancelled {
+                if let prompt = broker.current {
+                    rememberedPrompts += 1
+                    broker.resolve(prompt.id, .allow(remember: true))
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        do {
+            let roundtrip = try await tab.webView.callAsyncJavaScript("""
+            const encrypted = await window.nostr.nip44.encrypt('\(own)', 'remembered fixture');
+            return await window.nostr.nip44.decrypt('\(own)', encrypted);
+            """, contentWorld: .page)
+            rememberApprovals.cancel()
+            try require(roundtrip as? String == "remembered fixture" && rememberedPrompts == 2,
+                        "encrypt and decrypt require independent explicit remembered approval")
+        } catch { rememberApprovals.cancel(); throw error }
+        await browser.flushPermissionWrites()
+        let restored = BrowserModel()
+        await restored.configure(store: store, signer: { identity }, locked: false)
+        guard let restoredBroker = restored.broker else { throw Failure(description: "No restored broker") }
+        let context = NIP07Context(tabId: UUID(), documentId: 1, origin: "https://nip44.sample.invalid")
+        try require(restoredBroker.grants.count == 2, "LocalStore restored both operation grants")
+        let result = await restoredBroker.handle(method: "nip44.encrypt", params: ["pubkey": own, "plaintext": "restored"],
+                                                context: context, isCurrent: { true })
+        guard case .success(.text(let restoredPayload)) = result else { throw Failure(description: "durable encrypt grant missing") }
+        try require(restoredBroker.current == nil && restoredBroker.grants.count == 2, "LocalStore grant reconstruction")
+        guard let encryption = restoredBroker.grants.first(where: { $0.hasSuffix("|nip44.encrypt") }) else {
+            throw Failure(description: "No encryption grant")
+        }
+        restored.revoke(grant: encryption)
+        await restored.flushPermissionWrites()
+        let decrypted = await restoredBroker.handle(method: "nip44.decrypt", params: ["pubkey": own, "ciphertext": restoredPayload],
+                                                   context: context, isCurrent: { true })
+        try require(decrypted == .success(.text("restored")) && restoredBroker.grants.count == 1,
+                    "revoking encrypt preserves separate decrypt authority")
+        restored.forget(origin: context.origin)
+        await restored.flushPermissionWrites()
+        browser.forget(origin: context.origin)
+        await browser.flushPermissionWrites()
+        print("NIP44_CONSENT_PASS actual JS separate remembered encrypt/decrypt, LocalStore reconstruction, per-operation revoke, site reset")
+
         if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacNIP44HostedCheck") {
             guard let address = ProcessInfo.processInfo.environment["AMBULANDO_NIP44_TEST_ORIGIN"],
                   let hostedURL = URL(string: address), let hostedOrigin = BrowserURLPolicy.origin(of: hostedURL) else {

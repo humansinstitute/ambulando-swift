@@ -131,7 +131,7 @@ public struct NIP07Prompt: Identifiable, Equatable, Sendable {
         case connect
         case sign(NostrEventTemplate)
         /// `bytes` is the size of the text going in; the text itself is never shown or kept. `isSelf`: the peer is the
-        /// user's own key (a private list or setting), the only case that may be allowed until Ambulando locks.
+        /// user's own key (a private list or setting), shown as private data in the prompt.
         case encrypt(peer: String, isSelf: Bool, bytes: Int)
         case decrypt(peer: String, isSelf: Bool, bytes: Int)
     }
@@ -140,19 +140,10 @@ public struct NIP07Prompt: Identifiable, Equatable, Sendable {
     public let kind: Kind
     /// The user's own key, as shown in the sheet.
     public let npub: String?
-    /// Whether "allow for this site until Ambulando locks" may be offered (authentication kinds only).
-    public var offersSessionGrant: Bool {
-        switch kind {
-        case .sign(let event): return NIP07Broker.sessionGrantKinds.contains(event.kind)
-        case .encrypt(_, let isSelf, _), .decrypt(_, let isSelf, _): return isSelf
-        case .connect: return false
-        }
-    }
 }
 
 public enum NIP07Decision: Equatable, Sendable {
-    /// `remember`: for connect, keep the answer for the site; for an authentication kind, allow that kind for the site
-    /// until Ambulando locks.
+    /// `remember` explicitly saves only this origin/account/operation (and signing kind).
     case allow(remember: Bool)
     case deny(remember: Bool)
 }
@@ -166,15 +157,12 @@ public enum NIP07Reply: Equatable, Sendable {
 }
 
 /// Native side of `window.nostr`. Pages never see the key; they get the public key (after the user allows the site)
-/// and events the user approved one at a time in a sheet that names the site. Only the authentication kinds in
-/// `sessionGrantKinds` may be allowed for a site until Ambulando locks.
+/// and operation results approved once or explicitly remembered for this exact origin and account.
 ///
 /// A request is tied to the document that made it: when the tab navigates, reloads or closes, or Ambulando locks, it
 /// is cancelled, and `isCurrent` is asked again after the user answers and before anything is signed.
 @MainActor
 public final class NIP07Broker {
-    /// NIP-42 relay authentication and NIP-98 HTTP authentication.
-    public nonisolated static let sessionGrantKinds: Set<Int> = [22242, 27235]
     public nonisolated static let maxPromptsPerTab = 4
 
     public private(set) var prompts: [NIP07Prompt] = []
@@ -184,23 +172,29 @@ public final class NIP07Broker {
     /// Called after `prompts`, `sites` or `locked` change.
     public var onChange: (() -> Void)?
 
-    private var sessionGrants: Set<String> = []
+    public private(set) var grants: Set<String>
+    private let persistGrants: (Set<String>) -> Void
     private var authorizationEpoch: UInt64 = 0
     private var originEpochs: [String: UInt64] = [:]
     private var waiters: [UUID: CheckedContinuation<NIP07Decision?, Never>] = [:]
     private let publicKey: @Sendable () async throws -> String
+    private let accountSigner: (@Sendable (NostrEventTemplate, String) async throws -> NostrEvent)?
     private let signer: @Sendable (NostrEventTemplate) async throws -> NostrEvent
     /// Runs one NIP-44 operation for exactly the given public key (the account the user approved it for).
     private let cipher: @Sendable (NIP44Operation, String) async throws -> String
     private let persist: ([String: NIP07SitePermission]) -> Void
     private let now: () -> Date
 
-    public init(locked: Bool, sites: [String: NIP07SitePermission] = [:],
+    public init(locked: Bool, sites: [String: NIP07SitePermission] = [:], grants: Set<String> = [],
+                persistGrants: @escaping (Set<String>) -> Void = { _ in },
                 publicKey: @escaping @Sendable () async throws -> String,
                 signer: @escaping @Sendable (NostrEventTemplate) async throws -> NostrEvent,
+                accountSigner: (@Sendable (NostrEventTemplate, String) async throws -> NostrEvent)? = nil,
                 cipher: @escaping @Sendable (NIP44Operation, String) async throws -> String = { _, _ in throw NIP07Error.unsupported("nip44") },
                 persist: @escaping ([String: NIP07SitePermission]) -> Void = { _ in },
                 now: @escaping () -> Date = { Date() }) {
+        self.accountSigner = accountSigner
+        self.grants = grants; self.persistGrants = persistGrants
         self.locked = locked; self.sites = sites; self.publicKey = publicKey; self.signer = signer; self.cipher = cipher; self.persist = persist; self.now = now
     }
 
@@ -223,44 +217,62 @@ public final class NIP07Broker {
     }
 
     private func connect(_ context: NIP07Context, isCurrent: @escaping @MainActor () -> Bool) async -> Result<NIP07Reply, NIP07Error> {
-        switch sites[context.origin] {
-        case .denied: return .failure(.denied)
-        case .allowed: break
-        case nil:
-            switch await ask(.connect, context: context, isCurrent: isCurrent) {
-            case .failure(let error): return .failure(error)
-            case .success(.deny(let remember)):
-                if remember { setSite(context.origin, .denied) }
-                return .failure(.denied)
-            case .success(.allow(let remember)):
-                if remember { setSite(context.origin, .allowed) }
+        if sites[context.origin] == .denied { return .failure(.denied) }
+        let epoch = authorizationEpoch
+        let originEpoch = originEpochs[context.origin, default: 0]
+        do {
+            let own = try await publicKey()
+            let grant = Self.operationGrant(context.origin, own, "getPublicKey")
+            var remember = false
+            if !grants.contains(grant) {
+                switch await ask(.connect, context: context, isCurrent: isCurrent, account: own) {
+                case .failure(let error): return .failure(error)
+                case .success(.deny(let remember)):
+                    if remember { setSite(context.origin, .denied) }
+                    return .failure(.denied)
+                case .success(.allow(let value)): remember = value
+                }
             }
-        }
-        guard !locked else { return .failure(.locked) }
-        guard isCurrent() else { return .failure(.pageChanged) }
-        do { return .success(.publicKey(try await publicKey())) } catch { return .failure(locked ? .locked : .invalid("no identity")) }
+            guard try await publicKey() == own else { return .failure(.accountChanged) }
+            guard !locked else { return .failure(.locked) }
+            guard isCurrent() else { return .failure(.pageChanged) }
+            guard authorizationEpoch == epoch, originEpochs[context.origin, default: 0] == originEpoch else { return .failure(.denied) }
+            if remember { saveGrant(grant, origin: context.origin) }
+            return .success(.publicKey(own))
+        } catch { return .failure(locked ? .locked : .invalid("no identity")) }
     }
 
     private func sign(_ template: NostrEventTemplate, requested: String?, context: NIP07Context,
                       isCurrent: @escaping @MainActor () -> Bool) async -> Result<NIP07Reply, NIP07Error> {
         if sites[context.origin] == .denied { return .failure(.denied) }
+        let epoch = authorizationEpoch
+        let originEpoch = originEpochs[context.origin, default: 0]
         let own: String
         do { own = try await publicKey() } catch { return .failure(locked ? .locked : .invalid("no identity")) }
         if let requested, requested != own { return .failure(.invalid("the event's pubkey is not this identity")) }
-        let grant = Self.grantKey(context.origin, template.kind)
-        if !sessionGrants.contains(grant) {
-            switch await ask(.sign(template), context: context, isCurrent: isCurrent) {
+        let grant = Self.operationGrant(context.origin, own, "signEvent:\(template.kind)")
+        var rememberGrant = false
+        if !grants.contains(grant) {
+            switch await ask(.sign(template), context: context, isCurrent: isCurrent, account: own) {
             case .failure(let error): return .failure(error)
             case .success(.deny): return .failure(.denied)
             case .success(.allow(let remember)):
-                if remember, Self.sessionGrantKinds.contains(template.kind) { sessionGrants.insert(grant) }
+                rememberGrant = remember
             }
         }
         // Re-checked after the user answered: a lock or a navigation in the meantime wins over the approval.
         guard !locked else { return .failure(.locked) }
         guard isCurrent() else { return .failure(.pageChanged) }
         do {
-            let event = try await signer(template)
+            guard try await publicKey() == own else { return .failure(.accountChanged) }
+            guard !locked, authorizationEpoch == epoch, originEpochs[context.origin, default: 0] == originEpoch else { return .failure(.denied) }
+            guard isCurrent() else { return .failure(.pageChanged) }
+            if rememberGrant { saveGrant(grant, origin: context.origin) }
+            let event: NostrEvent
+            if let accountSigner { event = try await accountSigner(template, own) }
+            else { event = try await signer(template) }
+            guard event.pubkey == own, try await publicKey() == own else { return .failure(.accountChanged) }
+            guard authorizationEpoch == epoch, originEpochs[context.origin, default: 0] == originEpoch else { return .failure(.denied) }
             guard !locked else { return .failure(.locked) }
             guard isCurrent() else { return .failure(.pageChanged) }
             return .success(.event(event))
@@ -286,14 +298,14 @@ public final class NIP07Broker {
         case .encrypt(let peer, let plaintext): kind = .encrypt(peer: peer, isSelf: isSelf, bytes: plaintext.utf8.count); method = "nip44.encrypt"
         case .decrypt(let peer, let payload): kind = .decrypt(peer: peer, isSelf: isSelf, bytes: payload.utf8.count); method = "nip44.decrypt"
         }
-        let grant = "\(context.origin)|\(own)|\(method).self"
-        var rememberSelf = false
-        if !(isSelf && sessionGrants.contains(grant)) {
+        let grant = Self.operationGrant(context.origin, own, method)
+        var rememberGrant = false
+        if !grants.contains(grant) {
             switch await ask(kind, context: context, isCurrent: isCurrent, account: own) {
             case .failure(let error): return .failure(error)
             case .success(.deny): return .failure(.denied)
             case .success(.allow(let remember)):
-                rememberSelf = remember && isSelf
+                rememberGrant = remember
             }
         }
         guard !locked else { return .failure(.locked) }
@@ -305,7 +317,7 @@ public final class NIP07Broker {
             guard isCurrent() else { return .failure(.pageChanged) }
             guard sites[context.origin] != .denied,
                   authorizationEpoch == epoch, originEpochs[context.origin, default: 0] == originEpoch else { return .failure(.denied) }
-            if rememberSelf { sessionGrants.insert(grant) }
+            if rememberGrant { saveGrant(grant, origin: context.origin) }
             let result = try await cipher(operation, own)
             // Both identity lookup and the cipher suspend. Never deliver output after revocation or account change.
             guard try await publicKey() == own else { return .failure(.accountChanged) }
@@ -357,29 +369,48 @@ public final class NIP07Broker {
 
     public func tabClosed(_ tabId: UUID) { cancel { $0.context.tabId == tabId } }
 
-    /// Locking cancels every waiting request, forgets the until-lock grants and refuses new requests until unlocked.
+    /// Locking invalidates pending work and refuses calls until unlocked. Explicit persistent grants survive.
     public func setLocked(_ value: Bool) {
         guard value != locked else { return }
         locked = value
         if value {
             authorizationEpoch &+= 1
-            sessionGrants = []
             cancel { _ in true }
         }
+        onChange?()
+    }
+
+    /// Account transitions invalidate requests even if the user switches back before an await resumes.
+    /// Stored grants remain isolated by account.
+    public func accountChanged() {
+        authorizationEpoch &+= 1
+        cancel { _ in true }
+    }
+
+    /// Revoke one account/operation, invalidating in-flight work for that site.
+    public func revoke(_ grant: String) {
+        guard grants.remove(grant) != nil else { return }
+        let origin = String(grant.split(separator: "|", omittingEmptySubsequences: false).first ?? "")
+        originEpochs[origin, default: 0] &+= 1
+        persistGrants(grants)
+        cancel { $0.context.origin == origin }
         onChange?()
     }
 
     /// Settings › browser: forget what was decided for `origin`.
     public func forget(_ origin: String) {
         originEpochs[origin, default: 0] &+= 1
-        sessionGrants = sessionGrants.filter { !$0.hasPrefix(origin + "|") }
+        grants = grants.filter { !$0.hasPrefix(origin + "|") }
+        persistGrants(grants)
+        cancel { $0.context.origin == origin }
         setSite(origin, nil)
     }
 
     /// Identity removed or disconnected: nothing a site was allowed survives.
     public func reset() {
         authorizationEpoch &+= 1
-        sessionGrants = []
+        grants = []
+        persistGrants(grants)
         cancel { _ in true }
         sites = [:]
         persist(sites)
@@ -403,7 +434,16 @@ public final class NIP07Broker {
         onChange?()
     }
 
-    static func grantKey(_ origin: String, _ kind: Int) -> String { "\(origin)|\(kind)" }
+    private func saveGrant(_ grant: String, origin: String) {
+        grants.insert(grant)
+        persistGrants(grants)
+        setSite(origin, .allowed)
+    }
+
+    static func operationGrant(_ origin: String, _ account: String, _ operation: String) -> String {
+        "\(origin)|\(account)|\(operation)"
+    }
+
 }
 
 extension NIP07Reply {

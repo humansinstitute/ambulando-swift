@@ -99,6 +99,7 @@ final class AppModel {
             clearFileNappletForContextLoss()
             wikiContextEpoch &+= 1
             // window.nostr follows the identity: locking cancels and refuses every request; removing it forgets sites.
+            if identity.npub != oldValue.npub { browser.accountChanged() }
             browser.setLocked(!isUnlocked)
             if identity == .none, oldValue != .none { browser.reset() }
             if case .unlocked(let npub) = identity, towerDiscoveryAccount != npub {

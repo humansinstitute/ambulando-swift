@@ -525,22 +525,29 @@ directory refresh). No Tower route or schema was added.
   - `window.nostr`: a document-start script in the page world, top frame of HTTPS pages only, calls a
     `WKScriptMessageHandlerWithReply`. The handler answers only the main frame whose `securityOrigin` equals the tab's
     committed origin; requests carry the tab's document number (bumped on every main-frame commit). `NIP07Broker`
-    asks per origin before revealing the public key (remembered in `app_state` `browser.sites.v1`, forgettable from
-    the menu), shows a sheet with origin, kind, time, content and tags for **every** `signEvent`, and only for kinds
-    22242/27235 offers "until Ambulando locks" per origin and kind. Events are bounded (kind 0–65535, content
-    ≤ 256 KB, ≤ 2,000 tags) and a foreign `pubkey` is refused. Navigation, reload, tab close and lock cancel waiting
-    requests; after the user answers, lock and document are checked again before and after signing. Locking clears
-    the until-lock grants and refuses everything; removing the identity or disconnecting closes tabs and forgets
-    sites. `getRelays` returns `{}`; NIP-04 rejects.
-    `nip44.encrypt/decrypt` take exactly `{pubkey, plaintext|ciphertext}` (lowercase 64-hex x-only key, plaintext
-    1–65535 bytes, payload 132–87472 characters, no `#` marker; NIP-44 v2 per `Crypto/NIP44Browser.swift`, checked
-    against paulmillr's official vectors). Every call needs a sheet (origin, own key vs other key, size; never the
-    text); only own-key calls offer "until Ambulando locks" per origin, account and operation. Forgetting a site, resetting the identity, or locking invalidates in-flight
-    results even if permissions are granted again before the operation finishes. The broker fixes the active
-    public key when the request arrives, the sheet is refused if it changes, and `IdentityService.nip44` runs only
-    if the unlocked key is still that key, deriving and wiping the conversation key inside the actor. Lock, document
-    and site denial are re-checked before and after the operation. JavaScript only ever receives the public key,
-    signed events and NIP-44 results.
+    offers Allow once / Always allow for this site / Deny for public key, signing and NIP-44 requests.
+    Explicit grants are saved separately in `app_state` `browser.operation-grants.v2`, keyed by exact
+    origin, active account and operation, with event kind for signing. Legacy `browser.sites.v1` allows
+    never confer operation access; legacy denies continue to block. Writes are serialized so revocation
+    cannot be overtaken by an earlier grant write. Browser menu revocation removes one account/operation or every
+    grant for that site and invalidates pending requests; reset clears all grants. Lock cancels pending work
+    and rejects calls until unlocked, while explicit grants survive unlock and restart.
+    Sign sheets retain origin, account, kind, timestamp, content and tags. Events remain bounded and foreign
+    authors refused (kind 0–65535, content ≤256 KB, ≤2,000 tags). Cipher prompts show peer and size, never plaintext. NIP-44 encrypt and decrypt grants
+    are independent and cover any peer for that operation, explicitly stated in the sheet.
+    `nip44.encrypt/decrypt` still take exactly `{pubkey, plaintext|ciphertext}`: lowercase 64-hex x-only key,
+    plaintext 1–65535 bytes, payload 132–87472 characters and no `#` marker. NIP-44 v2 remains checked against
+    the official vectors. Conversation keys are derived and wiped inside the identity actor. Account-bound
+    `IdentityService.signForBrowser` and `nip44` require the exact unlocked vault inside the identity actor.
+    Epoch, document, lock, account and site checks suppress results after invalidation, even if permissions
+    are re-granted. No secret is exposed. `getRelays` returns `{}`; NIP-04 rejects.
+
+    Native private HTML File artefacts (`HTMLArtefactReviewView` → `SandboxedHTMLView`) are fetched through
+    the existing authenticated native access path and rendered with sandbox CSP, no network and no
+    `window.nostr` or signer bridge. The review overlay's separate `ambReview` bridge handles comment target
+    selection, anchor matches and badge taps only; comment writes remain native, revision-bound and ACL-checked.
+    The simpler `ToolboxViews` HTML viewer is bridge-free. Canvas HTML naplets also have no signer. Installed napplets have their separate typed capability host;
+    browser consent does not grant those capabilities or alter backend ACLs.
 
 ### 5.1 Chat catch-up (WP3, delivered)
 

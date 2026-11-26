@@ -138,8 +138,11 @@ struct BrowserView: View {
                     Button { browser.open(nil) } label: { Label("New tab", systemImage: "plus.square.on.square") }
                     Button(role: .destructive) { browser.close(tab) } label: { Label("Close tab", systemImage: "xmark") }
                 }
-                if let origin = tab.origin, browser.sites[origin] != nil {
-                    Section {
+                if let origin = tab.origin, browser.sites[origin] != nil || !browser.permissions(origin: origin).isEmpty {
+                    Section("Site permissions") {
+                        ForEach(browser.permissions(origin: origin), id: \.key) { permission in
+                            Button("Revoke " + permission.label, role: .destructive) { browser.revoke(grant: permission.key) }
+                        }
                         Button(role: .destructive) { browser.forget(origin: origin) } label: {
                             Label("Forget Nostr permission for \(URL(string: origin)?.host ?? origin)", systemImage: "key.slash")
                         }
@@ -308,14 +311,6 @@ struct BrowserTabsView: View {
 struct NostrApprovalSheet: View {
     let prompt: NIP07Prompt
     let decide: (NIP07Decision) -> Void
-    @State private var remember: Bool
-
-    init(prompt: NIP07Prompt, decide: @escaping (NIP07Decision) -> Void) {
-        self.prompt = prompt; self.decide = decide
-        // "Remember this site" starts on for the public key; an until-lock signing grant always starts off.
-        _remember = State(initialValue: prompt.kind == .connect)
-    }
-
     private var host: String { URL(string: prompt.context.origin)?.host ?? prompt.context.origin }
 
     var body: some View {
@@ -361,32 +356,34 @@ struct NostrApprovalSheet: View {
                 if let npub = prompt.npub {
                     Section("Your key") { Text(shortNpub(npub)).font(.amb(.footnote).monospaced()) }
                 }
-                if prompt.kind == .connect {
-                    Section { Toggle("Remember for \(host)", isOn: $remember).accessibilityIdentifier("nostr.remember") } footer: {
-                        Text("You can forget this in the browser menu. Signing still asks every time.")
-                    }
-                } else if prompt.offersSessionGrant {
-                    Section { Toggle(cipherDetail != nil ? "Don't ask again for your own data on \(host) until Ambulando locks" : "Don't ask again for this kind on \(host) until Ambulando locks", isOn: $remember)
-                            .accessibilityIdentifier("nostr.remember") } footer: {
-                        Text(cipherDetail != nil ? "Only for your own private data. Messages with other keys always ask." : "Only for sign-in requests. Other kinds always ask.")
-                    }
+                Section {
+                    Button("Allow once") { decide(.allow(remember: false)) }
+                        .accessibilityIdentifier("nostr.allow")
+                    Button("Always allow for this site") { decide(.allow(remember: true)) }
+                        .accessibilityIdentifier("nostr.alwaysAllow")
+                    Button("Deny", role: .cancel) { decide(.deny(remember: false)) }
+                        .accessibilityIdentifier("nostr.deny")
+                } footer: {
+                    Text(permissionExplanation)
                 }
             }
             .navigationTitle(navigationTitle)
             .inlineTitle()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(prompt.kind == .connect ? "Don't allow" : "Reject") { decide(.deny(remember: prompt.kind == .connect && remember)) }
-                        .accessibilityIdentifier("nostr.deny")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(confirmTitle) { decide(.allow(remember: remember)) }
-                        .fontWeight(.semibold)
-                        .accessibilityIdentifier("nostr.allow")
-                }
-            }
+
         }
         .presentationDetents([.medium, .large])
+        .macSheetSize(minWidth: 480, idealWidth: 580, minHeight: 500, idealHeight: 640)
+    }
+
+    private var permissionExplanation: String {
+        let scope: String
+        switch prompt.kind {
+        case .connect: scope = "Only share your public key. Signing, encrypting and decrypting still ask separately."
+        case .sign(let event): scope = "Only sign events of kind \(event.kind). Other kinds, encryption and decryption still ask separately."
+        case .encrypt: scope = "Only encrypt, including messages with any key. Decryption and signing still ask separately."
+        case .decrypt: scope = "Only decrypt, including messages with any key. Encryption and signing still ask separately."
+        }
+        return scope + " Always allow remembers this exact site and active account after restart. Revoke in the browser’s Site permissions menu."
     }
 
     private var summary: String {
@@ -412,15 +409,6 @@ struct NostrApprovalSheet: View {
         case .sign: "Sign with Nostr"
         case .encrypt: "Encrypt with Nostr"
         case .decrypt: "Decrypt with Nostr"
-        }
-    }
-
-    private var confirmTitle: String {
-        switch prompt.kind {
-        case .connect: "Allow"
-        case .sign: "Sign"
-        case .encrypt: "Encrypt"
-        case .decrypt: "Decrypt"
         }
     }
 

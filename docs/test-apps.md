@@ -42,7 +42,10 @@ and decrypts the saved content again. It verifies the signature, native rejectio
 and cancellation of a pending request on an actual WebKit document commit. Add
 `-AmbulandoMacNIP44HostedCheck` with `AMBULANDO_NIP44_TEST_ORIGIN=https://<preview-host>/` to repeat the fixture API roundtrip on the GitWorkshop preview origin and check
 its client-side Settings route (requires network). Approval answers are driven by the
-harness through the production broker. It never publishes to a relay and does not validate Pete's real lists,
+harness through the production broker. The check also approves encrypt and decrypt independently with Always allow,
+flushes production LocalStore writes, reconstructs a new browser host, and verifies that revoking encryption
+preserves decryption. It clears its site grants afterward.
+It never publishes to a relay and does not validate Pete's real lists,
 Keychain identity, a hosted GitWorkshop deployment, or installation on his MacBook.
 
 The Mac Refresh data regression uses the isolated Test executable (no installer):

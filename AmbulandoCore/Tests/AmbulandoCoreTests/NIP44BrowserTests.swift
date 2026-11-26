@@ -199,7 +199,6 @@ final class NIP44BrokerTests: XCTestCase {
         let task = await start(broker, "nip44.encrypt", ["pubkey": alicePub, "plaintext": "private list"])
         let prompt = try XCTUnwrapValue(broker.current)
         XCTAssertEqual(prompt.kind, .encrypt(peer: alicePub, isSelf: true, bytes: 12))
-        XCTAssertTrue(prompt.offersSessionGrant)
         XCTAssertEqual(prompt.context.origin, origin)
         broker.resolve(prompt.id, .allow(remember: false))
         guard case .text(let payload) = try await task.value.get() else { return XCTFail() }
@@ -217,48 +216,47 @@ final class NIP44BrokerTests: XCTestCase {
         let read = await start(bobBroker, "nip44.decrypt", ["pubkey": alicePub, "ciphertext": toBob])
         let bobPrompt = try XCTUnwrapValue(bobBroker.current)
         XCTAssertEqual(bobPrompt.kind, .decrypt(peer: alicePub, isSelf: false, bytes: toBob.utf8.count))
-        XCTAssertFalse(bobPrompt.offersSessionGrant, "only own-key data may be allowed in advance")
         bobBroker.resolve(bobPrompt.id, .allow(remember: true))
         let readResult = try await read.value.get()
         XCTAssertEqual(readResult, .text("for bob"))
-        // remember was ignored for another key's messages: it asks again.
-        let again = await start(bobBroker, "nip44.decrypt", ["pubkey": alicePub, "ciphertext": toBob])
-        XCTAssertNotNil(bobBroker.current)
-        bobBroker.resolve(bobBroker.current!.id, .deny(remember: false))
-        let denied = await again.value
-        XCTAssertEqual(denied, .failure(.denied))
+        // Approval applies to decrypt only, including after unlock.
+        bobBroker.setLocked(true); bobBroker.setLocked(false)
+        let again = await bobBroker.handle(method: "nip44.decrypt", params: ["pubkey": alicePub, "ciphertext": toBob],
+            context: .init(tabId: tab, documentId: 2, origin: origin), isCurrent: { true })
+        XCTAssertEqual(again, .success(.text("for bob")))
     }
 
-    func testSelfGrantLastsUntilLockAndIsPerOriginAndOperation() async throws {
+    func testPersistentGrantIsPerOriginAndOperation() async throws {
         let broker = makeBroker()
         let payload = try await encrypt(broker, to: alicePub, "list", remember: true)
-        // Granted for self-encryption on this site only.
-        let silent = await broker.handle(method: "nip44.encrypt", params: ["pubkey": alicePub, "plaintext": "again"],
-                                         context: .init(tabId: tab, documentId: 1, origin: origin), isCurrent: { true })
-        guard case .success(.text) = silent else { return XCTFail("granted self-encryption should not prompt") }
-        // Decrypt is a separate operation, other origins and other peers still ask.
-        let decrypt = await start(broker, "nip44.decrypt", ["pubkey": alicePub, "ciphertext": payload])
-        XCTAssertNotNil(broker.current, "decrypt asks separately")
-        broker.resolve(broker.current!.id, .deny(remember: false))
+        let saved = try JSONDecoder().decode(Set<String>.self, from: JSONEncoder().encode(broker.grants))
+        let box = account!
+        let reopened = NIP07Broker(locked: false, grants: saved,
+            publicKey: { try await box.current.publicKeyHex() }, signer: { try await box.current.sign($0) },
+            cipher: { try await box.current.nip44($0, expectedPublicKey: $1) })
+        let silent = await reopened.handle(method: "nip44.encrypt", params: ["pubkey": bobPub, "plaintext": "again"],
+            context: .init(tabId: tab, documentId: 2, origin: origin), isCurrent: { true })
+        guard case .success(.text) = silent else { return XCTFail("persisted encryption should not prompt") }
+        let decrypt = await start(reopened, "nip44.decrypt", ["pubkey": alicePub, "ciphertext": payload])
+        XCTAssertNotNil(reopened.current, "decrypt asks separately")
+        reopened.resolve(reopened.current!.id, .deny(remember: false))
         _ = await decrypt.value
-        let other = Task { @MainActor in
-            await broker.handle(method: "nip44.encrypt", params: ["pubkey": alicePub, "plaintext": "x"],
-                                context: .init(tabId: tab, documentId: 1, origin: "https://other.example"), isCurrent: { true })
-        }
-        for _ in 0..<200 where broker.current == nil { try? await Task.sleep(for: .milliseconds(2)) }
-        XCTAssertEqual(broker.current?.context.origin, "https://other.example")
-        broker.resolve(broker.current!.id, .deny(remember: false))
-        _ = await other.value
-        let toPeer = await start(broker, "nip44.encrypt", ["pubkey": bobPub, "plaintext": "x"])
-        XCTAssertNotNil(broker.current, "another key always asks")
-        broker.resolve(broker.current!.id, .deny(remember: false))
-        _ = await toPeer.value
-        // A lock forgets the grant.
-        broker.setLocked(true); broker.setLocked(false)
-        let afterLock = await start(broker, "nip44.encrypt", ["pubkey": alicePub, "plaintext": "x"])
-        XCTAssertNotNil(broker.current)
-        broker.resolve(broker.current!.id, .deny(remember: false))
-        _ = await afterLock.value
+        let allowDecrypt = await start(reopened, "nip44.decrypt", ["pubkey": alicePub, "ciphertext": payload])
+        reopened.resolve(reopened.current!.id, .allow(remember: true))
+        _ = try await allowDecrypt.value.get()
+        // Revoke encryption alone; independent decrypt authority survives.
+        let grant = NIP07Broker.operationGrant(origin, alicePub, "nip44.encrypt")
+        reopened.revoke(grant)
+        XCTAssertFalse(reopened.grants.contains(grant))
+        let stillDecrypts = await reopened.handle(method: "nip44.decrypt", params: ["pubkey": alicePub, "ciphertext": payload],
+            context: .init(tabId: tab, documentId: 3, origin: origin), isCurrent: { true })
+        XCTAssertEqual(stillDecrypts, .success(.text("list")))
+        reopened.forget(origin)
+        XCTAssertTrue(reopened.grants.isEmpty)
+        let revoked = await start(reopened, "nip44.encrypt", ["pubkey": alicePub, "plaintext": "x"])
+        XCTAssertNotNil(reopened.current)
+        reopened.resolve(reopened.current!.id, .deny(remember: false))
+        _ = await revoked.value
     }
 
     func testDenialAndMalformedCallsNeverReachTheKey() async throws {
@@ -331,6 +329,47 @@ final class NIP44BrokerTests: XCTestCase {
             let expected: NIP07Error = change == "account" ? .accountChanged : (change == "navigation" ? .pageChanged : .denied)
             XCTAssertEqual(result, .failure(expected), change)
         }
+    }
+
+    func testSigningIsBoundToAccountAndKind() async throws {
+        let broker = makeBroker()
+        let first = await start(broker, "signEvent", ["kind": 1])
+        account.switchTo(bob)
+        broker.resolve(broker.current!.id, .allow(remember: true))
+        let switched = await first.value
+        XCTAssertEqual(switched, .failure(.accountChanged))
+        XCTAssertTrue(broker.grants.isEmpty)
+        account.switchTo(alice)
+        let granted = await start(broker, "signEvent", ["kind": 1])
+        broker.resolve(broker.current!.id, .allow(remember: true))
+        _ = try await granted.value.get()
+        account.switchTo(bob)
+        let otherAccount = await start(broker, "signEvent", ["kind": 1])
+        XCTAssertNotNil(broker.current)
+        broker.resolve(broker.current!.id, .deny(remember: false))
+        _ = await otherAccount.value
+        do {
+            _ = try await bob.signForBrowser(NostrEventTemplate(kind: 1, tags: [], content: "x"), expectedPublicKey: alicePub)
+            XCTFail("identity actor must refuse mismatched browser signing")
+        } catch { XCTAssertEqual(error as? IdentityError, .signerMismatch) }
+    }
+
+    func testAccountTransitionInvalidatesAwaitedCipherEvenAfterSwitchBack() async throws {
+        let box = account!
+        let gate = CipherGate()
+        let broker = NIP07Broker(locked: false,
+            publicKey: { try await box.current.publicKeyHex() }, signer: { try await box.current.sign($0) },
+            cipher: { _, _ in await gate.run() })
+        let request = await start(broker, "nip44.encrypt", ["pubkey": alicePub, "plaintext": "x"])
+        broker.resolve(broker.current!.id, .allow(remember: false))
+        for _ in 0..<200 {
+            if await gate.started { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        broker.accountChanged()
+        await gate.finish()
+        let result = await request.value
+        XCTAssertEqual(result, .failure(.denied))
     }
 
     func testAccountSwitchWhileWaitingRefusesTheCall() async throws {

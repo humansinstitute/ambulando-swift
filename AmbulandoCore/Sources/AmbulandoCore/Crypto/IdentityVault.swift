@@ -618,6 +618,13 @@ public actor IdentityService: EventSigner {
         return try reader.sign(template)
     }
 
+    /// Browser signing must use the exact unlocked account approved by the user.
+    public func signForBrowser(_ template: NostrEventTemplate, expectedPublicKey: String) throws -> NostrEvent {
+        guard vault.isUnlocked, let current = vault.publicKeyHex else { throw IdentityError.locked }
+        guard current == expectedPublicKey else { throw IdentityError.signerMismatch }
+        return try vault.sign(template)
+    }
+
     /// Relay self-index crypto is available only while the user's vault is unlocked.
     private func workspaceIndexKey() throws -> Data {
         guard vault.isUnlocked else { throw IdentityError.locked }

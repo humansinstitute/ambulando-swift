@@ -68,6 +68,7 @@ final class BrowserModel {
     /// Website data (cookies, local storage) for the browser only, kept across launches and separate from the
     /// Toolbox's non-persistent views. The identifier names the store; it is not a secret.
     static let dataStoreIdentifier = UUID(uuidString: "6E1B5A55-0B1D-4C35-9A0E-AB0B2C0B7E12")!
+    static let grantsStateKey = "browser.operation-grants.v2"
     static let sitesStateKey = "browser.sites.v1"
     static let maxTabs = 12
 
@@ -108,6 +109,7 @@ final class BrowserModel {
     /// The broker's current question, mirrored for SwiftUI.
     private(set) var prompt: NIP07Prompt?
     private(set) var locked = true
+    private(set) var operationGrants: Set<String> = []
     private(set) var sites: [String: NIP07SitePermission] = [:]
     /// Sites saved to the new-tab page, kept on this device apart from website data and Nostr permissions.
     private(set) var favourites = BrowserFavourites()
@@ -120,6 +122,8 @@ final class BrowserModel {
     @ObservationIgnored private var delegate: BrowserWebDelegate?
     @ObservationIgnored private var handler: BrowserScriptHandler?
     @ObservationIgnored private var favouritesStore: LocalStore?
+    /// Permission writes run in order, including revocation and reset.
+    @ObservationIgnored private var grantsWrite: Task<Void, Never>?
     /// Favourites writes run one after another, so the stored list is always the latest.
     @ObservationIgnored private var favouritesWrite: Task<Void, Never>?
 
@@ -127,9 +131,20 @@ final class BrowserModel {
 
     /// Connects the broker to the identity. Called once the store and signer exist.
     func configure(store: LocalStore, signer: @escaping @Sendable () async -> IdentityService?, locked: Bool) async {
+        await flushPermissionWrites()
         let saved = (try? await store.reader.state(Self.sitesStateKey)).flatMap { $0.data(using: .utf8) }
             .flatMap { try? JSONDecoder().decode([String: NIP07SitePermission].self, from: $0) } ?? [:]
-        let broker = NIP07Broker(locked: locked, sites: saved,
+        let grants = (try? await store.reader.state(Self.grantsStateKey)).flatMap { $0.data(using: .utf8) }
+            .flatMap { try? JSONDecoder().decode(Set<String>.self, from: $0) } ?? []
+        let broker = NIP07Broker(locked: locked, sites: saved, grants: grants,
+                                 persistGrants: { [weak self] grants in
+                                     let text = (try? JSONEncoder().encode(grants)).map { String(decoding: $0, as: UTF8.self) }
+                                     let previous = self?.grantsWrite
+                                     self?.grantsWrite = Task {
+                                         await previous?.value
+                                         try? await store.writer.setState(Self.grantsStateKey, text)
+                                     }
+                                 },
                                  publicKey: {
                                      guard let service = await signer() else { throw IdentityError.locked }
                                      return try await service.publicKeyHex()
@@ -138,23 +153,33 @@ final class BrowserModel {
                                      guard let service = await signer() else { throw IdentityError.locked }
                                      return try await service.sign(template)
                                  },
+                                 accountSigner: { template, account in
+                                     guard let service = await signer() else { throw IdentityError.locked }
+                                     return try await service.signForBrowser(template, expectedPublicKey: account)
+                                 },
                                  cipher: { operation, account in
                                      guard let service = await signer() else { throw IdentityError.locked }
                                      return try await service.nip44(operation, expectedPublicKey: account)
                                  },
-                                 persist: { sites in
+                                 persist: { [weak self] sites in
                                      let text = sites.isEmpty ? nil : (try? JSONEncoder().encode(sites)).map { String(decoding: $0, as: UTF8.self) }
-                                     Task { try? await store.writer.setState(Self.sitesStateKey, text) }
+                                     let previous = self?.grantsWrite
+                                     self?.grantsWrite = Task {
+                                         await previous?.value
+                                         try? await store.writer.setState(Self.sitesStateKey, text)
+                                     }
                                  })
         broker.onChange = { [weak self, weak broker] in
             guard let self, let broker else { return }
             self.prompt = broker.current
             self.locked = broker.locked
             self.sites = broker.sites
+            self.operationGrants = broker.grants
         }
         self.broker = broker
         self.locked = locked
         self.sites = saved
+        self.operationGrants = grants
         favouritesStore = store
         favourites = BrowserFavourites.decode(try? await store.reader.state(BrowserFavourites.stateKey))
     }
@@ -366,6 +391,27 @@ final class BrowserModel {
         locked = value
         broker?.setLocked(value)
         if value { dialog?.reply(false); dialog = nil }
+    }
+
+    func flushPermissionWrites() async { await grantsWrite?.value }
+
+    func accountChanged() { broker?.accountChanged() }
+
+    func revoke(grant: String) { broker?.revoke(grant) }
+
+    func permissions(origin: String) -> [(key: String, label: String)] {
+        operationGrants.sorted().compactMap { grant in
+            let parts = grant.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count == 3, parts[0] == origin else { return nil }
+            let operation: String
+            switch parts[2] {
+            case "getPublicKey": operation = "Public key"
+            case "nip44.encrypt": operation = "Encrypt"
+            case "nip44.decrypt": operation = "Decrypt"
+            default: operation = "Sign kind " + parts[2].replacingOccurrences(of: "signEvent:", with: "")
+            }
+            return (grant, operation + " · " + shortNpub(NostrKeys.npub(publicKeyHex: parts[1]) ?? parts[1]))
+        }
     }
 
     func forget(origin: String) { broker?.forget(origin) }

@@ -67,7 +67,7 @@ struct BrowserStartPage: View {
         VStack(spacing: 10) {
             Image(systemName: "star").font(.amb(.largeTitle))
             Text("Your favourite sites appear here").font(.amb(.headline))
-            Text("Open a site, then choose Add to Favourites in the ••• menu, or tap Add. Pages open with your Nostr key available through window.nostr; each site asks before it can see your key, and every signature asks you first.")
+            Text("Open a site, then choose Add to Favourites in the ••• menu, or tap Add. Pages open with your Nostr key available through window.nostr; each operation asks first, with a choice to allow once or remember it for that site and account.")
                 .font(.amb(.footnote)).multilineTextAlignment(.center)
         }
         .foregroundStyle(.white)

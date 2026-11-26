@@ -803,14 +803,15 @@ Names and the in-app browser (build 12):
   the browser or a new tab (it shows how many are open). **Ambulando** at the top left goes back to exactly where you
   were, draft included; tabs keep their pages and back/forward history while the app runs. Pages are HTTPS only;
   links for mail, phone, messages, FaceTime, Lightning and Nostr apps ask before leaving.
-- **Nostr signing in the browser** (`window.nostr`, NIP-07). A site asks before it can see your public key (you can
-  remember or forget that per site). Every signature shows a sheet naming the site and what will be signed; only
-  sign-in requests (NIP-42, NIP-98) can be allowed for a site until you lock. Locking cancels and refuses all
-  requests. Your key never enters the page. `window.nostr.nip44.encrypt/decrypt(pubkey, text)` (NIP-44 v2, official
-  vectors in `Fixtures/nip44.vectors.json`) shows a sheet naming the site, the other key (or "your own key") and the size
-  for every call; only encrypting/decrypting with your own key (private lists and settings) can be allowed for a site until
-  you lock. The call runs only for the account the sheet named; a switch, lock, navigation or denied site in between
-  refuses it, and plaintext is never shown or logged. NIP-04 is not offered.
+- **Nostr signing in the browser** (`window.nostr`, NIP-07). Each request offers **Allow once**,
+  **Always allow for this site**, and **Deny**. Remembered consent is bound to the exact HTTPS origin,
+  active account and operation; signing is additionally bound to the event kind. Encrypt and decrypt
+  are independent NIP-44 v2 permissions, including messages with other keys. Grants survive restart
+  and lock/unlock; use Site permissions in the browser menu to revoke one operation or all grants for a site. Legacy connection permissions
+  grant no signing or cipher access. Lock, navigation, account changes and revocation invalidate pending
+  operations. Your key never enters the page. NIP-04 is not offered. Native private HTML artefacts use
+  a separate network-blocked viewer with no signing bridge; its comment-review bridge and authenticated native loading are unchanged.
+
 
 Web apps as browser tabs (build 13):
 

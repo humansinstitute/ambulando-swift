@@ -122,8 +122,9 @@ final class NIP07BrokerTests: XCTestCase {
         let awaited3 = await other.value
         XCTAssertEqual(awaited3, .failure(.denied))
         XCTAssertEqual(stored["https://other.example.com"], .denied)
-        // A denied site cannot ask to sign either, and forgetting it lets it ask again.
-        let awaited4 = await broker.handle(method: "signEvent", params: ["kind": 1] as [String: Any],
+        // Legacy explicit site denial still blocks all operations.
+        let deniedBroker = makeBroker(sites: ["https://other.example.com": .denied])
+        let awaited4 = await deniedBroker.handle(method: "signEvent", params: ["kind": 1] as [String: Any],
                                            context: .init(tabId: tab, documentId: 1, origin: "https://other.example.com"), isCurrent: { true })
         XCTAssertEqual(awaited4, .failure(.denied))
         broker.forget("https://other.example.com")
@@ -133,14 +134,13 @@ final class NIP07BrokerTests: XCTestCase {
     func testEverySignatureIsApprovedInASheetNamingTheSite() async throws {
         let broker = makeBroker(sites: [origin: .allowed])
         let params: [String: Any] = ["kind": 1, "content": "hello", "tags": [["t", "x"]], "created_at": 1_800_000_000]
-        for round in 0..<2 {
+        for _ in 0..<2 {
             let task = await start(broker, "signEvent", params)
             let prompt = try XCTUnwrapValue(broker.current)
             XCTAssertEqual(prompt.context.origin, origin)
-            XCTAssertFalse(prompt.offersSessionGrant, "ordinary kinds are never allowed in advance")
             guard case .sign(let template) = prompt.kind else { return XCTFail() }
             XCTAssertEqual(template.content, "hello")
-            broker.resolve(prompt.id, .allow(remember: true))
+            broker.resolve(prompt.id, .allow(remember: false))
             guard case .event(let event) = try await task.value.get() else { return XCTFail() }
             XCTAssertEqual(event.pubkey, pubkey)
             XCTAssertEqual(event.kind, 1)
@@ -162,12 +162,11 @@ final class NIP07BrokerTests: XCTestCase {
         XCTAssertNil(broker.current)
     }
 
-    func testAuthenticationKindsMayBeAllowedUntilLock() async throws {
+    func testAuthenticationKindGrantSurvivesLock() async throws {
         let broker = makeBroker()
         let auth: [String: Any] = ["kind": 27235, "tags": [["u", "https://app.example.com/api"], ["method", "GET"]]]
         let first = await start(broker, "signEvent", auth)
         let prompt = try XCTUnwrapValue(broker.current)
-        XCTAssertTrue(prompt.offersSessionGrant)
         broker.resolve(prompt.id, .allow(remember: true))
         guard case .event = try await first.value.get() else { return XCTFail() }
         // Same site and kind: signed without asking. Another site still asks.
@@ -177,13 +176,68 @@ final class NIP07BrokerTests: XCTestCase {
         XCTAssertNotNil(broker.current)
         broker.resolve(broker.current!.id, .deny(remember: false))
         _ = await other.value
-        // Locking forgets the grant.
+        // Lock cancels pending work but durable approvals survive unlock.
         broker.setLocked(true)
         broker.setLocked(false)
-        let again = await start(broker, "signEvent", auth)
-        XCTAssertNotNil(broker.current, "asks again after a lock")
-        broker.resolve(broker.current!.id, .deny(remember: false))
-        _ = await again.value
+        guard case .event = try await broker.handle(method: "signEvent", params: auth,
+            context: .init(tabId: tab, documentId: 2, origin: origin), isCurrent: { true }).get() else { return XCTFail() }
+
+    }
+
+    func testDurableSigningKindIsolationAndRevocation() async throws {
+        let broker = makeBroker(sites: [origin: .allowed])
+        let params: [String: Any] = ["kind": 1, "content": "first"]
+        let first = await start(broker, "signEvent", params)
+        XCTAssertNotNil(broker.current, "legacy connection permission grants no signing")
+        broker.resolve(broker.current!.id, .allow(remember: true))
+        _ = try await first.value.get()
+        let persisted = try JSONDecoder().decode(Set<String>.self, from: JSONEncoder().encode(broker.grants))
+        let service = signer!
+        let reopened = NIP07Broker(locked: false, grants: persisted,
+            publicKey: { try await service.publicKeyHex() }, signer: { try await service.sign($0) },
+            accountSigner: { try await service.signForBrowser($0, expectedPublicKey: $1) })
+        let silent = await reopened.handle(method: "signEvent", params: params,
+            context: .init(tabId: tab, documentId: 2, origin: origin), isCurrent: { true })
+        guard case .success(.event) = silent else { return XCTFail("durable exact kind grant") }
+        for (method, value, site) in [("signEvent", ["kind": 7] as [String: Any], origin),
+            ("signEvent", params, "https://app.example.com:8443"), ("getPublicKey", [:], origin)] {
+            let request = await start(reopened, method, value, origin: site)
+            XCTAssertNotNil(reopened.current, "no kind, origin port or connection escalation")
+            reopened.resolve(reopened.current!.id, .deny(remember: false))
+            _ = await request.value
+        }
+        reopened.forget(origin)
+        XCTAssertTrue(reopened.grants.isEmpty)
+        let revoked = await start(reopened, "signEvent", params)
+        reopened.resolve(reopened.current!.id, .deny(remember: false))
+        let result = await revoked.value
+        XCTAssertEqual(result, .failure(.denied))
+    }
+
+    func testRevocationWinsOverPendingRememberedSigning() async throws {
+        let broker = makeBroker()
+        let request = await start(broker, "signEvent", ["kind": 1])
+        let id = broker.current!.id
+        broker.forget(origin)
+        broker.resolve(id, .allow(remember: true))
+        guard case .failure = await request.value else { return XCTFail("revoked request must fail") }
+        XCTAssertTrue(broker.grants.isEmpty)
+    }
+
+    func testRevocationDiscardsAnAwaitedRememberedSignature() async throws {
+        let service = signer!
+        let gate = BrowserSigningGate()
+        let broker = NIP07Broker(locked: false,
+            grants: [NIP07Broker.operationGrant(origin, pubkey, "signEvent:1")],
+            publicKey: { try await service.publicKeyHex() },
+            signer: { template in await gate.wait(); return try await service.sign(template) })
+        let request = await start(broker, "signEvent", ["kind": 1])
+        let started = await gate.started
+        XCTAssertTrue(started)
+        broker.forget(origin)
+        await gate.finish()
+        let result = await request.value
+        XCTAssertEqual(result, .failure(.denied))
     }
 
     func testLockCancelsWaitingRequestsAndRefusesNewOnes() async throws {
@@ -251,4 +305,11 @@ final class NIP07BrokerTests: XCTestCase {
         broker.reset()
         XCTAssertEqual(stored, [:])
     }
+}
+
+private actor BrowserSigningGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    var started: Bool { continuation != nil }
+    func wait() async { await withCheckedContinuation { continuation = $0 } }
+    func finish() { continuation?.resume(); continuation = nil }
 }
