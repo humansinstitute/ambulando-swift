@@ -169,7 +169,7 @@ unsupported/missing images fail explicitly. See [document actions and export lim
 Source/build checks are separate from installation and real-account acceptance; Android remains deferred.
 
 
-## Chat inbox and indexed conversation search (Mac source 130)
+## Chat inbox and indexed conversation search (Mac source 131)
 
 Mac source adds the conversation inbox and inline thread reader described in
 [Chat inbox](chat-inbox.md). Android is the primary parallel delivery surface.
@@ -177,3 +177,8 @@ Web/iPhone parity remains pending approved nightly catch-up; shared Swift compil
 checks do not establish iPhone delivery. Offline coverage is cache-bound, title
 metadata is capped by the existing listing, and dense Markdown-page responsiveness
 remains an explicit acceptance gap. No backend or shared-contract change is implied.
+
+Build 131 fixes an existing-history query regression that could block Chat and
+starve Deck through their shared reader. Retained-cache upgrade and queued-loading
+regressions pass; installed-account acceptance remains pending. Nightly parity is
+held until recovery review rather than copying the unresolved build130 behavior.

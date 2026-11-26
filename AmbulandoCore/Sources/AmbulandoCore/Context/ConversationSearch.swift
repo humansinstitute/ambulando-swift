@@ -84,7 +84,16 @@ extension StoreReader {
     }
 
     public func threadParticipantNpubs(workspaceId: String, threadId: String) throws -> [String] {
-        let statement = try db.prepare("SELECT DISTINCT sender_npub FROM messages WHERE workspace_id = ?1 AND (thread_id = ?2 OR id IN (SELECT message_id FROM thread_membership WHERE workspace_id = ?1 AND thread_id = ?2)) AND deleted = 0 AND sender_npub IS NOT NULL ORDER BY sender_npub")
+        // Resolve IDs before reading senders. Sorting/deduplication on messages
+        // can otherwise select messages_sender and scan the workspace per thread.
+        // CROSS JOIN keeps the small ID set outside the canonical primary-key lookup.
+        let statement = try db.prepare("""
+        SELECT DISTINCT m.sender_npub FROM (
+          SELECT id FROM messages WHERE workspace_id = ?1 AND thread_id = ?2
+          UNION SELECT message_id FROM thread_membership WHERE workspace_id = ?1 AND thread_id = ?2
+        ) ids CROSS JOIN messages m ON m.workspace_id = ?1 AND m.id = ids.id
+        WHERE m.deleted = 0 AND m.sender_npub IS NOT NULL ORDER BY m.sender_npub
+        """)
         try statement.bind([.text(workspaceId), .text(threadId)])
         var people: [String] = []
         while try statement.step() { if let npub = statement.text(0) { people.append(npub) } }

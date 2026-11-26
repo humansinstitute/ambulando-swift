@@ -1,4 +1,4 @@
-# Conversation inbox (Mac source build 130)
+# Conversation inbox (Mac source build 131)
 
 Chat shows one compact row per cached conversation in the selected workspace,
 scope or channel, ordered by latest message activity. Direct messages and Note to
@@ -89,3 +89,26 @@ installation acceptance. Shared iOS compatibility is checked separately; the hos
 missing Xcode platform/runtime blocks a full iOS app build. Web/iPhone parity remains
 pending the approved nightly catch-up. Android remains the primary release surface;
 Rick reviews cross-platform integration before the full feature is accepted.
+
+## Existing-store loading recovery (build 131)
+
+Build 130's effective-membership summary predicates scanned workspace messages
+repeatedly. Chat could occupy the serialized reader long enough to prevent Deck's
+activity request from completing. Build 131 resolves canonical and inherited message
+IDs with existing indexes before reading summary fields and participants. It keeps
+record identities, branch membership, search semantics and schema version 11.
+
+`ConversationLoadingRecoveryTests` reopens a schema10-shaped retained cache with
+1,200 discussions and 48,000 messages, checks a deterministic SQLite work budget,
+and queues the actual Deck request behind an in-flight Chat load. It also checks
+branch deduplication, canonical ownership, title-index upgrade/idempotency and
+retained drafts/outbox. The test fails against build130's query sources and passes
+with the indexed reads. Run it with:
+
+```sh
+swift test --package-path AmbulandoCore --filter ConversationLoadingRecoveryTests
+```
+
+This establishes recovery on representative retained history, not acceptance on a
+particular installed account. MacBook acceptance and the separate dense Markdown
+rendering limitation remain pending. Nightly parity should wait for that review.
