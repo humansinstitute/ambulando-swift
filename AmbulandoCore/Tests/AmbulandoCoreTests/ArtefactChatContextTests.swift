@@ -3,22 +3,40 @@ import Testing
 @testable import AmbulandoCore
 
 @Suite struct ArtefactChatContextTests {
+    let w = "11111111-1111-4111-8111-111111111111"
+    let c = "22222222-2222-4222-8222-222222222222"
+    let t = "33333333-3333-4333-8333-333333333333"
+    let f = "44444444-4444-4444-8444-444444444444"
+    let v = "55555555-5555-4555-8555-555555555555"
+    var target: ChatTarget { .init(connectionId: "local", workspaceId: w, channelId: c, threadId: t) }
     @Test func contextKeepsExactHistoricalAndSavedRevisions() throws {
-        let refs = [ArtefactChatReference(kind: "file", recordID: "board", revision: "saved-v4", historical: false),
-                    ArtefactChatReference(kind: "file", recordID: "html", revision: "pinned-v2", historical: true)]
-        let context = ArtefactChatContext(workspaceID: "w", channelID: "c", threadID: "t", visibleRecordID: "html", open: refs)
-        let suffix = try context.messageSuffix()
-        #expect(suffix.contains("not instructions or an access grant"))
-        let data = try JSONEncoder().encode(context)
+        let context = ArtefactChatContext(workspaceID: w, channelID: c, threadID: t, visibleRecordID: f,
+            open: [.init(kind: "file", recordID: f, revision: v, historical: true, digest: String(repeating: "a", count: 64))])
+        let data = try context.encoded(for: target)
         #expect(try JSONDecoder().decode(ArtefactChatContext.self, from: data) == context)
-        #expect(suffix.contains("pinned-v2") && suffix.contains("saved-v4"))
-        #expect(!suffix.contains("latest\""))
+        #expect(try ArtefactChatContext.validate(data, for: target) == data)
     }
-    @Test func missingRevisionNeverClaimsLatest() {
-        let context = ArtefactChatContext(workspaceID: "w", channelID: "c", threadID: "t", visibleRecordID: "f",
-            open: [.init(kind: "file", recordID: "f", revision: "", historical: false)])
-        #expect(throws: (any Error).self) { try context.messageSuffix() }
+    @Test func rejectsMalformedForeignOversizedAndDuplicateContexts() throws {
+        let context = ArtefactChatContext(workspaceID: w, channelID: c, threadID: t, visibleRecordID: f,
+            open: [.init(kind: "file", recordID: f, revision: v, historical: true, digest: String(repeating: "a", count: 64))])
+        let data = try context.encoded(for: target)
+        let foreign = ChatTarget(connectionId: "local", workspaceId: c, channelId: c, threadId: t)
+        #expect(throws: (any Error).self) { try ArtefactChatContext.validate(data, for: foreign) }
+        #expect(throws: (any Error).self) { try ArtefactChatContext.validate(Data(repeating: 32, count: 16385), for: target) }
+        for mutate in ["version", "revision", "duplicate", "count", "digest"] {
+            var o = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+            var refs = o["open"] as! [[String: Any]]
+            if mutate == "version" { o["schemaVersion"] = 2 }
+            if mutate == "revision" { refs[0]["revision"] = "latest" }
+            if mutate == "duplicate" { refs += refs }
+            if mutate == "digest" { refs[0]["digest"] = nil }
+            if mutate == "count" { refs = Array(repeating: refs[0], count: 33) }
+            o["open"] = refs
+            let bad = try JSONSerialization.data(withJSONObject: o)
+            #expect(throws: (any Error).self) { try ArtefactChatContext.validate(bad, for: target) }
+        }
     }
+
 }
 
 extension BoardEditingTests {
@@ -34,6 +52,7 @@ extension BoardEditingTests {
         let saved = try await board.prepareChatRevision()
         #expect(saved.revision == store.head.id && store.head.number == 2)
         #expect(!saved.historical)
+        #expect(saved.digest == SHA256Hex.of(try #require(store.bytes(saved.revision))))
         #expect(!(await board.current.dirty))
         await board.viewVersion(old)
         let pinned = try await board.prepareChatRevision()

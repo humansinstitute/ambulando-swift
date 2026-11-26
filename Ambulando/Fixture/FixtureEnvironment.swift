@@ -862,7 +862,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             let row: [String: Any] = ["id": id, "workspace_id": w, "channel_id": c, "thread_id": threadId, "thread_source_message_id": source,
                                       "body": body, "client_request_id": requestId ?? NSNull(), "record_state": "active", "row_version": 1,
                                       "sender_npub": _actor, "created_by_actor_label": "You (sample identity)", "created_at": now, "updated_at": now,
-                                      "attachments": attachments, "metadata": ["attachments": attachments]]
+                                      "attachments": attachments, "metadata": object["metadata"] as? [String: Any] ?? [:]]
             posted.append(row)
             if let requestId { requests[requestId] = row }
             emitLocked(workspace: w, channel: c, type: "message", id: id, rowVersion: 1)

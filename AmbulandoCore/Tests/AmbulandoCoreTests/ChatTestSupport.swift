@@ -158,7 +158,7 @@ final class FakeChatTower: @unchecked Sendable {
             let row: [String: Any] = ["id": id, "workspace_id": workspaceId, "channel_id": channel, "thread_id": tid as Any,
                                       "body": body, "client_request_id": requestId as Any, "record_state": "active", "row_version": 1,
                                       "sender_npub": actorNpub, "created_at": timestamp(), "updated_at": "2026-10-24T00:00:00.000Z",
-                                      "mentions": object["mentions"] ?? []]
+                                      "mentions": object["mentions"] ?? [], "metadata": object["metadata"] ?? [:]]
             var stored = row
             stored["thread_source_message_id"] = (threads[tid ?? ""]?["source_message_id"]) ?? NSNull()
             messages.append(stored)

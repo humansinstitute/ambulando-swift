@@ -911,7 +911,7 @@ final class ComposerModel {
 
     /// Hands the composed text to the outbox (which clears the stored draft in the same transaction).
     func send(with outbox: OutboxSender, connection: ConnectionRecord, workspace: WorkspaceRecord,
-              onEnqueued: (@MainActor @Sendable (String) -> Void)? = nil, contextSuffix: String = "") {
+              onEnqueued: (@MainActor @Sendable (String) -> Void)? = nil, artefactContext: Data? = nil) {
         debounce?.cancel()
         debounce = nil
         let text = text, mentions = mentions, target = target, attachments = attachments
@@ -922,7 +922,7 @@ final class ComposerModel {
         edited = false
         chain {
             do {
-                if let item = try await outbox.send(text: text + contextSuffix, mentions: mentions, target: target, connection: connection, workspace: workspace, attachments: attachments) {
+                if let item = try await outbox.send(text: text, mentions: mentions, target: target, connection: connection, workspace: workspace, attachments: attachments, artefactContext: artefactContext) {
                     await onEnqueued?(item.id)
                 }
             }
@@ -1485,10 +1485,10 @@ struct Composer: View {
         Task { @MainActor in
             defer { preparingArtefacts = false; artefacts?.busy = false }
             do {
-                let suffix = try await artefacts?.prepare(target: target, holdForEnqueue: true) ?? ""
+                let context = try await artefacts?.prepare(target: target, holdForEnqueue: true)
                 guard model.connection?.id == connection.id, model.isUnlocked,
                       model.selectedWorkspaceId == workspace.id else { return }
-                composer.send(with: outbox, connection: connection, workspace: workspace, onEnqueued: onEnqueued, contextSuffix: suffix)
+                composer.send(with: outbox, connection: connection, workspace: workspace, onEnqueued: onEnqueued, artefactContext: context)
                 await composer.waitForPendingSend()
             } catch { /* The workspace displays the actionable failure; draft stays untouched. */ }
         }

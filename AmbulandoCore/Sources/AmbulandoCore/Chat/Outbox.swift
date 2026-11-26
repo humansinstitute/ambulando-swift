@@ -61,6 +61,10 @@ public enum OutboxRequest {
         // Storage links in the body are attachments too (sol `mergeChatStorageAttachments`).
         let attachments = StorageMarkdown.merged(wire, body: item.body)
         var metadata: [String: Any] = [:]
+        if let context = item.artefactContext {
+            _ = try ArtefactChatContext.validate(context, for: item.target)
+            metadata[ArtefactChatContext.metadataKey] = try JSONSerialization.jsonObject(with: context)
+        }
         if !attachments.isEmpty { metadata["attachments"] = attachments.map(\.requestObject) }
         if item.mentions.isEmpty, item.threadId != nil, let inheritedAgentRecipient, !inheritedAgentRecipient.isEmpty {
             metadata["agent_direct_recipient_npub"] = inheritedAgentRecipient
@@ -130,7 +134,7 @@ public struct OutboxSender: Sendable {
     /// Composes a message into the outbox (clearing that draft) and starts sending if unlocked.
     @discardableResult
     public func send(text: String, mentions selected: [Mention], target: ChatTarget, connection: ConnectionRecord,
-                     workspace: WorkspaceRecord, attachments: [PendingAttachment] = []) async throws -> OutboxItem? {
+                     workspace: WorkspaceRecord, attachments: [PendingAttachment] = [], artefactContext: Data? = nil) async throws -> OutboxItem? {
         guard target.connectionId == connection.id, target.workspaceId == workspace.id else { throw TowerError.unsafePath }
         let (encoded, mentions) = MentionCodec.encode(text: text, selected: selected)
         let body = OutboxRequest.normalizedBody(encoded)
@@ -138,7 +142,7 @@ public struct OutboxSender: Sendable {
         // A pasted item still uploading would otherwise be sent as its placeholder text.
         guard !UploadToken.contains(in: body) else { throw ComposerUploadError.unresolved }
         let item = try await store.writer.enqueueSend(target: target, origin: connection.origin, signerNpub: connection.signerNpub,
-                                                      appNpub: workspace.appNpub, body: body, mentions: mentions, attachments: attachments)
+                                                      appNpub: workspace.appNpub, body: body, mentions: mentions, attachments: attachments, artefactContext: artefactContext)
         await kick(connection)
         return item
     }

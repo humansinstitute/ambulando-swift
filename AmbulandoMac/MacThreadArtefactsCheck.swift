@@ -30,7 +30,7 @@ enum MacThreadArtefactFixture {
         if url.path == base + html + "/html" {
             let selected = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "version_id" }?.value ?? htmlV2
             return (200, ["workspace_id": FixtureTower.studio, "source": ["id": html, "type": "html"],
-                "content": ["html": String(decoding: htmlBytes, as: UTF8.self), "version_id": selected,
+                "content": ["html": String(decoding: htmlBytes, as: UTF8.self), "digest": SHA256Hex.of(htmlBytes), "version_id": selected,
                     "version_number": selected == htmlV1 ? 1 : 2, "current_version_id": htmlV2, "current_version_number": 2],
                 "versions": [["id": htmlV1, "version_number": 1], ["id": htmlV2, "version_number": 2]]])
         }
@@ -58,7 +58,10 @@ extension MacThreadRegression {
         for _ in 0..<50 { if MacThreadArtefacts.testingState != nil { break }; await settle() }
         guard let state = MacThreadArtefacts.testingState else { throw Failure(description: "mounted thread workspace") }
         state.open(kind: "file", id: f.board)
-        for _ in 0..<100 { if state.tabs.first?.prepare != nil { break }; await settle() }
+        for _ in 0..<100 {
+            if let prepare = state.tabs.first?.prepare, (try? await prepare()) != nil { break }
+            await settle()
+        }
         guard let boardTab = state.tabs.first, let boardPrepare = boardTab.prepare else { throw Failure(description: "board callback") }
         _ = try await boardPrepare()
         let reply = try textView(window)
@@ -68,9 +71,9 @@ extension MacThreadRegression {
             if let tab = state.tabs.last, let prepare = tab.prepare, (try? await prepare()) != nil { break }
             await settle()
         }
-        let suffix = try await state.prepare(target: target)
+        let context = try await state.prepare(target: target)
         await settle()
-        try require(suffix.contains(f.board) && suffix.contains(f.html) && suffix.contains(f.htmlV2), "both exact loaded revisions in context")
+        try require(String(decoding: context ?? Data(), as: UTF8.self).contains(f.board) && String(decoding: context ?? Data(), as: UTF8.self).contains(f.htmlV2), "both exact loaded revisions in context")
         try await menuAction(window, title: "v1", button: "artefacts.versionPicker")
         await settle()
         guard let htmlPrepare = state.tabs.last?.prepare else { throw Failure(description: "HTML version callback") }
@@ -99,8 +102,12 @@ extension MacThreadRegression {
         do { _ = try await state.prepare(target: target); throw Failure(description: "offline barrier accepted") }
         catch is URLError {}
         try require(state.failure != nil && reply.string == "change this", "failed save retains actionable draft")
+        let beforeFailedSend = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: focus.threadId, limit: 500).count
         try press(window, "composer.send"); await settle(); await settle()
         try require(reply.string == "change this", "native Send failure retains original draft")
+        let afterFailedSend = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: focus.threadId, limit: 500).count
+        let pendingFailedSend = try await store.reader.outbox(connectionId: connection.id, signerNpub: connection.signerNpub)
+        try require(afterFailedSend == beforeFailedSend && pendingFailedSend.isEmpty, "failed save neither enqueues nor posts a message")
         boardTab.prepare = savedPrepare
         _ = try await state.prepare(target: target)
         await settle()
@@ -125,16 +132,28 @@ extension MacThreadRegression {
         var sent: MessageRecord?
         for _ in 0..<60 {
             sent = try await store.reader.threadMessages(workspaceId: workspace.id, threadId: focus.threadId, limit: 500)
-                .first { $0.body.hasPrefix("change this") && $0.body.contains("Artefact workspace context") }
+                .first { $0.body == "change this" }
             if sent != nil { break }; await settle()
         }
         guard let sent else { throw Failure(description: "canonical fixture message receipt after save") }
         let savedState = await boardSession.controller.current
         try require(fixture.tower.boards.versionCount(f.board) == versionsBeforeSend + 1, "Send publishes pending whiteboard change first")
-        try require(sent.body.contains(savedState.baseVersionId) && sent.body.contains(f.htmlV1), "received body names exact saved board and selected HTML revisions")
+        try require(sent.body == "change this", "canonical visible body is exact user text")
+        let received = try JSONSerialization.jsonObject(with: sent.raw) as! [String: Any]
+        let metadata = received["metadata"] as? [String: Any]
+        let snapshotData = try JSONSerialization.data(withJSONObject: metadata?[ArtefactChatContext.metadataKey] as Any)
+        _ = try ArtefactChatContext.validate(snapshotData, for: target)
+        let frozenContext = try JSONDecoder().decode(ArtefactChatContext.self, from: snapshotData)
+        try require(frozenContext.open.contains { $0.recordID == f.board && $0.revision == savedState.baseVersionId }
+            && frozenContext.open.contains { $0.recordID == f.html && $0.revision == f.htmlV1 && $0.historical }, "metadata names exact saved board and pinned HTML revisions")
+        let exactSnapshot = try await state.prepare(target: target)
+        let expectedSnapshot = try JSONDecoder().decode(ArtefactChatContext.self, from: exactSnapshot ?? Data())
+        try require(frozenContext.open.first { $0.recordID == f.board }?.digest == SHA256Hex.of(fixture.tower.boards.currentBytes(f.board) ?? Data()), "saved board digest survives version-list clearing")
+        try require(frozenContext.open.first { $0.recordID == f.html }?.digest == SHA256Hex.of(f.htmlBytes), "pinned HTML digest retained")
+        try require(frozenContext == expectedSnapshot, "canonical metadata equals complete exact selected snapshot")
         guard let canonical = fixture.tower.boards.currentBytes(f.board) else { throw Failure(description: "saved board bytes") }
         try require(String(decoding: canonical, as: UTF8.self).contains("threadSendAcceptance"), "exact saved board contains final edit")
-        print("AGENT_CONTEXT_BASE64 \(Data(sent.body.utf8).base64EncodedString())")
+        print("AGENT_CONTEXT_BASE64 \(sent.raw.base64EncodedString())")
         try snapshot(window, model: model, name: "mac-thread-artefacts")
         print("PASS: actual AppKit thread, two editor tabs, exact context, tab focus, close/reopen identity, expand, resize and failure draft preservation; synthetic Tower and injected failure")
     }

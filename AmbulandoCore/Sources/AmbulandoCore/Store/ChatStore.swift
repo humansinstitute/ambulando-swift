@@ -69,6 +69,8 @@ public struct OutboxItem: Sendable, Equatable, Identifiable {
     /// Images to upload before the message is signed (their storage ids become part of the signed request).
     public var attachments: [PendingAttachment] = []
 
+    public var artefactContext: Data? = nil
+
     public var target: ChatTarget { ChatTarget(connectionId: connectionId, workspaceId: workspaceId, channelId: channelId, threadId: threadId) }
 }
 
@@ -169,24 +171,25 @@ extension StoreWriter {
     /// the text is never held only in memory between the two.
     @discardableResult
     public func enqueueSend(id: String = UUID().uuidString.lowercased(), target: ChatTarget, origin: String, signerNpub: String, appNpub: String,
-                            body: String, mentions: [Mention], attachments: [PendingAttachment] = []) async throws -> OutboxItem {
+                            body: String, mentions: [Mention], attachments: [PendingAttachment] = [], artefactContext: Data? = nil) async throws -> OutboxItem {
+        if let artefactContext { _ = try ArtefactChatContext.validate(artefactContext, for: target) }
         let stamp = now()
         try db.transaction {
             try db.prepare("""
             INSERT INTO outbox(id, connection_id, origin, signer_npub, workspace_id, app_npub, channel_id, thread_id, create_thread, body, mentions,
-                               request, state, attempts, created_at, updated_at, attachments)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,?,0,?,?,?)
+                               request, state, attempts, created_at, updated_at, attachments, artefact_context)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,?,0,?,?,?,?)
             """).run([.text(id), .text(target.connectionId), .text(origin), .text(signerNpub), .text(target.workspaceId), .text(appNpub),
                       .text(target.channelId), target.threadId.sql, .int(target.threadId == nil ? 1 : 0), .text(body),
                       .text(JSONText.mentions(mentions)), .text(OutboxState.awaitingSignature.rawValue), .text(stamp), .text(stamp),
-                      .text(JSONText.attachments(attachments))])
+                      .text(JSONText.attachments(attachments)), artefactContext.map { .blob($0) } ?? .null])
             try db.prepare("DELETE FROM drafts WHERE key = ?").run([.text(target.draftKey)])
         }
         await emit([ChangeKey(.outbox, target.workspaceId, chatScope: .conversation(channelId: target.channelId, threadId: target.threadId)), ChangeKey(.drafts, target.workspaceId)])
         return OutboxItem(id: id, connectionId: target.connectionId, origin: origin, signerNpub: signerNpub, workspaceId: target.workspaceId,
                           appNpub: appNpub, channelId: target.channelId, threadId: target.threadId, createThread: target.threadId == nil,
                           body: body, mentions: mentions, request: nil, state: .awaitingSignature, attempts: 0, lastStatus: nil, lastCode: nil,
-                          lastError: nil, createdAt: stamp, attachments: attachments)
+                          lastError: nil, createdAt: stamp, attachments: attachments, artefactContext: artefactContext)
     }
 
     /// Records upload progress for an unsigned row's attachments (never after the request is frozen).
@@ -385,7 +388,7 @@ extension StoreReader {
 
     static let outboxColumns = """
     id, connection_id, origin, signer_npub, workspace_id, app_npub, channel_id, thread_id, create_thread, body, mentions, request, state, attempts,
-    last_status, last_code, last_error, created_at, attachments
+    last_status, last_code, last_error, created_at, attachments, artefact_context
     """
 
     static func outbox(_ s: SQLiteConnection.Statement) -> OutboxItem {
@@ -393,7 +396,7 @@ extension StoreReader {
                    channelId: s.text(6)!, threadId: s.text(7), createThread: s.int(8) != 0, body: s.text(9)!, mentions: JSONText.mentions(s.text(10)),
                    request: s.isNull(11) ? nil : s.blob(11), state: OutboxState(rawValue: s.text(12) ?? "") ?? .failed, attempts: Int(s.int(13)),
                    lastStatus: s.isNull(14) ? nil : Int(s.int(14)), lastCode: s.text(15), lastError: s.text(16), createdAt: s.text(17)!,
-                   attachments: JSONText.attachments(s.text(18)))
+                   attachments: JSONText.attachments(s.text(18)), artefactContext: s.isNull(19) ? nil : s.blob(19))
     }
 
     /// Newest `limit` channel-level posts (thread roots), oldest first, each with its reply count.

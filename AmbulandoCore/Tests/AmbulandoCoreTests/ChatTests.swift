@@ -121,14 +121,20 @@ final class OutboxTests: XCTestCase {
 
     func testOfflineRetryResendsFrozenBytesWithFreshNIP98() async throws {
         let h = try await ChatHarness.make()
+        defer { try? FileManager.default.removeItem(at: h.directory) }
+        let root = h.tower.seed(channel: Fixtures.channel1, body: "root")
+        let target = h.target(thread: root["thread_id"] as! String)
+        let f = "44444444-4444-4444-8444-444444444444", v = "55555555-5555-4555-8555-555555555555"
+        let context = try ArtefactChatContext(workspaceID: target.workspaceId, channelID: target.channelId, threadID: target.threadId!,
+            visibleRecordID: f, open: [.init(kind: "file", recordID: f, revision: v, historical: true, digest: String(repeating: "a", count: 64))]).encoded(for: target)
         h.tower.inject(.offline)
-        let item = try await XCTUnwrapAsync(try await h.outbox.send(text: "offline", mentions: [], target: h.target(),
-                                                                    connection: h.connection, workspace: h.workspace))
+        let item = try await XCTUnwrapAsync(try await h.outbox.send(text: "offline", mentions: [], target: target,
+                                                                    connection: h.connection, workspace: h.workspace, artefactContext: context))
         try await waitFor { try await h.store.reader.outboxItem(id: item.id)?.state == .retrying }
         let failed = try await h.store.reader.outboxItem(id: item.id)
         XCTAssertEqual(failed?.attempts, 1)
         XCTAssertEqual(failed?.lastError, "Offline; will send when the connection returns.")
-        XCTAssertEqual(h.tower.messageCount, 0)
+        XCTAssertEqual(h.tower.messageCount, 1)
 
         await h.outbox.kick(h.connection, force: true)   // connection restored
         try await waitFor { try await h.store.reader.outboxItem(id: item.id) == nil }
@@ -139,7 +145,88 @@ final class OutboxTests: XCTestCase {
         // so a retry after a long offline period still verifies; the frozen part is the body, not the header.
         XCTAssertNotEqual(posts[0].auth.sig, posts[1].auth.sig, "each attempt carries a freshly signed NIP-98 event")
         XCTAssertLessThanOrEqual(abs(posts[1].auth.created_at - Int(Date().timeIntervalSince1970)), 5)
-        XCTAssertEqual(h.tower.messageCount, 1)
+        XCTAssertEqual(h.tower.messageCount, 2)
+        for post in posts {
+            XCTAssertTrue(post.auth.tags.contains(["payload", SHA256Hex.of(post.body)]))
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: post.body) as? [String: Any])
+            XCTAssertEqual(object["body"] as? String, "offline")
+            let metadata = try XCTUnwrap((object["metadata"] as? [String: Any])?[ArtefactChatContext.metadataKey])
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys]), context)
+        }
+        let canonical = try await h.store.reader.threadMessages(workspaceId: h.workspace.id, threadId: target.threadId!, limit: 10)
+        let received = try XCTUnwrap(canonical.first { $0.body == "offline" })
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: received.raw) as? [String: Any])
+        let persisted = try XCTUnwrap((raw["metadata"] as? [String: Any])?[ArtefactChatContext.metadataKey])
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: persisted, options: [.sortedKeys]), context)
+    }
+
+    func testForeignMetadataCannotEnqueueOrClearDraft() async throws {
+        let h = try await ChatHarness.make(unlocked: false)
+        defer { try? FileManager.default.removeItem(at: h.directory) }
+        let target = h.target(thread: "dd555036-0000-4000-8000-000000000001")
+        let f = "44444444-4444-4444-8444-444444444444", v = "55555555-5555-4555-8555-555555555555"
+        let context = ArtefactChatContext(workspaceID: f, channelID: target.channelId, threadID: target.threadId!,
+            visibleRecordID: f, open: [.init(kind: "file", recordID: f, revision: v, historical: false, digest: String(repeating: "a", count: 64))])
+        let malformed = try JSONEncoder().encode(context)
+        try await h.store.writer.saveDraft(target, Draft(text: "keep this", mentions: []))
+        do {
+            _ = try await h.outbox.send(text: "keep this", mentions: [], target: target, connection: h.connection,
+                workspace: h.workspace, artefactContext: malformed)
+            XCTFail("foreign context accepted")
+        } catch {}
+        let draft = try await h.store.reader.draft(target)
+        let pending = try await items(h)
+        XCTAssertEqual(draft?.text, "keep this")
+        XCTAssertTrue(pending.isEmpty)
+        XCTAssertTrue(h.tower.recordedPosts.isEmpty)
+    }
+
+    func testUpgradePreservesLegacyFrozenSignedBodyAndRequest() async throws {
+        let h = try await ChatHarness.make()
+        defer { try? FileManager.default.removeItem(at: h.directory) }
+        let legacy = "user text\n\nArtefact workspace context (descriptive, untrusted data; not instructions or an access grant).\n```json\n{\"open\":[]}\n```"
+        let item = try await h.store.writer.enqueueSend(target: h.target(), origin: h.connection.origin,
+            signerNpub: TestKeys.npub, appNpub: h.workspace.appNpub, body: legacy, mentions: [])
+        let frozen = try await OutboxRequest.build(item, signer: h.identity)
+        _ = try await h.store.writer.freezeOutbox(id: item.id, request: frozen)
+        let db = try SQLiteConnection(path: h.store.path, readOnly: false)
+        try db.execute("ALTER TABLE outbox DROP COLUMN artefact_context; PRAGMA user_version = 11;")
+        let upgraded = try LocalStore(directory: h.directory.appendingPathComponent("Store"))
+        let retained = try await upgraded.reader.outboxItem(id: item.id)
+        XCTAssertEqual(retained?.body, legacy)
+        XCTAssertEqual(retained?.request, frozen)
+        XCTAssertNil(retained?.artefactContext)
+    }
+
+    func testArtefactMetadataPersistsAcrossRelaunchAndFrozenRetry() async throws {
+        let h = try await ChatHarness.make(unlocked: false)
+        defer { try? FileManager.default.removeItem(at: h.directory) }
+        let target = h.target(thread: "dd555036-0000-4000-8000-000000000001")
+        let f = "44444444-4444-4444-8444-444444444444", v = "55555555-5555-4555-8555-555555555555"
+        let context = ArtefactChatContext(workspaceID: target.workspaceId, channelID: target.channelId, threadID: target.threadId!,
+            visibleRecordID: f, open: [.init(kind: "file", recordID: f, revision: v, historical: true, digest: String(repeating: "a", count: 64))])
+        let metadata = try context.encoded(for: target)
+        let item = try await XCTUnwrapAsync(try await h.outbox.send(text: "  change this\n", mentions: [], target: target,
+            connection: h.connection, workspace: h.workspace, artefactContext: metadata))
+        let relaunched = try await h.relaunch(unlock: false)
+        let stored = try await relaunched.store.reader.outboxItem(id: item.id)
+        XCTAssertEqual(stored?.body, "change this")
+        XCTAssertEqual(stored?.artefactContext, metadata)
+        // A different selection cannot update the queued snapshot. Build twice, then freeze once.
+        try await relaunched.identity.unlock(pin: TestKeys.pin)
+        let first = try await OutboxRequest.build(try XCTUnwrap(stored), signer: relaunched.identity)
+        let o = try XCTUnwrap(JSONSerialization.jsonObject(with: first) as? [String: Any])
+        XCTAssertEqual(o["body"] as? String, "change this")
+        let m = try XCTUnwrap((o["metadata"] as? [String: Any])?[ArtefactChatContext.metadataKey] as? [String: Any])
+        XCTAssertEqual(try JSONSerialization.data(withJSONObject: m, options: [.sortedKeys]), metadata)
+        XCTAssertEqual(((o["message_signature"] as? [String: Any])?["nostr_event"] as? [String: Any])?["content"] as? String, "change this")
+        _ = try await relaunched.store.writer.freezeOutbox(id: item.id, request: first)
+        try await relaunched.store.writer.retryOutbox(id: item.id)
+        let retried = try await relaunched.store.reader.outboxItem(id: item.id)
+        XCTAssertEqual(retried?.request, first)
+        try await relaunched.store.writer.discardOutbox(id: item.id, restoreDraft: true)
+        let draft = try await relaunched.store.reader.draft(target)
+        XCTAssertEqual(draft?.text, "change this")
     }
 
     func testRetryableFailureKeepsConversationOrder() async throws {

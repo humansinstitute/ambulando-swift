@@ -237,7 +237,7 @@ public actor BoardController {
     private var viewing: (versionId: String, number: Int, scene: BoardScene.Object)?
     private var loadKey = ""
     private var sessions: [String: Session] = [:]
-    private var cache: [String: BoardScene.Object] = [:]
+    private var cache: [String: (scene: BoardScene.Object, digest: String)] = [:]
     private var loading: Task<Void, Never>?
     private var saving = false
 
@@ -302,11 +302,11 @@ public actor BoardController {
     }
 
     private func readVersion(_ versionId: String, sha256: String?) async throws -> BoardScene.Object {
-        if let cached = cache[versionId] { return cached }
+        if let cached = cache[versionId] { return cached.scene }
         let bytes = try await transport.read(versionId, sha256)
         let scene = try BoardScene.parse(bytes)
         if cache.count > 8 { cache.removeAll() }
-        cache[versionId] = scene
+        cache[versionId] = (scene, SHA256Hex.of(bytes))
         return scene
     }
 
@@ -517,7 +517,7 @@ public actor BoardController {
         do {
             let bytes = try BoardScene.serialize(scene, summary: summary, baseVersionId: base.versionId)
             let version = try await transport.publish(base.versionId, bytes, summary)
-            cache[version.id] = scene
+            cache[version.id] = (scene, SHA256Hex.of(bytes))
             self.base = (version.id, version.number, scene, fingerprint)
             let stillDirty = working.map(BoardScene.fingerprint) != fingerprint
             if stillDirty { persistDraft() } else { drafts.delete(fileId) }
@@ -565,7 +565,11 @@ public actor BoardController {
         guard !state.dirty, state.save != .saving else { throw ArtefactChatContext.ContextError.unresolved }
         let revision = viewing?.versionId ?? base?.versionId ?? ""
         guard !revision.isEmpty else { throw ArtefactChatContext.ContextError.unresolved }
-        return ArtefactChatReference(kind: "file", recordID: fileId, revision: revision, historical: viewing != nil)
+        // The version menu may be cleared after Save. Keep the digest of the exact loaded/published bytes,
+        // or reread this immutable version if its bounded cache entry was evicted.
+        _ = try await readVersion(revision, sha256: state.versions.first(where: { $0.id == revision })?.sha256)
+        guard let digest = cache[revision]?.digest else { throw ArtefactChatContext.ContextError.unresolved }
+        return ArtefactChatReference(kind: "file", recordID: fileId, revision: revision, historical: viewing != nil, digest: digest)
     }
 
     // MARK: Versions

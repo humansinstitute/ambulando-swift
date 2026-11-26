@@ -48,7 +48,7 @@ final class ConversationLoadingRecoveryTests: XCTestCase {
         let db = try SQLiteConnection(path: h.store.path, readOnly: false)
         // Schema10 had message FTS, branch membership and durable pending work, but
         // no thread title index. Populate that retained shape before an actual reopen.
-        try db.execute("DROP TRIGGER search_threads_ai; DROP TRIGGER search_threads_au; DROP TRIGGER search_threads_ad; DELETE FROM search_index WHERE kind = 'thread'; PRAGMA user_version = 10;")
+        try db.execute("ALTER TABLE outbox DROP COLUMN artefact_context; DROP TRIGGER search_threads_ai; DROP TRIGGER search_threads_au; DROP TRIGGER search_threads_ad; DELETE FROM search_index WHERE kind = 'thread'; PRAGMA user_version = 10;")
         try db.transaction {
             let channel = try db.prepare("INSERT INTO channels(workspace_id,id,scope_id,name,row_version,updated_at,raw) VALUES(?,?,'scope','History',1,'1',?)")
             for c in 0..<6 { try channel.run([.text(h.workspace.id), .text("history-\(c)"), .blob(Data("{}".utf8))]) }
@@ -113,7 +113,7 @@ final class ConversationLoadingRecoveryTests: XCTestCase {
         let version = try await reopened.writer.schemaVersion()
         let draft = try await reopened.reader.draft(target)
         let item = try await reopened.reader.outboxItem(id: pending.id)
-        XCTAssertEqual(version, 11)
+        XCTAssertEqual(version, 12)
         XCTAssertEqual(draft?.text, "retained draft")
         XCTAssertEqual(item?.body, "retained outbox")
         let titles = try db.prepare("SELECT COUNT(*) FROM search_index WHERE search_index MATCH 'title : retained' AND kind = 'thread'")

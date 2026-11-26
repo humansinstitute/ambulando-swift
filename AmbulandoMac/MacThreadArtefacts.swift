@@ -62,12 +62,12 @@ final class MacThreadArtefacts: Equatable {
         }
         return true
     }
-    func prepare(target: ChatTarget, holdForEnqueue: Bool = false) async throws -> String {
+    func prepare(target: ChatTarget, holdForEnqueue: Bool = false) async throws -> Data? {
         guard !busy else { throw ArtefactChatContext.ContextError.unresolved }
-        guard let thread = target.threadId else { return "" }
+        guard let thread = target.threadId else { return nil }
         let open = tabs.filter(\.open)
         // Hidden workspace has no visible artefact, but dirty open editors must still save.
-        guard !open.isEmpty else { return "" }
+        guard !open.isEmpty else { return nil }
         NSApp.keyWindow?.makeFirstResponder(nil)
         busy = true; failure = nil
         var prepared = false
@@ -84,10 +84,10 @@ final class MacThreadArtefacts: Equatable {
                 preparingTitle = tab.title
                 if let validate = tab.validate, !(await validate(reference)) { throw ArtefactChatContext.ContextError.unresolved }
             }
-            let suffix = try ArtefactChatContext(workspaceID: target.workspaceId, channelID: target.channelId,
-                threadID: thread, visibleRecordID: selected ?? open[0].id, workspaceVisible: shown, open: refs).messageSuffix()
+            let context = try ArtefactChatContext(workspaceID: target.workspaceId, channelID: target.channelId,
+                threadID: thread, visibleRecordID: selected ?? open[0].id, workspaceVisible: shown, open: refs).encoded(for: target)
             prepared = true
-            return suffix
+            return context
         } catch {
             failure = "Send paused for \(preparingTitle): \(error.localizedDescription) Resolve the affected tab, then press Send to retry."
             throw error

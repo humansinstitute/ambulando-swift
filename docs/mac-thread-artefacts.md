@@ -1,4 +1,4 @@
-# Mac thread artefact workspace (source build 132)
+# Mac thread artefact workspace (source build 133)
 
 A Doc/File reference in an open Mac conversation opens a retained workspace beside chat.
 Chat starts at roughly one third of the available width. Drag the divider to resize it.
@@ -29,19 +29,37 @@ The app then validates the captured selections and holds the barrier through dur
 insertion. The draft is separate from the generated context. Queue failure restores only the
 original user draft; retries reuse the existing frozen request and idempotency key.
 
-A labelled JSON block is included in the existing signed message body. It contains native
-Doc/File IDs, exact revisions, historical flags, the selected tab, actual workspace visibility,
-and routing captured from the composer's ChatTarget. File revisions are immutable version
-UUIDs. Doc history uses the supported `/docs/:id/versions` snapshot `row_version`; a matching
-full envelope must exist, and its SHA256 digest accompanies the reference. A mutable head
-row alone is not sufficient. No binary assets, titles or browser state enter the context.
+The visible and kind-33358-signed body contains only user text under existing trimming and
+mention-token semantics. Generated prose/JSON is never appended. The existing generic message
+`metadata.ambulando_artefact_context` carries schemaVersion 1 with workspaceID, channelID,
+threadID, workspaceVisible, visibleRecordID and open references. Each reference carries kind,
+recordID, revision, revisionKind, historical and the exact canonical SHA256 digest. File revisions
+use immutable `file_version_id` UUIDs. Doc snapshots use `doc_versions.row_version` with a
+required SHA256 digest of the full canonical snapshot bytes; a mutable head is insufficient.
+No titles, binary assets, browser state or instructions enter the snapshot.
 
-The block is descriptive, untrusted context, never instructions or an access grant. Agent
-retrieval must use ordinary ACL-checked contracts and must not silently substitute latest.
-Autopilot's existing direct-chat prompt projection includes message bodies; arbitrary new
-metadata is not relied upon. Source inspection and synthetic tests do not establish receipt
-or exact-revision retrieval by a real account/agent. That authenticated acceptance check
-remains required, as does testing on Pete's MacBook after pulling and building the source.
+Context is validated against the captured ChatTarget before the atomic outbox write, stored
+in an additive local column, and included in the frozen exact JSON request. Fresh NIP-98 headers
+cover all request bytes including metadata. Retry never recaptures current tabs or routing.
+Old queued bodies and signed requests remain unchanged, including pre-133 generated suffixes.
+Discard/Edit restores the stored user body for new messages; old body content remains history.
+No history migration or display heuristic hides user-authored JSON.
+
+Limits: 32 unique Doc/File references and 16 KiB UTF-8 JSON per snapshot; UUID routing/record
+keys, exact revision kinds, positive Doc revision and SHA256 syntax are checked. Missing or
+invalid context blocks a new native enqueue, preserving the draft. Autopilot ignores malformed,
+oversized or foreign-routing snapshots and retains human text. It compares routing to canonical
+message fields, never lets payload fields select a workspace, change eligibility or grant access.
+Only actionable Prompt snapshots appear in a separate untrusted dispatch section, in both
+initial and rehydrated envelopes; historical metadata cannot bypass the history budget. That
+section is bounded to the latest 16 snapshots / 64 KiB compact JSON with an omission notice.
+All retrieval remains through ACL-checked exact-revision contracts.
+
+NStack's existing generic message metadata contract needs no backend/schema change. Autopilot
+must activate the corresponding source change to project this namespace; the old runtime stores
+it through NStack but does not provide it to the model. Source/fixture tests do not establish
+live receipt or authorized retrieval by a real account. No shared-service restart or MacBook
+installation is implied. Android/web/iPhone transport capture remains outside this Mac fix.
 
 ## Validation
 
