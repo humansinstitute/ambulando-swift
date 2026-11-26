@@ -393,6 +393,7 @@ struct ThreadView: View {
                 PersonAvatar(person: snapshot.value.people.person(npub)).frame(width: 24, height: 24).clipped()
             }
             if onBack != nil, let thread = target.threadId {
+                AddToGoalMenu(source: GoalSource(type: .chat, recordId: thread, channelId: target.channelId, workspace: workspace))
                 PinToggleButton(type: .thread, id: thread, workspace: workspace)
                 ThreadHeaderMenu(context: snapshot.value.menu, workspace: workspace, title: snapshot.value.title)
             }

@@ -261,6 +261,20 @@ struct SidebarContent: View {
                         .accessibilityLabel("All workspace activity")
                         .accessibilityAddTraits(context.isHome ? .isSelected : [])
                         .accessibilityIdentifier("sidebar.home")
+                        .padding(.bottom, 4)
+
+                        // Personal Home -> Goals: goals belong to the person, not to a scope, so they sit with Home.
+                        Button { model.openGoals() } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "target").frame(width: 24).foregroundStyle(Amb.primary)
+                                Text("Goals").font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("sidebar.goals")
                         .padding(.bottom, 8)
 
                         NavigationStatus(state: model.navigationState, compact: true)

@@ -331,6 +331,7 @@ private struct ShellToolbar: ViewModifier {
     @State private var searching = false
     @State private var notifying = false
     var pin: ToolbarPin? = nil
+    var goal: GoalSource? = nil
     var showsSidebar = true
     /// A conversation chosen in Search, focused once the sheet has gone (one presentation at a time on iOS).
     @State private var searchedThread: ThreadFocus?
@@ -371,6 +372,7 @@ private struct ShellToolbar: ViewModifier {
                         Button { search() } label: { Image(systemName: "magnifyingglass") }
                             .accessibilityLabel("Search").accessibilityIdentifier("search")
                         NotificationsButton { showNotifications() }
+                        if let goal { AddToGoalMenu(source: goal) }
                         if let pin {
                             PinToggleButton(type: pin.type, id: pin.id, workspace: pin.workspace)
                         }
@@ -440,8 +442,8 @@ extension View {
     /// Sample-data label under the navigation bar of a pushed screen (no-op outside sample-data mode).
     func fixtureLabel() -> some View { safeAreaInset(edge: .top, spacing: 0) { FixtureBanner() } }
 
-    func toolbarItems(showSettings: Binding<Bool>, pin: ToolbarPin? = nil, showsSidebar: Bool = true) -> some View {
-        modifier(ShellToolbar(showSettings: showSettings, pin: pin, showsSidebar: showsSidebar))
+    func toolbarItems(showSettings: Binding<Bool>, pin: ToolbarPin? = nil, goal: GoalSource? = nil, showsSidebar: Bool = true) -> some View {
+        modifier(ShellToolbar(showSettings: showSettings, pin: pin, goal: goal, showsSidebar: showsSidebar))
     }
 }
 

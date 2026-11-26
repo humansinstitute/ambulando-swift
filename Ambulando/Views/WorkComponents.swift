@@ -177,6 +177,8 @@ struct WorkDestination: View {
                 BoardSceneView(canvasId: canvas, napletId: naplet, workspace: workspace, store: store)
                 #endif
             case .contextComponent(_, let scope, let component): ContextComponentView(scopeId: scope, componentId: component, workspace: workspace, store: store)
+            case .goals: GoalsView(workspace: workspace, store: store)
+            case .goal(_, let fileId): GoalDetailView(fileId: fileId, workspace: workspace, store: store)
             case .webContent(_, let source):
                 #if os(macOS)
                 if source == .dailyMetrics || source == .workspaceReport {
@@ -217,7 +219,8 @@ struct WorkStack<Root: View, Banner: View>: View {
             .toolbarItems(showSettings: $showSettings)
             .navigationDestination(for: WorkRoute.self) { route in
                 WorkDestination(route: route, adoptsContext: !contextBar)
-                    .toolbarItems(showSettings: $showSettings, pin: ToolbarPin.work(route, workspace: model.selectedWorkspace), showsSidebar: false)
+                    .toolbarItems(showSettings: $showSettings, pin: ToolbarPin.work(route, workspace: model.selectedWorkspace),
+                                  goal: GoalSource.work(route, workspace: model.selectedWorkspace), showsSidebar: false)
             }
         }
     }

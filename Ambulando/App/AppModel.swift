@@ -38,11 +38,14 @@ enum WorkRoute: Hashable {
     case contextComponent(workspaceId: String, scopeId: String, componentId: String)
     /// Publisher-owned web content in a labelled view.
     case webContent(workspaceId: String, source: WebContentSource)
+    /// The personal Goals list, and one goal (a File in the owner's private Goals channel).
+    case goals(workspaceId: String)
+    case goal(workspaceId: String, fileId: String)
 
     var workspaceId: String {
         switch self {
         case .task(let w, _), .doc(let w, _), .file(let w, _), .thread(let w, _, _), .channel(let w, _), .threadById(let w, _), .canvas(let w, _),
-             .board(let w, _, _), .contextComponent(let w, _, _), .webContent(let w, _): w
+             .board(let w, _, _), .contextComponent(let w, _, _), .webContent(let w, _), .goals(let w), .goal(let w, _): w
         }
     }
 }
@@ -197,6 +200,8 @@ final class AppModel {
     @ObservationIgnored var canvasViewports: [String: CanvasViewport] = [:]
     /// Excalidraw board sessions (drafts, saves) shared by the inline and full-screen editors.
     @ObservationIgnored let boards = BoardRegistry()
+    /// Goals state per workspace boundary (see `GoalsModel`).
+    @ObservationIgnored var goalModels: [String: GoalsModel] = [:]
     /// Transient File napplet navigation gate. Never persisted; access/context loss always destroys the host.
     @ObservationIgnored var fileNappletNavigation: ((@escaping () -> Void) -> Bool)?
     @ObservationIgnored var fileNappletNavigationOwner: UUID?
@@ -850,6 +855,7 @@ final class AppModel {
             workspaceEntries.removeAll { $0.connection.id == connection.id }
             await persistWorkspacePreferences()
             boards.removeAll(deletingDraftsOf: connection.id)
+            goalModels = [:]
             clearWorkspaceContent()
             if let next = enabledWorkspaceEntries.first { await activateWorkspace(next) }
             else {
@@ -1415,7 +1421,7 @@ final class AppModel {
             case .doc(_, let id): channelId = try? await store.reader.doc(workspaceId: workspace, id: id)?.channelId
             case .file(_, let id): channelId = try? await store.reader.file(workspaceId: workspace, id: id)?.channelId
             case .threadById(_, let id): channelId = try? await store.reader.thread(workspaceId: workspace, id: id)?.channelId
-            case .canvas, .board, .contextComponent, .webContent: channelId = nil
+            case .canvas, .board, .contextComponent, .webContent, .goals, .goal: channelId = nil
             }
             guard let channelId, channelId != context.channelId,
                   let channel = try? await store.reader.channel(workspaceId: workspace, id: channelId), workspace == selectedWorkspaceId, boundary == selectedWorkspaceBoundary else { return }

@@ -439,6 +439,7 @@ private struct ThreadFocusPanel: View {
             MacRefreshDataButton()
             #endif
             if let workspace = model.selectedWorkspace, workspace.id == focus.workspaceId {
+                AddToGoalMenu(source: GoalSource(type: .chat, recordId: focus.threadId, channelId: focus.channelId, workspace: workspace))
                 PinToggleButton(type: .thread, id: focus.threadId, workspace: workspace)
                 // Only this thread's own targets: a context left by another thread is never acted on.
                 ThreadHeaderMenu(context: menu?.threadId == focus.threadId ? menu : nil, workspace: workspace, title: title)

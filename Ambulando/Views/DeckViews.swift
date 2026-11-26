@@ -1074,6 +1074,7 @@ private struct MacDeckDashboard: View {
                         DeckInboxCard(workspace: workspace, store: store, active: model.mode == .deck)
                             .desktopDeckPanel().frame(minWidth: 400, maxWidth: .infinity)
                         VStack(spacing: 16) {
+                            DeckGoalsCard(workspace: workspace).desktopDeckPanel()
                             DeckPinnedCard(workspace: workspace).desktopDeckPanel()
                             DeckCanvasCard(workspace: workspace, store: store).desktopDeckPanel()
                         }.frame(minWidth: 280, idealWidth: 360, maxWidth: 500)
@@ -1084,6 +1085,7 @@ private struct MacDeckDashboard: View {
                     VStack(spacing: 16) {
                         MacDeckWelcome(workspace: workspace, store: store, compact: true).frame(height: 260)
                         DeckInboxCard(workspace: workspace, store: store, active: model.mode == .deck).desktopDeckPanel().frame(height: 440)
+                        DeckGoalsCard(workspace: workspace).desktopDeckPanel().frame(height: 200)
                         DeckPinnedCard(workspace: workspace).desktopDeckPanel().frame(height: 250)
                         DeckCanvasCard(workspace: workspace, store: store).desktopDeckPanel().frame(height: 280)
                     }.padding(12)
