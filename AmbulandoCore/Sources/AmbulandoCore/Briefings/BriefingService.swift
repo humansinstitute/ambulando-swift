@@ -31,15 +31,11 @@ public struct BriefingService: Sendable {
     }
     public func forget() async { await cache?.remove(slot) }
 
-    private func grants(_ channel: String) async throws -> [GoalsChannelGrant] {
+    private func grants(_ channel: String) async throws -> [BriefingGrant] {
         let o = try api.object(try await api.client.request(path: try TowerAPI.base(workspace) + "/channels/" + TowerAPI.uuid(channel) + "/grants", appNpub: app), "briefing grants")
         guard o["has_more"] as? Bool != true, o["partial"] as? Bool != true, o["next_cursor"] as? String == nil,
               let rows = o["grants"] as? [[String: Any]] else { throw BriefingError.unsafe }
-        guard rows.allSatisfy({ row in
-            let type = row["principal_type"] as? String
-            return type == "actor" || (type == "person" && row["stored_principal_type"] as? String == "actor")
-        }) else { throw BriefingError.unsafe }
-        return rows.map(GoalsChannelGrant.init(row:))
+        return try rows.map(BriefingGrant.init(row:))
     }
 
     public func load() async throws -> BriefingSnapshot {

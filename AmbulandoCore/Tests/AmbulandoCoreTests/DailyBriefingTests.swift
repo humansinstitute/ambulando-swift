@@ -53,18 +53,72 @@ import Testing
         [MemberRecord(workspaceId: workspace, actorId: humanId, npub: owner, kind: "agent", displayName: "Owner"),
          MemberRecord(workspaceId: workspace, actorId: agentId, npub: author, kind: "person", displayName: "Author")]
     }
-    var grants: [GoalsChannelGrant] {
-        [GoalsChannelGrant(actorId: humanId, npub: owner, isGroup: false, access: "manage"),
-         GoalsChannelGrant(actorId: agentId, npub: author, isGroup: false, access: "contribute")]
+    func grantRow(owner isOwner: Bool) -> [String: Any] {
+        let id = isOwner ? humanId : agentId
+        return ["principal_type": "person", "stored_principal_type": "actor", "principal_id": id,
+                "principal": ["type": "person", "id": id, "actor_id": id, "npub": isOwner ? owner : author],
+                "access_level": isOwner ? "manage" : "custom",
+                "permissions": ["channel.read", "file.read", "file.write"] + (isOwner ? ["channel.manage", "channel.grants.manage"] : [])]
     }
-    @Test func onlyExplicitOwnerAndAuthorGrantsAreAccepted() throws {
-        try BriefingAccess.verify(grants: grants, members: members, owner: owner, author: author)
-        for bad in [Array(grants.prefix(1)), grants + [GoalsChannelGrant(actorId: nil, npub: nil, isGroup: true, access: "read")],
-                    [grants[0], GoalsChannelGrant(actorId: agentId, npub: owner, isGroup: false, access: "contribute")],
-                    [GoalsChannelGrant(actorId: humanId, npub: owner, isGroup: false, access: "read"), grants[1]]] {
-            #expect(throws: BriefingError.unsafe) { try BriefingAccess.verify(grants: bad, members: members, owner: owner, author: author) }
+    func verify(_ rows: [[String: Any]], members: [MemberRecord]? = nil) throws {
+        try BriefingAccess.verify(grants: rows.map(BriefingGrant.init(row:)), members: members ?? self.members, owner: owner, author: author)
+    }
+    @Test func liveCustomScopesAndExactActorPair() throws {
+        let human = grantRow(owner: true), agent = grantRow(owner: false)
+        try verify([human, agent])
+        var renamed = agent; renamed["access_level"] = "future-label"
+        try verify([human, renamed])
+        var legacy = agent; legacy["principal_type"] = "actor"; legacy.removeValue(forKey: "stored_principal_type")
+        try verify([human, legacy])
+        #expect(throws: BriefingError.unsafe) { try verify([human]) }
+        #expect(throws: BriefingError.unsafe) { try verify([human, agent, agent]) }
+        #expect(throws: BriefingError.unsafe) { try verify([human, human]) }
+        #expect(throws: BriefingError.unsafe) { try verify([human, agent], members: members + [members[0]]) }
+        let isolated = [members[0], MemberRecord(workspaceId: agentId, actorId: agentId, npub: author, kind: "agent", displayName: "Other workspace")]
+        #expect(throws: BriefingError.unsafe) { try verify([human, agent], members: isolated) }
+    }
+    @Test func missingScopesAndUnsafePrincipalsFailClosedEvenWithManageLabel() throws {
+        let human = grantRow(owner: true), agent = grantRow(owner: false)
+        for ownerRow in [false, true] {
+            let original = ownerRow ? human : agent
+            let required = ["channel.read", "file.read", "file.write"] + (ownerRow ? ["channel.manage", "channel.grants.manage"] : [])
+            for scope in required {
+                var row = original; row["access_level"] = "manage"
+                row["permissions"] = (row["permissions"] as! [String]).filter { $0 != scope }
+                #expect(throws: BriefingError.unsafe) { try verify(ownerRow ? [row, agent] : [human, row]) }
+            }
+            for scopes in [NSNull(), [], ["file.read", 1]] as [Any] {
+                var row = original; row["permissions"] = scopes
+                #expect(throws: BriefingError.unsafe) { try verify(ownerRow ? [row, agent] : [human, row]) }
+            }
+            var row = original; row.removeValue(forKey: "permissions")
+            #expect(throws: BriefingError.unsafe) { try verify(ownerRow ? [row, agent] : [human, row]) }
         }
+        for type in ["group", "public", "workspace", "unknown"] {
+            var row = agent; row["principal_type"] = type
+            #expect(throws: BriefingError.unsafe) { try verify([human, row]) }
+            row = agent; var principal = row["principal"] as! [String: Any]; principal["type"] = type; row["principal"] = principal
+            #expect(throws: BriefingError.unsafe) { try verify([human, row]) }
+        }
+        for key in ["actor_id", "id", "npub"] {
+            var row = agent; var principal = row["principal"] as! [String: Any]
+            principal[key] = key == "npub" ? owner : humanId; row["principal"] = principal
+            #expect(throws: BriefingError.unsafe) { try verify([human, row]) }
+        }
+        var row = agent; row["principal_id"] = humanId
+        #expect(throws: BriefingError.unsafe) { try verify([human, row]) }
+        row = agent; row["stored_principal_type"] = "group"
+        #expect(throws: BriefingError.unsafe) { try verify([human, row]) }
     }
+    @Test func rolloverPreservesImmutableHistoricalWriting() throws {
+        let bytes = try rawJSON(journal())
+        let before = try DailyBriefing.parse(bytes, workspace: workspace, owner: owner, author: author, now: now)
+        let after = try DailyBriefing.parse(bytes, workspace: workspace, owner: owner, author: author, now: DailyBriefing.timestamp("2026-11-27T16:00:01Z")!)
+        #expect(before == after)
+        #expect(after.entries["2026-11-27"] == before.entries["2026-11-27"])
+        #expect(after.entries["2026-11-28"] == nil)
+    }
+
 }
 
 @Suite struct BriefingTransportTests {
@@ -103,6 +157,31 @@ import Testing
         let missing = try await service.load()
         #expect(missing.journal.entries[DailyBriefing.day()] == nil)
         #expect(missing.journal.entries.count == 1)
+    }
+    @Test func incompleteOrWrongGrantIdentityNeverReachesPrivateBytes() async throws {
+        let dir = temporaryDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
+        let identity = try await makeIdentity(directory: dir)
+        for mutation in ["partial", "has_more", "next_cursor", "permissions", "principal_id", "principal_type"] {
+            let sample = SampleBriefingTower(workspace: Fixtures.workspaceId, scope: Fixtures.scopeA,
+                                             author: NostrKeys.npub(publicKeyHex: String(repeating: "22", count: 32))!, app: Fixtures.appNpub)
+            let transport = StubTransport { request in
+                let response = try sample.response(request, owner: TestKeys.npub, fallback: (200, [:]))
+                guard request.url!.path.hasSuffix("/grants"), var object = response.1 as? [String: Any] else { return response }
+                if ["partial", "has_more", "next_cursor"].contains(mutation) {
+                    object[mutation] = mutation == "next_cursor" ? "another-page" : true
+                } else {
+                    var rows = object["grants"] as! [[String: Any]]
+                    if mutation == "permissions" { rows[1].removeValue(forKey: mutation) }
+                    else { rows[1][mutation] = mutation == "principal_id" ? Fixtures.scopeA : "public" }
+                    object["grants"] = rows
+                }
+                return (200, object)
+            }
+            let api = TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: transport, signer: identity))
+            let service = BriefingService(api: api, workspace: Fixtures.workspaceId, app: Fixtures.appNpub, viewer: TestKeys.npub)
+            await #expect(throws: BriefingError.unsafe) { try await service.load() }
+            #expect(!sample.paths.contains { $0.hasSuffix("/object") })
+        }
     }
     @Test func encryptedBriefingCacheRestoresOnlyItsUnlockedBoundaryAndHonorsRemoval() async throws {
         let dir = temporaryDirectory(); defer { try? FileManager.default.removeItem(at: dir) }

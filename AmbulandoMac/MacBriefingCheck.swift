@@ -25,7 +25,9 @@ extension MacThreadRegression {
         }
         func refresh() async throws {
             try await wait("refresh ready") { enabled("home.briefing.refresh") }
+            let previousReads = sample.paths.count
             try press(window, "home.briefing.refresh")
+            try await wait("refresh completed") { (fixture.tower.offline ? find(window, "home.briefing.error") != nil : sample.paths.count > previousReads) && enabled("home.briefing.refresh") }
         }
         print("BRIEFING_FIXTURE_DIRECTORY \(fixture.directory.path)"); fflush(stdout)
         window.setContentSize(NSSize(width: 1320, height: 1000)); model.showWorkspaceHome()
@@ -42,11 +44,20 @@ extension MacThreadRegression {
         try require(!unsafeBitCast(next.method(for: enabledSelector), to: Enabled.self)(next, enabledSelector), "history stops at today")
         try press(window, "home.briefing.previous")
         try await wait("history") { !text("home.briefing.day").contains("Today") && find(window, "home.briefing.paragraph") != nil }
+        let historicalDay = text("home.briefing.day"), historicalAuthor = text("home.briefing.author")
+        sample.missingToday = true; try await refresh()
+        try await wait("selected history after refresh") { enabled("home.briefing.refresh") && find(window, "home.briefing.paragraph") != nil }
+        try require(text("home.briefing.day") == historicalDay && text("home.briefing.author") == historicalAuthor, "refresh retains historical date and generation time when today is absent")
+        try require(find(window, "home.briefing.fact") == nil, "historical writing excludes present-day goal facts")
         try press(window, "home.briefing.next")
         try await wait("today") { text("home.briefing.day").contains("Today") }
-        sample.missingToday = true; try await refresh()
+        try await refresh()
         try await wait("missing today") { find(window, "home.briefing.stale") != nil && find(window, "home.briefing.paragraph") == nil }
+        try press(window, "home.briefing.stale")
+        try await wait("latest saved history") { text("home.briefing.day") == historicalDay && find(window, "home.briefing.paragraph") != nil }
         sample.missingToday = false; try await refresh()
+        try await wait("history retained after new today") { enabled("home.briefing.refresh") && text("home.briefing.day") == historicalDay }
+        try press(window, "home.briefing.next")
         try await wait("restored") { find(window, "home.briefing.paragraph") != nil }
         fixture.tower.offline = true; try await refresh()
         try await wait("cached offline") { find(window, "home.briefing.error") != nil && find(window, "home.briefing.cached") != nil }
@@ -67,7 +78,7 @@ extension MacThreadRegression {
         }
         model.selectWorkspace(FixtureTower.lab); model.showWorkspaceHome()
         try await wait("other workspace isolation") { model.selectedWorkspace?.id == FixtureTower.lab && find(window, "home.briefing.paragraph") == nil }
-        print("PASS briefing: real SwiftUI private reader, author/timezone/coverage/native links, bounded dated history, missing-today stale link, offline verified cache, unsafe access clears writing, recovery, saved-goal facts preserved, narrow Home, workspace isolation")
+        print("PASS briefing: real SwiftUI private reader, author/timezone/coverage/native links, bounded dated history retained across refresh and new-today arrival, missing-today stale link, offline verified cache, unsafe access clears writing, recovery, saved-goal facts preserved, narrow Home, workspace isolation")
     }
 }
 #endif

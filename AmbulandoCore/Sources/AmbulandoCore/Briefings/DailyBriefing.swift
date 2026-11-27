@@ -105,20 +105,51 @@ public enum BriefingAccess {
               let m = o["metadata"] as? [String: Any] else { return false }
         return m["system_key"] as? String == DailyBriefing.systemKey
     }
-    public static func verify(grants: [GoalsChannelGrant], members: [MemberRecord], owner: String, author: String) throws {
-        guard let human = members.first(where: { $0.npub == owner }),
-              let agent = members.first(where: { $0.npub == author }), grants.count == 2 else { throw BriefingError.unsafe }
+    public static func verify(grants: [BriefingGrant], members: [MemberRecord], owner: String, author: String) throws {
+        let owners = members.filter { $0.npub == owner }, authors = members.filter { $0.npub == author }
+        guard owner != author, owners.count == 1, authors.count == 1,
+              let human = owners.first, let agent = authors.first,
+              human.workspaceId == agent.workspaceId, human.actorId != agent.actorId,
+              UUID(uuidString: human.actorId) != nil, UUID(uuidString: agent.actorId) != nil,
+              grants.count == 2 else { throw BriefingError.unsafe }
         var seen = Set<String>()
         for g in grants {
-            guard !g.isGroup else { throw BriefingError.unsafe }
             let person: MemberRecord
-            if g.actorId == human.actorId || g.npub == owner { person = human }
-            else if g.actorId == agent.actorId || g.npub == author { person = agent }
+            if g.actorId == human.actorId { person = human }
+            else if g.actorId == agent.actorId { person = agent }
             else { throw BriefingError.unsafe }
-            guard g.actorId == person.actorId, g.npub == nil || g.npub == person.npub,
+            let required: Set<String> = ["channel.read", "file.read", "file.write"]
+            let ownerRequired: Set<String> = ["channel.manage", "channel.grants.manage"]
+            guard g.npub == nil || g.npub == person.npub,
                   seen.insert(person.npub).inserted,
-                  person.npub == owner ? g.access == "manage" : ["contribute", "manage"].contains(g.access ?? "") else { throw BriefingError.unsafe }
+                  required.isSubset(of: g.permissions),
+                  person.npub != owner || ownerRequired.isSubset(of: g.permissions) else { throw BriefingError.unsafe }
         }
         guard seen == Set([owner, author]) else { throw BriefingError.unsafe }
+    }
+}
+
+/// Decode persisted direct actor bundles. Access labels are presentation only; missing scopes fail closed.
+public struct BriefingGrant: Sendable, Equatable {
+    public let actorId: String
+    public let npub: String?
+    public let permissions: Set<String>
+
+    public init(row: [String: Any]) throws {
+        let type = row["principal_type"] as? String, stored = row["stored_principal_type"] as? String
+        guard type == "actor" || (type == "person" && stored == "actor"),
+              stored == nil || stored == "actor",
+              let principal = row["principal"] as? [String: Any],
+              principal["type"] == nil || ["person", "actor"].contains(principal["type"] as? String ?? ""),
+              let id = (principal["actor_id"] ?? principal["id"] ?? row["principal_id"]) as? String,
+              UUID(uuidString: id) != nil,
+              let scopes = row["permissions"] as? [String] else { throw BriefingError.unsafe }
+        for value in [principal["actor_id"], principal["id"], row["principal_id"]].compactMap({ $0 }) {
+            guard let alias = value as? String, alias.lowercased() == id.lowercased() else { throw BriefingError.unsafe }
+        }
+        if let value = principal["npub"] {
+            guard let text = value as? String, NostrKeys.isValidNpub(text) else { throw BriefingError.unsafe }
+        }
+        actorId = id.lowercased(); npub = principal["npub"] as? String; permissions = Set(scopes)
     }
 }

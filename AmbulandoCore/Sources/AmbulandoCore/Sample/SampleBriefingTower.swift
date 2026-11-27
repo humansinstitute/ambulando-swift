@@ -56,7 +56,7 @@ public final class SampleBriefingTower: @unchecked Sendable {
             }
             if path == base + "/channels/" + channel + "/grants" {
                 var rows = [(human, owner, "manage"), (agent, author, "contribute")].map { id, npub, access in
-                    ["principal_type": "person", "stored_principal_type": "actor", "principal": ["type": "person", "actor_id": id, "npub": npub], "access_level": access] as [String: Any]
+                    ["principal_type": "person", "stored_principal_type": "actor", "principal": ["type": "person", "actor_id": id, "npub": npub], "access_level": id == agent ? "custom" : access, "permissions": ["channel.read", "file.read", "file.write"] + (id == human ? ["channel.manage", "channel.grants.manage"] : [])] as [String: Any]
                 }
                 if _unsafe { rows.append(["principal_type": "group", "principal_id": human, "access_level": "read"]) }
                 return (200, ["grants": rows])
