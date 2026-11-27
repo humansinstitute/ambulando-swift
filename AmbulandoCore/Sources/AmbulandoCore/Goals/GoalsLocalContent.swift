@@ -2,7 +2,7 @@ import Foundation
 
 extension GoalsService {
     private struct SavedGoal: Codable { let id: String; let version: String }
-    private struct SavedDocument: Codable { let file: Data; let goal: Data }
+    private struct SavedDocument: Codable { let file: Data; let goal: Data; var storage: GoalDocument.Storage? = nil }
     private struct SavedGoals: Codable { let channel: Data; let goals: [SavedGoal] }
     /// The channel was privately verified when saved. It is a read location, never permission to write.
     public func cached() async -> GoalsSnapshot? {
@@ -18,7 +18,7 @@ extension GoalsService {
                     let document = try JSONDecoder().decode(SavedDocument.self, from: bytes)
                     let file = try FileRecord(raw: document.file)
                     guard file.id == row.id, file.workspaceId == workspaceId, file.channelId == channel.id else { throw FileNappletError.invalid }
-                    goals.append(GoalDocument(file: file, versionId: row.version, goal: try Goal.parse(document.goal)))
+                    goals.append(GoalDocument(file: file, versionId: row.version, goal: try Goal.parse(document.goal), storage: document.storage ?? .file))
                 } catch {
                     unreadable.append(UnreadableGoal(fileId: row.id, name: "Saved goal", reason: "Saved content is unavailable. Connect to refresh this goal."))
                 }
@@ -30,7 +30,7 @@ extension GoalsService {
         guard let cache else { return }
         guard case .ready(let channel, _) = snapshot.space else { await cache.remove("goals"); return }
         for document in snapshot.goals {
-            if let bytes = try? JSONEncoder().encode(SavedDocument(file: document.file.raw, goal: document.goal.encode())) {
+            if let bytes = try? JSONEncoder().encode(SavedDocument(file: document.file.raw, goal: document.goal.encode(), storage: document.storage)) {
                 try? await cache.save("goal:" + document.id + ":" + document.versionId, bytes, dependencies: [channel.id, document.id], expectedEpoch: epoch)
             }
         }

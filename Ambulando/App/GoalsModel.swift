@@ -86,6 +86,7 @@ final class GoalsModel {
             note("cancelled")
         } catch {
             guard isCurrent(boundary) else { note("dropped-not-current"); return }
+            if CachedContentFailure.invalidates(error) { await reconcileLocalRemovals() }
             self.error = Self.message(error)
             note("failed")
         }
@@ -149,8 +150,13 @@ final class GoalsModel {
 
     /// Re-reads one goal (e.g. after a conflict or an agent edit).
     func reload(_ fileId: String) async {
-        guard let fresh = try? await service.read(fileId), isCurrent(boundary) else { return }
-        publish(fresh)
+        do {
+            let fresh = try await service.read(fileId)
+            guard isCurrent(boundary) else { return }
+            publish(fresh)
+        } catch {
+            if CachedContentFailure.invalidates(error) { await reconcileLocalRemovals() }
+        }
     }
 
     /// Adds a link from a source record to a goal, saving only the reference. Tower decides write access.
@@ -163,7 +169,7 @@ final class GoalsModel {
         guard isCurrent(boundary) else { throw CancellationError() }
         let thread = try await service.api.createGoalDiscussion(workspaceId: service.workspaceId, appNpub: service.appNpub,
             goalFileId: goalFileId, channelId: channelId, scopeId: scopeId, expectedDefault: expectedDefault,
-            requestId: requestId, beforeCreate: beforeCreate)
+            requestId: requestId, beforeCreate: beforeCreate, resolveGoal: { [service] in try await service.resolveReference($0) })
         guard isCurrent(boundary) else { throw CancellationError() }
         return thread
     }

@@ -23,22 +23,29 @@ public enum GoalAssociation {
 extension TowerAPI {
     /// Resolve a primary reference, independently of explicit goal mentions. A 403 permits identity-only propagation,
     /// never private goal content or ACL changes. Accessible wrong-kind, missing and unsupported goals are refused.
-    public func threadGoalMetadata(workspaceId: String, appNpub: String, threadId: String, expectedChannelId: String? = nil) async throws -> JSONValue {
+    public func threadGoalMetadata(workspaceId: String, appNpub: String, threadId: String, expectedChannelId: String? = nil,
+                                   resolveGoal: (@Sendable (String) async throws -> GoalDocument)? = nil) async throws -> JSONValue {
         let row = try await thread(workspaceId: workspaceId, appNpub: appNpub, threadId: threadId)
         guard row.workspaceId == workspaceId, row.id == threadId, !row.archived, !row.deleted,
               expectedChannelId == nil || row.channelId == expectedChannelId else { throw TowerError.malformed("goal discussion identity") }
         let raw = try JSONValue.parse(row.raw)
         guard let id = try GoalAssociation.read(raw["metadata"] ?? .object([])) else { return .object([]) }
-        do { _ = try await readGoal(workspaceId: workspaceId, appNpub: appNpub, fileId: id) }
+        do {
+            if let resolveGoal { _ = try await resolveGoal(id) }
+            else { _ = try await readGoal(workspaceId: workspaceId, appNpub: appNpub, fileId: id) }
+        }
         catch TowerError.http(let status, _, _) where status == 403 { /* Keep only the readable thread's reference. */ }
         return try GoalAssociation.metadata(goalFileId: id)
     }
 
     /// Generic thread creation is not idempotent. Persist the local receipt in beforeCreate and never replay an uncertain POST.
     public func createGoalDiscussion(workspaceId: String, appNpub: String, goalFileId: String, channelId: String, scopeId: String,
-                                     expectedDefault: String?, requestId: String, beforeCreate: @Sendable () async throws -> Void = {}) async throws -> ThreadRecord {
+                                     expectedDefault: String?, requestId: String, beforeCreate: @Sendable () async throws -> Void = {},
+                                     resolveGoal: (@Sendable (String) async throws -> GoalDocument)? = nil) async throws -> ThreadRecord {
         guard lowerUUID(requestId) == requestId else { throw TowerError.unsafePath }
-        let goal = try await readGoal(workspaceId: workspaceId, appNpub: appNpub, fileId: goalFileId).goal
+        let goal: Goal
+        if let resolveGoal { goal = try await resolveGoal(goalFileId).goal }
+        else { goal = try await readGoal(workspaceId: workspaceId, appNpub: appNpub, fileId: goalFileId).goal }
         guard goal.status != .archived else { throw GoalError.conflict("Restore this goal before discussing it.") }
         guard goal.defaultChannelId == expectedDefault else { throw GoalError.conflict("The default channel changed elsewhere. Reopen Discuss goal.") }
         guard try await scopes(workspaceId: workspaceId, appNpub: appNpub).contains(where: { $0.id == scopeId && $0.workspaceId == workspaceId && goalRecordAvailable($0.raw) }) else { throw GoalError.invalid("This channel’s scope is unavailable.") }

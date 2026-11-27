@@ -1,7 +1,8 @@
 import Foundation
 
 /// A personal goal: name, description, optional date-only start/target, an ordered checkpoint timeline and links to
-/// existing records. Stored as the JSON content of one ordinary File (`application/vnd.ambulando.goal+json`).
+/// existing records. The v1 JSON format is retained for legacy Files and recovery export; active canonical storage
+/// uses Ambulando's normalized relational schema.
 /// Links are references only: titles, locations and access are always read from the source record, never copied here.
 /// Progress is checkpoints reached; nothing is inferred from linked tasks. The format is the same one Android writes
 /// (`ambulando.goal` v1), so either client can open and edit what the other saved.

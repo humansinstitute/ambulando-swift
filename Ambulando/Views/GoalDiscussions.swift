@@ -196,8 +196,9 @@ extension AppModel {
               source.workspaceId == workspace.id, source.channelId == channelId, let threadId = source.threadId,
               let boundary = selectedWorkspaceBoundary else { throw GoalError.invalid("The discussion channel or account changed. Reopen the creation form.") }
         try await sync.identity.requireSigner(npub: connection.signerNpub)
-        let api = try sync.goals(connection, workspace).api
-        let metadata = try await api.threadGoalMetadata(workspaceId: workspace.id, appNpub: workspace.appNpub, threadId: threadId, expectedChannelId: channelId)
+        let service = try sync.goals(connection, workspace)
+        let metadata = try await service.api.threadGoalMetadata(workspaceId: workspace.id, appNpub: workspace.appNpub, threadId: threadId,
+            expectedChannelId: channelId, resolveGoal: { try await service.resolveReference($0) })
         guard isUnlocked, selectedWorkspaceBoundary == boundary, self.connection?.id == connection.id else { throw CancellationError() }
         var result: [String: any Sendable] = ["source_thread_id": threadId]
         if let goalId = try GoalAssociation.read(metadata) { result["ambulando_goal"] = ["version": 1, "goal_file_id": goalId] as [String: any Sendable] }

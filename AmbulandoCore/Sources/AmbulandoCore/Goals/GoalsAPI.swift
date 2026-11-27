@@ -9,11 +9,16 @@ import Foundation
 // - `POST /storage/prepare` … `complete`, `POST /channels/:c/files`, `POST /files/:f/versions` with `base_version_id`
 
 public struct GoalDocument: Sendable, Equatable, Identifiable {
+    /// A File UUID is the permanent reference identity, even after storage authority moves to SQL.
+    public enum Storage: String, Sendable, Codable { case file, relational }
     public let file: FileRecord
     public let versionId: String
     public let goal: Goal
+    public let storage: Storage
     public var id: String { file.id }
-    public init(file: FileRecord, versionId: String, goal: Goal) { self.file = file; self.versionId = versionId; self.goal = goal }
+    public init(file: FileRecord, versionId: String, goal: Goal, storage: Storage = .file) {
+        self.file = file; self.versionId = versionId; self.goal = goal; self.storage = storage
+    }
 }
 
 public enum GoalFiles {
@@ -79,7 +84,7 @@ public enum GoalEditor {
             if next == head.goal { return head }
             switch try await transport.save(fileId, head.versionId, next.encode(), GoalFiles.fileName(next)) {
             case .saved(let versionId):
-                return GoalDocument(file: head.file, versionId: versionId, goal: next)
+                return GoalDocument(file: head.file, versionId: versionId, goal: next, storage: head.storage)
             case .conflict:
                 head = try await transport.read(fileId)
             case .denied(let message):
