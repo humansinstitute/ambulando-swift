@@ -369,6 +369,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     let surfaces: SampleSurfaceTower
     /// The sample identity's private Goals space, only with `-AmbulandoFixtureGoals` (Home and Goals checks).
     let goals: SampleGoalsTower?
+    let briefing = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacBriefingCheck")
+        ? SampleBriefingTower(workspace: FixtureTower.studio, scope: "b11ef000-0000-4000-8000-000000000010", author: FixtureTower.rick, app: FixtureTower.appNpub) : nil
     let labSurfaces: SampleSurfaceTower
     /// Board File versions (list, read, save with a stale-base check) and their canvas projection.
     let trustNapplet = NappletTrustFixture()
@@ -542,7 +544,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         let delayedSecondDescriptor = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMultiWorkspaceCheck")
             && request.url?.host == "fixture-second.ambulando.invalid" && request.url?.path == "/.well-known/nstack.json"
         try await Task.sleep(for: .milliseconds(delayedSecondDescriptor ? 300 : 40))
-        let (status, body) = try route(request)
+        let original = try route(request)
+        let (status, body) = try briefing?.response(request, owner: actorNpub, fallback: original) ?? original
         var result = body
         if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMultiWorkspaceCheck"),
            request.url?.host == "fixture-second.ambulando.invalid" {
@@ -1346,7 +1349,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     }
 
     private func workspace(_ id: String, _ label: String) -> [String: Any] {
-        ["identity": WorkspaceReportFixture.enabled && id == Self.studio ? WorkspaceReportFixture.identity : (NappletRuntimeFixture.enabled ? ["workspace_id":id,"app_npub":Self.appNpub,"workspace_owner_npub":Self.ana,"tower_service_npub":Self.appNpub,"workspace_service_npub":Self.appNpub] : ["workspace_id": id, "app_npub": Self.appNpub, "workspace_owner_npub": Self.ana]), "label": label, "slug": label.lowercased(),
+        ["identity": WorkspaceReportFixture.enabled && id == Self.studio ? WorkspaceReportFixture.identity : (NappletRuntimeFixture.enabled ? ["workspace_id":id,"app_npub":Self.appNpub,"workspace_owner_npub":Self.ana,"tower_service_npub":Self.appNpub,"workspace_service_npub":Self.appNpub] : ["workspace_id": id, "app_npub": Self.appNpub, "workspace_owner_npub": briefing != nil && id == Self.studio ? actorNpub : Self.ana]), "label": label, "slug": label.lowercased(),
          "tower_base_url": FixtureEnvironment.origin, "membership": ["role": "member"]]
     }
     private func scope(_ id: String, _ w: String, _ name: String) -> [String: Any] {

@@ -232,51 +232,129 @@ struct GoalProgressDots: View {
     }
 }
 
-/// Facts from saved goals for a chosen day. There is no agent-written briefing yet, and Home says so.
+/// Rick's immutable dated writing, with current saved-goal facts clearly distinguished below it.
 private struct HomeBriefing: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
     let workspace: WorkspaceRecord
-    @State private var offset = 0
+    @State private var selectedDay: String?
+    @State private var briefing: BriefingModel?
+    @State private var accessChanges = LiveQuery<String?>(initial: nil)
 
-    private var day: Date { Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date() }
+    private var current: BriefingModel? {
+        guard model.isUnlocked, let briefing, briefing.boundary == model.selectedWorkspaceBoundary else { return nil }
+        return briefing
+    }
 
     var body: some View {
-        let goals = model.goalsModel(for: workspace)
-        let today = GoalFormat.string(from: Date()), dayValue = GoalFormat.string(from: day)
-        let facts = GoalBriefing.facts(goals?.goals ?? [], day: dayValue, today: today, focus: HomeFocus.count)
-        VStack(alignment: .leading, spacing: 10) {
-            HomeHeading(title: "Daily Briefing")
-            HStack(spacing: 6) {
-                Button { offset -= 1 } label: { Image(systemName: "chevron.left") }.buttonStyle(.borderless)
-                    .accessibilityLabel("Previous day").accessibilityIdentifier("home.briefing.previous")
-                Text(offset == 0 ? "Today, \(GoalFormat.date(dayValue) ?? dayValue)" : GoalFormat.date(dayValue) ?? dayValue)
-                    .font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).monospacedDigit()
-                    .accessibilityIdentifier("home.briefing.day")
-                Button { offset += 1 } label: { Image(systemName: "chevron.right") }.buttonStyle(.borderless)
-                    .disabled(offset >= 0).accessibilityLabel("Next day").accessibilityIdentifier("home.briefing.next")
-                if offset != 0 { Button("Today") { offset = 0 }.buttonStyle(.borderless).font(.amb(.subheadline)) }
-            }
-            if goals?.loaded != true {
-                line("Loading goals…")
-            } else if facts.isEmpty {
-                line(offset == 0 ? "Nothing in your goals is dated today, and no goal in focus has a next checkpoint." : "Nothing in your goals is dated on this day.")
-            } else {
-                if offset != 0 {
-                    line("What your goals have dated on this day. Reached shows the status now; past days aren’t recorded.")
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let today = DailyBriefing.day(context.date)
+            let day = min(selectedDay ?? today, today)
+            let parts = DailyBriefing.calendar.dateComponents([.hour, .minute], from: context.date)
+            let due = (parts.hour ?? 0) * 60 + (parts.minute ?? 0) >= 330
+            VStack(alignment: .leading, spacing: 10) {
+                HomeHeading(title: "Daily Briefing")
+                HStack(spacing: 6) {
+                    Button { move(day, by: -1) } label: { Image(systemName: "chevron.left") }.buttonStyle(.borderless)
+                        .accessibilityLabel("Previous day").accessibilityIdentifier("home.briefing.previous")
+                    Text(day == today ? "Today, \(GoalFormat.date(day) ?? day)" : GoalFormat.date(day) ?? day)
+                        .font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).monospacedDigit()
+                        .accessibilityIdentifier("home.briefing.day")
+                    Button { move(day, by: 1) } label: { Image(systemName: "chevron.right") }.buttonStyle(.borderless)
+                        .disabled(day >= today).accessibilityLabel("Next day").accessibilityIdentifier("home.briefing.next")
+                    if day != today { Button("Today") { selectedDay = nil }.buttonStyle(.borderless).font(.amb(.subheadline)) }
+                    Spacer()
+                    Button { Task { await current?.refresh() } } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.borderless).disabled(current?.loading != false)
+                        .accessibilityLabel("Refresh briefing").accessibilityIdentifier("home.briefing.refresh")
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in factRow(fact) }
+                line("05:30 daily · Australia/Perth · Private to you and Rick")
+                    .accessibilityIdentifier("home.briefing.source")
+                if let current {
+                    if current.loading { line(current.snapshot == nil ? "Loading Rick’s briefing…" : "Checking for the latest briefing…") }
+                    if let error = current.error { line(error).accessibilityIdentifier("home.briefing.error") }
+                    if let saved = current.snapshot {
+                        if current.cached {
+                            line("Saved copy · last verified \(stamp(saved.verifiedAt)). Refresh to check access and updates.")
+                                .accessibilityIdentifier("home.briefing.cached")
+                        }
+                        if let entry = saved.journal.entries[day] {
+                            Text("By \(saved.authorLabel) · \(DailyBriefing.timestamp(entry.generatedAt).map(stamp) ?? entry.generatedAt)")
+                                .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                                .accessibilityIdentifier("home.briefing.author")
+                            ForEach(Array(entry.paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                                Text(paragraph).font(.amb(.subheadline)).foregroundStyle(Amb.foreground).textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("home.briefing.paragraph")
+                            }
+                            if let note = entry.coverageNote, !note.isEmpty {
+                                line(note).accessibilityIdentifier("home.briefing.coverage")
+                            }
+                            ForEach(Array(entry.links.enumerated()), id: \.offset) { _, link in
+                                Button(link.label) {
+                                    guard model.selectedWorkspace?.id == workspace.id, current != nil else { return }
+                                    model.openRecord(kind: link.type, id: link.recordId)
+                                }
+                                    .buttonStyle(.link).font(.amb(.subheadline))
+                                    .accessibilityIdentifier("home.briefing.link")
+                            }
+                        } else {
+                            line(day == today ? (due ? "Rick’s briefing has not been published for today." : "Rick’s morning briefing is due at 05:30 Perth.") : "No saved briefing for this day.")
+                                .accessibilityIdentifier("home.briefing.empty")
+                            if day == today, let latest = saved.journal.entries.keys.filter({ $0 < today }).max() {
+                                Button("Latest saved briefing: \(GoalFormat.date(latest) ?? latest)") { selectedDay = latest }
+                                    .buttonStyle(.link).font(.amb(.subheadline)).accessibilityIdentifier("home.briefing.stale")
+                            }
+                        }
+                    } else if !current.loading, current.error == nil {
+                        line("Rick’s briefing is not available yet.").accessibilityIdentifier("home.briefing.empty")
+                    }
+                } else { line(model.isUnlocked ? "Rick’s private briefing is unavailable for this workspace." : "Unlock to read your private briefing.") }
+                // These are present-day saved facts, never a fabricated entry or a reconstruction of past analysis.
+                if day == today, let goals = model.goalsModel(for: workspace), goals.loaded {
+                    let facts = GoalBriefing.facts(goals.goals, day: today, today: today, focus: HomeFocus.count)
+                    if !facts.isEmpty {
+                        Divider()
+                        Text("Current saved-goal facts").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in factRow(fact) }
+                        }
+                    }
                 }
             }
-            Text("From your saved goals. Agent briefings aren’t available yet.")
-                .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
-                .accessibilityIdentifier("home.briefing.source")
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Amb.canvas, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("home.briefing")
+            .task(id: "\(model.selectedWorkspaceBoundary?.id ?? "locked"):\(today):\(due)") {
+                guard model.isUnlocked, let boundary = model.selectedWorkspaceBoundary, let sync = model.sync,
+                      let connection = model.connection, workspace.id == model.selectedWorkspace?.id,
+                      let service = try? sync.briefings(connection, workspace) else { briefing = nil; return }
+                let state: BriefingModel
+                if let existing = briefing, existing.boundary == boundary { state = existing } else {
+                    state = BriefingModel(boundary: boundary, service: service, isCurrent: { [weak model] in model?.isUnlocked == true && model?.selectedWorkspaceBoundary == $0 })
+                    briefing = state
+                }
+                if let store = model.store {
+                    accessChanges.start(store: store, matches: { $0.table == .access }) { try await store.reader.state("local-content.epoch") }
+                }
+                await state.refresh()
+            }
+            .onChange(of: accessChanges.value) { _, _ in Task { await current?.reconcileLocalRemovals() } }
+            .onDisappear { accessChanges.stop() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { Task { await current?.refresh() } }
+            }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Amb.canvas, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("home.briefing")
+    }
+
+    private func move(_ day: String, by value: Int) {
+        guard let date = DailyBriefing.dayDate(day), let next = DailyBriefing.calendar.date(byAdding: .day, value: value, to: date) else { return }
+        selectedDay = min(DailyBriefing.day(next), DailyBriefing.day())
+    }
+    private func stamp(_ date: Date) -> String {
+        let f = DateFormatter(); f.timeZone = DailyBriefing.calendar.timeZone
+        f.dateStyle = .medium; f.timeStyle = .short; return f.string(from: date) + " Perth"
     }
 
     @ViewBuilder private func factRow(_ fact: GoalBriefing.Fact) -> some View {

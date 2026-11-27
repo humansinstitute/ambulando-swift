@@ -91,8 +91,8 @@ each goal, not a separate catalogue: no new record type, endpoint or backend cha
 
 - **Home → Goals** in the sidebar (row under Home) opens the list on Deck; Deck also has a Goals card of active goals.
 - **Home** (globe, or Home in the sidebar) shows goals in focus order: three full cards, the fourth quieter, then "Show all
-  goals"; drag, a card's menu or its accessibility actions reorder (see Focus order). Beside them, Daily Briefing restates
-  saved dates and checkpoints only ("Agent briefings aren't available yet") and Latest shows the five most recent chats.
+  goals"; drag, a card's menu or its accessibility actions reorder (see Focus order). Beside them, [Daily Briefing](daily-briefing.md) reads Rick’s private dated writing.
+  Current saved-goal facts remain separately labelled; Latest shows the five most recent chats.
   The Deck section keeps the dashboard.
 - **Goal form keys**: focus starts in Name; Return there moves to Description, where Return is a newline; Tab and
   Shift-Tab move between Name, Description and the two date controls; ⌘Return saves; Escape cancels. Date controls are

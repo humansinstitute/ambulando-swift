@@ -1,7 +1,7 @@
 import Foundation
 
-/// Home's Daily Briefing, from saved goals only. Nothing is inferred, scheduled or written in an agent's voice: each fact
-/// restates a date or checkpoint the owner (or an agent they allowed) saved. Agent-written briefings do not exist yet.
+/// Home's separately labelled current saved-goal facts. Each fact restates a saved date or checkpoint;
+/// Rick's immutable daily analysis is read independently by BriefingService and never reconstructed here.
 public enum GoalBriefing {
     public enum Fact: Equatable, Sendable {
         /// The first unreached checkpoint of a goal in focus (shown for today only).

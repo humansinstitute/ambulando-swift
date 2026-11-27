@@ -138,7 +138,7 @@ extension MacThreadRegression {
             try require(order[3].hasPrefix("Read twelve books") && order[3].hasSuffix("Out of focus") && order[4].hasPrefix("Tidy the garden"),
                         "unranked goals after, by target date, marked out of focus")
             try require(!all(window, "home.briefing.fact").isEmpty, "briefing lists facts from saved goals")
-            try require((find(window, "home.briefing.source").map(label) ?? "").contains("Agent briefings aren’t available yet"), "briefing states its source honestly")
+            try require((find(window, "home.briefing.source").map(label) ?? "").contains("05:30 daily"), "briefing labels its schedule and keeps saved-goal facts separate")
             try await wait("latest chats") { !all(window, "home.latest.chat").isEmpty }
             try require(all(window, "home.latest.chat").count <= 5, "at most five latest chats")
             try snapshot(window, model: model, name: "home-all-goals")
