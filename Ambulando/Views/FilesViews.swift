@@ -170,6 +170,8 @@ struct FileDetailView: View {
         .task {
             start()
             if renderArtefact, let goals = model.goalsModel(for: workspace), !goals.loaded { await goals.refresh() }
+            // A SQL-created goal has no File row. A generic File 404 must not tombstone its valid cached Goal UUID.
+            if renderArtefact, model.goalsModel(for: workspace)?.goal(fileId)?.storage == .relational { return }
             if let sync = model.sync, let c = model.connection { await sync.refreshArtefactFile(c, workspace, fileId: fileId) }
         }
     }

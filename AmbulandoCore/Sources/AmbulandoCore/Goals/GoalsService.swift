@@ -46,7 +46,7 @@ public struct GoalsService: Sendable {
         if let (repository, current) = try await relational(channelId: channel.id) {
             let snapshot = GoalsSnapshot(space: space, goals: try current.documents(workspaceId: workspaceId, channelId: repository.channelId, owner: viewer).sorted(by: Self.order), unreadable: [])
             if let epoch, try await cache?.epoch() != epoch { throw CancellationError() }
-            await remember(snapshot, epoch: epoch); return snapshot
+            await remember(snapshot, epoch: epoch, storage: .relational); return snapshot
         }
         var goals: [GoalDocument] = [], unreadable: [UnreadableGoal] = []
         for file in try await api.goalFiles(workspaceId: workspaceId, appNpub: appNpub, channelId: channel.id) {
@@ -56,6 +56,7 @@ public struct GoalsService: Sendable {
         }
         let snapshot = GoalsSnapshot(space: space, goals: goals.sorted(by: Self.order), unreadable: unreadable)
         if let epoch, try await cache?.epoch() != epoch { throw CancellationError() }
+        if (try await cache?.read("goals-authority:" + channel.id)) != nil { throw CancellationError() }
         await remember(snapshot, epoch: epoch)
         return snapshot
     }
@@ -70,6 +71,7 @@ public struct GoalsService: Sendable {
         }
         do {
             let document = try await api.readGoal(workspaceId: workspaceId, appNpub: appNpub, fileId: fileId)
+            if (try await cache?.read("goals-authority:" + document.file.channelId)) != nil { throw CancellationError() }
             await remember(document); return document
         } catch {
             if CachedContentFailure.invalidates(error), let cache { try? await cache.store.writer.invalidateLocalContent(workspace: workspaceId, record: fileId) }
@@ -198,7 +200,7 @@ extension GoalsService {
         let snapshot: GoalsRelationalRepository.Snapshot?
         do { snapshot = try await repository.snapshot() }
         catch {
-            if CachedContentFailure.invalidates(error), let cache {
+            if case TowerError.http(let status, _, _) = error, status == 403 || status == 410, let cache {
                 try? await cache.store.writer.invalidateLocalContent(workspace: workspaceId, record: channelId)
             }
             throw error

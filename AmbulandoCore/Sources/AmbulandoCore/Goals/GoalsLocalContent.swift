@@ -6,7 +6,10 @@ extension GoalsService {
     private struct SavedGoals: Codable { let channel: Data; let goals: [SavedGoal] }
     /// The channel was privately verified when saved. It is a read location, never permission to write.
     public func cached() async -> GoalsSnapshot? {
-        guard let cache, let bytes = try? await cache.read("goals") else { return nil }
+        guard let cache else { return nil }
+        var savedBytes = try? await cache.read("goals-relational")
+        if savedBytes == nil { savedBytes = try? await cache.read("goals") }
+        guard let bytes = savedBytes else { return nil }
         do {
             let saved = try JSONDecoder().decode(SavedGoals.self, from: bytes)
             let channel = try ChannelRecord(raw: saved.channel)
@@ -26,20 +29,24 @@ extension GoalsService {
             return GoalsSnapshot(space: .ready(channel: channel, agents: []), goals: goals.sorted(by: Self.order), unreadable: unreadable)
         } catch { return nil }
     }
-    func remember(_ snapshot: GoalsSnapshot, epoch: String? = nil) async {
+    func remember(_ snapshot: GoalsSnapshot, epoch: String? = nil, storage: GoalDocument.Storage = .file) async {
         guard let cache else { return }
-        guard case .ready(let channel, _) = snapshot.space else { await cache.remove("goals"); return }
+        guard case .ready(let channel, _) = snapshot.space else { await cache.remove("goals"); await cache.remove("goals-relational"); return }
+        // A legacy read started before cutover must not replace a newer canonical SQL snapshot after it finishes.
+        if storage == .file, (try? await cache.read("goals-authority:" + channel.id)) != nil { return }
         for document in snapshot.goals {
             if let bytes = try? JSONEncoder().encode(SavedDocument(file: document.file.raw, goal: document.goal.encode(), storage: document.storage)) {
                 try? await cache.save("goal:" + document.id + ":" + document.versionId, bytes, dependencies: [channel.id, document.id], expectedEpoch: epoch)
             }
         }
         let saved = SavedGoals(channel: channel.raw, goals: snapshot.goals.map { SavedGoal(id: $0.id, version: $0.versionId) })
-        if let bytes = try? JSONEncoder().encode(saved) { try? await cache.save("goals", bytes, dependencies: [channel.id], expectedEpoch: epoch) }
+        if let bytes = try? JSONEncoder().encode(saved) {
+            try? await cache.save(storage == .relational ? "goals-relational" : "goals", bytes, dependencies: [channel.id], expectedEpoch: epoch)
+        }
     }
     public func remember(_ document: GoalDocument) async {
         guard var snapshot = await cached() else { return }
         snapshot.goals = (snapshot.goals.filter { $0.id != document.id } + [document]).sorted(by: Self.order)
-        await remember(snapshot)
+        await remember(snapshot, storage: document.storage)
     }
 }

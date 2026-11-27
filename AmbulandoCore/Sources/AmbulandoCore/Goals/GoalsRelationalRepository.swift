@@ -58,7 +58,12 @@ public struct GoalsRelationalRepository: Sendable {
             do {
                 let status = try await request("status", .object([("channel_id", .string(channelId)), ("content_type", .string(Goal.mime))]))
                 guard status["version"] == .int(1), let authority = status["authority"] else { throw GoalsRelationalRows.invalid }
-                if authority == .null || authority["mode"] == .string("staging") { return nil }
+                if authority == .null || authority["mode"] == .string("staging") {
+                    if status["fence"]?["active"] == .bool(true) {
+                        throw GoalSaveFailed(message: "Goals storage is being updated. Saved goals remain available; changes are paused.", retryable: true)
+                    }
+                    return nil
+                }
                 guard authority["mode"] == .string("active"), authority["content_type"] == .string(Goal.mime) else {
                     throw GoalSaveFailed(message: "Goals storage is paused. Saved goals remain available; reconnect before changing them.", retryable: true)
                 }

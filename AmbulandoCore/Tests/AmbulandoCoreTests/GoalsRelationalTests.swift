@@ -92,6 +92,20 @@ import Testing
         }
     }
 
+    @Test func stagingWithoutFenceUsesLegacyAndFencedStagingPauses() async throws {
+        let identity = try await makeIdentity()
+        for fenced in [false, true] {
+            let transport = StubTransport { _ in
+                (200, JSONValue.object([("version", .int(1)), ("authority", .object([("mode", .string("staging"))])),
+                    ("fence", .object([("active", .bool(fenced))]))]).serialized())
+            }
+            let api = TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: transport, signer: identity))
+            if fenced { await #expect(throws: GoalSaveFailed.self) { try await Self.repository(api).snapshot() } }
+            else { #expect(try await Self.repository(api).snapshot() == nil) }
+            #expect(transport.recorded.allSatisfy { $0.url!.path.hasSuffix("/status") })
+        }
+    }
+
     @Test func uuidOnlyRelationalReferenceNeedsNoFileAndDenialStays403() async throws {
         let fixture = try Fixture(), identity = try await makeIdentity()
         let api = TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: StubTransport { try fixture.handle($0) }, signer: identity))
@@ -129,7 +143,12 @@ import Testing
             try WorkspaceSync(store: LocalStore(directory: dir), engine: SyncEngine(), identity: identity, transport: transport).goals(connection, workspace)
         }
         let live = try service(StubTransport { try fixture.handle($0) })
-        #expect(try await live.load().goals.first?.storage == .relational)
+        let loaded = try await live.load()
+        #expect(loaded.goals.first?.storage == .relational)
+        let canonical = try #require(loaded.goals.first)
+        var old = canonical.goal; old.name = "Delayed legacy content"
+        await live.remember(GoalsSnapshot(space: loaded.space, goals: [GoalDocument(file: canonical.file, versionId: UUID().uuidString.lowercased(), goal: old)], unreadable: []))
+        #expect(await live.cached()?.goals.first?.goal.name == canonical.goal.name)
         let offline = try service(StubTransport { _ in throw URLError(.notConnectedToInternet) })
         #expect(await offline.cached()?.goals.first?.goal == (try Self.value()))
         await #expect(throws: (any Error).self) { try await offline.edit(Self.id, [.setReached(id: "string_1", expected: false, reached: true)]) }
