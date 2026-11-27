@@ -18,6 +18,9 @@ public enum GoalEdit: Sendable, Equatable {
     case removeCheckpoint(id: String)
     /// Moves a checkpoint to `toIndex` among the checkpoints that remain (clamped).
     case moveCheckpoint(id: String, toIndex: Int)
+    case setDefaultChannel(expected: String?, value: String?)
+    case pin(GoalLink)
+    case unpin(GoalLinkType, recordId: String)
     case link(GoalLink)
     /// Removes only the reference; the source record, its location and its access are untouched.
     case unlink(GoalLinkType, recordId: String)
@@ -75,6 +78,17 @@ public enum GoalEdit: Sendable, Equatable {
             var out = goal
             out.checkpoints.removeAll { $0.id == id }
             out.checkpoints.insert(item, at: min(max(toIndex, 0), out.checkpoints.count))
+            return out
+        case .setDefaultChannel(let expected, let value):
+            return try goal.setting("default channel", goal.defaultChannelId, expected, value) { $0.defaultChannelId = $1 }
+        case .pin(let link):
+            try goal.requireEditable()
+            if goal.pinnedRefs.contains(where: { $0.key == link.key }) { return goal }
+            var out = goal; out.pinnedRefs.append(link)
+            return try out.validated()
+        case .unpin(let type, let recordId):
+            try goal.requireEditable()
+            var out = goal; out.pinnedRefs.removeAll { $0.type == type && $0.recordId == recordId }
             return out
         case .link(let link):
             try goal.requireEditable()

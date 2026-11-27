@@ -408,8 +408,9 @@ public struct WriteSender: Sendable {
                     return .done(ack(docs: [found]))
                 }
                 let summary = DocumentBody(bytes: bytes, contentType: contentType).markdown
-                let r = try await send("POST", base + "/channels/" + TowerAPI.uuid(channel) + "/docs",
-                                       ["title": p["title"] ?? "Untitled document", "storage_object_id": objectId, "summary": summary])
+                var body: [String: Any] = ["title": p["title"] ?? "Untitled document", "storage_object_id": objectId, "summary": summary]
+                if let metadata = p["metadata"] as? [String: Any] { body["metadata"] = metadata }
+                let r = try await send("POST", base + "/channels/" + TowerAPI.uuid(channel) + "/docs", body)
                 if (200..<300).contains(r.status), let d = record(r.body, "doc", DocRecord.init(raw:)) { return .done(ack(docs: [d])) }
                 if r.status == 409, let found = try await api.channelDocs(workspaceId: w, appNpub: app, channelId: channel).docs.first(where: { $0.storageObjectId == objectId }) {
                     return .done(ack(docs: [found]))

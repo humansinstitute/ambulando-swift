@@ -136,7 +136,7 @@ extension TowerAPI {
     /// caller to rebase. With a lineage file the save is a version on `baseVersionId`; a stale base is a `.conflict`.
     public func saveTextEdit(workspaceId: String, appNpub: String, channelId: String, origin: (messageId: String, storageObjectId: String, filename: String),
                              lineage: TextLineage?, baseVersionId: String?, bytes: Data, filename: String, clientMutationId: String,
-                             prepared: PreparedObject? = nil, onPrepared: @Sendable (PreparedObject) async throws -> Void = { _ in }) async throws -> TextSaveOutcome {
+                             prepared: PreparedObject? = nil, metadata: JSONValue = .object([]), onPrepared: @Sendable (PreparedObject) async throws -> Void = { _ in }) async throws -> TextSaveOutcome {
         let objectId = try await store(workspaceId: workspaceId, appNpub: appNpub, bytes: bytes, contentType: textAttachmentContentType,
                                        fileName: filename, prepared: prepared, allowReplacingMissingPrepared: false, onPrepared: onPrepared)
         if let lineage {
@@ -155,9 +155,30 @@ extension TowerAPI {
             let file = (o["file"] as? [String: Any]).flatMap(fileLineage) ?? lineage
             return .saved(lineage: file, version: version)
         }
-        let meta: [String: Any] = ["text_attachment_lineage": ["v": 1, "origin_message_id": origin.messageId.lowercased(),
-                                                                "origin_storage_object_id": origin.storageObjectId.lowercased(), "origin_filename": origin.filename]]
-        let body = try rawJSON(["storage_object_id": objectId, "display_name": filename, "metadata": meta])
+        // An existing canonical File keeps its original association, even if its source chat changed later.
+        let existing: TextLineage?
+        do { existing = try await textLineage(workspaceId: workspaceId, appNpub: appNpub, channelId: channelId, originMessageId: origin.messageId, originStorageObjectId: origin.storageObjectId) }
+        catch TowerError.http(404, _, _) { existing = nil }
+        if let existing {
+            let versions = try await textVersions(workspaceId: workspaceId, appNpub: appNpub, fileId: existing.fileId)
+            if let accepted = versions.versions.first(where: { $0.storageObjectId == objectId }) { return .saved(lineage: existing, version: accepted) }
+            return .conflict(lineage: existing, current: versions.versions.first { $0.versionId == versions.currentVersionId } ?? versions.versions.last)
+        }
+        // Read the original message through its normal ACL. A 404 preserves supported editing without inventing context.
+        let source = try await message(workspaceId: workspaceId, appNpub: appNpub, messageId: origin.messageId)
+        if let source {
+            guard source.id == origin.messageId, source.workspaceId == workspaceId, source.channelId == channelId else { throw TextAttachmentError.integrity }
+        }
+        guard metadata.isObject else { throw TextVersionError.malformed }
+        var meta = metadata.setting(GoalAssociation.key, nil).setting("source_thread_id", nil)
+        if let threadId = source?.threadId {
+            let inherited = try await threadGoalMetadata(workspaceId: workspaceId, appNpub: appNpub, threadId: threadId, expectedChannelId: channelId)
+            if let reference = inherited[GoalAssociation.key] { meta = meta.setting(GoalAssociation.key, reference) }
+            meta = meta.setting("source_thread_id", .string(threadId))
+        }
+        meta = meta.setting("text_attachment_lineage", .object([("v", .int(1)), ("origin_message_id", .string(origin.messageId.lowercased())),
+            ("origin_storage_object_id", .string(origin.storageObjectId.lowercased())), ("origin_filename", .string(origin.filename))]))
+        let body = JSONValue.object([("storage_object_id", .string(objectId)), ("display_name", .string(filename)), ("metadata", meta)]).serialized()
         let reply = try await client.exchange(method: "POST", path: Self.base(workspaceId) + "/channels/" + Self.uuid(channelId) + "/files", appNpub: appNpub, jsonBody: body)
         let o = (try? JSONSerialization.jsonObject(with: reply.body)) as? [String: Any] ?? [:]
         if reply.status == 409, o["code"] as? String == "lineage_file_exists" {

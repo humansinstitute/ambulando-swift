@@ -13,6 +13,7 @@ struct MacThreadArtefactBrowser: View {
     @State private var channel: String
     @State private var search = ""
     @State private var type: ArtefactType?
+    @State private var creating: ArtefactType?
     @FocusState private var searching: Bool
 
     init(state: MacThreadArtefacts, target: ChatTarget, workspace: WorkspaceRecord, store: LocalStore) {
@@ -144,6 +145,13 @@ struct MacThreadArtefactBrowser: View {
             }
             HStack {
                 Button("Refresh") { refresh(force: true) }.disabled(!model.isUnlocked)
+                Menu("New artefact") {
+                    Button("Document") { creating = .document }
+                    Button("Whiteboard") { creating = .whiteboard }
+                    Button("HTML") { creating = .html }
+                }
+                .disabled(!model.isUnlocked || !boundaryValid || target.threadId == nil || !query.value.choice.channels.contains(where: { $0.id == target.channelId }))
+                .accessibilityIdentifier("thread.artefacts.create")
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("thread.artefacts.browser.cancel")
@@ -159,6 +167,14 @@ struct MacThreadArtefactBrowser: View {
             if unlocked { start(); refresh() } else { query.stop() }
         }
         .onDisappear { query.stop() }
+        .sheet(item: $creating) { kind in
+            let context = WorkContext(scopeId: query.value.choice.scope(ofChannel: target.channelId), channelId: target.channelId)
+            if kind == .document {
+                DocumentCreateSheet(workspace: workspace, choice: query.value.choice, context: context, sourceThread: target)
+            } else {
+                ArtefactCreateSheet(type: kind, workspace: workspace, choice: query.value.choice, context: context, sourceThread: target)
+            }
+        }
     }
     private func refresh(force: Bool = false) {
         guard model.isUnlocked, boundaryValid else { return }

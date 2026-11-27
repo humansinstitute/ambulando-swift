@@ -12,6 +12,13 @@ network work against the existing Tower HTTPS + NIP-98 API. The web client lives
 - **Mac app** (same core, desktop window, install on another Mac): [docs/mac.md](docs/mac.md)
 - **iPhone TestFlight distribution**: [docs/testflight.md](docs/testflight.md)
 
+## Goal discussions (Mac source build 144)
+
+Discuss a goal in its default channel, pin key original Docs/Files, and keep discussion-created outputs associated
+with the goal. Uncertain thread starts retain a durable recovery receipt instead of repeating creation. See
+[behavior, contracts, access and validation limits](docs/goal-discussions.md). Mac installation, live agent context and
+iPhone/web parity require their separate delivery checks.
+
 ## iPhone/iPad thread artefacts (source build 117)
 
 Header-only artefact browsing/switching/removal and Discuss context reuse the Mac

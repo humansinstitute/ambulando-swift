@@ -144,10 +144,12 @@ struct DocumentCreateSheet: View {
     let workspace: WorkspaceRecord
     let choice: ScopeChoice
     let context: WorkContext
+    var sourceThread: ChatTarget? = nil
     @State private var title = ""
     @State private var text = ""
     @State private var channelId: String?
     @State private var error: String?
+    @State private var saving = false
 
     var body: some View {
         NavigationStack {
@@ -155,36 +157,43 @@ struct DocumentCreateSheet: View {
                 TextField("Title", text: $title).accessibilityIdentifier("newdoc.title")
                 Picker("Channel", selection: $channelId) {
                     ForEach(choice.channels(in: context)) { Text("#\(choice.channelName($0.id) ?? "Channel")").tag(Optional($0.id)) }
-                }
+                }.disabled(sourceThread != nil || saving)
                 Section("Text") { ContentTextEntry(text: $text, placeholder: "Document text", workspace: workspace, field: "newdoc", multilineEditor: true).frame(minHeight: 160).accessibilityIdentifier("newdoc.text") }
                 if let error { Text(error).foregroundStyle(Amb.destructive) }
             }
             .navigationTitle("New document")
             .inlineTitle()
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") { create() }.disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || channelId == nil)
+                    Button(saving ? "Creating…" : "Create") { create() }.disabled(saving || !model.isUnlocked || title.trimmingCharacters(in: .whitespaces).isEmpty || channelId == nil)
                         .accessibilityIdentifier("newdoc.create")
                 }
             }
-            .onAppear { channelId = channelId ?? context.channelId ?? choice.channels(in: context).first?.id }
+            .onAppear { channelId = sourceThread?.channelId ?? channelId ?? context.channelId ?? choice.channels(in: context).first?.id }
         }
     }
 
     /// The body is built in the web format and staged on the device; the write queue uploads it and creates the record.
     private func create() {
-        guard let channelId, let staging = model.staging else { return }
+        guard !saving, let channelId, let staging = model.staging else { return }
         guard !UploadToken.contains(in: text) else { error = ComposerUploadError.unresolved.localizedDescription; return }
-        let created = DocumentBody.newDocument(text: text)
-        let name = UUID().uuidString.lowercased() + ".document.json"
-        do {
-            try created.bytes.write(to: staging.appendingPathComponent(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        } catch { self.error = error.localizedDescription; return }
-        let clean = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let payload: [String: any Sendable] = ["channel_id": channelId, "title": clean, "staged": name, "content_type": created.contentType,
-                                               "file_name": String(clean.prefix(60)) + ".document.json"]
-        if model.submit(WriteIntent(kind: .docCreate, targetId: channelId, payload: payload), in: workspace) { dismiss() }
+        let capturedText = text, clean = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        saving = true; error = nil
+        Task {
+            defer { saving = false }
+            do {
+                let metadata = try await model.goalCreationMetadata(source: sourceThread, workspace: workspace, channelId: channelId)
+                let created = DocumentBody.newDocument(text: capturedText)
+                let name = UUID().uuidString.lowercased() + ".document.json"
+                try created.bytes.write(to: staging.appendingPathComponent(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                var payload: [String: any Sendable] = ["channel_id": channelId, "title": clean, "staged": name, "content_type": created.contentType,
+                    "file_name": String(clean.prefix(60)) + ".document.json"]
+                if !metadata.isEmpty { payload["metadata"] = metadata }
+                if model.submit(WriteIntent(kind: .docCreate, targetId: channelId, payload: payload), in: workspace) { dismiss() }
+                else { try? FileManager.default.removeItem(at: staging.appendingPathComponent(name)); error = "The document could not be queued. Reopen the form in the original workspace." }
+            } catch { self.error = GoalsModel.message(error) }
+        }
     }
 }
 
@@ -1570,41 +1579,51 @@ struct ArtefactCreateSheet: View {
     let workspace: WorkspaceRecord
     let choice: ScopeChoice
     let context: WorkContext
+    var sourceThread: ChatTarget? = nil
     @State private var title = ""
     @State private var source = "<!doctype html><html><body><h1>New artefact</h1></body></html>"
     @State private var channel: String?
     @State private var error: String?
+    @State private var saving = false
     var body: some View {
         NavigationStack {
             Form {
                 TextField("Title", text: $title)
                 Picker("Channel", selection: $channel) {
                     ForEach(choice.channels(in: context)) { Text(choice.channelName($0.id) ?? "Channel").tag(Optional($0.id)) }
-                }
+                }.disabled(sourceThread != nil || saving)
                 if type == .html { TextEditor(text: $source).font(.system(.body, design: .monospaced)).frame(minHeight: 240) }
                 if let error { Text(error).foregroundStyle(Amb.destructive) }
             }
             .navigationTitle(type == .whiteboard ? "New whiteboard" : "New HTML")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Create") { create() }.disabled(channel == nil || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.isUnlocked) }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
+                ToolbarItem(placement: .confirmationAction) { Button(saving ? "Creating…" : "Create") { create() }.disabled(saving || channel == nil || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.isUnlocked) }
             }
-            .onAppear { channel = context.channelId ?? choice.channels(in: context).first?.id }
+            .onAppear { channel = sourceThread?.channelId ?? context.channelId ?? choice.channels(in: context).first?.id }
         }
     }
     private func create() {
-        guard let channel, let staging = model.staging else { return }
-        do {
-            let name = title.trimmingCharacters(in: .whitespacesAndNewlines) + (type == .whiteboard ? ".excalidraw" : ".html")
+        guard !saving, let channel, let staging = model.staging else { return }
+        let capturedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines), capturedSource = source
+        saving = true; error = nil
+        Task {
+          defer { saving = false }
+          do {
+            let association = try await model.goalCreationMetadata(source: sourceThread, workspace: workspace, channelId: channel)
+            let name = capturedTitle + (type == .whiteboard ? ".excalidraw" : ".html")
             let token = UUID().uuidString.lowercased()
-            let bytes = type == .whiteboard ? try JSONSerialization.data(withJSONObject: BoardScene.empty()) : Data(source.utf8)
+            let bytes = type == .whiteboard ? try JSONSerialization.data(withJSONObject: BoardScene.empty()) : Data(capturedSource.utf8)
             try bytes.write(to: staging.appendingPathComponent(token), options: .atomic)
             let descriptor: [String: any Sendable] = ["schema_version": 1, "format_version": 1, "type": type == .whiteboard ? "excalidraw" : "html", "editor_id": type == .whiteboard ? "builtin.excalidraw" : "builtin.html"]
-            let metadata: [String: any Sendable] = ["artefact": descriptor]
+            var metadata: [String: any Sendable] = ["artefact": descriptor]
+            metadata.merge(association) { _, captured in captured }
             let payload: [String: any Sendable] = ["channel_id": channel, "display_name": name, "file_name": name, "staged": token,
                 "content_type": type == .whiteboard ? BoardScene.contentType : "text/html",
                 "metadata": metadata]
             if model.submit(WriteIntent(kind: .fileUpload, targetId: channel, payload: payload), in: workspace) { dismiss() }
-        } catch { self.error = error.localizedDescription }
+            else { try? FileManager.default.removeItem(at: staging.appendingPathComponent(token)); error = "The artefact could not be queued. Reopen the form in the original workspace." }
+          } catch { self.error = GoalsModel.message(error) }
+        }
     }
 }

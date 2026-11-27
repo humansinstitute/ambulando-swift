@@ -9,10 +9,12 @@ struct GoalDetailView: View {
     let fileId: String
     let workspace: WorkspaceRecord
     let store: LocalStore
-    @State private var links: [ResolvedGoalLink] = []
+    @State private var associations = LiveQuery<GoalWorkSnapshot>(initial: GoalWorkSnapshot())
+    private var links: [ResolvedGoalLink] { associations.value.links }
     @State private var editing = false
     @State private var checkpointForm: CheckpointForm?
     @State private var picking = false
+    @State private var pinning = false
     @State private var actionError: String?
 
     private var goals: GoalsModel? { model.goalsModel(for: workspace) }
@@ -26,24 +28,26 @@ struct GoalDetailView: View {
             } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
         }
         .navigationTitle(document?.goal.name ?? "Goal")
-        .task(id: model.selectedWorkspaceBoundary) {
+        .task(id: (model.selectedWorkspaceBoundary?.id ?? "") + ":" + fileId) {
             guard let goals else { return }
             if goals.goal(fileId) == nil { await goals.refresh() }
             await goals.reload(fileId)
         }
-        .task(id: document?.goal.links) { await resolve() }
+        .task(id: GoalAssociationLoadKey(boundaryId: model.selectedWorkspaceBoundary?.id, fileId: fileId, goal: document?.goal)) { await resolve() }
+        .onDisappear { associations.stop() }
         .alert("Couldn’t save", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(actionError ?? "") }
     }
 
     private func resolve() async {
-        guard let links = document?.goal.links else { links = []; return }
-        links_: do {
-            let resolved = try await store.reader.resolveGoalLinks(workspaceId: workspace.id, links: links)
-            guard !Task.isCancelled else { break links_ }
-            self.links = resolved
-        } catch { self.links = links.map { ResolvedGoalLink(link: $0, title: nil, location: nil, detail: nil, channelId: $0.channelId, available: false) } }
+        guard let goal = document?.goal else { associations.stop(); return }
+        let w = workspace.id, id = fileId, store = store
+        associations.start(store: store, matches: { $0.table == .access || ($0.workspaceId == w && [.threads, .tasks, .docs, .files, .channels, .scopes].contains($0.table)) }) {
+            async let linked = store.reader.associatedGoalLinks(workspaceId: w, goalId: id, explicit: goal.links)
+            async let pinned = store.reader.resolveGoalLinks(workspaceId: w, links: goal.pinnedRefs)
+            return try await GoalWorkSnapshot(links: linked, pins: pinned)
+        }
     }
 
     private func run(_ edits: GoalEdit...) {
@@ -65,6 +69,9 @@ struct GoalDetailView: View {
                 header(goal)
                 Text(goal.description).font(.amb(.body)).foregroundStyle(Amb.foreground).textSelection(.enabled)
                 dates(goal)
+                GoalDiscussionControls(goals: goals, document: document, workspace: workspace, store: store)
+                    .id(goals.boundary.id + ":" + document.id)
+                pins(goal, editable: editable)
                 timeline(goal, editable: editable)
                 work(goal, editable: editable)
             }
@@ -95,6 +102,11 @@ struct GoalDetailView: View {
         }
         .sheet(isPresented: $picking) {
             GoalLinkPicker(workspace: workspace, store: store, linked: Set(goal.links.map(\.key))) { link in run(.link(link)) }
+        }
+        .sheet(isPresented: $pinning) {
+            GoalLinkPicker(workspace: workspace, store: store, linked: Set(goal.pinnedRefs.map(\.key)), pinsOnly: true) { link in
+                try await goals.pinReference(goalFileId: document.id, link: link)
+            }
         }
         .accessibilityIdentifier("goal.detail")
     }
@@ -201,29 +213,46 @@ struct GoalDetailView: View {
                     }
                 }
             }
-            if goal.links.isEmpty { Text("Nothing is linked yet. Link existing chats, tasks and documents, or use “Add to goal” on any of them.").font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground) }
+            if links.isEmpty { Text("No associated work yet. Start a discussion or link existing work.").font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground) }
+            if let error = associations.error { Text(error).font(.amb(.footnote)).foregroundStyle(Amb.destructive) }
         }
     }
 
-    private func linkRow(_ item: ResolvedGoalLink, editable: Bool) -> some View {
-        HStack {
+    private func pins(_ goal: Goal, editable: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Pinned references").font(.amb(.title3).weight(.semibold)); Spacer()
+                Button("Pin Doc or File", systemImage: "pin") { pinning = true }
+                    .disabled(!editable || goal.pinnedRefs.count >= Goal.maxPinnedRefs).accessibilityIdentifier("goal.pin")
+            }
+            Text("Key originals for this goal. Pins are separate from associated outputs and grant no additional access.").font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+            ForEach(associations.value.pins) { item in linkRow(item, editable: editable, pinned: true) }
+            if goal.pinnedRefs.isEmpty { Text("No pinned references").foregroundStyle(Amb.mutedForeground) }
+        }
+    }
+
+    private func linkRow(_ item: ResolvedGoalLink, editable: Bool, pinned: Bool = false) -> some View {
+        let manual = document?.goal.links.contains(where: { $0.key == item.link.key }) == true
+        return HStack {
             Button { open(item) } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.title ?? "Not available").font(.amb(.body)).foregroundStyle(item.available ? Amb.foreground : Amb.mutedForeground)
                     Text(item.available ? [item.location, item.detail].compactMap { $0 }.joined(separator: " · ") : "You may not have access, or it hasn’t synced to this device yet.")
                         .font(.amb(.footnote)).foregroundStyle(Amb.mutedForeground)
+                    if !pinned && !manual { Text("Associated through a goal discussion").font(.amb(.caption)).foregroundStyle(Amb.primary) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain).disabled(!item.available)
-            if editable {
-                Button { run(.unlink(item.link.type, recordId: item.link.recordId)) } label: { Image(systemName: "xmark.circle") }
-                    .buttonStyle(.plain).foregroundStyle(Amb.mutedForeground).accessibilityLabel("Remove from goal")
+            if editable && (pinned || manual) {
+                Button { if pinned { run(.unpin(item.link.type, recordId: item.link.recordId)) } else { run(.unlink(item.link.type, recordId: item.link.recordId)) } } label: { Image(systemName: pinned ? "pin.slash" : "xmark.circle") }
+                    .buttonStyle(.plain).foregroundStyle(Amb.mutedForeground).accessibilityLabel(pinned ? "Unpin reference" : "Remove manual link")
             }
         }
         .padding(.vertical, 2)
     }
 
     private func open(_ item: ResolvedGoalLink) {
+        guard item.available, model.isUnlocked, let goals, model.selectedWorkspaceBoundary == goals.boundary else { return }
         switch item.link.type {
         case .task: model.openRecord(kind: "task", id: item.link.recordId)
         case .doc: model.openRecord(kind: "doc", id: item.link.recordId)
@@ -292,43 +321,67 @@ private struct GoalLinkPicker: View {
     let workspace: WorkspaceRecord
     let store: LocalStore
     let linked: Set<GoalLink.Key>
-    let choose: (GoalLink) -> Void
+    var pinsOnly = false
+    let choose: (GoalLink) async throws -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var kind = Kind.tasks
     @State private var query = ""
     @State private var tasks: [TaskRecord] = []
     @State private var docs: [DocRecord] = []
     @State private var files: [FileRecord] = []
+    @State private var busy = false
+    @State private var error: String?
 
     private func matches(_ title: String) -> Bool { query.isEmpty || title.localizedCaseInsensitiveContains(query) }
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Kind", selection: $kind) { ForEach(Kind.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding()
+            Picker("Kind", selection: $kind) { ForEach(Kind.allCases.filter { !pinsOnly || $0 != .tasks }) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).padding()
             TextField("Search", text: $query).textFieldStyle(.roundedBorder).padding(.horizontal)
             List {
                 switch kind {
                 case .tasks: ForEach(tasks.filter { matches($0.title) && !linked.contains(.init(type: .task, recordId: $0.id)) }) { t in
-                    row(t.title) { choose(GoalLink(type: .task, recordId: t.id, channelId: t.channelId)) } }
+                    row(t.title) { try await choose(GoalLink(type: .task, recordId: t.id, channelId: t.channelId)) } }
                 case .docs: ForEach(docs.filter { matches($0.title) && !$0.archived && !linked.contains(.init(type: .doc, recordId: $0.id)) }) { d in
-                    row(d.title) { choose(GoalLink(type: .doc, recordId: d.id, channelId: d.channelId)) } }
+                    row(d.title) { try await choose(GoalLink(type: .doc, recordId: d.id, channelId: d.channelId)) } }
                 case .files: ForEach(files.filter { matches($0.displayName) && !$0.archived && $0.contentType != Goal.mime && !linked.contains(.init(type: .file, recordId: $0.id)) }) { f in
-                    row(f.displayName) { choose(GoalLink(type: .file, recordId: f.id, channelId: f.channelId)) } }
+                    row(f.displayName) { try await choose(GoalLink(type: .file, recordId: f.id, channelId: f.channelId)) } }
                 }
-            }
-            HStack { Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }.padding()
+            }.disabled(busy)
+            if let error { Text(error).foregroundStyle(Amb.destructive).padding(.horizontal).accessibilityIdentifier("goal.picker.error") }
+            HStack { if busy { ProgressView().controlSize(.small) }; Spacer(); Button("Done") { dismiss() }.disabled(busy).keyboardShortcut(.defaultAction) }.padding()
         }
+        .interactiveDismissDisabled(busy)
         #if os(macOS)
         .frame(minWidth: 460, minHeight: 480)
         #endif
         .task {
+            if pinsOnly { kind = .docs }
             tasks = (try? await store.reader.tasks(workspaceId: workspace.id)) ?? []
             docs = (try? await store.reader.docs(workspaceId: workspace.id)) ?? []
             files = (try? await store.reader.files(workspaceId: workspace.id)) ?? []
         }
     }
 
-    private func row(_ title: String, add: @escaping () -> Void) -> some View {
-        Button(action: add) { Label(title, systemImage: "plus.circle").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain)
+    private func row(_ title: String, add: @escaping () async throws -> Void) -> some View {
+        Button {
+            guard !busy else { return }; busy = true; error = nil
+            Task {
+                defer { busy = false }
+                do { try await add(); if pinsOnly { dismiss() } }
+                catch { self.error = GoalsModel.message(error) }
+            }
+        } label: { Label(title, systemImage: "plus.circle").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain)
     }
+}
+
+private struct GoalWorkSnapshot: Sendable, Equatable {
+    var links: [ResolvedGoalLink] = []
+    var pins: [ResolvedGoalLink] = []
+}
+
+private struct GoalAssociationLoadKey: Equatable {
+    let boundaryId: String?
+    let fileId: String
+    let goal: Goal?
 }

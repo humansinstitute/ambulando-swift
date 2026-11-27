@@ -15,11 +15,14 @@ public struct Goal: Sendable, Equatable {
     public var links: [GoalLink]
     /// Unknown top-level fields from a newer writer, written back untouched.
     public var extra: JSONValue
+    public var defaultChannelId: String?
+    public var pinnedRefs: [GoalLink]
 
     public init(name: String, description: String, startDate: String? = nil, targetDate: String? = nil, status: GoalStatus = .active,
-                checkpoints: [GoalCheckpoint] = [], links: [GoalLink] = [], extra: JSONValue = .object([])) {
+                checkpoints: [GoalCheckpoint] = [], links: [GoalLink] = [], extra: JSONValue = .object([]), defaultChannelId: String? = nil, pinnedRefs: [GoalLink] = []) {
         self.name = name; self.description = description; self.startDate = startDate; self.targetDate = targetDate
         self.status = status; self.checkpoints = checkpoints; self.links = links; self.extra = extra
+        self.defaultChannelId = defaultChannelId; self.pinnedRefs = pinnedRefs
     }
 
     public static let schema = "ambulando.goal"
@@ -30,7 +33,8 @@ public struct Goal: Sendable, Equatable {
     public static let maxDescription = 2000
     public static let maxCheckpoints = 100
     public static let maxLinks = 500
-    static let known: Set<String> = ["schema", "schema_version", "name", "description", "start_date", "target_date", "status", "checkpoints", "links"]
+    public static let maxPinnedRefs = 100
+    static let known: Set<String> = ["schema", "schema_version", "name", "description", "start_date", "target_date", "status", "checkpoints", "links", "default_channel_id", "pinned_refs"]
 
     public var reachedCount: Int { checkpoints.filter(\.reached).count }
 
@@ -46,6 +50,8 @@ public struct Goal: Sendable, Equatable {
         pairs.append(("status", .string(status.rawValue)))
         pairs.append(("checkpoints", .array(checkpoints.map { $0.toJSON() })))
         pairs.append(("links", .array(links.map { $0.toJSON() })))
+        if let defaultChannelId { pairs.append(("default_channel_id", .string(defaultChannelId))) }
+        if !pinnedRefs.isEmpty { pairs.append(("pinned_refs", .array(pinnedRefs.map { $0.toJSON() }))) }
         return .object(pairs)
     }
 
@@ -63,7 +69,8 @@ public struct Goal: Sendable, Equatable {
             startDate: try root.string("start_date"), targetDate: try root.string("target_date"), status: status,
             checkpoints: try root.array("checkpoints").map(GoalCheckpoint.parse),
             links: try root.array("links").map(GoalLink.parse),
-            extra: .object((root.objectValue ?? []).filter { !known.contains($0.0) }))
+            extra: .object((root.objectValue ?? []).filter { !known.contains($0.0) }),
+            defaultChannelId: try root.string("default_channel_id"), pinnedRefs: try root.array("pinned_refs").map(GoalLink.parse))
         return try goal.validated()
     }
 
@@ -104,6 +111,13 @@ public struct Goal: Sendable, Equatable {
         guard links.count <= Self.maxLinks else { throw GoalError.invalid("Too many linked records.") }
         guard Set(links.map(\.key)).count == links.count else { throw GoalError.invalid("A record is linked twice.") }
         try links.forEach { try $0.validate() }
+        if let defaultChannelId, lowerUUID(defaultChannelId) != defaultChannelId { throw GoalError.invalid("The default channel identity is invalid.") }
+        guard pinnedRefs.count <= Self.maxPinnedRefs else { throw GoalError.invalid("Too many pinned references.") }
+        guard Set(pinnedRefs.map(\.key)).count == pinnedRefs.count else { throw GoalError.invalid("A reference is pinned twice.") }
+        try pinnedRefs.forEach { ref in
+            guard ref.type == .doc || ref.type == .file else { throw GoalError.invalid("Only Docs and Files can be pinned.") }
+            try ref.validate()
+        }
         return self
     }
 }

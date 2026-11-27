@@ -119,6 +119,7 @@ final class GoalsModel {
 
     @discardableResult
     func edit(_ fileId: String, _ edits: [GoalEdit]) async throws -> GoalDocument {
+        guard isCurrent(boundary) else { throw CancellationError() }
         let saved = try await service.edit(fileId, edits)
         if isCurrent(boundary) { publish(saved) }
         return saved
@@ -155,6 +156,79 @@ final class GoalsModel {
     /// Adds a link from a source record to a goal, saving only the reference. Tower decides write access.
     func add(_ link: GoalLink, to fileId: String) async -> String? {
         do { try await edit(fileId, .link(link)); return nil } catch { return Self.message(error) }
+    }
+
+    func createDiscussion(goalFileId: String, channelId: String, scopeId: String, expectedDefault: String?, requestId: String,
+                          beforeCreate: @escaping @Sendable () async throws -> Void) async throws -> ThreadRecord {
+        guard isCurrent(boundary) else { throw CancellationError() }
+        let thread = try await service.api.createGoalDiscussion(workspaceId: service.workspaceId, appNpub: service.appNpub,
+            goalFileId: goalFileId, channelId: channelId, scopeId: scopeId, expectedDefault: expectedDefault,
+            requestId: requestId, beforeCreate: beforeCreate)
+        guard isCurrent(boundary) else { throw CancellationError() }
+        return thread
+    }
+
+    func findDiscussion(_ receipt: GoalDiscussionReceipt) async throws -> ThreadRecord? {
+        guard isCurrent(boundary), receipt.workspaceId == service.workspaceId else { throw CancellationError() }
+        let thread = try await service.api.findGoalDiscussion(workspaceId: service.workspaceId, appNpub: service.appNpub,
+            channelId: receipt.channelId, goalFileId: receipt.goalFileId, requestId: receipt.requestId)
+        guard isCurrent(boundary) else { throw CancellationError() }
+        return thread
+    }
+
+    /// Picker rows are discovery only. Read the original through its own ACL before saving a pin reference.
+    func pinReference(goalFileId: String, link: GoalLink) async throws {
+        guard isCurrent(boundary) else { throw CancellationError() }
+        guard link.type == .doc || link.type == .file, UUID(uuidString: service.workspaceId) != nil,
+              UUID(uuidString: link.recordId) != nil else { throw GoalError.invalid("Only existing Docs and Files can be pinned.") }
+        let workspaceId: String, recordId: String, channelId: String, raw: Data
+        do {
+            if link.type == .doc {
+                let doc = try await service.api.doc(workspaceId: service.workspaceId, appNpub: service.appNpub, docId: link.recordId)
+                workspaceId = doc.workspaceId; recordId = doc.id; channelId = doc.channelId; raw = doc.raw
+            } else {
+                let data = try await service.api.client.request(path: "/api/v4/flightdeck-pg/workspaces/\(service.workspaceId)/files/\(link.recordId)", appNpub: service.appNpub)
+                guard let value = try JSONValue.parse(data)["file"], value.isObject else { throw GoalError.invalid("This file could not be verified. Nothing was pinned.") }
+                let file = try FileRecord(raw: value.serialized())
+                workspaceId = file.workspaceId; recordId = file.id; channelId = file.channelId; raw = file.raw
+            }
+        } catch TowerError.http(let status, _, _) where status == 403 || status == 404 {
+            throw GoalError.invalid("This reference is no longer available to you. Nothing was pinned.")
+        }
+        guard isCurrent(boundary) else { throw CancellationError() }
+        guard workspaceId == service.workspaceId, recordId == link.recordId,
+              link.channelId == nil || link.channelId == channelId else { throw GoalError.invalid("This reference moved or belongs to another workspace. Refresh the picker; nothing was pinned.") }
+        let source = try JSONValue.parse(raw)
+        guard source["access_removed"]?.boolValue != true,
+              !["archived", "deleted", "revoked", "access_removed"].contains(source["record_state"]?.stringValue ?? ""),
+              source["deleted_at"] == nil || source["deleted_at"] == .null,
+              source["archived_at"] == nil || source["archived_at"] == .null else {
+            throw GoalError.invalid("This reference is no longer available. Nothing was pinned.")
+        }
+        try await edit(goalFileId, .pin(GoalLink(type: link.type, recordId: recordId, channelId: channelId, extra: link.extra)))
+    }
+
+    func setDefaultDiscussionChannel(goalFileId: String, expected: String?, channel: ChannelRecord?) async throws {
+        guard isCurrent(boundary) else { throw CancellationError() }
+        if let channel {
+            func available(_ raw: Data) -> Bool {
+                guard let value = try? JSONValue.parse(raw) else { return false }
+                return !["archived", "deleted", "revoked", "access_removed"].contains(value["record_state"]?.stringValue ?? "")
+                    && value["access_removed"]?.boolValue != true
+                    && (value["deleted_at"] == nil || value["deleted_at"] == .null)
+                    && (value["archived_at"] == nil || value["archived_at"] == .null)
+            }
+            let scopes = try await service.api.scopes(workspaceId: service.workspaceId, appNpub: service.appNpub)
+            guard scopes.contains(where: { $0.id == channel.scopeId && $0.workspaceId == service.workspaceId && available($0.raw) }) else {
+                throw GoalError.invalid("The selected channel’s scope is unavailable. Choose again.")
+            }
+            let channels = try await service.api.channels(workspaceId: service.workspaceId, scopeId: channel.scopeId, appNpub: service.appNpub)
+            guard channels.contains(where: { $0.id == channel.id && $0.workspaceId == service.workspaceId && available($0.raw) }) else {
+                throw GoalError.invalid("The selected channel is no longer accessible. Choose again.")
+            }
+        }
+        guard isCurrent(boundary) else { throw CancellationError() }
+        try await edit(goalFileId, .setDefaultChannel(expected: expected, value: channel?.id))
     }
 
     private func publish(_ doc: GoalDocument) {
