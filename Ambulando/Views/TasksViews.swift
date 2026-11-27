@@ -115,7 +115,13 @@ struct TasksView: View {
             TaskCreateSheet(workspace: workspace, store: store, choice: snapshot.value.choice, context: context)
         }
         .refreshable { model.openTasks(workspace, scopeId: scopeId, force: true) }
-        .task(id: model.context) { start(); model.openTasks(workspace, scopeId: scopeId) }
+        .task(id: model.context) {
+            if let channel = model.remindersBoardChannelId, channel == context.channelId { board = true }
+            start(); model.openTasks(workspace, scopeId: scopeId)
+        }
+        .onChange(of: model.remindersBoardRequests) { _, _ in
+            if let channel = model.remindersBoardChannelId, channel == context.channelId { board = true }
+        }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openTasks(workspace, scopeId: scopeId) } }
     }
 

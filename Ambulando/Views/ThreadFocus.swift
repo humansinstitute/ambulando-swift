@@ -521,6 +521,7 @@ struct ThreadHeaderMenu: View {
     var title = ""
     @State private var renaming = false
     @State private var gettingItDone: MessageRecord?
+    @State private var reminding: MessageRecord?
     @State private var deleting: MessageRecord?
 
     private var root: MessageRecord? { context?.root }
@@ -538,6 +539,7 @@ struct ThreadHeaderMenu: View {
     private var items: [Item] {
         var items: [Item] = []
         if context != nil { items.append(Item(id: "rename", title: "Rename thread", symbol: "pencil") { renaming = true }) }
+        if let liveRoot { items.append(Item(id: "remind", title: "Remind me", symbol: "bookmark") { reminding = liveRoot }) }
         if let liveRoot { items.append(Item(id: "getitdone", title: "Get it done", symbol: "checkmark.circle") { gettingItDone = liveRoot }) }
         if let root { items.append(Item(id: "copy", title: "Copy message", symbol: "doc.on.doc") { Pasteboard.copy(MentionCodec.plain(root.body)) }) }
         if let source = context?.autopilotSource {
@@ -559,6 +561,7 @@ struct ThreadHeaderMenu: View {
             .help("Thread menu")
             .accessibilityLabel("Thread menu")
             .accessibilityIdentifier("thread.focus.actions")
+            .sheet(item: $reminding) { ReminderSheet(message: $0, workspace: workspace, title: title) }
             .sheet(item: $gettingItDone) { GetItDoneSheet(message: $0, workspace: workspace) }
             .sheet(isPresented: $renaming) {
                 if let threadId = context?.threadId { RenameThreadSheet(threadId: threadId, workspace: workspace, shownTitle: title) }

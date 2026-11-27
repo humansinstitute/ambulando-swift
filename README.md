@@ -1,3 +1,7 @@
+# Personal Reminders (Mac source build 150)
+
+Message and conversation menus now offer **Remind me**, saving a Ready task assigned to you on your existing private Notes to Self board. **Reminders** above the sidebar channel list opens that board. Saves retain the selected message and native source link, with durable same-device retries. See [Reminders](docs/reminders.md) for contracts and limits. Pushed source is separate from installation and live verification on Pete’s MacBook.
+
 # Ambulando for iPhone and Mac (native)
 
 A native SwiftUI client for Ambulando (Wingman Flight Deck) workspaces. It is a separate renderer, not

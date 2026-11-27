@@ -195,14 +195,25 @@ extension AppModel {
             // it has one; otherwise the channel does.
             let parts = record.split(separator: "#", maxSplits: 1).map(String.init)
             let channelId = parts.count == 2 ? parts[0] : nil, messageId = parts.last ?? record
-            guard let store else { return }
+            guard let sync, let connection, let selected = selectedWorkspace else { return }
             let epoch = wikiContextEpoch
             Task { @MainActor in
-                let stored = try? await store.reader.message(workspaceId: workspace, id: messageId)
-                guard epoch == wikiContextEpoch else { return }
-                let channel = stored?.channelId ?? channelId
-                if let channel { openInChat(channelId: channel, threadId: stored?.threadId ?? (stored == nil ? nil : messageId)) }
-                else { focusThread(ThreadFocus(workspaceId: workspace, channelId: nil, threadId: messageId)) }
+                do {
+                    // Resolve even cold references through the original message ACL, rather than guessing a thread
+                    // from the message UUID or silently opening only its channel. Revocation is an explicit refusal.
+                    let source = try await sync.linkedChatMessage(connection, selected, messageId: messageId, channelId: channelId)
+                    guard epoch == wikiContextEpoch else { return }
+                    let target = ChatTarget(connectionId: connection.id, workspaceId: workspace, channelId: source.channelId, threadId: source.threadId)
+                    ReadingPositions.shared.record(target, firstVisible: source.id)
+                    if let thread = source.threadId {
+                        focusThread(ThreadFocus(workspaceId: workspace, channelId: source.channelId, threadId: thread))
+                    } else {
+                        openInChat(channelId: source.channelId)
+                    }
+                } catch {
+                    guard epoch == wikiContextEpoch else { return }
+                    notice = "Could not open the original message: " + error.localizedDescription
+                }
             }
         default:
             return

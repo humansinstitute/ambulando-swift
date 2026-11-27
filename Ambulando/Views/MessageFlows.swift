@@ -125,3 +125,89 @@ struct GetItDoneSheet: View {
         }
     }
 }
+
+extension AppModel {
+    func showReminders() {
+        guard let sync, let connection, let workspace = selectedWorkspace else { notice = "Unlock and select a workspace to open Reminders."; return }
+        let boundary = selectedWorkspaceBoundary
+        Task { @MainActor in
+            do {
+                let board = try await sync.remindersBoard(connection, workspace)
+                guard boundary == selectedWorkspaceBoundary else { return }
+                if fileNappletNavigation?({ self.showReminders() }) == true { return }
+                focusedThread = nil
+                selectContext(WorkContext(scopeId: board.scopeId, channelId: board.id))
+                tasksPath = []
+                remindersBoardChannelId = board.id
+                remindersBoardRequests &+= 1
+                show(.tasks)
+                openTasks(workspace, scopeId: board.scopeId, force: true)
+            } catch {
+                guard boundary == selectedWorkspaceBoundary else { return }
+                notice = error.localizedDescription
+            }
+        }
+    }
+}
+
+/// Success and Open task are offered only after the server returns the persisted task.
+struct ReminderSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let message: MessageRecord
+    let workspace: WorkspaceRecord
+    var title: String? = nil
+    @State private var saving = false
+    @State private var saved: TaskRecord?
+    @State private var failure: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(saved == nil ? "Remind me" : "Saved to Reminders").font(.headline)
+            Text(saved?.title ?? Reminders.title(title, body: message.body))
+            Text("A Ready task assigned to you in your private Notes to Self board.").font(.caption)
+            if let failure { Text(failure).foregroundStyle(Amb.destructive) }
+            HStack {
+                Button(saved == nil ? "Cancel" : "Close") { dismiss() }.disabled(saving)
+                Spacer()
+                if let saved {
+                    Button("Open task") {
+                        guard model.selectedWorkspace?.id == workspace.id else { return }
+                        dismiss()
+                        model.openRecord(kind: "task", id: saved.id)
+                    }
+                } else {
+                    Button(saving ? "Saving…" : "Save reminder") { save() }.disabled(saving)
+                        .accessibilityIdentifier("reminder.save")
+                }
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 340, idealWidth: 460)
+        .task { if saved == nil { save() } }
+    }
+
+    private func save() {
+        guard !saving, let sync = model.sync, let connection = model.connection,
+              model.selectedWorkspace?.id == workspace.id, model.isUnlocked, model.identity.npub == connection.signerNpub else {
+            failure = "Unlock and open this message in its own workspace to save a reminder."
+            return
+        }
+        let key = "\(connection.id):\(workspace.id):\(message.id)"
+        guard model.savingReminders.insert(key).inserted else { failure = "This message is already being saved."; return }
+        let boundary = model.selectedWorkspaceBoundary
+        saving = true; failure = nil
+        Task { @MainActor in
+            defer { saving = false; model.savingReminders.remove(key) }
+            do {
+                let task = try await sync.saveReminder(connection, workspace, message: message, title: title)
+                guard boundary == model.selectedWorkspaceBoundary else { return }
+                _ = try await model.store?.writer.upsertTasks(workspaceId: workspace.id, [task])
+                saved = task
+            } catch {
+                guard boundary == model.selectedWorkspaceBoundary else { return }
+                failure = "Could not confirm the reminder. Try again to check the same save: " + error.localizedDescription
+            }
+        }
+    }
+}

@@ -219,6 +219,13 @@ struct SidebarContent: View {
         VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
+                    Button { model.showReminders() } label: {
+                        Label("Reminders", systemImage: "bookmark").font(.amb(.subheadline).weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).padding(.horizontal, 10)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.selectedWorkspace == nil)
+                    .accessibilityIdentifier("sidebar.reminders")
                     if model.enabledWorkspaceEntries.count > 1 {
                         StackedWorkspaceNavigation { entry, scope in
                             Task {

@@ -1172,6 +1172,10 @@ final class AppModel {
         }
     }
 
+    var savingReminders: Set<String> = []
+    var remindersBoardChannelId: String?
+    var remindersBoardRequests = 0
+
     // MARK: Tasks, documents, files, inbox
 
     var isUnlocked: Bool { if case .unlocked = identity { true } else { false } }

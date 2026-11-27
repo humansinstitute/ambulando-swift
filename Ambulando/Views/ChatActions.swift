@@ -29,6 +29,7 @@ struct MessageCell: View, Equatable {
     @Environment(\.editChatMessage) private var editChatMessage
     @State private var confirmDelete = false
     @State private var gettingItDone = false
+    @State private var reminding = false
     @State private var autopilot: URL?
     @Environment(\.openURL) private var openURL
 
@@ -96,6 +97,7 @@ struct MessageCell: View, Equatable {
             }
         }
         .contextMenu { actions }
+        .sheet(isPresented: $reminding) { ReminderSheet(message: message, workspace: workspace, title: threadTitle) }
         .sheet(isPresented: $gettingItDone) { GetItDoneSheet(message: message, workspace: workspace) }
         .confirmationDialog("Delete this message for everyone?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -114,6 +116,8 @@ struct MessageCell: View, Equatable {
         } label: { Label("React", systemImage: "face.smiling") }
             .accessibilityIdentifier("message.react") }
         if !message.deleted {
+            Button { reminding = true } label: { Label("Remind me", systemImage: "bookmark") }
+                .accessibilityIdentifier("message.remind")
             Button { gettingItDone = true } label: { Label("Get it done", systemImage: "checkmark.circle") }
                 .accessibilityIdentifier("message.getitdone")
         }
@@ -192,6 +196,7 @@ struct MessageCell: View, Equatable {
             NativeMessageAction(emoji.name, emoji.symbol) { toggle(emoji.rawValue) }
         })]
         if !message.deleted {
+            items.append(NativeMessageAction("Remind me", "bookmark") { reminding = true })
             items.append(NativeMessageAction("Get it done", "checkmark.circle") { gettingItDone = true })
         }
         if message.threadId != nil && !message.deleted {
