@@ -254,6 +254,7 @@ public actor StoreWriter {
     }
 
     func deleteWorkspaceRows(_ workspaceId: String) throws {
+        try invalidateLocalContent(workspace: workspaceId)
         for table in ["scopes", "channels", "messages", "threads", "members", "channel_sync"] + Schema.v3WorkspaceTables + Schema.v4WorkspaceTables + Schema.v7WorkspaceTables + Schema.v9WorkspaceTables {
             try db.prepare("DELETE FROM \(table) WHERE workspace_id = ?").run([.text(workspaceId)])
         }
@@ -502,10 +503,12 @@ public actor StoreWriter {
     }
 
     func purgeChannelContent(workspaceId: String, channelId: String) throws -> ChannelCacheRemoval {
+        try invalidateLocalContent(workspace: workspaceId, record: channelId)
         var removal = ChannelCacheRemoval()
         let cachedFiles = try db.prepare("SELECT id FROM files WHERE workspace_id = ? AND channel_id = ?")
         try cachedFiles.bind([.text(workspaceId), .text(channelId)])
         while try cachedFiles.step() { if let id = cachedFiles.text(0) { removal.files.insert(id) } }
+        for file in removal.files { try invalidateLocalContent(workspace: workspaceId, record: file) }
         let cachedMessages = try db.prepare("SELECT body, raw FROM messages WHERE workspace_id = ? AND channel_id = ?")
         try cachedMessages.bind([.text(workspaceId), .text(channelId)])
         while try cachedMessages.step() {

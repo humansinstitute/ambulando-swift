@@ -27,6 +27,12 @@ final class InstalledNappletHost {
     init(key: String, read: @escaping () async throws -> NappletSnapshot, write: @escaping (String, String, Data) async throws -> Void) {
         self.key = key; self.read = read; self.write = write
     }
+    func restore(_ result: NappletSnapshot) {
+        guard !closed, let bundle = result.installations.first(where: { $0.key == key }), let html = result.html[key] else { return }
+        authority = result.authority; snapshot = result
+        let p = NappletPage(html: html, capabilities: bundle.capabilities) { [weak self] in self?.receive($0) }
+        page = p; p.didFail = { [weak self] in self?.destroy($0) }; p.install()
+    }
     func destroy(_ error: String? = nil) {
         generation += 1; request?.cancel(); request = nil; writeRequest?.cancel(); writeRequest = nil; refreshPending = false; pendingError = nil
         page?.destroy(); page = nil; authority = nil; snapshot = nil
@@ -39,7 +45,7 @@ final class InstalledNappletHost {
         authorizing = true; failure = nil; generation += 1
         let current = generation, prior = authority, oldPage = page
         if !background { page?.destroy(); page = nil; dirty = false }
-        send(status: "loading", retainDraft: background && dirty)
+        if !background || snapshot == nil { send(status: "loading", retainDraft: background && dirty) }
         request = Task { [weak self] in
             guard let self else { return }
             do {
@@ -68,7 +74,9 @@ final class InstalledNappletHost {
                 }
             } catch {
                 guard !Task.isCancelled, !closed, current == generation else { return }
-                destroy(error.localizedDescription)
+                authorizing = false
+                if CachedContentFailure.invalidates(error) || page == nil { destroy(error.localizedDescription) }
+                else { send(status: "error", retainDraft: true, error: "Refresh could not complete. Showing saved content."); page?.visible = true }
             }
         }
     }
@@ -89,12 +97,13 @@ final class InstalledNappletHost {
         case .ready:
             guard !page.ready else { return }
             page.ready = true
-            guard !authorizing, !writing, snapshot != nil else { return }
+            guard !writing, snapshot != nil else { return }
             page.visible = true; send(status: "ready")
         case .dirty(let value): dirty = value
         case .refresh: if !writing { requestRefresh() }
         case .close: if !writing { requestClose() }
         case .write(let path, let method, let body):
+            if authorizing { send(status: "error", retainDraft: true, error: "Access is still being checked. Your changes are kept."); return }
             guard page.ready, !authorizing, !writing, snapshot != nil else { return }
             writing = true
             let writeSession = page.session
@@ -146,7 +155,7 @@ struct InstalledNappletView: View {
             if let host, let page = host.page {
                 InstalledNappletWebView(page: page).id(page.session)
                     .opacity(page.visible && scenePhase == .active ? 1 : 0)
-                    .allowsHitTesting(page.visible && scenePhase == .active && !host.authorizing && !host.writing)
+                    .allowsHitTesting(page.visible && scenePhase == .active && model.isUnlocked && !host.writing)
                     .overlay { if !page.visible { ProgressView("Authorizing napplet…") } }
             } else if let error = host?.failure {
                 EmptyNote(title: "Napplet unavailable", systemImage: "lock", detail: error)
@@ -161,7 +170,7 @@ struct InstalledNappletView: View {
         }
         .task(id: hostContext) { await runHost() }
         .onChange(of: discovery.value) { _, _ in host?.refresh(background: true) }
-        .onChange(of: model.canRead) { _, canRead in if !canRead { host?.close() } }
+        .onChange(of: model.isUnlocked) { _, canRead in if !canRead { host?.close() } }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { host?.refresh(background: true) }
             else { host?.page?.visible = false }
@@ -192,14 +201,14 @@ struct InstalledNappletView: View {
     }
     private func runHost() async {
             host?.close()
-            guard model.canRead, model.selectedWorkspace?.id == workspace.id,
+            guard model.isUnlocked, model.selectedWorkspace?.id == workspace.id,
                   let sync = model.sync, let connection = model.connection else { return }
             let discoveryKey = WorkspaceSync.nappletsKey(connection.id, workspace.id)
             if let store = model.store {
                 discovery.start(store: store, matches: { $0.table == .appState }) { try await store.reader.state(discoveryKey) }
             }
             let epoch = model.wikiContextEpoch
-            let current: () -> Bool = { model.canRead && model.wikiContextEpoch == epoch && model.selectedWorkspace?.id == workspace.id }
+            let current: () -> Bool = { model.isUnlocked && model.wikiContextEpoch == epoch && model.selectedWorkspace?.id == workspace.id }
             let h = InstalledNappletHost(key: key, read: {
                 guard current() else { throw CancellationError() }
                 let result = try await sync.readNapplets(connection, workspace)
@@ -210,7 +219,9 @@ struct InstalledNappletView: View {
                 guard current() else { throw CancellationError() }
             })
             h.requestClose = { confirm("close") }; h.requestRefresh = { confirm("refresh") }
-            host = h; h.refresh()
+            host = h
+            if let cached = await sync.cachedNapplets(connection, workspace), current() { h.restore(cached) }
+            h.refresh(background: h.page != nil)
             // A visible authorized document must recheck even without an event connection. Cancellation on disappearance
             // or context changes invalidates in-flight reads and destroys its browsing context.
             while !Task.isCancelled {

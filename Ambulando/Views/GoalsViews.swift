@@ -10,6 +10,7 @@ struct GoalsView: View {
     let store: LocalStore
     @State private var creating = false
     @State private var showArchived = false
+    @State private var accessChanges = LiveQuery<String?>(initial: nil)
 
     private var goals: GoalsModel? { model.goalsModel(for: workspace) }
 
@@ -20,8 +21,11 @@ struct GoalsView: View {
             }
         }
         .navigationTitle("Goals")
+        .onChange(of: accessChanges.value) { _, _ in Task { await goals?.reconcileLocalRemovals() } }
+        .onDisappear { accessChanges.stop() }
         .task(id: model.selectedWorkspaceBoundary) {
             guard let goals else { return }
+            accessChanges.start(store: store, matches: { $0.table == .access }) { try await store.reader.state("local-content.epoch") }
             await goals.refresh()
             // Agents can edit goals too; pick their changes up while this screen is open.
             while !Task.isCancelled {

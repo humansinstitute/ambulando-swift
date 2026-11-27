@@ -60,7 +60,7 @@ public enum TrackerDocument {
     }
 }
 
-public struct FileNappletBinding: Sendable, Equatable {
+public struct FileNappletBinding: Codable, Sendable, Equatable {
     public let dataFileId: String
     public static func parse(html: String, metadata: Data) throws -> Self? {
         let meta = try JSONSerialization.jsonObject(with: metadata) as? [String: Any] ?? [:]
@@ -117,21 +117,23 @@ public struct FileNappletRequest: Sendable {
     }
 }
 
-public struct FileNappletCode: Sendable, Equatable {
+public struct FileNappletCode: Codable, Sendable, Equatable {
+    public let channelIds: [String]
     public let html: String
     public let binding: FileNappletBinding?
     public let versionId: String
     public let sha256: String
-    init(html: String, binding: FileNappletBinding?, versionId: String, sha256: String? = nil) {
-        self.html = html; self.binding = binding; self.versionId = versionId
+    init(html: String, binding: FileNappletBinding?, versionId: String, sha256: String? = nil, channelIds: [String] = []) {
+        self.html = html; self.binding = binding; self.versionId = versionId; self.channelIds = channelIds
         self.sha256 = sha256 ?? SHA256Hex.of(Data(html.utf8))
     }
 }
-public struct FileNappletData: Sendable {
+public struct FileNappletData: Codable, Sendable {
     public let bytes: Data
     public let versionId: String
     public let canWrite: Bool
-    public init(bytes: Data, versionId: String, canWrite: Bool) { self.bytes = bytes; self.versionId = versionId; self.canWrite = canWrite }
+    public let channelId: String?
+    public init(bytes: Data, versionId: String, canWrite: Bool, channelId: String? = nil) { self.bytes = bytes; self.versionId = versionId; self.canWrite = canWrite; self.channelId = channelId }
 }
 
 extension TowerAPI {
@@ -188,7 +190,7 @@ extension TowerAPI {
               let file = try? FileRecord(raw: rawJSON(row)), ArtefactType.file(file) == .html else { throw FileNappletError.invalid }
         let (bytes, version) = try await nappletBytes(workspace: workspace, app: app, file: row, mime: "text/html", limit: 4 * 1024 * 1024)
         guard let html = String(data: bytes, encoding: .utf8) else { throw FileNappletError.invalid }
-        return FileNappletCode(html: html, binding: try FileNappletBinding.parse(html: html, metadata: rawJSON(metadata)), versionId: version, sha256: SHA256Hex.of(bytes))
+        return FileNappletCode(html: html, binding: try FileNappletBinding.parse(html: html, metadata: rawJSON(metadata)), versionId: version, sha256: SHA256Hex.of(bytes), channelIds: [file.channelId].compactMap { $0 })
     }
     func authorizeNappletData(workspace: String, app: String, viewer: String, codeFile: String, expected: FileNappletCode) async throws -> [String: Any] {
         guard let binding = expected.binding, try await fileNappletCode(workspace: workspace, app: app, fileId: codeFile) == expected else { throw FileNappletError.unavailable }
@@ -206,7 +208,7 @@ extension TowerAPI {
         let row = try await authorizeNappletData(workspace: workspace, app: app, viewer: viewer, codeFile: codeFile, expected: expected)
         let (bytes, version) = try await nappletBytes(workspace: workspace, app: app, file: row, mime: "application/json", limit: TrackerDocument.maxBytes)
         try TrackerDocument.validate(bytes)
-        return FileNappletData(bytes: bytes, versionId: version, canWrite: row["can_write"] as? Bool == true)
+        return FileNappletData(bytes: bytes, versionId: version, canWrite: row["can_write"] as? Bool == true, channelId: row["channel_id"] as? String)
     }
     public func saveFileNapplet(workspace: String, app: String, viewer: String, codeFile: String, expected: FileNappletCode, base: String, bytes: Data) async throws -> FileNappletData {
         let current = try await readFileNapplet(workspace: workspace, app: app, viewer: viewer, codeFile: codeFile, expected: expected)
@@ -294,7 +296,13 @@ extension WorkspaceSync {
     }
     public func readFileNapplet(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String, code: FileNappletCode) async throws -> FileNappletData {
         try await identity.requireReader(npub: c.signerNpub)
-        return try await api(origin: TowerOrigin(c.origin)).readFileNapplet(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, codeFile: fileId, expected: code)
+        let epoch = try await store.reader.state("local-content.epoch") ?? ""
+        do {
+            let data = try await api(origin: TowerOrigin(c.origin)).readFileNapplet(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, codeFile: fileId, expected: code)
+            guard try await store.reader.state("local-content.epoch") ?? "" == epoch else { throw CancellationError() }
+            await rememberFileNapplet(c, w, fileId: fileId, code: code, data: data, epoch: epoch)
+            return data
+        } catch { if CachedContentFailure.invalidates(error) { await forgetCachedFileNapplet(c, w, fileId: fileId) }; throw error }
     }
     public func canUpdateDailyTracker(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String, code: FileNappletCode) async throws -> Bool {
         try await identity.requireReader(npub: c.signerNpub)
@@ -306,7 +314,12 @@ extension WorkspaceSync {
     }
     public func saveFileNapplet(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String, code: FileNappletCode, base: String, bytes: Data) async throws -> FileNappletData {
         try await identity.requireSigner(npub: c.signerNpub)
-        return try await api(origin: TowerOrigin(c.origin)).saveFileNapplet(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, codeFile: fileId, expected: code, base: base, bytes: bytes)
+        let epoch = try await store.reader.state("local-content.epoch") ?? ""
+        do {
+            let data = try await api(origin: TowerOrigin(c.origin)).saveFileNapplet(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, codeFile: fileId, expected: code, base: base, bytes: bytes)
+            await rememberFileNapplet(c, w, fileId: fileId, code: code, data: data, epoch: epoch)
+            return data
+        } catch { if CachedContentFailure.invalidates(error) { await forgetCachedFileNapplet(c, w, fileId: fileId) }; throw error }
     }
 }
 

@@ -14,7 +14,7 @@ public struct InstalledNapplet: Codable, Sendable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey { case key, version, revision, title, capabilities, sha256; case bridgeVersion = "bridge_version" }
 }
 
-public struct NappletSnapshot: Sendable {
+public struct NappletSnapshot: Codable, Sendable {
     public let installations: [InstalledNapplet]
     public let html: [String: String]
     public let projection: Data
@@ -164,11 +164,35 @@ extension WorkspaceSync {
         do {
             let result = try await api(origin: TowerOrigin(connection.origin)).installedNapplets(workspace: workspace, connection: connection, catalogue: catalogue)
             try Task.checkCancellation()
+            if catalogue {
+                let previous = (try? await store.reader.installedNapplets(connectionId: connection.id, workspaceId: workspace.id)) ?? []
+                if previous.contains(where: { old in !result.installations.contains(old) }) {
+                    let cache = LocalContentSnapshot(store: store, identity: identity, boundary: try WorkspaceBoundary(connection: connection, workspace: workspace))
+                    await cache.remove("installed-napplets")
+                }
+            }
+            if !catalogue, let bytes = try? JSONEncoder().encode(result) {
+                let cache = LocalContentSnapshot(store: store, identity: identity, boundary: try WorkspaceBoundary(connection: connection, workspace: workspace))
+                try? await cache.save("installed-napplets", bytes)
+            }
             return result
         } catch {
-            if !Task.isCancelled { try? await store.writer.setState(Self.nappletsKey(connection.id, workspace.id), nil) }
+            if CachedContentFailure.invalidates(error) {
+                let cache = LocalContentSnapshot(store: store, identity: identity, boundary: try WorkspaceBoundary(connection: connection, workspace: workspace))
+                await cache.remove("installed-napplets")
+                try? await store.writer.setState(Self.nappletsKey(connection.id, workspace.id), nil)
+            }
             throw error
         }
+    }
+    public func cachedNapplets(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord) async -> NappletSnapshot? {
+        do {
+            let cache = LocalContentSnapshot(store: store, identity: identity, boundary: try WorkspaceBoundary(connection: connection, workspace: workspace))
+            guard let bytes = try await cache.read("installed-napplets") else { return nil }
+            let snapshot = try JSONDecoder().decode(NappletSnapshot.self, from: bytes)
+            guard snapshot.installations.allSatisfy({ SHA256Hex.of(Data((snapshot.html[$0.key] ?? "").utf8)) == $0.sha256 }) else { return nil }
+            return snapshot
+        } catch { return nil }
     }
     public func writeNapplet(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, path: String, method: String, body: Data) async throws {
         // Background read credentials must never acquire write authority through a published bundle.
@@ -184,7 +208,7 @@ extension WorkspaceSync {
                 let list = try String(decoding: JSONEncoder().encode(snapshot.installations), as: UTF8.self)
                 try await sync.store.writer.setState(key, Self.nappletDiscoveryRun + "\n" + UUID().uuidString + "\n" + list)
             } catch {
-                if !Task.isCancelled { try await sync.store.writer.setState(key, nil) }
+                if !Task.isCancelled, CachedContentFailure.invalidates(error) { try await sync.store.writer.setState(key, nil) }
                 throw error
             }
         }
@@ -193,7 +217,7 @@ extension WorkspaceSync {
 
 extension StoreReader {
     public func installedNapplets(connectionId: String, workspaceId: String) throws -> [InstalledNapplet] {
-        guard let value = try state(WorkspaceSync.nappletsKey(connectionId, workspaceId)), value.hasPrefix(WorkspaceSync.nappletDiscoveryRun + "\n"),
+        guard let value = try state(WorkspaceSync.nappletsKey(connectionId, workspaceId)),
               let data = value.split(separator: "\n", maxSplits: 2).last?.data(using: .utf8) else { return [] }
         return try JSONDecoder().decode([InstalledNapplet].self, from: data)
     }

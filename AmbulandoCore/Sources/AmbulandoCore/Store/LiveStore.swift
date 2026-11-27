@@ -26,7 +26,11 @@ extension StoreWriter {
                     try run("DELETE FROM docs WHERE workspace_id = ? AND id = ?", id, .docs)
                     try run("DELETE FROM doc_bodies WHERE workspace_id = ? AND doc_id = ?", id, .docBodies)
                     try run("DELETE FROM comments WHERE workspace_id = ? AND parent = 'doc' AND parent_id = ?", id, .comments)
-                case .file(let id): try run("DELETE FROM files WHERE workspace_id = ? AND id = ?", id, .files)
+                case .file(let id):
+                    try invalidateLocalContent(workspace: workspaceId, record: id)
+                    // Direct API snapshots may exist without a canonical File row; the removal still invalidates UI.
+                    keys.formUnion([ChangeKey(.access, workspaceId), ChangeKey(.files, workspaceId)])
+                    try run("DELETE FROM files WHERE workspace_id = ? AND id = ?", id, .files)
                 case .comment(let id): try run("DELETE FROM comments WHERE workspace_id = ? AND id = ?", id, .comments)
                 case .reaction(let id): try run("DELETE FROM reactions WHERE workspace_id = ? AND id = ?", id, .reactions)
                 }

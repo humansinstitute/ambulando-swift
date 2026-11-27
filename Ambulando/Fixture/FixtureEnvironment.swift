@@ -195,7 +195,9 @@ final class FixtureEnvironment {
         if args.contains("-AmbulandoMacThreadRegression") {
             // Each in-process interaction run is disposable, including its credentials.
             #if AMBULANDO_TEST
-            if args.contains("-AmbulandoMacStartupThreadCheck") {
+            if args.contains("-AmbulandoMacCachedContentCheck"), let at = args.firstIndex(of: "-AmbulandoCacheRun"), args.indices.contains(at + 1), UUID(uuidString: args[at + 1]) != nil {
+                directory = directory.appendingPathComponent("cached-content-" + args[at + 1], isDirectory: true)
+            } else if args.contains("-AmbulandoMacStartupThreadCheck") {
                 // Dedicated Test-only namespace permits a real quit/relaunch without touching ordinary fixtures.
                 directory = directory.appendingPathComponent("startup-thread-regression", isDirectory: true)
             } else {

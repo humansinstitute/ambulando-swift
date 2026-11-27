@@ -2,7 +2,7 @@ import AmbulandoCore
 import SwiftUI
 import WebKit
 
-/// The host keeps private values and draft DOM only in memory. Each run pins one verified code head.
+/// Draft DOM stays in memory; verified read snapshots are sealed in the workspace store. Each run pins one code head.
 @MainActor @Observable
 final class GenericNappletHost {
     var page: NappletPage?
@@ -14,17 +14,19 @@ final class GenericNappletHost {
     private var closed = false
     private var task: Task<Void, Never>?
     private var deadline: Task<Void, Never>?
+    private var validation: Task<Void, Never>?
     private var aggregateRange: String?
     private var base: String?
+    private var cachedData: FileNappletData?
     private var queuedRead: (request: GenericNappletRequest, expires: ContinuousClock.Instant)?
     let code: GenericNappletCode
     let canWrite: Bool
     let authorize: () async throws -> Bool
     let read: (String?) async throws -> FileNappletData
     let save: (String, Data) async throws -> FileNappletData
-    init(code: GenericNappletCode, canWrite: Bool, authorize: @escaping () async throws -> Bool,
+    init(code: GenericNappletCode, canWrite: Bool, cachedData: FileNappletData? = nil, authorize: @escaping () async throws -> Bool,
          read: @escaping (String?) async throws -> FileNappletData, save: @escaping (String, Data) async throws -> FileNappletData) {
-        self.code = code; self.canWrite = canWrite; self.authorize = authorize; self.read = read; self.save = save
+        self.code = code; self.canWrite = canWrite; self.cachedData = cachedData; self.authorize = authorize; self.read = read; self.save = save
     }
     func open() {
         let p = NappletPage(html: code.html, binding: code.binding) { [weak self] in self?.receive($0) ?? false }
@@ -32,54 +34,73 @@ final class GenericNappletHost {
         page = p; p.visible = true; p.install()
     }
     func destroy(_ message: String? = nil) {
-        closed = true; queuedRead = nil; task?.cancel(); deadline?.cancel(); task = nil; deadline = nil
+        closed = true; queuedRead = nil; validation?.cancel(); validation = nil; task?.cancel(); deadline?.cancel(); task = nil; deadline = nil
         page?.destroy(); page = nil; base = nil; aggregateRange = nil; dirty = false; busy = false; authorizing = false; writing = false; failure = message
     }
-    private func timer(until expires: ContinuousClock.Instant? = nil) {
+    private func timer(until expires: ContinuousClock.Instant? = nil, requestId: String? = nil) {
         deadline?.cancel()
         let limit = expires ?? ContinuousClock.now.advanced(by: .seconds(45))
         deadline = Task { [weak self] in
             try? await Task.sleep(until: limit, clock: .continuous); guard !Task.isCancelled else { return }
-            self?.destroy("Operation could not be confirmed. Reopen before trying again.")
+            self?.task?.cancel(); self?.busy = false; self?.writing = false
+            if let requestId { self?.reply(requestId, code: "unavailable") }
         }
     }
     func reauthorize() {
         guard !closed, !busy, !authorizing, let expectedPage = page else { return }
-        authorizing = true; timer()
-        task = Task { [weak self] in
+        authorizing = true
+        validation = Task { [weak self] in
             guard let self else { return }
             do {
                 let write = try await authorize()
                 if code.binding.includesWorkspaceStorage { _ = try await read(aggregateRange ?? "30d") }
                 guard !Task.isCancelled, !closed, page === expectedPage, write == canWrite else { if !Task.isCancelled { destroy("Permissions or context changed. Reopen to review access.") }; return }
-                authorizing = false; deadline?.cancel() // Do not reload or replace a healthy draft DOM.
+                authorizing = false // Do not reload or replace a healthy draft DOM.
                 if let next = queuedRead {
                     queuedRead = nil
                     _ = receive(next.request, until: next.expires)
                 }
-            } catch { if !Task.isCancelled { destroy("Access could not be verified. Reopen the napplet.") } }
+            } catch {
+                guard !Task.isCancelled else { return }
+                authorizing = false
+                if CachedContentFailure.invalidates(error) { destroy("Code or access changed. Reopen to review it.") }
+            }
+        }
+    }
+    /// Fetch independently; the caller swaps only a fully ready, clean frame. No duplicate response ID is sent.
+    func updatedRead() async -> FileNappletData? {
+        guard !closed, !dirty, !busy, !authorizing, aggregateRange == nil || aggregateRange == "30d" else { return nil }
+        do {
+            let data = try await read(aggregateRange)
+            guard !closed, !dirty, !busy, data.canWrite == canWrite else { return nil }
+            // An unchanged private version needs no UI replacement. Reports have no version and can refresh cleanly.
+            return data.versionId != base || code.binding.capability != "private-json-file" ? data : nil
+        } catch {
+            if CachedContentFailure.invalidates(error) { destroy("Code or access changed. Reopen to review it.") }
+            return nil
         }
     }
     @discardableResult func receive(_ request: GenericNappletRequest, until expires: ContinuousClock.Instant? = nil) -> Bool {
         guard !closed, !busy, let p = page else { return false }
-        if authorizing {
-            // Authorization checks are not bridge operations. Admit one initial read, keeping its
-            // original deadline and consumed replay ID, and dispatch only after the fresh check.
+        if request.operation == "dirty" { dirty = request.dirty == true; return true }
+        if authorizing, request.operation == "save" { reply(request.id, code: "unavailable"); return true }
+        if authorizing, cachedData == nil || request.operation != "read" {
             guard request.operation == "read", base == nil, queuedRead == nil else { return false }
             queuedRead = (request, ContinuousClock.now.advanced(by: .seconds(45)))
             return true
         }
-        if request.operation == "dirty" { dirty = request.dirty == true; return true }
         if request.operation == "save", !canWrite || request.base != base {
             reply(request.id, code: canWrite ? "conflict" : "invalid"); return true
         }
-        busy = true; writing = request.operation == "save"; timer(until: expires)
+        busy = true; writing = request.operation == "save"; timer(until: expires, requestId: request.id)
         task = Task { [weak self] in
             guard let self else { return }
             do {
                 let data: FileNappletData
                 if let value = request.value, let base = request.base { data = try await save(base, value) }
-                else { data = try await read(request.range) }
+                else if let cached = cachedData, code.binding.capability == "private-json-file" || (request.range ?? "30d") == "30d" {
+                    cachedData = nil; data = cached
+                } else { data = try await read(request.range) }
                 guard !Task.isCancelled, !closed, page === p, data.canWrite == canWrite else { if !Task.isCancelled { destroy("Access changed. Reopen the napplet.") }; return }
                 base = data.versionId; aggregateRange = request.range; busy = false; writing = false; deadline?.cancel()
                 if request.operation == "save" { dirty = false }
@@ -88,14 +109,11 @@ final class GenericNappletHost {
                 p.sendGeneric(result,value:data.bytes)
             } catch {
                 guard !Task.isCancelled, !closed else { return }
-                // A neutral capability failure may keep a draft only after authority is freshly confirmed.
-                do {
-                    guard try await authorize() == canWrite, !Task.isCancelled, !closed else { throw FileNappletError.unavailable }
-                    busy = false; writing = false; deadline?.cancel()
-                    let code: String
-                    switch error { case FileNappletError.forbidden: code = "forbidden"; case FileNappletError.conflict: code = "conflict"; case FileNappletError.invalid: code = "invalid"; default: code = "unavailable" }
-                    reply(request.id, code: code)
-                } catch { if !Task.isCancelled { destroy("Access could not be verified. Reopen the napplet.") } }
+                busy = false; writing = false; deadline?.cancel()
+                if CachedContentFailure.invalidates(error) { destroy("Code or access changed. Reopen to review it."); return }
+                let code: String
+                switch error { case FileNappletError.conflict: code = "conflict"; case FileNappletError.invalid: code = "invalid"; default: code = "unavailable" }
+                reply(request.id, code: code)
             }
         }; return true
     }
@@ -115,6 +133,8 @@ struct GenericNappletFileView: View {
     #endif
     let file: FileRecord
     let workspace: WorkspaceRecord
+    @State private var cachedRevision = LiveQuery<String?>(initial: nil)
+    @State private var restoredLocal = false
     @State private var code: GenericNappletCode?
     @State private var receipt: GenericNappletReceipt?
     @State private var canWrite = false
@@ -129,7 +149,7 @@ struct GenericNappletFileView: View {
     @State private var invalidations = LiveQuery<Int>(initial:0)
     @State private var suppressRemembered = false
     let trust = GenericNappletTrustStore()
-    private var context: [String] { [file.id, workspace.id, model.connection?.id ?? "", model.connection?.origin ?? "", model.connection?.signerNpub ?? "", model.selectedWorkspaceId ?? "", String(model.wikiContextEpoch), String(model.canRead), String(reopen)] }
+    private var context: [String] { [file.id, workspace.id, model.connection?.id ?? "", model.connection?.origin ?? "", model.connection?.signerNpub ?? "", model.selectedWorkspaceId ?? "", String(model.wikiContextEpoch), String(model.isUnlocked), String(reopen)] }
     var body: some View {
         VStack(spacing: 8) {
             if let host, let page = host.page {
@@ -146,7 +166,7 @@ struct GenericNappletFileView: View {
                 }.padding(8)
                 if let notice { Text(notice).font(.caption) }
                 GenericNappletWebView(page:page).id(page.session)
-                    .opacity(scenePhase == .active ? 1 : 0).allowsHitTesting(scenePhase == .active && !host.busy && !host.authorizing)
+                    .opacity(scenePhase == .active ? 1 : 0).allowsHitTesting(scenePhase == .active && model.isUnlocked && !host.busy)
             } else if let failure = host?.failure ?? failure {
                 EmptyNote(title:"Napplet unavailable", systemImage:"lock", detail:failure)
                 Button("Reopen") { reopen += 1 }
@@ -170,9 +190,18 @@ struct GenericNappletFileView: View {
             Button("Discard changes", role:.destructive) { let action = confirmation; confirmation = nil; perform(action ?? "close") }
             Button("Keep editing", role:.cancel) { confirmation = nil }
         }
+        .onChange(of: cachedRevision.value) { _, _ in
+            guard restoredLocal, model.isUnlocked, let sync = model.sync, let c = model.connection else { return }
+            let boundary = context
+            Task {
+                let saved = await sync.cachedGenericNapplet(c, workspace, fileId: file.id, range: code?.binding.capability == "workspace-aggregate" ? "30d" : nil)
+                guard context == boundary, restoredLocal else { return }
+                if saved == nil { host?.destroy("Saved code or data access was removed. Reopen to review it.") }
+            }
+        }
         .task(id:context) { await run() }
         .onChange(of:scenePhase) { _, phase in if phase == .active { host?.reauthorize() } }
-        .onChange(of:model.canRead) { _, read in if !read { host?.destroy(); code = nil } }
+        .onChange(of:model.isUnlocked) { _, unlocked in if !unlocked { host?.destroy(); code = nil } }
         .onChange(of:model.wikiContextEpoch) { _, _ in host?.destroy(); code = nil }
         .onDisappear { cleanup() }
         #if os(macOS)
@@ -187,29 +216,61 @@ struct GenericNappletFileView: View {
     }
     private func run() async {
         cleanup(); host = nil; code = nil; receipt = nil; failure = nil
-        guard model.canRead else { failure = "Unlock to open this app."; return }
+        guard model.isUnlocked else { failure = "Unlock to open this app."; return }
         guard model.selectedWorkspaceId == workspace.id, let c = model.connection, let sync = model.sync else { failure = "Reopen this app in its workspace."; return }
+        restoredLocal = false
+        if let store = model.store {
+            cachedRevision.start(store: store, matches: { $0.table == .access || $0.table == .appState }) { try await store.reader.state("local-content.epoch") }
+        }
         let boundary = context
+        var cached = await sync.cachedGenericNapplet(c, workspace, fileId: file.id)
+        if cached == nil { cached = await sync.cachedGenericNapplet(c, workspace, fileId: file.id, range: "30d") }
+        if let cached, context == boundary,
+           GenericAppDescriptorKey(file: file).map({ $0.matches(cached.code) }) ?? true, let r = try? makeReceipt(c, cached.code, cached.data.canWrite),
+           !suppressRemembered, trust.contains(r) {
+            restoredLocal = true
+            code = cached.code; canWrite = cached.data.canWrite; receipt = r
+            start(cached.code, cached: cached.data)
+            notice = "Showing saved content. Checking for updates…"
+        }
         do {
             let result = try await sync.genericNappletCode(c, workspace, fileId:file.id)
             let writable = try await sync.authorizeGenericNapplet(c, workspace, fileId:file.id, code:result)
-            if result.binding.capability == "private-json-file" { _ = try await sync.readGenericJSON(c, workspace, fileId:file.id, code:result) }
+            let freshData: FileNappletData?
+            if result.binding.capability == "private-json-file" { freshData = try await sync.readGenericJSON(c, workspace, fileId:file.id, code:result) }
+            else { freshData = nil }
             guard !Task.isCancelled, context == boundary else { return }
-            let r = try makeReceipt(c,result,writable); code = result; canWrite = writable; receipt = r
-            if !suppressRemembered, trust.contains(r) { start(result) }
+            let r = try makeReceipt(c,result,writable)
+            if host != nil, code != result || canWrite != writable { host?.destroy(); host = nil }
+            code = result; canWrite = writable; receipt = r; notice = nil
+            if freshData != nil { restoredLocal = true }
+            if host == nil, !suppressRemembered, trust.contains(r) { start(result, cached: freshData) }
+            else if let freshData, let old = cached, freshData.bytes != old.data.bytes || freshData.versionId != old.data.versionId,
+                    host?.dirty == false, host?.busy == false { start(result, cached: freshData, replaceWhenReady: true) }
             if let store = model.store {
                 invalidations.onLoad = { _ in if scenePhase == .active { host?.reauthorize() } }
-                invalidations.start(store:store,matches:{ [.files,.channels,.access,.appState].contains($0.table) }) {
+                invalidations.start(store:store,matches:{ [.files,.channels,.access].contains($0.table) }) {
                     let f = try await store.reader.file(workspaceId:workspace.id,id:file.id)
                     return f?.rowVersion ?? 0
                 }
             }
             while !Task.isCancelled {
                 try await Task.sleep(for:.seconds(30)); guard context == boundary else { break }
-                if scenePhase == .active { host?.reauthorize() }
+                if scenePhase == .active {
+                    if let data = await host?.updatedRead(), context == boundary, let code { start(code, cached: data, replaceWhenReady: true) }
+                    else { host?.reauthorize() }
+                }
             }
-        } catch is CancellationError {} catch { if context == boundary { failure = "The code or its bound resource could not be verified." } }
-        host?.destroy()
+        } catch is CancellationError {} catch {
+            if context == boundary {
+                if CachedContentFailure.invalidates(error) {
+                    await sync.forgetCachedGeneric(c, workspace, fileId: file.id)
+                    host?.destroy(); host = nil; code = nil
+                    failure = "Code or access changed. Reopen to review it."
+                } else if host != nil { notice = "Showing saved content. Refresh could not complete." }
+                else { failure = "No saved content is available. Connect to verify this app and its data." }
+            }
+        }
     }
     private func approve(_ code: GenericNappletCode) async {
         guard !loading, let sync = model.sync, let c = model.connection, let receipt else { return }
@@ -221,11 +282,11 @@ struct GenericNappletFileView: View {
             start(code)
         } catch { if context == boundary { failure = "Code or access changed. Reopen to review it." } }
     }
-    private func start(_ code: GenericNappletCode) {
+    private func start(_ code: GenericNappletCode, cached: FileNappletData? = nil, replaceWhenReady: Bool = false) {
         guard let c = model.connection, let sync = model.sync else { return }
         let boundary = context, approvedWrite = canWrite
-        let current = { context == boundary && model.canRead && model.selectedWorkspaceId == workspace.id }
-        let h = GenericNappletHost(code:code, canWrite:approvedWrite, authorize:{
+        let current = { context == boundary && model.isUnlocked && model.selectedWorkspaceId == workspace.id }
+        let h = GenericNappletHost(code:code, canWrite:approvedWrite, cachedData: cached, authorize:{
             guard current() else { throw CancellationError() }
             let result = try await sync.authorizeGenericNapplet(c, workspace, fileId:file.id, code:code)
             guard current() else { throw CancellationError() }; return result
@@ -240,7 +301,19 @@ struct GenericNappletFileView: View {
             let result = try await sync.saveGenericJSON(c,workspace,fileId:file.id,code:code,base:base,bytes:bytes)
             guard current() else { throw CancellationError() }; return result
         })
-        host = h
+        if replaceWhenReady, let existing = host {
+            h.open()
+            Task {
+                for _ in 0..<300 {
+                    if h.page?.ready == true && !h.busy { break }
+                    try? await Task.sleep(for: .milliseconds(20))
+                }
+                guard current(), host === existing, !existing.dirty, !existing.busy, h.page?.ready == true, !h.busy else { h.destroy(); return }
+                existing.destroy(); host = h; bindNavigation(h)
+            }
+        } else { host = h; bindNavigation(h); h.open() }
+    }
+    private func bindNavigation(_ h: GenericNappletHost) {
         model.fileNappletNavigationOwner = owner
         model.fileNappletNavigation = { [weak h] action in
             guard let h, h.page != nil else { return false }
@@ -248,13 +321,12 @@ struct GenericNappletFileView: View {
             if h.dirty { deferred = action; confirmation = "navigate"; return true }; return false
         }
         model.fileNappletContextLost = { [weak h] in h?.destroy(); deferred = nil; confirmation = nil }
-        h.open()
         #if os(macOS)
         windowGuard()
         #endif
     }
     private func cleanup() {
-        host?.destroy(); invalidations.stop()
+        host?.destroy(); invalidations.stop(); cachedRevision.stop()
         if model.fileNappletNavigationOwner == owner { model.fileNappletNavigationOwner = nil; model.fileNappletNavigation = nil; model.fileNappletContextLost = nil }
     }
     private func confirm(_ action: String) { guard host?.writing != true else { return }; if host?.dirty == true { confirmation = action } else { perform(action) } }

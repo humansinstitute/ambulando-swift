@@ -21,6 +21,7 @@ final class GoalsModel {
     private(set) var error: String?
     /// The load in progress. It is not tied to the view that started it, so a view that disappears (or is rebuilt)
     /// mid-load does not cancel it, and callers that arrive meanwhile wait for its result instead of being skipped.
+    @ObservationIgnored private var localRevision: String?
     @ObservationIgnored private var inflight: Task<Void, Never>?
 
     init(boundary: WorkspaceBoundary, service: GoalsService, isCurrent: @escaping @MainActor (WorkspaceBoundary) -> Bool) {
@@ -43,6 +44,20 @@ final class GoalsModel {
         if refreshLog.count > 12 { refreshLog.removeFirst() }
     }
 
+    func reconcileLocalRemovals() async {
+        let revision = await service.cacheRevision()
+        guard revision != localRevision, isCurrent(boundary) else { return }
+        localRevision = revision
+        guard loaded else { return }
+        if let saved = await service.cached() {
+            let keep = Set(saved.goals.map(\.id))
+            goals.removeAll { !keep.contains($0.id) }
+        } else {
+            goals = []; space = nil; loaded = false
+            error = "Saved Goals are no longer available with their previous access."
+        }
+    }
+
     func refresh() async {
         if let inflight { note("joined"); await inflight.value; return }
         note("start")
@@ -53,12 +68,19 @@ final class GoalsModel {
     }
 
     private func load() async {
+        await reconcileLocalRemovals()
+        if !loaded, let snapshot = await service.cached(), isCurrent(boundary) {
+            space = snapshot.space; goals = snapshot.goals; unreadable = snapshot.unreadable; loaded = true
+            localRevision = await service.cacheRevision()
+            note("cached")
+        }
         loading = true
         defer { loading = false }
         do {
             let snapshot = try await service.load()
             guard isCurrent(boundary) else { note("dropped-not-current"); return }
             space = snapshot.space; goals = snapshot.goals; unreadable = snapshot.unreadable; error = nil; loaded = true
+            localRevision = await service.cacheRevision()
             note("loaded")
         } catch is CancellationError {
             note("cancelled")
@@ -156,7 +178,7 @@ final class GoalsModel {
 extension AppModel {
     /// The Goals model of the selected workspace, created on first use. Nil without an open, connected workspace.
     func goalsModel(for workspace: WorkspaceRecord) -> GoalsModel? {
-        guard let sync, let connection, let boundary = selectedWorkspaceBoundary, workspace.id == selectedWorkspace?.id,
+        guard isUnlocked, let sync, let connection, let boundary = selectedWorkspaceBoundary, workspace.id == selectedWorkspace?.id,
               workspace.appNpub == selectedWorkspace?.appNpub else { return nil }
         if let existing = goalModels[boundary.id] { return existing }
         guard let service = try? sync.goals(connection, workspace) else { return nil }

@@ -2,7 +2,7 @@ import AmbulandoCore
 import SwiftUI
 import WebKit
 
-/// In-memory only. Neither tracker values nor its unsaved draft enter the native store or recovery files.
+/// Verified tracker reads can restore from sealed local content. Unsaved draft DOM stays in memory.
 @MainActor @Observable
 final class FileNappletHost {
     var page: NappletPage?
@@ -10,6 +10,7 @@ final class FileNappletHost {
     var pending = false
     var writing = false
     var dirty = false
+    private var cachedData: FileNappletData?
     private var base: String?
     private var delivered: Data?
     private var writable: Bool?
@@ -18,8 +19,8 @@ final class FileNappletHost {
     private var queuedRead: FileNappletRequest?
     let read: () async throws -> FileNappletData
     let save: (String, Data) async throws -> FileNappletData
-    init(read: @escaping () async throws -> FileNappletData, save: @escaping (String, Data) async throws -> FileNappletData) {
-        self.read = read; self.save = save
+    init(cachedData: FileNappletData? = nil, read: @escaping () async throws -> FileNappletData, save: @escaping (String, Data) async throws -> FileNappletData) {
+        self.cachedData = cachedData; self.read = read; self.save = save
     }
     func open(html: String) {
         let page = NappletPage(html: html, fileReceive: { [weak self] request in self?.receive(request) })
@@ -36,7 +37,7 @@ final class FileNappletHost {
         pending = false; writing = false; dirty = false; failure = message
     }
     func reauthorize() {
-        guard !closed, !pending, !writing, page != nil else { return }
+        guard !closed, !pending, !writing, cachedData == nil, page != nil else { return }
         pending = true
         task = Task { [weak self] in
             guard let self else { return }
@@ -46,7 +47,21 @@ final class FileNappletHost {
                 if let writable, writable != access.canWrite { destroy("Permissions changed. Reopen the napplet."); return }
                 pending = false // Successful reauthorization preserves DOM, original base and draft.
                 if let next = queuedRead { queuedRead = nil; receive(next) }
-            } catch { if !Task.isCancelled { destroy("Access could not be verified. Reopen the napplet.") } }
+            } catch {
+                pending = false
+                if !Task.isCancelled, CachedContentFailure.invalidates(error) { destroy("Code or access changed. Reopen the napplet.") }
+            }
+        }
+    }
+    func updatedRead() async -> FileNappletData? {
+        guard !closed, !dirty, !pending, !writing else { return nil }
+        do {
+            let data = try await read()
+            guard !closed, !dirty, !pending, !writing, data.versionId != base else { return nil }
+            return data
+        } catch {
+            if CachedContentFailure.invalidates(error) { destroy("Code or access changed. Reopen the napplet.") }
+            return nil
         }
     }
     func interceptNavigation(_ action: @escaping () -> Void, discard: (@escaping () -> Void) -> Void) -> Bool {
@@ -76,6 +91,7 @@ final class FileNappletHost {
             do {
                 let data: FileNappletData
                 if let bytes = request.value, let base = request.base { data = try await save(base, bytes) }
+                else if let cached = cachedData { cachedData = nil; data = cached }
                 else { data = try await read() }
                 guard !Task.isCancelled, !closed, self.page === page else { return }
                 self.base = data.versionId; delivered = data.bytes; writable = data.canWrite; pending = false; writing = false
@@ -85,13 +101,13 @@ final class FileNappletHost {
                            "canWrite": data.canWrite, "privacy": "self-channel"])
                 if let next = queuedRead { queuedRead = nil; receive(next) }
             } catch FileNappletError.conflict {
-                // Confirm authority before leaving private draft code mounted after a conflict.
-                do {
-                    _ = try await read()
-                    guard !Task.isCancelled, !closed else { return }
-                    pending = false; writing = false; reply(request.id, code: "conflict")
-                } catch { if !Task.isCancelled { destroy("Access could not be verified. Reopen the napplet.") } }
-            } catch { if !Task.isCancelled { destroy("Access or save could not be verified. Reopen the napplet.") } }
+                pending = false; writing = false; reply(request.id, code: "conflict")
+            } catch {
+                guard !Task.isCancelled else { return }
+                pending = false; writing = false
+                if CachedContentFailure.invalidates(error) { destroy("Code or access changed. Reopen the napplet.") }
+                else { reply(request.id, code: "unavailable") }
+            }
         }
     }
     private func reply(_ id: String, code: String) {
@@ -130,6 +146,8 @@ struct TrackerHTMLFileView: View {
     let file: FileRecord
     let workspace: WorkspaceRecord
     var appMode = false
+    @State private var cachedRevision = LiveQuery<String?>(initial: nil)
+    @State private var restoredLocal = false
     @State private var code: FileNappletCode?
     @State private var host: FileNappletHost?
     @State private var failure: String?
@@ -209,6 +227,15 @@ struct TrackerHTMLFileView: View {
             Text("Replace the original app code with the bundled version. Your tracker data and history stay in the same File. You will be asked to approve the changed code.")
         }
         .sheet(isPresented: $editing, onDismiss: { reopen += 1 }) { HTMLSourceSheet(file: file, workspace: workspace) }
+        .onChange(of: cachedRevision.value) { _, _ in
+            guard restoredLocal, model.isUnlocked, let sync = model.sync, let c = model.connection else { return }
+            let boundary = context
+            Task {
+                let saved = await sync.cachedFileNapplet(c, workspace, fileId: file.id)
+                guard context == boundary, restoredLocal else { return }
+                if saved == nil { host?.destroy("Saved code or data access was removed. Reopen to review it.") }
+            }
+        }
         .task(id: context) { await run() }
 
         .onChange(of: model.canRead) { _, readable in if !readable { host?.destroy(); code = nil } }
@@ -219,7 +246,7 @@ struct TrackerHTMLFileView: View {
                 else { host?.reauthorize() }
             }
         }
-        .onDisappear { updateTask?.cancel(); active = false; host?.destroy(); clearNavigation(); invalidations.stop(); code = nil; trusted = false }
+        .onDisappear { updateTask?.cancel(); active = false; host?.destroy(); clearNavigation(); invalidations.stop(); cachedRevision.stop(); code = nil; trusted = false }
         #if os(macOS)
         .onExitCommand { confirm("close") }
         .onChange(of: host?.dirty, initial: true) { _, _ in updateWindowGuard() }
@@ -251,9 +278,21 @@ struct TrackerHTMLFileView: View {
         host?.destroy(); host = nil; code = nil; trusted = false; receipt = nil; rememberNotice = nil; failure = nil
         updateTask?.cancel(); updateAvailable = false
         active = true
-        guard model.canRead else { failure = "Unlock to open this artefact."; return }
+        guard model.isUnlocked else { failure = "Unlock to open this artefact."; return }
         guard model.selectedWorkspaceId == workspace.id, let sync = model.sync, let connection = model.connection else { failure = "Reopen this artefact in its workspace."; return }
+        restoredLocal = false
+        if let store = model.store {
+            cachedRevision.start(store: store, matches: { $0.table == .access || $0.table == .appState }) { try await store.reader.state("local-content.epoch") }
+        }
         let epoch = model.wikiContextEpoch
+        if let cached = await sync.cachedFileNapplet(connection, workspace, fileId: file.id), model.isUnlocked,
+           model.wikiContextEpoch == epoch,
+           let candidate = try? FileNappletTrustReceipt(connection: connection, workspace: workspace, codeFile: file.id, code: cached.code, canWrite: cached.data.canWrite),
+           !suppressRemembered, trustStore.contains(candidate) {
+            restoredLocal = true
+            receipt = candidate; code = cached.code; trusted = true; start(cached.code, cached: cached.data)
+            rememberNotice = "Showing saved content. Checking for updates…"
+        }
         do {
             let result = try await sync.fileNappletCode(connection, workspace, fileId: file.id)
             guard !Task.isCancelled, model.wikiContextEpoch == epoch, model.canRead else { return }
@@ -269,12 +308,17 @@ struct TrackerHTMLFileView: View {
                 }
                 guard !Task.isCancelled, model.wikiContextEpoch == epoch, model.canRead else { return }
                 receipt = candidate
+                restoredLocal = true
                 code = result
-                if !suppressRemembered && trustStore.contains(candidate) { trusted = true; start(result) }
+                if !suppressRemembered && trustStore.contains(candidate) {
+                    trusted = true
+                    if host == nil { start(result, cached: access) }
+                } else if host != nil { host?.destroy(); host = nil; trusted = false }
+                rememberNotice = nil
             } else { code = result }
             if let store = model.store {
                 invalidations.onLoad = { _ in if scenePhase == .active { host?.reauthorize() } }
-                invalidations.start(store: store, matches: { [.files, .channels, .appState, .access].contains($0.table) }) {
+                invalidations.start(store: store, matches: { [.files, .channels, .access].contains($0.table) }) {
                     // A changed canonical row is an invalidation signal only; never store tracker values.
                     let f = try await store.reader.file(workspaceId: workspace.id, id: file.id)
                     var d: FileRecord?
@@ -285,10 +329,18 @@ struct TrackerHTMLFileView: View {
             while !Task.isCancelled {
                 try await Task.sleep(for: .seconds(30))
                 guard model.wikiContextEpoch == epoch, model.canRead else { break }
-                if scenePhase == .active { host?.reauthorize() }
+                if scenePhase == .active {
+                    if let data = await host?.updatedRead(), let code { start(code, cached: data, replaceWhenReady: true) }
+                    else { host?.reauthorize() }
+                }
             }
-        } catch is CancellationError {} catch { failure = "The HTML File could not be verified." }
-        host?.destroy()
+        } catch is CancellationError {} catch {
+            if CachedContentFailure.invalidates(error) {
+                await sync.forgetCachedFileNapplet(connection, workspace, fileId: file.id)
+                host?.destroy(); host = nil; code = nil; failure = "Code or access changed. Reopen to review it."
+            } else if host != nil { rememberNotice = "Showing saved content. Refresh could not complete." }
+            else { failure = "No saved content is available. Connect to verify this app." }
+        }
     }
     private func approve(_ code: FileNappletCode) async {
         guard !approving, let receipt, let sync = model.sync, let connection = model.connection else { return }
@@ -308,12 +360,12 @@ struct TrackerHTMLFileView: View {
             if context == boundary { failure = "Code or data access changed. Reopen to review current access." }
         }
     }
-    private func start(_ code: FileNappletCode) {
+    private func start(_ code: FileNappletCode, cached: FileNappletData? = nil, replaceWhenReady: Bool = false) {
         guard active, scenePhase == .active, trusted, let sync = model.sync, let connection = model.connection else { return }
         let approvedWrite = receipt?.canWrite
         let epoch = model.wikiContextEpoch
-        let current: () -> Bool = { model.canRead && model.wikiContextEpoch == epoch && model.selectedWorkspaceId == workspace.id }
-        let host = FileNappletHost(read: {
+        let current: () -> Bool = { model.isUnlocked && model.wikiContextEpoch == epoch && model.selectedWorkspaceId == workspace.id }
+        let host = FileNappletHost(cachedData: cached, read: {
             guard current() else { throw CancellationError() }
             let value = try await sync.readFileNapplet(connection, workspace, fileId: file.id, code: code)
             guard current(), value.canWrite == approvedWrite else { throw FileNappletError.unavailable }; return value
@@ -322,7 +374,19 @@ struct TrackerHTMLFileView: View {
             let value = try await sync.saveFileNapplet(connection, workspace, fileId: file.id, code: code, base: base, bytes: bytes)
             guard current(), value.canWrite == approvedWrite else { throw FileNappletError.unavailable }; return value
         })
-        self.host = host
+        if replaceWhenReady, let existing = self.host {
+            host.open(html: code.html)
+            Task {
+                for _ in 0..<300 {
+                    if host.page?.ready == true && !host.pending { break }
+                    try? await Task.sleep(for: .milliseconds(20))
+                }
+                guard current(), self.host === existing, !existing.dirty, !existing.pending, host.page?.ready == true, !host.pending else { host.destroy(); return }
+                existing.destroy(); self.host = host; bindNavigation(host)
+            }
+        } else { self.host = host; bindNavigation(host); host.open(html: code.html) }
+    }
+    private func bindNavigation(_ host: FileNappletHost) {
         model.fileNappletNavigationOwner = navigationId
         model.fileNappletNavigation = { [weak host] action in
             if updating { return true }; guard let host, host.page != nil else { return false }
@@ -330,7 +394,6 @@ struct TrackerHTMLFileView: View {
             return host.interceptNavigation(action) { next in deferredNavigation = next; confirmation = "navigate" }
         }
         model.fileNappletContextLost = { [weak host] in updateTask?.cancel(); host?.destroy(); deferredNavigation = nil; confirmation = nil; updateConfirmation = false }
-        host.open(html: code.html)
         #if os(macOS)
         updateWindowGuard()
         #endif

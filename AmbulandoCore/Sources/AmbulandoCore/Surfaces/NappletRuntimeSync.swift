@@ -33,9 +33,11 @@ extension WorkspaceSync {
         do {
             let rows = try await api(origin:TowerOrigin(c.origin)).runtimeInstallations(context)
             try Task.checkCancellation()
+            let previous = (try? await store.reader.runtimeApps(connection: c, workspace: w, context: context)) ?? []
+            for old in previous where !rows.contains(where: { $0.id == old.id }) { await forgetCachedRuntime(c, w, id: old.id) }
             let list = "[" + rows.map { String(decoding:$0.raw,as:UTF8.self) }.joined(separator:",") + "]"
             try await store.writer.setState(key,Self.runtimeRun + "\n" + list)
-        } catch { if !Task.isCancelled { try? await store.writer.setState(key,nil) }; throw error }
+        } catch { if !Task.isCancelled, CachedContentFailure.invalidates(error) { try? await store.writer.setState(key,nil) }; throw error }
     }
     public func runtimeCode(_ c: ConnectionRecord, _ w: WorkspaceRecord, id: String) async throws -> RuntimeCode {
         try await identity.requireReader(npub:c.signerNpub)
@@ -43,19 +45,31 @@ extension WorkspaceSync {
     }
     public func runtimeAuthorize(_ c: ConnectionRecord, _ w: WorkspaceRecord, installation: RuntimeInstallation) async throws -> RuntimeInstallation {
         try await identity.requireReader(npub:c.signerNpub)
-        let latest = try await api(origin:TowerOrigin(c.origin)).runtimeInstallation(runtimeContext(c,w),id:installation.id)
-        guard latest.sameRelease(as:installation) else { throw FileNappletError.unavailable }; return latest
+        let latest: RuntimeInstallation
+        do { latest = try await api(origin:TowerOrigin(c.origin)).runtimeInstallation(runtimeContext(c,w),id:installation.id) }
+        catch { if CachedContentFailure.invalidates(error) { await forgetCachedRuntime(c, w, id: installation.id) }; throw error }
+        guard latest.sameRelease(as:installation) else {
+            // A late check of the old frame must not evict a newer already verified release.
+            if let saved = await cachedRuntime(c, w, id: installation.id), saved.code.installation.sameRelease(as: installation) {
+                await forgetCachedRuntime(c, w, id: installation.id)
+            }
+            throw FileNappletError.unavailable
+        }
+        return latest
     }
     public func runtimeCommand(_ c: ConnectionRecord, _ w: WorkspaceRecord, installation: RuntimeInstallation, request: NappletRuntimeRequest, selections: [String:String] = [:]) async throws -> Data {
         if ["list","get"].contains(request.operation) { try await identity.requireReader(npub:c.signerNpub) }
         else { try await identity.requireSigner(npub:c.signerNpub) }
+        let epoch = try await store.reader.state("local-content.epoch") ?? ""
         let result = try await api(origin:TowerOrigin(c.origin)).runtimeCommand(runtimeContext(c,w),installation:installation,request:request,selections:selections)
         try Task.checkCancellation()
         // Commands return only the confirmed response. The local store owns the result projection.
         let key = Self.runtimeKey(c,w) + ":result:" + installation.id + ":" + (request.collection ?? "")
         try await store.writer.setState(key,Self.runtimeRun + "\n" + String(decoding:result,as:UTF8.self))
         guard let saved = try await store.reader.state(key), saved.hasPrefix(Self.runtimeRun + "\n") else { throw FileNappletError.unavailable }
-        return Data(saved.dropFirst(Self.runtimeRun.count + 1).utf8)
+        let bytes = Data(saved.dropFirst(Self.runtimeRun.count + 1).utf8)
+        await rememberRuntimeRead(c, w, installation: installation, request: request, selections: selections, bytes: bytes, epoch: epoch)
+        return bytes
     }
     public func runtimeCollections(_ c: ConnectionRecord, _ w: WorkspaceRecord, id: String) async throws -> Data {
         try await identity.requireReader(npub:c.signerNpub)
@@ -138,13 +152,14 @@ extension WorkspaceSync {
         }
         _ = try await api.client.request(method:method,path:path,appNpub:w.appNpub,jsonBody:exactBody ?? GenericJSON.canonical(body))
         try Task.checkCancellation()
+        if case .remove = action { await forgetCachedRuntime(c, w, id: installation.id) }
         try await refreshRuntimeApps(c,w)
     }
 }
 extension StoreReader {
     public func runtimeApps(connection: ConnectionRecord, workspace: WorkspaceRecord, context: NappletRuntimeContext) throws -> [RuntimeInstallation] {
-        guard let value = try state(WorkspaceSync.runtimeKey(connection,workspace)), value.hasPrefix(WorkspaceSync.runtimeRun + "\n"),
-              let rows = try JSONSerialization.jsonObject(with:Data(value.dropFirst(WorkspaceSync.runtimeRun.count + 1).utf8)) as? [[String:Any]] else { return [] }
+        guard let value = try state(WorkspaceSync.runtimeKey(connection,workspace)), let newline = value.firstIndex(of: "\n"),
+              let rows = try JSONSerialization.jsonObject(with:Data(value[value.index(after: newline)...].utf8)) as? [[String:Any]] else { return [] }
         return try rows.map { try RuntimeInstallation.parse($0,context:context) }
     }
 }

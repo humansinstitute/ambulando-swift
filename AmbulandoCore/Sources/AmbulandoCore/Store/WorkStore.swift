@@ -201,7 +201,10 @@ extension StoreWriter {
         var gone: [String] = []
         while try s.step() { if let id = s.text(0), !keep.contains(id) { gone.append(id) } }
         let delete = try db.prepare("DELETE FROM \(table) WHERE workspace_id = ? AND id = ?")
-        for id in gone { try delete.run([.text(workspaceId), .text(id)]) }
+        for id in gone {
+            if table == "files" { try invalidateLocalContent(workspace: workspaceId, record: id) }
+            try delete.run([.text(workspaceId), .text(id)])
+        }
         return gone.count
     }
 

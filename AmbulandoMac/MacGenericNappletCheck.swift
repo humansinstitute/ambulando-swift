@@ -14,6 +14,12 @@ private actor GenericNativeGate {
     func release() { released = true; continuation?.resume(); continuation = nil }
 }
 
+private struct CacheDelayedTransport: HTTPTransport {
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        try await Task.sleep(for: .seconds(3)); throw URLError(.notConnectedToInternet)
+    }
+}
+
 extension MacThreadRegression {
     static func genericAuthorizationQueueCheck(_ code:GenericNappletCode) async throws {
         for mode in 0..<4 {
@@ -33,7 +39,7 @@ extension MacThreadRegression {
             try require(host.authorizing && !host.busy,"authorization is separate from operation busy")
             try require(host.receive(request("first")),"one initial valid read admitted during delayed authority check")
             try require(!host.receive(request("second")),"only one read queued")
-            try require(!host.receive(request("write","save")),"writes are never queued during authority checks")
+            try require(host.receive(request("write","save")),"writes receive an immediate unavailable result, without being queued during authority checks")
             if mode == 2 { host.destroy() }
             await gate.release()
             for _ in 0..<200 { if !host.authorizing && !host.busy { break }; try await Task.sleep(for:.milliseconds(1)) }
@@ -58,13 +64,108 @@ extension MacThreadRegression {
         print("GENERIC_AUTH_QUEUE_PASS delayedCheck oneFirstRead noWrites normalBusyIgnored denied changedGrant contextDestroyed")
     }
 
+    static func cachedGoalsRenderCheck(model: AppModel, workspace: WorkspaceRecord, sync: WorkspaceSync, connection: ConnectionRecord, store: LocalStore) async throws {
+        let service = try sync.goals(connection, workspace)
+        let snapshot: GoalsSnapshot
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacCachedContentRelaunch"), let saved = await service.cached() { snapshot = saved }
+        else { snapshot = try await service.load() }
+        guard let first = snapshot.goals.first else { throw Failure(description: "Goals fixture must include cached data") }
+        let offline = WorkspaceSync(store: store, engine: SyncEngine(), identity: sync.identity, transport: CacheDelayedTransport())
+        let previousModels = model.goalModels
+        let boundary = try WorkspaceBoundary(connection: connection, workspace: workspace)
+        let goals = GoalsModel(boundary: boundary, service: try offline.goals(connection, workspace), isCurrent: { model.isUnlocked && model.selectedWorkspaceBoundary == $0 })
+        model.goalModels[boundary.id] = goals
+        defer { model.goalModels = previousModels }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 850, height: 750), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let clock = ContinuousClock(), began = clock.now
+        window.contentView = NSHostingView(rootView: GoalsView(workspace: workspace, store: store).environment(model))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.contentView = nil; window.orderOut(nil) }
+        for _ in 0..<200 {
+            if find(window, "goal.row." + first.goal.name) != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try require(find(window, "goal.row." + first.goal.name) != nil && goals.loading, "native Goals row is usable before delayed refresh completes")
+        let elapsed = began.duration(to: clock.now)
+        try await Task.sleep(for: .milliseconds(3200))
+        try require(goals.error != nil && goals.goal(first.id) != nil, "offline refresh retains native Goals")
+        print("CACHED_GOALS_RENDER_PASS firstUsable=\(elapsed) delayedNetwork=3s retainedOnFailure=true synthetic=true")
+    }
+
+    /// Actual AppKit/WebKit cached render, with an unresolved authority request and then an offline failure.
+    static func cachedGenericRenderCheck(sync: WorkspaceSync, connection: ConnectionRecord, workspace: WorkspaceRecord, file: String) async throws {
+        let relaunch = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacCachedContentRelaunch")
+        let code: GenericNappletCode, fresh: FileNappletData
+        if relaunch, let saved = await sync.cachedGenericNapplet(connection, workspace, fileId: file) { code = saved.code; fresh = saved.data }
+        else {
+            code = try await sync.genericNappletCode(connection, workspace, fileId: file)
+            fresh = try await sync.readGenericJSON(connection, workspace, fileId: file, code: code)
+        }
+        let reopenedStore = try LocalStore(directory: URL(fileURLWithPath: sync.store.path).deletingLastPathComponent())
+        let reopened = WorkspaceSync(store: reopenedStore, engine: SyncEngine(), identity: sync.identity, transport: sync.transport)
+        let clock = ContinuousClock(), began = clock.now
+        guard let cached = await reopened.cachedGenericNapplet(connection, workspace, fileId: file) else { throw Failure(description: "durable code and data restoration") }
+        try require(cached.code == code && cached.data.bytes == fresh.bytes && cached.data.versionId == fresh.versionId, "same durable verified code and data after reopening store")
+        let gate = GenericNativeGate()
+        let h = GenericNappletHost(code: cached.code, canWrite: cached.data.canWrite, cachedData: cached.data, authorize: {
+            await gate.wait(); throw URLError(.notConnectedToInternet)
+        }, read: { _ in throw URLError(.notConnectedToInternet) }, save: { _, _ in throw URLError(.notConnectedToInternet) })
+        h.open(); h.reauthorize()
+        guard let page = h.page, let web = page.webView else { throw Failure(description: "cached native page") }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = web; window.makeKeyAndOrderFront(nil)
+        defer { h.destroy(); window.orderOut(nil) }
+        _ = try await web.evaluateJavaScript("window.addEventListener('message',e=>{if(e.data?.probe)window.genericProbe=e.data.probe})")
+        var usable = false
+        for _ in 0..<300 {
+            _ = try? await web.evaluateJavaScript("if(!window.cacheProbeListener){window.cacheProbeListener=true;window.addEventListener('message',e=>{if(e.data?.probe)window.genericProbe=e.data.probe})}")
+            _ = try? await web.evaluateJavaScript("document.getElementById('napplet')?.contentWindow.postMessage({command:'probe'},'*')")
+            if let probe = try? await web.evaluateJavaScript("window.genericProbe") as? [String: Any], probe["loaded"] as? Bool == true { usable = true; break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try require(usable && h.authorizing && !h.busy && h.page === page, "usable cached WebKit content precedes delayed authority")
+        let elapsed = began.duration(to: clock.now)
+        let dirty: [String: Any] = ["type": "wingman-napplet-data", "version": 2, "session": page.session, "requestId": "cached-draft", "operation": "dirty", "dirty": true]
+        _ = h.receive(try GenericNappletRequest.parse(JSONSerialization.data(withJSONObject: dirty), session: page.session, binding: code.binding))
+        await gate.release()
+        for _ in 0..<100 where h.authorizing { try await Task.sleep(for: .milliseconds(10)) }
+        try require(h.page === page && h.dirty, "offline authority failure keeps frame and draft")
+        h.destroy()
+        if relaunch {
+            print("CACHED_NATIVE_RELAUNCH_PASS firstUsable=\(elapsed) actualSecondProcess=true offline=true restoredCodeAndData=true"); return
+        }
+        let saving = GenericNappletHost(code: cached.code, canWrite: true, cachedData: cached.data, authorize: { true }, read: { _ in
+            try await sync.readGenericJSON(connection, workspace, fileId: file, code: code)
+        }, save: { base, bytes in
+            try await sync.saveGenericJSON(connection, workspace, fileId: file, code: code, base: base, bytes: bytes)
+        })
+        saving.open()
+        guard let savePage = saving.page else { throw Failure(description: "cached save host") }
+        defer { saving.destroy() }
+        for _ in 0..<200 { if savePage.ready && !saving.busy { break }; try await Task.sleep(for: .milliseconds(20)) }
+        let saveRequest: [String: Any] = ["type":"wingman-napplet-data", "version":2, "session":savePage.session,"requestId":"cached-save","operation":"save","binding":code.binding.name,"baseVersionId":cached.data.versionId,"value":["cachedNativeEdit":true]]
+        try require(saving.receive(try GenericNappletRequest.parse(JSONSerialization.data(withJSONObject: saveRequest), session: savePage.session, binding: code.binding)), "first cached edit save accepted by host")
+        for _ in 0..<300 where saving.busy { try await Task.sleep(for: .milliseconds(10)) }
+        let saved = try await sync.readGenericJSON(connection, workspace, fileId: file, code: code)
+        try require(!saving.busy && saving.failure == nil && saved.bytes == Data("{\"cachedNativeEdit\":true}".utf8), "first edit from displayed cached base saves without a false conflict")
+        print("CACHED_NATIVE_EDIT_SAVE_PASS originalDisplayedBase=true noFalseConflict=true")
+        print("CACHED_NATIVE_RENDER_PASS firstUsable=\(elapsed) authorityStillPending=true restoredCodeAndData=true offlineRetainsDraft=true synthetic=true")
+    }
+
     /// Exercises production native views/bridge with synthetic signed File transport, never a human backend.
     static func genericNappletCheck(model:AppModel) async throws {
         try require(Bundle.main.bundleIdentifier == "studio.otherstuff.ambulando.mac.test" && GenericNappletFixture.enabled,"isolated synthetic scenario")
         guard let workspace = model.selectedWorkspace, let sync = model.sync, let c = model.connection, let store = model.store, let fixture = model.fixture else { throw Failure(description:"fixture context") }
+        print("CACHE_FIXTURE_DIRECTORY=\(fixture.directory.path)")
         let scenario = try fixture.tower.genericNapplet.scenario(), rows = scenario["files"] as! [[String:Any]]
         let codeIDs = rows.filter { $0["content_type"] as? String == "text/html" }.map { $0["id"] as! String }
         try require(codeIDs.count == 2,"two arbitrary supplied apps after build")
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacCachedContentRelaunch") {
+            try await cachedGoalsRenderCheck(model: model, workspace: workspace, sync: sync, connection: c, store: store)
+            try await cachedGenericRenderCheck(sync: sync, connection: c, workspace: workspace, file: codeIDs[0])
+            print("CACHED_CONTENT_RELAUNCH_CHECK_PASS"); return
+        }
         let window = NSWindow(contentRect:NSRect(x:0,y:0,width:800,height:820),styleMask:[.titled],backing:.buffered,defer:false)
         window.isReleasedWhenClosed = false; defer { window.orderOut(nil) }
         func mount<V:View>(_ view:V) async {
@@ -82,7 +183,14 @@ extension MacThreadRegression {
         var codes:[GenericNappletCode] = [], files:[FileRecord] = []
         for id in codeIDs {
             let file = try await sync.genericNappletFile(c,workspace,fileId:id), code = try await sync.genericNappletCode(c,workspace,fileId:id)
-            if files.isEmpty { try await genericAuthorizationQueueCheck(code) }
+            if files.isEmpty {
+                try await genericAuthorizationQueueCheck(code)
+                if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacCachedContentCheck") {
+                    try await cachedGoalsRenderCheck(model: model, workspace: workspace, sync: sync, connection: c, store: store)
+                    try await cachedGenericRenderCheck(sync: sync, connection: c, workspace: workspace, file: id)
+                    print("CACHED_CONTENT_CHECK_PASS"); return
+                }
+            }
             files.append(file); codes.append(code)
             await mount(AddGenericNappletView(workspace:workspace,store:store))
             try await wait("generic.file-link"); try click(window,"generic.file-link")

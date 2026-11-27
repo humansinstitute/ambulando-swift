@@ -115,7 +115,7 @@ extension TowerAPI {
         }
         let grants: [GoalsChannelGrant]
         do { grants = try await channelGrants(workspaceId: workspaceId, appNpub: appNpub, channelId: channel.id) }
-        catch TowerError.http { return .unsafe("This Goals space could not be checked, so it was not used.") }
+        catch TowerError.http(let status, _, _) where status == 403 || status == 404 { return .unsafe("This Goals space is no longer available with its saved access.") }
         return GoalsSpaceResolver.classify(channel: channel, grants: grants, members: members, viewer: viewer)
     }
 

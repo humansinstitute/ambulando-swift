@@ -92,6 +92,8 @@ struct NappletRuntimeView: View {
     @Environment(\.scenePhase) private var scenePhase
     let workspace: WorkspaceRecord
     let id: String
+    @State private var cachedRevision = LiveQuery<String?>(initial: nil)
+    @State private var restoredLocal = false
     @State private var code: RuntimeCode?
     @State private var dataAuthority: Data?
     @State private var host: NappletRuntimeHost?
@@ -107,7 +109,7 @@ struct NappletRuntimeView: View {
     @State private var deferred: (() -> Void)?
     @State private var discard = false
     private let trust = NappletRuntimeTrust()
-    private var context: [String] { [model.connection?.id ?? "",model.connection?.origin ?? "",model.connection?.signerNpub ?? "",model.selectedWorkspaceId ?? "",workspace.id,String(model.wikiContextEpoch),String(model.canRead),String(reopen)] }
+    private var context: [String] { [model.connection?.id ?? "",model.connection?.origin ?? "",model.connection?.signerNpub ?? "",model.selectedWorkspaceId ?? "",workspace.id,String(model.wikiContextEpoch),String(model.isUnlocked),String(reopen)] }
     var body: some View {
         VStack(spacing:8) {
             if let host, let page = host.page {
@@ -121,7 +123,7 @@ struct NappletRuntimeView: View {
                             Text("\(code.installation.manifest.icon) \(code.installation.manifest.title)").font(.title2)
                             Text("Allow this authenticated publisher’s app to use the collections below? Approval applies to this identity and workspace. Future code updates within this access load automatically.")
                             access(code.installation.manifest)
-                            Text("Record permissions are checked by NStack. App audience, record access and personal capabilities are separate. This runtime requires an online connection.").font(.caption)
+                            Text("Record permissions are checked by NStack. App audience, record access and personal capabilities are separate. Previously loaded content is available offline; changes require an online connection.").font(.caption)
                             Button("Approve access and open") { approve(code) }.disabled(loading).accessibilityIdentifier("runtime.approve")
                         }.padding()
                     }
@@ -167,9 +169,18 @@ struct NappletRuntimeView: View {
             }
         }
         .sheet(isPresented:$management) { if let code { RuntimeManagementView(workspace:workspace,installation:code.installation,changed:{ reopen += 1 },selectDataset:{ name, id in collectionBindings[name] = id; reopen += 1 }) } }
+        .onChange(of: cachedRevision.value) { _, _ in
+            guard restoredLocal, model.isUnlocked, let sync = model.sync, let c = model.connection else { return }
+            let boundary = context
+            Task {
+                let saved = await sync.cachedRuntime(c, workspace, id: id)
+                guard context == boundary, restoredLocal else { return }
+                if saved == nil { host?.destroy("Saved code or data access was removed. Reopen to review it.") }
+            }
+        }
         .task(id:context) { await run() }
         .onChange(of:scenePhase) { _, phase in if phase == .active { verifyOnFocus() } }
-        .onChange(of:model.canRead) { _, read in if !read { cleanup(); code = nil } }
+        .onChange(of:model.isUnlocked) { _, read in if !read { cleanup(); code = nil } }
         .onChange(of:model.wikiContextEpoch) { _, _ in cleanup(); code = nil; collectionBindings = [:]; dataAuthority = nil }
         .onChange(of:model.connection?.id) { _, _ in collectionBindings = [:]; dataAuthority = nil }
         .onChange(of:model.selectedWorkspaceId) { _, _ in collectionBindings = [:]; dataAuthority = nil }
@@ -185,16 +196,34 @@ struct NappletRuntimeView: View {
     }
     private func run() async {
         cleanup(); host = nil; code = nil; failure = nil
-        guard model.canRead else { failure = "Unlock to open this app."; return }
+        guard model.isUnlocked else { failure = "Unlock to open this app."; return }
         guard model.selectedWorkspaceId == workspace.id, let c = model.connection, let sync = model.sync else { failure = "Reopen this app in its workspace."; return }
+        restoredLocal = false
+        if let store = model.store {
+            cachedRevision.start(store: store, matches: { $0.table == .access || $0.table == .appState }) { try await store.reader.state("local-content.epoch") }
+        }
         let boundary = context
+        if let cached = await sync.cachedRuntime(c, workspace, id: id), context == boundary,
+           let runtimeContext = try? sync.runtimeContext(c, workspace),
+           trust.approved(context: runtimeContext, publisher: cached.code.installation.publisher, manifest: cached.code.installation.manifest) {
+            restoredLocal = true
+            code = cached.code; dataAuthority = cached.collections
+            start(cached.code, boundary: boundary)
+            notice = "Showing saved content. Checking for updates…"
+        }
         do {
+            let epoch = try await sync.store.reader.state("local-content.epoch") ?? ""
             let result = try await sync.runtimeCode(c,workspace,id:id)
             guard !Task.isCancelled, context == boundary else { return }
-            code = result
-            dataAuthority = try await sync.runtimeCollections(c,workspace,id:id)
+            let freshAuthority = try await sync.runtimeCollections(c,workspace,id:id)
             guard !Task.isCancelled, context == boundary else { return }
-            if trust.approved(context:try sync.runtimeContext(c,workspace),publisher:result.installation.publisher,manifest:result.installation.manifest) { start(result,boundary:boundary) }
+            if let old = code, !old.installation.sameRelease(as: result.installation) || dataAuthority != freshAuthority {
+                host?.destroy(); host = nil
+            }
+            code = result; dataAuthority = freshAuthority; notice = nil
+            await sync.rememberRuntime(c, workspace, code: result, collections: freshAuthority, epoch: epoch)
+            restoredLocal = true
+            if host == nil, trust.approved(context:try sync.runtimeContext(c,workspace),publisher:result.installation.publisher,manifest:result.installation.manifest) { start(result,boundary:boundary) }
             while !Task.isCancelled {
                 try await Task.sleep(for:.seconds(30))
                 guard context == boundary, scenePhase == .active else { continue }
@@ -206,10 +235,24 @@ struct NappletRuntimeView: View {
                 }
                 if !latest.installation.sameRelease(as:result.installation) {
                     if host?.dirty == true || host?.busy == true { notice = "An update is available. Finish saving, then check for update." }
-                    else { reopen += 1; return }
-                } else { code = latest }
+                    else {
+                        await sync.rememberRuntime(c, workspace, code: latest, collections: latestDataAuthority)
+                        reopen += 1; return
+                    }
+                } else {
+                    code = latest
+                    if let host, try await host.refreshReads() { start(latest, boundary: boundary, replaceWhenReady: true) }
+                }
             }
-        } catch is CancellationError {} catch { if context == boundary { host?.destroy("Access could not be verified online."); failure = "The app or its current access could not be verified." } }
+        } catch is CancellationError {} catch {
+            guard context == boundary else { return }
+            if CachedContentFailure.invalidates(error) {
+                await sync.forgetCachedRuntime(c, workspace, id: id)
+                host?.destroy("Code or access changed. Reopen to review it."); code = nil
+                failure = "The app is no longer available with its saved access."
+            } else if host != nil { notice = "Showing saved content. Refresh could not complete." }
+            else { failure = "No saved content is available. Connect to verify this app." }
+        }
     }
     private func approve(_ code: RuntimeCode) {
         guard let c = model.connection, let sync = model.sync else { return }
@@ -224,21 +267,39 @@ struct NappletRuntimeView: View {
             } catch { failure = "Approval could not be confirmed. Reopen to review access." }
         }
     }
-    private func start(_ code: RuntimeCode, boundary: [String]) {
+    private func start(_ code: RuntimeCode, boundary: [String], replaceWhenReady: Bool = false) {
         guard let c = model.connection, let sync = model.sync else { return }
         let approvedAuthority = dataAuthority
-        let current = { context == boundary && model.canRead && model.selectedWorkspaceId == workspace.id }
+        let current = { context == boundary && model.isUnlocked && model.selectedWorkspaceId == workspace.id }
+        var cachedRequests = Set<String>()
         let h = NappletRuntimeHost(html:code.html,manifest:code.installation.manifest,authorize:{
             guard current() else { throw CancellationError() }
             _ = try await sync.runtimeAuthorize(c,workspace,installation:code.installation)
             guard try await sync.runtimeCollections(c,workspace,id:id) == approvedAuthority else { throw FileNappletError.unavailable }
             guard current() else { throw CancellationError() }
+        },cachedRead:{ request in
+            guard current(), ["list", "get"].contains(request.operation) else { return nil }
+            let slot = [request.operation, request.collection ?? "", request.record ?? "", String(request.limit ?? 0), request.cursor ?? ""].joined(separator: "|")
+            guard cachedRequests.insert(slot).inserted else { return nil }
+            return await sync.cachedRuntimeRead(c, workspace, installation: code.installation, request: request, selections: collectionBindings)
         },command:{ request in
             guard current() else { throw CancellationError() }
             let result = try await sync.runtimeCommand(c,workspace,installation:code.installation,request:request,selections:collectionBindings)
             guard current() else { throw CancellationError() }; return result
         })
-        host = h; h.open()
+        if replaceWhenReady, let existing = host {
+            h.open()
+            Task {
+                for _ in 0..<300 {
+                    if h.page?.ready == true && !h.busy { break }
+                    try? await Task.sleep(for: .milliseconds(20))
+                }
+                guard current(), host === existing, !existing.dirty, !existing.busy, h.page?.ready == true, !h.busy else { h.destroy(); return }
+                existing.destroy(); host = h; bindNavigation(h)
+            }
+        } else { host = h; h.open(); bindNavigation(h) }
+    }
+    private func bindNavigation(_ h: NappletRuntimeHost) {
         model.fileNappletNavigationOwner = owner
         model.fileNappletContextLost = { [weak h] in h?.destroy(); deferred = nil; discard = false }
         model.fileNappletNavigation = { [weak h] action in
@@ -257,7 +318,10 @@ struct NappletRuntimeView: View {
                 let grants = try await sync.runtimeCollections(c,workspace,id:id)
                 guard context == boundary else { return }
                 if grants != approved { host?.destroy("Collection access changed. Reopen to verify your datasets.") }
-            } catch { if context == boundary { host?.destroy("Access could not be verified online.") } }
+            } catch { if context == boundary, CachedContentFailure.invalidates(error) {
+                await sync.forgetCachedRuntime(c, workspace, id: id)
+                host?.destroy("Code or access changed. Reopen to review it.")
+            } }
         }
     }
     private func requestReload() {
@@ -265,7 +329,7 @@ struct NappletRuntimeView: View {
         if host?.dirty == true { deferred = { reopen += 1 }; discard = true } else { reopen += 1 }
     }
     private func cleanup() {
-        host?.destroy()
+        cachedRevision.stop(); host?.destroy()
         if model.fileNappletNavigationOwner == owner { model.fileNappletNavigationOwner = nil; model.fileNappletNavigation = nil; model.fileNappletContextLost = nil }
     }
     private func forget() {

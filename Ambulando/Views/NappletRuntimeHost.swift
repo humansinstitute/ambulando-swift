@@ -12,13 +12,16 @@ final class NappletRuntimeHost {
     private var closed = false
     private var task: Task<Void,Never>?
     private var deadline: Task<Void,Never>?
+    private var observedReads: [String: (NappletRuntimeRequest, Data)] = [:]
     let manifest: NappletRuntimeManifest
     let html: String
     let authorize: () async throws -> Void
+    let cachedRead: (NappletRuntimeRequest) async -> Data?
     let command: (NappletRuntimeRequest) async throws -> Data
     init(html: String, manifest: NappletRuntimeManifest, authorize: @escaping () async throws -> Void,
+         cachedRead: @escaping (NappletRuntimeRequest) async -> Data? = { _ in nil },
          command: @escaping (NappletRuntimeRequest) async throws -> Data) {
-        self.html = html; self.manifest = manifest; self.authorize = authorize; self.command = command
+        self.html = html; self.manifest = manifest; self.authorize = authorize; self.cachedRead = cachedRead; self.command = command
     }
     func open() {
         guard !closed else { return }
@@ -31,6 +34,18 @@ final class NappletRuntimeHost {
         closed = true; generation = UUID(); task?.cancel(); deadline?.cancel(); task = nil; deadline = nil
         page?.destroy(); page = nil; dirty = false; busy = false; failure = reason
     }
+    func refreshReads() async throws -> Bool {
+        guard !closed, !dirty, !busy else { return false }
+        let expected = generation
+        var changed = false
+        for (_, pair) in observedReads {
+            try await authorize()
+            let bytes = try await command(pair.0)
+            guard !closed, !dirty, !busy, generation == expected else { return false }
+            changed = changed || bytes != pair.1
+        }
+        return changed
+    }
     @discardableResult func receive(_ request: NappletRuntimeRequest) -> Bool {
         guard !closed, !busy, let page else { return false }
         if request.operation == "dirty" { dirty = request.dirty == true; return true }
@@ -38,34 +53,37 @@ final class NappletRuntimeHost {
         let epoch = generation
         deadline = Task { [weak self] in
             try? await Task.sleep(for:.seconds(45)); guard !Task.isCancelled else { return }
-            self?.destroy("Operation could not be confirmed. Reopen before trying again.")
+            guard let self else { return }
+            task?.cancel(); busy = false
+            page.send(["type":"wingman-napplet-result","version":3,"session":page.session,"requestId":request.id,"status":"error","code":"unavailable","message":"Operation could not be confirmed. No automatic retry was made."])
         }
         task = Task { [weak self, weak page] in
             guard let self, let page else { return }
             do {
-                try await authorize()
-                let result = try await command(request)
-                try await authorize()
+                let result: Data
+                if let cached = await cachedRead(request) { result = cached }
+                else {
+                    try await authorize()
+                    result = try await command(request)
+                    try await authorize()
+                }
                 guard !Task.isCancelled, !closed, generation == epoch, self.page === page else { return }
                 // Canonical object result bytes retain scalar-distinct JSON object keys.
                 let value = try GenericJSON.canonicalData(result)
                 page.sendRuntime(["type":"wingman-napplet-result","version":3,"session":page.session,"requestId":request.id,"status":"ready"],result:value)
+                if ["list", "get"].contains(request.operation) {
+                    let key = [request.operation, request.collection ?? "", request.record ?? "", String(request.limit ?? 0), request.cursor ?? ""].joined(separator: "|")
+                    observedReads[key] = (request, value)
+                }
                 if ["create","update","delete"].contains(request.operation) { dirty = false }
                 busy = false; deadline?.cancel()
             } catch {
                 guard !Task.isCancelled, !closed, generation == epoch, self.page === page else { return }
-                // Revocation/offline checks clear the frame; a conflict can keep its current draft.
-                do {
-                    try await authorize()
-                    guard !Task.isCancelled, !closed, generation == epoch else { return }
-                    var code = "unavailable"
-                    if case TowerError.http(let status,_,_) = error {
-                        if status == 403 || status == 404 { destroy("Access was revoked or the napplet is unavailable."); return }
-                        if status == 409 { code = "conflict" }
-                    }
-                    page.send(["type":"wingman-napplet-result","version":3,"session":page.session,"requestId":request.id,"status":"error","code":code,"message":code == "conflict" ? "A newer record revision exists. Refresh before saving." : "Operation could not be confirmed. No automatic retry was made."])
-                    busy = false; deadline?.cancel()
-                } catch { destroy("Access could not be verified. This runtime requires an online connection.") }
+                if CachedContentFailure.invalidates(error) { destroy("Access was revoked or the napplet is unavailable."); return }
+                var code = "unavailable"
+                if case TowerError.http(let status,_,_) = error, status == 409 { code = "conflict" }
+                page.send(["type":"wingman-napplet-result","version":3,"session":page.session,"requestId":request.id,"status":"error","code":code,"message":code == "conflict" ? "A newer record revision exists. Refresh before saving." : "Operation could not be confirmed. No automatic retry was made."])
+                busy = false; deadline?.cancel()
             }
         }
         return true

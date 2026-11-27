@@ -183,10 +183,11 @@ public struct GenericAppDescriptorKey: Hashable, Sendable {
 }
 
 public struct GenericNappletCode: Equatable, Sendable {
-    public init(html: String, binding: GenericNappletBinding, versionId: String, sha256: String) {
-        self.html = html; self.binding = binding; self.versionId = versionId; self.sha256 = sha256
+    public init(html: String, binding: GenericNappletBinding, versionId: String, sha256: String, channelIds: [String] = []) {
+        self.html = html; self.binding = binding; self.versionId = versionId; self.sha256 = sha256; self.channelIds = channelIds
     }
     public let html: String
+    public let channelIds: [String]
     public let binding: GenericNappletBinding
     public let versionId: String
     public let sha256: String

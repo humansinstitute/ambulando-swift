@@ -15,7 +15,7 @@ extension TowerAPI {
         let (bytes, version) = try await nappletBytes(workspace: workspace, app: app, file: row, mime: "text/html", limit: 4 * 1024 * 1024)
         guard let html = String(data: bytes, encoding: .utf8), let binding = try GenericNappletBinding.parse(html: html, metadata: rawJSON(meta)) else { throw FileNappletError.invalid }
         if binding.capability == "workspace-aggregate", binding.resourceId != workspace { throw FileNappletError.invalid }
-        return (file, GenericNappletCode(html: html, binding: binding, versionId: version, sha256: SHA256Hex.of(bytes)))
+        return (file, GenericNappletCode(html: html, binding: binding, versionId: version, sha256: SHA256Hex.of(bytes), channelIds: [file.channelId].compactMap { $0 }))
     }
     private func genericChannel(workspace: String, app: String, file: [String: Any], viewer: String?) async throws {
         guard let channel = file["channel_id"] as? String, GenericJSON.uuid(channel) else { throw FileNappletError.unavailable }
@@ -45,7 +45,7 @@ extension TowerAPI {
         _ = try GenericJSON.canonicalData(bytes)
         let after = try await authorizeGenericNapplet(workspace: workspace, app: app, viewer: viewer, fileId: fileId, expected: expected)
         guard canWrite == after else { throw FileNappletError.unavailable }
-        return FileNappletData(bytes: bytes, versionId: version, canWrite: after)
+        return FileNappletData(bytes: bytes, versionId: version, canWrite: after, channelId: row["channel_id"] as? String)
     }
     public func saveGenericJSON(workspace: String, app: String, viewer: String, fileId: String, expected: GenericNappletCode, base: String, bytes: Data) async throws -> FileNappletData {
         guard expected.binding.allowsSave, GenericJSON.uuid(base) else { throw FileNappletError.invalid }
@@ -109,16 +109,30 @@ extension WorkspaceSync {
     }
     public func readGenericJSON(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String, code: GenericNappletCode) async throws -> FileNappletData {
         try await identity.requireReader(npub: c.signerNpub)
-        return try await api(origin: TowerOrigin(c.origin)).readGenericJSON(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, fileId: fileId, expected: code)
+        let epoch = try await store.reader.state("local-content.epoch") ?? ""
+        do {
+            let data = try await api(origin: TowerOrigin(c.origin)).readGenericJSON(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, fileId: fileId, expected: code)
+            guard try await store.reader.state("local-content.epoch") ?? "" == epoch else { throw CancellationError() }
+            await rememberGeneric(c, w, fileId: fileId, code: code, data: data, epoch: epoch)
+            return data
+        } catch { if CachedContentFailure.invalidates(error) { await forgetCachedGeneric(c, w, fileId: fileId) }; throw error }
     }
     public func saveGenericJSON(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String, code: GenericNappletCode, base: String, bytes: Data) async throws -> FileNappletData {
         try await identity.requireSigner(npub: c.signerNpub)
-        return try await api(origin: TowerOrigin(c.origin)).saveGenericJSON(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, fileId: fileId, expected: code, base: base, bytes: bytes)
+        let epoch = try await store.reader.state("local-content.epoch") ?? ""
+        let data = try await api(origin: TowerOrigin(c.origin)).saveGenericJSON(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, fileId: fileId, expected: code, base: base, bytes: bytes)
+        await rememberGeneric(c, w, fileId: fileId, code: code, data: data, epoch: epoch)
+        return data
     }
     public func readGenericAggregate(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String, code: GenericNappletCode, range: String) async throws -> Data {
         try await identity.requireReader(npub: c.signerNpub)
         guard let root = try JSONSerialization.jsonObject(with: w.raw) as? [String: Any], let expected = root["identity"] as? [String: String], expected["workspace_id"] == w.id, expected["app_npub"] == w.appNpub, expected["tower_service_npub"] == c.towerNpub else { throw FileNappletError.unavailable }
-        return try await api(origin: TowerOrigin(c.origin)).readGenericAggregate(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, fileId: fileId, expected: code, range: range, identity: expected)
+        let epoch = try await store.reader.state("local-content.epoch") ?? ""
+        do {
+            let bytes = try await api(origin: TowerOrigin(c.origin)).readGenericAggregate(workspace: w.id, app: w.appNpub, viewer: c.signerNpub, fileId: fileId, expected: code, range: range, identity: expected)
+            await rememberGeneric(c, w, fileId: fileId, code: code, data: FileNappletData(bytes: bytes, versionId: "", canWrite: false), range: range, epoch: epoch)
+            return bytes
+        } catch { if CachedContentFailure.invalidates(error) { await forgetCachedGeneric(c, w, fileId: fileId) }; throw error }
     }
     /// Re-fetch a selected existing File. Installation never creates code or data.
     public func genericNappletFile(_ c: ConnectionRecord, _ w: WorkspaceRecord, fileId: String) async throws -> FileRecord {
