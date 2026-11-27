@@ -161,13 +161,15 @@ import Testing
     @Test func incompleteOrWrongGrantIdentityNeverReachesPrivateBytes() async throws {
         let dir = temporaryDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
         let identity = try await makeIdentity(directory: dir)
-        for mutation in ["partial", "has_more", "next_cursor", "permissions", "principal_id", "principal_type"] {
+        for mutation in ["complete", "partial", "has_more", "next_cursor", "permissions", "principal_id", "principal_type"] {
             let sample = SampleBriefingTower(workspace: Fixtures.workspaceId, scope: Fixtures.scopeA,
                                              author: NostrKeys.npub(publicKeyHex: String(repeating: "22", count: 32))!, app: Fixtures.appNpub)
             let transport = StubTransport { request in
                 let response = try sample.response(request, owner: TestKeys.npub, fallback: (200, [:]))
                 guard request.url!.path.hasSuffix("/grants"), var object = response.1 as? [String: Any] else { return response }
-                if ["partial", "has_more", "next_cursor"].contains(mutation) {
+                if mutation == "complete" {
+                    object[mutation] = false
+                } else if ["partial", "has_more", "next_cursor"].contains(mutation) {
                     object[mutation] = mutation == "next_cursor" ? "another-page" : true
                 } else {
                     var rows = object["grants"] as! [[String: Any]]

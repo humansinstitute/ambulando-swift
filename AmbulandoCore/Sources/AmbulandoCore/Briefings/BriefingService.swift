@@ -33,7 +33,7 @@ public struct BriefingService: Sendable {
 
     private func grants(_ channel: String) async throws -> [BriefingGrant] {
         let o = try api.object(try await api.client.request(path: try TowerAPI.base(workspace) + "/channels/" + TowerAPI.uuid(channel) + "/grants", appNpub: app), "briefing grants")
-        guard o["has_more"] as? Bool != true, o["partial"] as? Bool != true, o["next_cursor"] as? String == nil,
+        guard o["complete"] as? Bool != false, o["has_more"] as? Bool != true, o["partial"] as? Bool != true, o["next_cursor"] as? String == nil,
               let rows = o["grants"] as? [[String: Any]] else { throw BriefingError.unsafe }
         return try rows.map(BriefingGrant.init(row:))
     }
