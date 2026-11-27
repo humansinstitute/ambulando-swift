@@ -88,6 +88,7 @@ public struct GoalsRelationalRepository: Sendable {
     public func save(goal: Goal, id: String, before: Snapshot, actor: String, operationId: String = UUID().uuidString.lowercased()) async throws -> GoalDocument {
         guard before.mode == "relational", lowerUUID(id) == id, lowerUUID(operationId) == operationId else { throw GoalsRelationalRows.invalid }
         try goal.validated()
+        guard goal.encode().count <= Goal.maxBytes else { throw GoalError.invalid("This goal is too large to save.") }
         let pending = try await cache?.read(pendingSlot).map(JSONValue.parse)
         if try await recoverPending() {
             // The unchanged create form can safely finish with the recovered original UUID, rather than sending a new create.

@@ -79,6 +79,19 @@ import Testing
         #expect(fixture.tables["goal_checkpoint_history"]?.count == 2)
     }
 
+    @Test func oversizedExtensionsAreRefusedBeforeAnyMutation() async throws {
+        let fixture = try Fixture(), identity = try await makeIdentity()
+        let api = TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: StubTransport { try fixture.handle($0) }, signer: identity))
+        let repository = Self.repository(api)
+        let before = try #require(try await repository.snapshot())
+        var value = try Self.value()
+        value.extra = .object([("future", .string(String(repeating: "x", count: Goal.maxBytes)))])
+        await #expect(throws: GoalError.invalid("This goal is too large to save.")) {
+            try await repository.save(goal: value, id: Self.id, before: before, actor: TestKeys.npub)
+        }
+        #expect(fixture.batchAttempts == 0 && fixture.commits == 0)
+    }
+
     @Test func generationMismatchAndRepeatedPageNeverPublishPartialRows() async throws {
         let fixture = try Fixture(), identity = try await makeIdentity()
         let api = TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: StubTransport { try fixture.handle($0) }, signer: identity))
