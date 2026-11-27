@@ -8,9 +8,13 @@ export function normalizedAt(tables,id) {
  const parent=tables.goals.find(g=>g.id===id);if(!parent)throw new Error('Goal unavailable');
  return {goal:{...parent,goal_id:parent.id},checkpoints:tables.goal_checkpoints.filter(c=>c.goal_id===id),associations:tables.goal_associations.filter(r=>r.goal_id===id)};
 }
-export function decode(tables,id) {
+export function validateMarker(tables) {
  const marker=tables.goals_authority?.[0];
  if(tables.goals_authority?.length!==1 || marker.contract_version!==1 || marker.schema_version!=='ambulando-goals-relational-1')throw new Error('Unsupported normalized Goals schema; update before editing');
+ return marker;
+}
+export function decode(tables,id) {
+ validateMarker(tables);
  const normalized=normalizedAt(tables,id);
  return {...normalized,goal:lib.parse(denormalize(normalized)),id,versionId:`sql:${normalized.goal.revision}`,revision:normalized.goal.revision};
 }
@@ -49,15 +53,15 @@ export function relationalClient({request,legacyClient,workspace,owner,app,chann
  return {state,readSnapshot,
   async list(){const s=await readSnapshot();return s? s.tables.goals.filter(g=>!g.tombstoned_at).map(g=>decode(s.tables,g.id)):null;},
   async read(id){const s=await readSnapshot();return s?decode(s.tables,id):null;},
-  async create(goal){if(await state()!=='relational')return null;await verify(null,goal);const id=randomUUID(),timestamp=new Date().toISOString();
-   const n=normalizeContent(lib.encode(goal),{workspace_id:workspace,channel_id:channel,owner_npub:owner,goal_id:id});const rows=currentRows(n,{revision:1,timestamp,actor});
+  async create(goal){const initial=await readSnapshot();if(!initial)return null;const marker=validateMarker(initial.tables);await verify(null,goal);const id=randomUUID(),timestamp=new Date().toISOString();
+   const n=normalizeContent(lib.encode(goal),{workspace_id:workspace,channel_id:channel,owner_npub:marker.owner_npub,goal_id:id});const rows=currentRows(n,{revision:1,timestamp,actor});
    await send(insertOperations({...rows,...historyRows(rows)}));return {id,versionId:'sql:1',goal};},
   async edit(id,edits){
    for(let attempt=0;attempt<4;attempt++) {
     const s=await readSnapshot();if(!s)return null;const current=decode(s.tables,id);
     const next=edits.reduce(lib.applyEdit,current.goal);if(canonical(next)===canonical(current.goal))return {...current,changed:false};await verify(current.goal,next);
     const revision=Number(current.revision);if(!Number.isSafeInteger(revision))throw new Error('Revision exceeds client safe range');
-    const n=normalizeContent(lib.encode(next),{workspace_id:workspace,channel_id:channel,owner_npub:owner,goal_id:id});
+    const n=normalizeContent(lib.encode(next),{workspace_id:workspace,channel_id:channel,owner_npub:s.tables.goals.find(g=>g.id===id).owner_npub,goal_id:id});
     const after=currentRows(n,{revision:revision+1,timestamp:new Date().toISOString(),actor});after.goals[0].created_at=s.tables.goals.find(g=>g.id===id).created_at;
     const before=Object.fromEntries(['goals','goal_checkpoints','goal_associations'].map(t=>[t,s.tables[t].filter(r=>t==='goals'?r.id===id:r.goal_id===id)]));
     try{await send(editOperations(before,after));return {id,versionId:`sql:${revision+1}`,goal:next,changed:true};}
