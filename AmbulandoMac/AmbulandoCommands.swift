@@ -83,6 +83,7 @@ struct AmbulandoCommands: Commands {
     private func back() {
         if model.mode == .chat {
             if !model.chatPath.isEmpty { model.chatPath.removeLast() }
+            else if model.chatInboxRoute != nil { model.chatInboxRoute = nil }
         } else if let key = AppModel.pathKey(model.mode), !model[keyPath: key].isEmpty {
             model[keyPath: key].removeLast()
         }

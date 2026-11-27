@@ -10,30 +10,44 @@ struct ChatStack<Banner: View>: View {
     /// Owned here, not by the toolbar button: toolbar content is rebuilt as sync state changes, which would drop the sheet.
     @State private var newScope: ScopeRecord?
     @State private var created: ChannelRecord?
-    @State private var inboxPath: [ChatRoute] = []
 
     var body: some View {
         @Bindable var model = model
+        let showingInboxThread = model.chatInboxRoute != nil
         NavigationStack(path: $model.chatPath) {
             VStack(spacing: 0) {
                 banner()
                 ContextBar()
                 ZStack {
-                    ChatContextRoot(active: inboxPath.isEmpty) { model.chatPath = []; inboxPath = [$0] }
-                        .opacity(inboxPath.isEmpty ? 1 : 0)
-                        .accessibilityHidden(!inboxPath.isEmpty)
-                        .allowsHitTesting(inboxPath.isEmpty)
-                    if case .thread(let w, let channel, let thread)? = inboxPath.last,
+                    ChatContextRoot(active: !showingInboxThread) { model.chatPath = []; model.chatInboxRoute = $0 }
+                        .opacity(showingInboxThread ? 0 : 1)
+                        .accessibilityHidden(showingInboxThread)
+                        .allowsHitTesting(!showingInboxThread)
+                    if case .thread(let w, let channel, let thread)? = model.chatInboxRoute,
                        let workspace = model.selectedWorkspace, workspace.id == w,
                        let store = model.store, let connection = model.connection {
                         ThreadView(target: ChatTarget(connectionId: connection.id, workspaceId: w, channelId: channel, threadId: thread),
-                                   workspace: workspace, store: store, onBack: { inboxPath = [] })
+                                   workspace: workspace, store: store, inlineHeader: true)
                             .id("\(w):\(thread)")
                     }
                 }
             }
             .background(Amb.background)
-            .toolbarItems(showSettings: $showSettings, pin: ToolbarPin.chat(nil, channel: model.context.channelId, workspace: model.selectedWorkspace))
+            .toolbarItems(showSettings: $showSettings, pin: ToolbarPin.chat(nil, channel: model.context.channelId, workspace: model.selectedWorkspace), showsSidebar: !showingInboxThread)
+            .toolbar {
+                if showingInboxThread {
+                    ToolbarItem(placement: .leadingBar) {
+                        Button {
+                            model.chatInboxRoute = nil
+                        } label: {
+                            Label("Back", systemImage: "chevron.left")
+                        }
+                        .help("Back")
+                        .accessibilityLabel("Back")
+                        .accessibilityIdentifier("chat.thread.back")
+                    }
+                }
+            }
 
             .navigationDestination(for: ChatRoute.self) { route in
                 Group {
@@ -44,7 +58,7 @@ struct ChatStack<Banner: View>: View {
                                     workspace: workspace, store: store)
                     case .thread(_, let channelId, let threadId):
                         ThreadView(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId, threadId: threadId),
-                                   workspace: workspace, store: store, onBack: inboxPath.isEmpty ? nil : { inboxPath = [] })
+                                   workspace: workspace, store: store)
                     }
                 } else {
                     ContentUnavailableView("Not in this workspace", systemImage: "arrow.uturn.backward",
@@ -58,10 +72,10 @@ struct ChatStack<Banner: View>: View {
             guard let focus, focus.workspaceId == model.selectedWorkspace?.id, let route = focus.chatRoute else { return }
             model.chatCreatedThread = nil
             model.chatPath = []
-            inboxPath = [route]
+            model.chatInboxRoute = route
         }
-        .onChange(of: model.context) { _, _ in inboxPath = [] }
-        .onChange(of: model.selectedWorkspaceBoundary?.id) { _, _ in inboxPath = [] }
+        .onChange(of: model.context) { _, _ in model.chatInboxRoute = nil }
+        .onChange(of: model.selectedWorkspaceBoundary?.id) { _, _ in model.chatInboxRoute = nil }
         .sheet(item: $newScope, onDismiss: {
             guard let channel = created else { return }
             created = nil
@@ -113,9 +127,6 @@ struct ChatNewButton: View {
 private struct ConversationInboxSnapshot: Sendable, Equatable {
     var rows: [ConversationRow] = []
     var people = PeopleDirectory()
-    var cachedMessages = 0
-    var completeChannels = 0
-    var channelCount = 0
 }
 
 /// One local conversation per row. Selection uses the same focused thread and composer as Deck.
@@ -133,6 +144,9 @@ struct ConversationInbox: View {
     @State private var created: ThreadFocus?
     @State private var position = ScrollPosition(edge: .top)
     @State private var startedIdentity = ""
+    #if os(iOS)
+    @State private var keyboardShown = false
+    #endif
 
     var body: some View {
         VStack(spacing: 0) {
@@ -142,38 +156,25 @@ struct ConversationInbox: View {
                 Picker("Conversations", selection: $filter) {
                     ForEach(ConversationFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }.pickerStyle(.segmented).frame(maxWidth: 240)
-                Button {
-                    #if os(macOS)
-                    model.threadCreationFromChat = true
-                    model.composingThread = true
-                    #else
-                    composing = true
-                    #endif
-                } label: { Label("New thread", systemImage: "square.and.pencil") }
-                .accessibilityIdentifier("chat.inbox.new")
             }.padding(12)
-            HStack {
-                Text("Search covers \(snapshot.value.cachedMessages) cached messages · \(snapshot.value.completeChannels)/\(snapshot.value.channelCount) channel message histories downloaded. Titles use cached metadata; older renamed titles may be missing.")
-                    .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
-                Spacer()
-                Button("Download history") {
-                    for channel in model.navigation.value.channels(in: model.context) { model.openChannel(channel.id, in: workspace, force: true) }
-                }.disabled(!model.canRead)
-                .accessibilityIdentifier("chat.inbox.download")
-            }.padding(.horizontal, 12).padding(.bottom, 8)
             if let error = snapshot.error { SyncNote(text: error, tone: .warning) }
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: 8) {
                     ForEach(snapshot.value.rows) { row in
                         Button { open(row) } label: { conversation(row) }
-                            .buttonStyle(.plain).accessibilityIdentifier("chat.conversation.\(row.id)")
-                        Divider()
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("chat.conversation.\(row.id)")
                     }
                     if snapshot.loaded && snapshot.value.rows.isEmpty {
                         Text(query.isEmpty ? "No conversations in this view." : "No matches in downloaded history.")
                             .foregroundStyle(Amb.mutedForeground).padding(32)
                     }
-                }.frame(maxWidth: 1100).frame(maxWidth: .infinity)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, DeckLayout.newThreadButton + 28)
+                .frame(maxWidth: 1100)
+                .frame(maxWidth: .infinity)
             }.scrollPosition($position)
             ForEach(model.navigation.value.channels(in: model.context)) { channel in
                 let key = WorkspaceSync.messagesKey(workspace.id, channel.id)
@@ -181,16 +182,53 @@ struct ConversationInbox: View {
                 if let error = model.syncError(forKey: key) { SyncNote(text: error, tone: .warning) }
             }
         }
+        .overlay(alignment: .bottomTrailing) {
+            #if os(iOS)
+            if !keyboardShown {
+                floatingNewThreadButton
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 12)
+            }
+            #else
+            floatingNewThreadButton
+                .padding(.trailing, 20)
+                .padding(.bottom, 20)
+            #endif
+        }
         .task(id: "\(model.context.encoded()):\(filter.rawValue):\(query):\(active)") { if active { start() } else { snapshot.pause() } }
         .onDisappear { snapshot.pause() }
         .onAppear {
             model.openDeckActivity(workspace, channelIds: model.navigation.value.channels(in: model.context).map(\.id))
         }
         #if os(iOS)
+        .onKeyboard(willHide: { keyboardShown = false }, didShow: { keyboardShown = true })
         .fullScreenCover(isPresented: $composing, onDismiss: {
             if let created, let route = created.chatRoute { openConversation(route); self.created = nil }
         }) { DeckThreadComposer(workspace: workspace, store: store, onCreated: { created = $0 }) }
         #endif
+    }
+
+    private var floatingNewThreadButton: some View {
+        Button {
+            #if os(macOS)
+            model.threadCreationFromChat = true
+            model.composingThread = true
+            #else
+            composing = true
+            #endif
+        } label: {
+            Image(systemName: "plus").font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(Amb.primaryForeground)
+                .frame(width: DeckLayout.newThreadButton, height: DeckLayout.newThreadButton)
+                .background(Amb.primary, in: Circle())
+                .shadow(color: .black.opacity(0.18), radius: 6, y: 3)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help("New thread")
+        .accessibilityLabel("New thread")
+        .accessibilityHint("Starts a new thread in the current scope or channel")
+        .accessibilityIdentifier("chat.inbox.new")
     }
 
     private func open(_ row: ConversationRow) {
@@ -209,10 +247,24 @@ struct ConversationInbox: View {
         let summary = row.summary
         let nav = model.navigation.value
         return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                if row.unread { Circle().fill(Color.accentColor).frame(width: 6, height: 6) }
-                Text(MentionCodec.plain(summary.title ?? summary.rootBody)).font(.amb(.body).weight(.semibold)).lineLimit(1)
-                Spacer()
+            HStack(spacing: 8) {
+                if row.unread {
+                    Circle().fill(Amb.brandOrange).frame(width: 9, height: 9)
+                        .accessibilityHidden(true)
+                }
+                Text(MentionCodec.plain(summary.title ?? summary.rootBody))
+                    .font(.amb(.body).weight(row.unread ? .bold : .regular))
+                    .foregroundStyle(Amb.foreground)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if row.unread {
+                    Text("Unread")
+                        .font(.amb(.caption2).weight(.semibold))
+                        .foregroundStyle(Amb.brandOrange)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Amb.brandOrange.opacity(0.14), in: Capsule())
+                }
                 Text(String(summary.lastActivityAt.prefix(10))).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
             }
             HStack(spacing: 8) {
@@ -223,7 +275,17 @@ struct ConversationInbox: View {
                 Text("\(summary.replyCount) \(summary.replyCount == 1 ? "reply" : "replies")").font(.amb(.caption))
                 Text(highlighted(MentionCodec.plain(row.excerpt))).font(.amb(.subheadline)).lineLimit(1)
             }.foregroundStyle(Amb.mutedForeground)
-        }.padding(.horizontal, 20).padding(.vertical, 14).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background((row.unread ? Amb.brandOrange : .clear).opacity(0.06), in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
+        .background(Amb.card, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
+        .overlay(
+            RoundedRectangle(cornerRadius: Amb.radiusPanel)
+                .stroke(row.unread ? Amb.brandOrange.opacity(0.8) : Amb.border, lineWidth: row.unread ? 1.5 : 0.8)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: Amb.radiusPanel))
     }
 
     private func highlighted(_ text: String) -> AttributedString {
@@ -250,19 +312,11 @@ struct ConversationInbox: View {
         let identity = "\(workspaceId):\(context.encoded()):\(filter.rawValue):\(query)"
         let resume = startedIdentity == identity
         startedIdentity = identity
-        snapshot.start(store: store, keepingValue: resume, invalidatedBy: [.access, .messages, .threads, .channels], matches: { key in
+        snapshot.start(store: store, keepingValue: resume, invalidatedBy: [.access, .messages, .threads, .channels, .viewStates], matches: { key in
             key.workspaceId == nil || key.workspaceId == workspaceId || key.table == .profiles
         }) {
             let rows = try await store.reader.conversations(workspaceId: workspaceId, context: context, viewer: viewer, filter: filter, query: query)
-            let channels = try await store.reader.channels(workspaceId: workspaceId).filter { context.contains(scopeId: $0.scopeId, channelId: $0.id) }
-            var complete = 0
-            var cached = 0
-            for channel in channels {
-                if try await store.reader.channelSync(workspaceId: workspaceId, channelId: channel.id)?.complete == true { complete += 1 }
-                cached += try await store.reader.channelMessageCount(workspaceId: workspaceId, channelId: channel.id)
-            }
-            return ConversationInboxSnapshot(rows: rows, people: try await store.reader.people(connectionId: connectionId, workspaceId: workspaceId),
-                                             cachedMessages: cached, completeChannels: complete, channelCount: channels.count)
+            return ConversationInboxSnapshot(rows: rows, people: try await store.reader.people(connectionId: connectionId, workspaceId: workspaceId))
         }
     }
 }

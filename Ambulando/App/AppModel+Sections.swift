@@ -95,7 +95,7 @@ extension AppModel {
     /// Back to a section's first screen (tapping the current section again, as on a tab bar).
     func popToRoot(_ mode: AppMode) {
         if fileNappletNavigation?({ self.popToRoot(mode) }) == true { return }
-        if let key = Self.pathKey(mode) { self[keyPath: key] = [] } else { chatPath = [] }
+        if let key = Self.pathKey(mode) { self[keyPath: key] = [] } else { chatPath = []; chatInboxRoute = nil }
     }
 
     func resetSectionPaths() {

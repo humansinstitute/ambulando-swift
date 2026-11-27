@@ -143,6 +143,8 @@ final class AppModel {
     var composingThread = false
     var threadCreationFromChat = false
     var chatCreatedThread: ThreadFocus?
+    /// Inline conversation open inside the Chat section (not persisted; cleared on back, context change or Chat tab reset).
+    var chatInboxRoute: ChatRoute?
     /// Mac recovery: keep the saved conversation available without mounting its content during startup.
     /// This is presentation state only; the persisted route and every composer draft remain untouched.
     var restoredThread: ThreadFocus?

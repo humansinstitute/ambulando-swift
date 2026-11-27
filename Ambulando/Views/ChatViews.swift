@@ -332,7 +332,7 @@ struct ThreadView: View {
     let target: ChatTarget
     let workspace: WorkspaceRecord
     let store: LocalStore
-    var onBack: (() -> Void)?
+    var inlineHeader = false
     @State private var snapshot = LiveQuery<ThreadSnapshot>(initial: ThreadSnapshot())
     @State private var atNewest = true
     @State private var messageEdit: ChatMessageEdit?
@@ -344,8 +344,8 @@ struct ThreadView: View {
     /// The newest agent activity line shown at the end of the thread.
     @State private var activityTail = ""
 
-    init(target: ChatTarget, workspace: WorkspaceRecord, store: LocalStore, onBack: (() -> Void)? = nil) {
-        self.onBack = onBack
+    init(target: ChatTarget, workspace: WorkspaceRecord, store: LocalStore, inlineHeader: Bool = false) {
+        self.inlineHeader = inlineHeader
         self.target = target
         self.workspace = workspace
         self.store = store
@@ -375,19 +375,15 @@ struct ThreadView: View {
         #endif
         VStack(spacing: 0) {
         HStack(spacing: 8) {
-            if let onBack {
-                Button(action: onBack) { Label("Conversations", systemImage: "chevron.left") }
-                    .accessibilityIdentifier("chat.thread.back")
-            }
             Text(model.navigation.value.channel(target.channelId).map { model.navigation.value.label($0) } ?? "Conversation")
                 .font(.amb(.subheadline).weight(.semibold))
-            if onBack != nil { Text(snapshot.value.title).font(.amb(.subheadline)).lineLimit(1) }
+            if inlineHeader { Text(snapshot.value.title).font(.amb(.subheadline)).lineLimit(1) }
             Spacer()
             ForEach(Array(snapshot.value.participants.prefix(5)), id: \.self) { npub in
                 PersonAvatar(person: snapshot.value.people.person(npub)).frame(width: 24, height: 24).clipped()
             }
             if let thread = target.threadId {
-                if onBack != nil {
+                if inlineHeader {
                     AddToGoalMenu(source: GoalSource(type: .chat, recordId: thread, channelId: target.channelId, workspace: workspace))
                     PinToggleButton(type: .thread, id: thread, workspace: workspace)
                 }
@@ -400,7 +396,7 @@ struct ThreadView: View {
                 #else
                 if !artefactsInParentHeader { PhoneThreadArtefactsButton(state: artefacts) }
                 #endif
-                if onBack != nil { ThreadHeaderMenu(context: snapshot.value.menu, workspace: workspace, title: snapshot.value.title) }
+                if inlineHeader { ThreadHeaderMenu(context: snapshot.value.menu, workspace: workspace, title: snapshot.value.title) }
             }
         }.padding(.horizontal, 16).padding(.vertical, 8).background(Amb.card)
         if artefacts.membershipPending {
