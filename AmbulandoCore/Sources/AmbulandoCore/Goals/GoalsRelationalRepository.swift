@@ -135,7 +135,14 @@ public struct GoalsRelationalRepository: Sendable {
             }
         }
         let body = JSONValue.object([("version", .int(1)), ("operation_id", .string(operationId)), ("channel_id", .string(channelId)), ("operations", .array(operations))])
-        try await cache?.save(pendingSlot, body.serialized())
+        if let cache {
+            let bytes = body.serialized()
+            try await cache.save(pendingSlot, bytes)
+            // A revocation epoch can intentionally reject a cache write. Verify durable intent before sending anything.
+            guard try await cache.read(pendingSlot) == bytes else {
+                throw GoalSaveFailed(message: "This save could not be retained on this device. Nothing was sent. Try again.", retryable: true)
+            }
+        }
         // A retry uses this identical body and operation UUID. Unknown outcomes never fall back to File storage.
         var result: JSONValue?
         for attempt in 0..<2 {
