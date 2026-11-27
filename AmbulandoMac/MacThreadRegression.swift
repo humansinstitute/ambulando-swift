@@ -94,6 +94,9 @@ enum MacThreadRegression {
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacBriefingCheck") {
                 try await briefingCheck(window, model: model); fflush(stdout); exit(0)
             }
+            if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacGoalMentionCheck") {
+                try await goalMentionCheck(window, model: model); fflush(stdout); exit(0)
+            }
             if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacGoalsHomeCheck") {
                 try await goalsHomeCheck(window, model: model); fflush(stdout); exit(0)
             }
