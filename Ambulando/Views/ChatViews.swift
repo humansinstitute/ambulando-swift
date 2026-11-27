@@ -456,6 +456,10 @@ struct ThreadView: View {
         }
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
+        #if os(macOS)
+        // Keep the first and last lines clear of the header rule and the composer instead of sliced against them.
+        .contentMargins(.vertical, 8, for: .scrollContent)
+        #endif
         // New public commentary is followed like a new message: only when the reader is already at the newest one.
         .modifier(FollowLatest(lastId: (snapshot.value.pending.last?.id ?? snapshot.value.messages.last?.id).map { activityTail.isEmpty ? $0 : "\($0)|\(activityTail)" },
                                pendingCount: snapshot.value.pending.count, nearBottom: atNewest && !snapshot.value.hasNewer,
@@ -621,7 +625,12 @@ struct MessageRow: View {
         // of being read as a single combined label.
         let interactive = !display.attachments.isEmpty || (bodyOverride == nil && (display.blocks.map(RichBlocksInfo.hasControls) ?? false))
         let sender = sender
+        #if os(macOS)
+        // Desktop reads as a column: the avatar stays beside the name for every sender, clear of the actions menu.
+        let mine = false
+        #else
         let mine = message.senderNpub != nil && message.senderNpub == model.identity.npub
+        #endif
         HStack(alignment: .top, spacing: 10) {
             if mine { Spacer(minLength: 40) }
             if !mine { PersonAvatar(person: sender) }
@@ -1221,7 +1230,12 @@ struct Composer: View {
             HStack(alignment: .bottom, spacing: 6) {
                 // The tools stack in a column on the left so the text box gets the row's width; the box is at least as
                 // tall as the column, so a long draft shows more lines rather than the column wasting the height.
+                #if os(macOS)
+                // A wide desktop window has the width for a single row; stacking the tools made even an empty composer five lines tall.
+                HStack(spacing: 0) { composerTools }
+                #else
                 VStack(spacing: 0) { composerTools }
+                #endif
                 ComposerTextView(text: Binding(get: { composer?.visibleText ?? "" }, set: { composer?.visibleText = $0; fixtureTyping() }),
                                  focused: $focused, placeholder: placeholder, plainKeyboard: model.fixture?.plainKeyboard == true,
                                  onPasteItems: pasteItems, onSubmit: send, onPickerKey: mentionKey, pickerOpen: !suggestions.isEmpty,
@@ -1239,10 +1253,11 @@ struct Composer: View {
                         ComposerBlankFocusTarget { focused = true }
                         #endif
                     }
-                VStack(spacing: 0) {
+                composerEnd {
                     // While typing the on-screen keyboard covers the section bar: this button puts it away. Its place above
                     // Send is kept when it is hidden: a composer that changed height as the keyboard appeared stopped the
                     // list following its newest message (measured: the newest row left the screen on focus and after Send).
+                    #if os(iOS)
                     Button { focused = false } label: {
                         Image(systemName: "keyboard.chevron.compact.down").font(.body.weight(.semibold)).frame(width: 34, height: 32)
                     }
@@ -1252,6 +1267,7 @@ struct Composer: View {
                     .opacity(focused ? 1 : 0)
                     .disabled(!focused)
                     .accessibilityHidden(!focused)
+                    #endif
                     Button { send() } label: {
                         Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).foregroundStyle(canSend ? Amb.primary : Amb.border)
                     }
@@ -1376,6 +1392,16 @@ struct Composer: View {
     }
 
     /// Photos, files (Mac) and mention, one above the other.
+    /// Send (and, on iPhone and iPad, hide-keyboard) beside the text box: a column on touch devices, one row on the Mac.
+    private func composerEnd<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        #if os(macOS)
+        let layout = AnyLayout(HStackLayout(spacing: 0))
+        #else
+        let layout = AnyLayout(VStackLayout(spacing: 0))
+        #endif
+        return layout { content() }
+    }
+
     @ViewBuilder private var composerTools: some View {
         if editing == nil {
         PhotosPicker(selection: $photos, maxSelectionCount: 4, matching: .images) {
