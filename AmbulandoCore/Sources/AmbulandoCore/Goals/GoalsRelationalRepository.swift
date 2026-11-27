@@ -177,33 +177,38 @@ public struct GoalsRelationalRepository: Sendable {
 
     static func omit(_ value: JSONValue, _ keys: [String]) -> JSONValue { .object((value.objectValue ?? []).filter { !keys.contains($0.0) }) }
     static func rows(goal: Goal, id: String, workspace: String, channel: String, owner: String, revision: Int, createdAt: JSONValue, timestamp: String, actor: String) -> [String: [JSONValue]] {
-        let scope = JSONValue.object([("workspace_id", .string(workspace)), ("channel_id", .string(channel)), ("owner_npub", .string(owner)), ("revision", .int(revision))])
+        let scope: [(String, JSONValue)] = [("workspace_id", .string(workspace)), ("channel_id", .string(channel)), ("owner_npub", .string(owner)), ("revision", .int(revision))]
         let known = Goal.known.union(["focus_rank"])
-        var parent = scope.setting("id", .string(id)).setting("name", .string(goal.name)).setting("description", .string(goal.description))
-            .setting("status", .string(goal.status.rawValue)).setting("start_date", goal.startDate.map(JSONValue.string) ?? .null)
-            .setting("target_date", goal.targetDate.map(JSONValue.string) ?? .null).setting("default_channel_id", goal.defaultChannelId.map(JSONValue.string) ?? .null)
-            .setting("focus_rank", GoalFocus.rank(goal).map(JSONValue.string) ?? .null)
-            .setting("extensions", .object((goal.extra.objectValue ?? []).filter { !known.contains($0.0) }))
-            .setting("present_fields", .array((goal.toJSON().objectValue ?? []).filter { known.contains($0.0) }.map { .string($0.0) }))
-            .setting("created_at", createdAt).setting("updated_at", .string(timestamp)).setting("updated_by_npub", .string(actor)).setting("tombstoned_at", .null)
+        var extensions = Self.omit(goal.extra, Array(known))
         // Invalid historical focus ranks stay unknown extensions, matching the shared app mapper.
-        if GoalFocus.rank(goal) == nil, let rank = goal.extra["focus_rank"] { parent = parent.setting("extensions", parent["extensions"]!.setting("focus_rank", rank)) }
-        parent = parent.setting("extensions", .string(String(decoding: parent["extensions"]!.serialized(), as: UTF8.self)))
+        if GoalFocus.rank(goal) == nil, let rank = goal.extra["focus_rank"] { extensions = extensions.setting("focus_rank", rank) }
+        let parent = JSONValue.object(scope + [
+            ("id", .string(id)), ("name", .string(goal.name)), ("description", .string(goal.description)), ("status", .string(goal.status.rawValue)),
+            ("start_date", goal.startDate.map(JSONValue.string) ?? .null), ("target_date", goal.targetDate.map(JSONValue.string) ?? .null),
+            ("default_channel_id", goal.defaultChannelId.map(JSONValue.string) ?? .null), ("focus_rank", GoalFocus.rank(goal).map(JSONValue.string) ?? .null),
+            ("extensions", .string(String(decoding: extensions.serialized(), as: UTF8.self))),
+            ("present_fields", .array((goal.toJSON().objectValue ?? []).filter { known.contains($0.0) }.map { .string($0.0) })),
+            ("created_at", createdAt), ("updated_at", .string(timestamp)), ("updated_by_npub", .string(actor)), ("tombstoned_at", .null)
+        ])
         let cp = goal.checkpoints.enumerated().map { position, value in
-            scope.setting("id", .string(id + ":cp:" + value.id)).setting("goal_id", .string(id)).setting("checkpoint_id", .string(value.id))
-                .setting("title", .string(value.title)).setting("date", value.date.map(JSONValue.string) ?? .null)
-                .setting("description", value.description.map(JSONValue.string) ?? .null).setting("reached", .bool(value.reached)).setting("position", .int(position))
-                .setting("extensions", .string(String(decoding: Self.omit(value.extra, Array(GoalCheckpoint.known)).serialized(), as: UTF8.self)))
-                .setting("present_fields", .array((value.toJSON().objectValue ?? []).filter { GoalCheckpoint.known.contains($0.0) }.map { .string($0.0) }))
+            JSONValue.object(scope + [
+                ("id", .string(id + ":cp:" + value.id)), ("goal_id", .string(id)), ("checkpoint_id", .string(value.id)), ("title", .string(value.title)),
+                ("date", value.date.map(JSONValue.string) ?? .null), ("description", value.description.map(JSONValue.string) ?? .null),
+                ("reached", .bool(value.reached)), ("position", .int(position)),
+                ("extensions", .string(String(decoding: Self.omit(value.extra, Array(GoalCheckpoint.known)).serialized(), as: UTF8.self))),
+                ("present_fields", .array((value.toJSON().objectValue ?? []).filter { GoalCheckpoint.known.contains($0.0) }.map { .string($0.0) }))
+            ])
         }
         var refs: [JSONValue] = []
         for (lane, values) in [("link", goal.links), ("pin", goal.pinnedRefs)] {
             refs += values.enumerated().map { position, value in
-                scope.setting("id", .string(id + ":" + lane + ":" + value.type.rawValue + ":" + value.recordId)).setting("goal_id", .string(id))
-                    .setting("lane", .string(lane)).setting("kind", .string(value.type.rawValue)).setting("record_id", .string(value.recordId))
-                    .setting("target_channel_id", value.channelId.map(JSONValue.string) ?? .null).setting("position", .int(position))
-                    .setting("extensions", .string(String(decoding: Self.omit(value.extra, Array(GoalLink.known)).serialized(), as: UTF8.self)))
-                    .setting("present_fields", .array((value.toJSON().objectValue ?? []).filter { GoalLink.known.contains($0.0) }.map { .string($0.0) }))
+                JSONValue.object(scope + [
+                    ("id", .string(id + ":" + lane + ":" + value.type.rawValue + ":" + value.recordId)), ("goal_id", .string(id)),
+                    ("lane", .string(lane)), ("kind", .string(value.type.rawValue)), ("record_id", .string(value.recordId)),
+                    ("target_channel_id", value.channelId.map(JSONValue.string) ?? .null), ("position", .int(position)),
+                    ("extensions", .string(String(decoding: Self.omit(value.extra, Array(GoalLink.known)).serialized(), as: UTF8.self))),
+                    ("present_fields", .array((value.toJSON().objectValue ?? []).filter { GoalLink.known.contains($0.0) }.map { .string($0.0) }))
+                ])
             }
         }
         return ["goals": [parent], "goal_checkpoints": cp, "goal_associations": refs]
