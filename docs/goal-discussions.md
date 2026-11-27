@@ -1,4 +1,4 @@
-# Goal discussions (Mac source build 144)
+# Goal discussions (Mac source build 145)
 
 Goals can start discussions, retain useful outputs and keep key references close to the aim. This guide describes
 implemented source behavior. A successful source test or local build does not establish installation on another Mac,
