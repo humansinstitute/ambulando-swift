@@ -1008,6 +1008,8 @@ struct Composer: View {
     @State private var recordSuggestions: (query: MentionQuery, rows: [MentionSuggestion]) = (MentionQuery(""), [])
     /// What this person tagged most recently, for the bare `@` list.
     @State private var recentTags: [Mention] = []
+    @State private var goalMentionStatus: String?
+    @State private var mentionBoundary: WorkspaceBoundary?
     /// The row of the mention list that Return or Tab picks (Up and Down move it).
     @State private var highlighted = 0
     /// Escape closes the list for the text as it stands; typing more opens it again.
@@ -1048,7 +1050,7 @@ struct Composer: View {
     private var suggestions: [MentionSuggestion] {
         guard let composer, composer.visibleText != dismissedAt, let typed = activeQuery else { return [] }
         let query = MentionQuery(typed)
-        let records = editing == nil && recordSuggestions.query == query ? recordSuggestions.rows : []
+        let records = editing == nil && recordSuggestions.query == query && mentionBoundary == model.selectedWorkspaceBoundary && model.isUnlocked ? recordSuggestions.rows : []
         let actors = editing == nil ? members.value : members.value.filter { NostrKeys.isValidNpub($0.member.npub) }
         return MentionRanking.merge(actors: actors.map { (Mention(member: $0.member), $0.member.npub) }, records: records, query: query,
                                     recent: recentTags)
@@ -1063,8 +1065,14 @@ struct Composer: View {
 
     /// Records matching the active `@` query, read off the main actor as it changes.
     private func lookUpRecords(_ typed: String?) async {
+        recordSuggestions = (MentionQuery(""), [])
+        goalMentionStatus = nil
         guard editing == nil, let typed, let store = model.store else { return }
         let query = MentionQuery(typed), workspaceId = target.workspaceId
+        let boundary = model.selectedWorkspaceBoundary
+        mentionBoundary = boundary
+        recordSuggestions = (query, [])
+        goalMentionStatus = query.only == .file ? "Loading goals…" : nil
         if typed.isEmpty, let me = model.identity.npub, let rows = try? await store.reader.recentMentions(workspaceId: workspaceId, senderNpub: me) {
             recentTags = rows
         }
@@ -1073,11 +1081,28 @@ struct Composer: View {
         guard !Task.isCancelled, let rows = try? await store.reader.mentionSuggestions(workspaceId: workspaceId, query: query, limit: query.limit) else { return }
         let navigation = model.navigation.value
         // Channels carry the sidebar's name (direct messages are named after their participants), as the web labels them.
-        let labelled = rows.map { row -> MentionSuggestion in
+        var labelled = rows.map { row -> MentionSuggestion in
             guard row.mention.type == .channel, let channel = navigation.channel(row.mention.id) else { return row }
             return MentionSuggestion(mention: Mention(type: .channel, npub: row.mention.id, label: navigation.label(channel)),
                                      detail: row.detail, updatedAt: row.updatedAt)
         }
+        if query.allows(.file) {
+            do {
+                guard model.isUnlocked, let sync = model.sync, let connection = model.connection,
+                      connection.id == target.connectionId, model.selectedWorkspace?.id == workspaceId else {
+                    throw GoalError.invalid("Unlock this workspace to browse goals.")
+                }
+                let service = try sync.goals(connection, workspace)
+                let goals = try await service.mentionSuggestions(query: query)
+                labelled += goals
+                guard !Task.isCancelled, boundary == model.selectedWorkspaceBoundary, model.isUnlocked else { return }
+                goalMentionStatus = query.only == .file && goals.isEmpty ? "No matching personal goals." : nil
+            } catch {
+                guard !Task.isCancelled, boundary == model.selectedWorkspaceBoundary else { return }
+                goalMentionStatus = "Couldn’t load personal goals. Type again to retry."
+            }
+        }
+        guard !Task.isCancelled, boundary == model.selectedWorkspaceBoundary else { return }
         recordSuggestions = (query, labelled)
     }
 
@@ -1111,6 +1136,11 @@ struct Composer: View {
                 Text("Existing attachments are kept. Edits are signed with your identity.")
                     .font(.amb(.caption)).foregroundStyle(Amb.mutedForeground).padding(.horizontal, 14)
                     .accessibilityIdentifier("editmessage.notice.\(editing.message.id)")
+            }
+            if let goalMentionStatus, activeQuery != nil, mentionBoundary == model.selectedWorkspaceBoundary {
+                Text(goalMentionStatus).font(.amb(.caption)).foregroundStyle(Amb.mutedForeground)
+                    .padding(.horizontal, 14).padding(.vertical, 6)
+                    .accessibilityIdentifier("mention.goals.status")
             }
             if !suggestions.isEmpty {
                 MentionPicker(suggestions: suggestions, people: members.value, highlighted: min(highlighted, suggestions.count - 1)) { pick($0.mention) }
@@ -1294,7 +1324,7 @@ struct Composer: View {
             }
         }
         .onChange(of: activeQuery) { _, _ in highlighted = 0 }
-        .task(id: activeQuery) { await lookUpRecords(activeQuery) }
+        .task(id: "\(model.selectedWorkspaceBoundary?.id ?? "")|\(model.isUnlocked)|\(activeQuery ?? "")") { await lookUpRecords(activeQuery) }
         .onChange(of: photos) { _, items in
             guard !items.isEmpty else { return }
             photos = []
@@ -1595,6 +1625,7 @@ struct MentionIcon: View {
         case .chat: "bubble.left.and.text.bubble.right"
         case .channel: "number"
         case .scope: "square.stack.3d.up"
+        case .file: "target"
         }
     }
 

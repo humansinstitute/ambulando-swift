@@ -230,12 +230,6 @@ private struct InboxQueryIdentity: Hashable {
     let liveInbox: Bool
 }
 
-struct DeckInboxSnapshot: Sendable, Equatable {
-    var items: [DeckActivity.Item] = []
-    var viewStates: [String: ViewStateRecord] = [:]
-    var channelLabels: [String: String] = [:]
-}
-
 /// Deck's Inbox: the context's activity with the web's type toggles, search, "Load older activity", Pin, Mark read,
 /// Mark done (review tasks) and the read menu.
 struct DeckInboxCard: View {
@@ -524,7 +518,12 @@ struct DeckInboxCard: View {
 
     private func refresh(_ context: WorkContext) {
         model.openInbox(workspace)
-        model.openDeckActivity(workspace, channelIds: model.navigation.value.channels(in: context).map(\.id))
+        // Read from the store, not the navigation snapshot, which is empty until the switched-to workspace has loaded.
+        let store = store, w = workspace.id
+        Task {
+            let rows = (try? await store.reader.channels(workspaceId: w)) ?? []
+            model.openDeckActivity(workspace, channelIds: DeckInboxLoader.scopedChannelIds(context, channels: rows) ?? rows.map(\.id))
+        }
         model.openTasks(workspace, scopeId: context.scopeId)
         model.openDocs(workspace, scopeId: context.scopeId)
         model.openFiles(workspace, scopeId: context.scopeId)
@@ -541,7 +540,6 @@ struct DeckInboxCard: View {
         }
         let w = workspace.id, store = store, viewer = model.connection?.signerNpub
         let origin = model.connection.flatMap { try? TowerOrigin($0.origin).description }
-        let channelIds = context.scopeId == nil ? nil : model.navigation.value.channels(in: context).map(\.id)
         #if os(macOS)
         snapshot.onLoad = { _ in MacHangDiagnostics.shared.mark("deck.inbox.loaded") }
         #endif
@@ -552,32 +550,7 @@ struct DeckInboxCard: View {
             (key.workspaceId == w || key.workspaceId == nil) &&
                 (key.table == .access || (liveInbox && [.threads, .messages, .tasks, .docs, .files, .viewStates, .comments, .channels, .agents, .members, .profiles, .attentionPreferences].contains(key.table)))
         }) {
-            var sources = DeckActivity.Sources()
-            async let channels = store.reader.channels(workspaceId: w)
-            async let threads = store.reader.deckThreads(workspaceId: w, channelIds: channelIds)
-            async let tasks = store.reader.tasks(workspaceId: w, scopeId: context.scopeId, channelId: context.channelId)
-            async let docs = store.reader.docs(workspaceId: w, scopeId: context.scopeId)
-            async let files = store.reader.files(workspaceId: w, channelId: context.channelId)
-            async let states = store.reader.viewStates(workspaceId: w)
-            async let taskComments = store.reader.deckCommentActivity(workspaceId: w, parent: .task, viewerNpub: viewer)
-            async let docComments = store.reader.deckCommentActivity(workspaceId: w, parent: .doc, viewerNpub: viewer)
-            async let activities = store.reader.agentActivities(workspaceId: w, channelIds: channelIds)
-            let channelRows = try await channels
-            let names = try await store.reader.people(workspaceId: w).names
-            sources.channelScopes = Dictionary(channelRows.map { ($0.id, $0.scopeId) }, uniquingKeysWith: { a, _ in a })
-            sources.threads = try await threads
-            sources.tasks = try await tasks
-            sources.docs = try await docs
-            sources.files = try await files
-            sources.viewStates = try await states
-            sources.taskComments = try await taskComments
-            sources.docComments = try await docComments
-            sources.activities = try await activities
-            sources.now = ServerClock.shared.now(origin: origin)
-            let types = try await store.reader.attentionTypes(workspaceId: w)
-            return DeckInboxSnapshot(items: types.deck(DeckActivity.inbox(sources, context: context)),
-                                     viewStates: Dictionary(sources.viewStates.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }),
-                                     channelLabels: Dictionary(channelRows.map { ($0.id, SidebarNavigation.label($0, viewerNpub: viewer, names: names)) }, uniquingKeysWith: { a, _ in a }))
+            try await DeckInboxLoader.load(store: store, workspaceId: w, context: context, viewer: viewer, origin: origin)
         }
         if !resuming { refresh(context) }
     }

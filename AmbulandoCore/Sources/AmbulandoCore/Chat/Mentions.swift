@@ -4,7 +4,7 @@ import Foundation
 /// record references carried by their body token only, as the web's `@` picker writes them (sol `searchMentions`):
 /// `doc`, `task`, `channel`, `scope`, and `chat` for a conversation (`<channel id>#<root message id>`, the web's FD Ref).
 public enum MentionType: String, Sendable, Codable, Hashable, CaseIterable {
-    case agent, person, doc, task, chat, channel, scope
+    case agent, person, doc, task, chat, channel, scope, file
 
     /// A person or agent: routed to, and sent in the structured `mentions` list.
     public var isActor: Bool { self == .agent || self == .person }
@@ -19,6 +19,7 @@ public enum MentionType: String, Sendable, Codable, Hashable, CaseIterable {
         case .chat: "Thread"
         case .channel: "Channel"
         case .scope: "Scope"
+        case .file: "File"
         }
     }
 }
@@ -34,16 +35,16 @@ public struct Mention: Sendable, Codable, Hashable {
     public init(type: MentionType, npub: String, label: String) {
         self.type = type
         self.npub = npub
-        self.label = Mention.cleanLabel(label, fallback: npub)
+        self.label = Mention.cleanLabel(label, fallback: npub, limit: type == .file ? 120 : 80)
     }
 
     public init(member: MemberRecord) { self.init(type: member.mentionType, npub: member.npub, label: member.label) }
 
     /// Labels cannot contain the token delimiters; Tower caps label length, so keep it short.
-    static func cleanLabel(_ label: String, fallback: String) -> String {
+    static func cleanLabel(_ label: String, fallback: String, limit: Int = 80) -> String {
         let cleaned = label.replacingOccurrences(of: "[\\[\\]()\\n\\r]", with: " ", options: .regularExpression)
             .split(separator: " ").joined(separator: " ")
-        return String((cleaned.isEmpty ? fallback : cleaned).prefix(80))
+        return String((cleaned.isEmpty ? fallback : cleaned).prefix(limit))
     }
 
     /// `@[Label](mention:type:npub)` — the canonical stored form.
@@ -183,7 +184,7 @@ public enum MentionCodec {
         guard let at = text.lastIndex(of: "@") else { return nil }
         if at > text.startIndex, let before = text[text.index(before: at)...].first, !(before.isWhitespace || before == "(") { return nil }
         let query = text[text.index(after: at)...]
-        guard query.count <= 40, !query.contains(where: { $0.isNewline }), query.filter({ $0 == " " }).count <= 2 else { return nil }
+        guard query.count <= 160, !query.hasPrefix("["), !query.contains(where: { $0.isNewline }) else { return nil }
         return String(query)
     }
 

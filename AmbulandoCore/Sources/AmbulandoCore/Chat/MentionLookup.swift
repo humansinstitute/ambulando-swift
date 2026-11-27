@@ -37,7 +37,7 @@ public struct MentionQuery: Sendable, Equatable {
     }
 
     static let prefixes: [(String, MentionType?)] = [
-        ("doc:", .doc), ("task:", .task), ("channel:", .channel), ("chat:", .channel), ("thread:", .chat), ("scope:", .scope),
+        ("goal:", .file), ("doc:", .doc), ("task:", .task), ("channel:", .channel), ("chat:", .channel), ("thread:", .chat), ("scope:", .scope),
         ("agent:", .agent), ("person:", .person), ("flow:", nil), ("opportunity:", nil),
     ]
 
@@ -49,8 +49,8 @@ public struct MentionQuery: Sendable, Equatable {
     }
 
     /// How many suggestions are offered: 15 for a bare `@` (recently tagged first, the rest scrolls), 10 once a name is typed,
-    /// every channel for `channel:`.
-    public var limit: Int { text.isEmpty && only == nil ? 15 : only == .channel ? 500 : 10 }
+    /// every channel for `channel:`, every loaded personal goal for `goal:`.
+    public var limit: Int { only == .file ? Int.max : text.isEmpty && only == nil ? 15 : only == .channel ? 500 : 10 }
 
     /// Where `label` matches: 0 exact, 1 at the start, 2 inside; nil no match. Case is ignored in any script.
     public func rank(_ label: String) -> Int? {
@@ -171,7 +171,7 @@ extension StoreReader {
 
 public enum MentionRanking {
     /// Display order of the kinds (sol `searchMentions`: people, docs, tasks, channels, scopes; conversations follow tasks).
-    static let order: [MentionType] = [.agent, .person, .doc, .task, .chat, .channel, .scope]
+    static let order: [MentionType] = [.agent, .person, .doc, .task, .chat, .channel, .scope, .file]
 
     /// The mentions a stored body carries, in order. People, agents and the picker's record kinds only; the web's
     /// `document` spelling counts as `doc`.
