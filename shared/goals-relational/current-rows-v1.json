@@ -1,0 +1,137 @@
+{
+  "schema": "ambulando.goals.relational.fixture",
+  "version": 1,
+  "generation": "12",
+  "tables": {
+    "goals": [
+      {
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "channel_id": "11111111-1111-4111-8111-111111111111",
+        "owner_npub": "npub1fixture",
+        "name": "Shared normalized goal",
+        "description": "Independent mapper fixture",
+        "start_date": "2026-12-01",
+        "target_date": "2026-12-18",
+        "status": "active",
+        "focus_rank": "V",
+        "default_channel_id": "22222222-2222-4222-8222-222222222222",
+        "extensions": "{\"future\":{\"decimal\":0.123456789012345678901,\"integer\":9007199254740993}}",
+        "present_fields": [
+          "checkpoints",
+          "default_channel_id",
+          "description",
+          "focus_rank",
+          "links",
+          "name",
+          "pinned_refs",
+          "schema",
+          "schema_version",
+          "start_date",
+          "status",
+          "target_date"
+        ],
+        "id": "11111111-1111-4111-8111-111111111111",
+        "revision": "7",
+        "created_at": "2026-11-27T00:00:00Z",
+        "updated_at": "2026-11-27T00:00:00Z",
+        "updated_by_npub": "npub1fixture",
+        "tombstoned_at": null
+      }
+    ],
+    "goal_checkpoints": [
+      {
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "channel_id": "11111111-1111-4111-8111-111111111111",
+        "owner_npub": "npub1fixture",
+        "goal_id": "11111111-1111-4111-8111-111111111111",
+        "checkpoint_id": "cp-string",
+        "title": "First",
+        "date": "2026-12-05",
+        "description": null,
+        "reached": true,
+        "position": 0,
+        "extensions": "{\"future_cp\":9007199254740993}",
+        "present_fields": [
+          "date",
+          "id",
+          "reached",
+          "title"
+        ],
+        "id": "11111111-1111-4111-8111-111111111111:cp:cp-string",
+        "revision": "7"
+      },
+      {
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "channel_id": "11111111-1111-4111-8111-111111111111",
+        "owner_npub": "npub1fixture",
+        "goal_id": "11111111-1111-4111-8111-111111111111",
+        "checkpoint_id": "cp-last",
+        "title": "Second",
+        "date": null,
+        "description": null,
+        "reached": false,
+        "position": 1,
+        "extensions": "{}",
+        "present_fields": [
+          "id",
+          "reached",
+          "title"
+        ],
+        "id": "11111111-1111-4111-8111-111111111111:cp:cp-last",
+        "revision": "7"
+      }
+    ],
+    "goal_associations": [
+      {
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "channel_id": "11111111-1111-4111-8111-111111111111",
+        "owner_npub": "npub1fixture",
+        "goal_id": "11111111-1111-4111-8111-111111111111",
+        "lane": "link",
+        "kind": "chat",
+        "record_id": "33333333-3333-4333-8333-333333333333",
+        "target_channel_id": "22222222-2222-4222-8222-222222222222",
+        "position": 0,
+        "extensions": "{\"future_link\":{\"enabled\":true}}",
+        "present_fields": [
+          "channel_id",
+          "record_id",
+          "type"
+        ],
+        "id": "11111111-1111-4111-8111-111111111111:link:chat:33333333-3333-4333-8333-333333333333",
+        "revision": "7"
+      },
+      {
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "channel_id": "11111111-1111-4111-8111-111111111111",
+        "owner_npub": "npub1fixture",
+        "goal_id": "11111111-1111-4111-8111-111111111111",
+        "lane": "pin",
+        "kind": "doc",
+        "record_id": "44444444-4444-4444-8444-444444444444",
+        "target_channel_id": null,
+        "position": 0,
+        "extensions": "{\"future_pin\":\"kept\"}",
+        "present_fields": [
+          "record_id",
+          "type"
+        ],
+        "id": "11111111-1111-4111-8111-111111111111:pin:doc:44444444-4444-4444-8444-444444444444",
+        "revision": "7"
+      }
+    ],
+    "goals_authority": [
+      {
+        "id": "11111111-1111-4111-8111-111111111111",
+        "workspace_id": "11111111-1111-4111-8111-111111111111",
+        "channel_id": "11111111-1111-4111-8111-111111111111",
+        "revision": "1",
+        "owner_npub": "npub1fixture",
+        "mode": "relational",
+        "epoch": 1,
+        "contract_version": 1,
+        "schema_version": "ambulando-goals-relational-1"
+      }
+    ]
+  }
+}

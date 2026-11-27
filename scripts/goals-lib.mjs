@@ -55,6 +55,15 @@ export function validate(goal) {
     if (!UUID.test(l.record_id ?? '')) throw invalid('A linked record identity is invalid.');
     if (l.channel_id != null && !UUID.test(l.channel_id)) throw invalid('A linked channel identity is invalid.');
   }
+  if (goal.default_channel_id != null && (typeof goal.default_channel_id !== 'string' || !UUID.test(goal.default_channel_id))) throw invalid('Invalid default discussion channel.');
+  if (goal.pinned_refs != null) {
+    if (!Array.isArray(goal.pinned_refs) || goal.pinned_refs.length > 100) throw invalid('Too many pinned references.');
+    const seen = new Set();
+    for (const pin of goal.pinned_refs) {
+      if (!pin || !['doc','file'].includes(pin.type) || !UUID.test(pin.record_id ?? '') || (pin.channel_id != null && !UUID.test(pin.channel_id))) throw invalid('Invalid pinned reference.');
+      const key=pin.type+':'+pin.record_id;if(seen.has(key)) throw invalid('A reference is pinned twice.');seen.add(key);
+    }
+  }
   return goal;
 }
 
@@ -62,7 +71,7 @@ export function validate(goal) {
 export function parse(bytes) {
   if (bytes.length > MAX_BYTES) throw invalid('This goal is too large to read.');
   let root;
-  try { root = JSON.parse(Buffer.from(bytes).toString('utf8')); } catch { throw invalid('This goal could not be read.'); }
+  try { root = JSON.parse(Buffer.from(bytes).toString('utf8'), (key,value,context) => typeof value === 'number' && context?.source && JSON.stringify(value)!==context.source ? JSON.rawJSON(context.source) : value); } catch { throw invalid('This goal could not be read.'); }
   if (!root || typeof root !== 'object' || Array.isArray(root)) throw invalid('This goal could not be read.');
   if (root.schema !== SCHEMA) throw invalid('This is not a goal.');
   if (root.schema_version !== VERSION) throw new GoalError('unsupported', 'This goal was saved by a newer version of the app. Update to open it.');
@@ -123,6 +132,13 @@ export function applyEdit(goal, edit) {
     case 'set_description': return setting(goal, 'description', 'description', edit.expected, String(edit.value ?? '').trim());
     case 'set_start_date': return setting(goal, 'start_date', 'start date', edit.expected ?? null, clean(edit.value));
     case 'set_target_date': return setting(goal, 'target_date', 'target date', edit.expected ?? null, clean(edit.value));
+    case 'set_default_channel_id': return setting(goal, 'default_channel_id', 'default discussion channel', edit.expected ?? null, edit.value ?? null);
+    case 'pin': {
+      editable(goal);const link={type:edit.type,record_id:String(edit.record_id??'').toLowerCase(),...(edit.channel_id?{channel_id:String(edit.channel_id).toLowerCase()}: {})};
+      if((goal.pinned_refs??[]).some(p=>p.type===link.type&&p.record_id===link.record_id))return goal;
+      return validate({...goal,pinned_refs:[...(goal.pinned_refs??[]),link]});
+    }
+    case 'unpin': editable(goal);return validate({...goal,pinned_refs:(goal.pinned_refs??[]).filter(p=>p.type!==edit.type||p.record_id!==edit.record_id)});
     case 'set_status': {
       if (!STATUSES.includes(edit.value)) throw invalid('Unknown goal status.');
       if (goal.status === edit.value) return goal;

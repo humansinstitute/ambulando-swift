@@ -3,6 +3,7 @@
 // requests are signed by the Autopilot capability broker (`wingman-capability.ts nip98`), as the artefact helpers do.
 // Format and edit rules live in goals-lib.mjs and match the Android and Mac clients. See docs/goals.md.
 import os from 'node:os';
+import {nativeAgentCommand} from '../shared/goals-relational/agent-command.mjs';
 import path from 'node:path';
 import * as lib from './goals-lib.mjs';
 import { editGoal, fileName, readGoal as readGoalFile } from './goals-ops.mjs';
@@ -52,7 +53,9 @@ const out = value => console.log(JSON.stringify(value, null, 2));
 const summary = g => ({ name: g.name, status: g.status, target_date: g.target_date ?? null, checkpoints_reached: g.checkpoints.filter(c => c.reached).length, checkpoints: g.checkpoints.length, links: g.links.length });
 
 try {
-  if (command === 'space') {
+  if (['list','show','create','edit','move'].includes(command) && await nativeAgentCommand(await client(),options,command,out)) {
+    // Native SQL authority handled the command; never fall through to historical File bytes.
+  } else if (command === 'space') {
     need('owner'); out(await findSpace(await client(), options.owner));
   } else if (command === 'setup') {
     // Creates the owner's private Goals channel only when none exists. Grants are explicit: the owner manages; the creating
