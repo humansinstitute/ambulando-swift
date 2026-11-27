@@ -82,7 +82,14 @@ public struct GoalsService: Sendable {
     /// Primary discussion references are independently ACL checked. They need not belong to this viewer's personal home.
     /// A denied read stays 403 so callers may propagate only the already-readable thread's identity reference.
     public func resolveReference(_ id: String) async throws -> GoalDocument {
-        if let workspaceOwner, let repository = try await GoalsRelationalRepository.resolve(api: api, workspaceId: workspaceId, workspaceOwner: workspaceOwner, appNpub: appNpub, id: id) {
+        var resolved: GoalsRelationalRepository?
+        if let workspaceOwner {
+            do { resolved = try await GoalsRelationalRepository.resolve(api: api, workspaceId: workspaceId, workspaceOwner: workspaceOwner, appNpub: appNpub, id: id) }
+            catch TowerError.http(let status, let code, _) where status == 409 && code == "authority_unavailable" {
+                // Staged imports may exist before cutover. Verify File identity and server status below before any legacy read.
+            }
+        }
+        if let repository = resolved {
             guard let snapshot = try await repository.snapshot(),
                   let document = try snapshot.documents(workspaceId: workspaceId, channelId: repository.channelId, owner: repository.owner).first(where: { $0.id == id }) else {
                 throw TowerError.http(status: 404, code: "goal_not_found", stage: "Goal reference")

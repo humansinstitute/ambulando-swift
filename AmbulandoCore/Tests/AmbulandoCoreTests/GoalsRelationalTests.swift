@@ -134,6 +134,22 @@ import Testing
         #expect(!transport.recorded.contains { $0.url!.path.hasSuffix("/object") })
     }
 
+    @Test func stagedImportedReferenceStillReadsLegacyUntilFenced() async throws {
+        let identity = try await makeIdentity(), original = try Self.value()
+        let legacy = GoalWireTests.Tower(original)
+        let transport = StubTransport { request in
+            if request.url!.path.hasSuffix("/read") { return (409, ["code": "authority_unavailable"]) }
+            if request.url!.path.hasSuffix("/status") {
+                return (200, JSONValue.object([("version", .int(1)), ("authority", .object([("mode", .string("staging"))])), ("fence", .null)]).serialized())
+            }
+            return try legacy.handle(request)
+        }
+        let api = TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: transport, signer: identity))
+        var service = GoalsService(api: api, workspaceId: Self.workspace, appNpub: Fixtures.appNpub, viewer: TestKeys.npub, identity: identity)
+        service.workspaceOwner = TestKeys.npub
+        #expect(try await service.resolveReference(Self.id).goal == original)
+    }
+
     @Test func sealedSnapshotRelaunchOfflineAndAuthorityStampPreventLegacyFallback() async throws {
         let fixture = try Fixture(), identity = try await makeIdentity(), dir = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
