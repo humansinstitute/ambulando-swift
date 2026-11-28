@@ -624,6 +624,59 @@ import Testing
             guard case .failed = try await outcome(status, reply).0 else { Issue.record("HTTP \(status) \(reply) must fail honestly"); continue }
         }
 
+        // The route follows the key that actually signs, not the viewer label. A delegated signer (agent key) addresses
+        // the binding owner's Autopilot space even when the service's viewer claims to be the owner, and the NIP-98
+        // `u` tag covers that exact owner URL.
+        let ownerRunURL = "https://autopilot.example.invalid/api/owners/\(ownerNpub)/pipelines/definitions/chief-of-staff-reconcile.v1/runs"
+        let delegated = StubTransport { request in
+            request.url!.absoluteString == ownerRunURL ? (202, ["runId": "run-d", "status": "running"]) : (404, [:])
+        }
+        let delegatedService = ChiefOfStaffService(
+            api: TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: delegated,
+                                              signer: FixedKeySigner(publicKey: String(repeating: "11", count: 32)))),
+            workspace: wsId, ownerNpub: ownerNpub, appNpub: appNpub, viewerNpub: ownerNpub)
+        #expect(try await delegatedService.reconcileViaRuntimeBinding(binding, assignment: assignment) == .accepted(runId: "run-d", state: "running"))
+        let delegatedRequest = try #require(delegated.recorded.first)
+        #expect(delegated.recorded.count == 1)
+        let delegatedAuth = try decodeAuthorization(delegatedRequest)
+        #expect(delegatedAuth.tags.first { $0.first == "u" }?.last == ownerRunURL)
+        #expect(delegatedAuth.tags.first { $0.first == "method" }?.last == "POST")
+        #expect(delegatedAuth.pubkey == String(repeating: "11", count: 32))
+
+        // The owner's own key keeps the self-space route, even when the viewer label says otherwise.
+        let selfRunURL = "https://autopilot.example.invalid/api/pipelines/definitions/chief-of-staff-reconcile.v1/runs"
+        let ownerSigned = StubTransport { request in
+            request.url!.absoluteString == selfRunURL ? (202, ["runId": "run-o", "status": "running"]) : (404, [:])
+        }
+        let ownerService = ChiefOfStaffService(
+            api: TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: ownerSigned, signer: identity)),
+            workspace: wsId, ownerNpub: ownerNpub, appNpub: appNpub, viewerNpub: agentNpub)
+        #expect(try await ownerService.reconcileViaRuntimeBinding(binding, assignment: assignment) == .accepted(runId: "run-o", state: "running"))
+        #expect(try decodeAuthorization(try #require(ownerSigned.recorded.first)).tags.first { $0.first == "u" }?.last == selfRunURL)
+
+        // A locked identity sends nothing.
+        let locked = StubTransport { _ in (202, [:]) }
+        let lockedService = ChiefOfStaffService(
+            api: TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: locked, signer: nil)),
+            workspace: wsId, ownerNpub: ownerNpub, appNpub: appNpub, viewerNpub: ownerNpub)
+        guard case .failed = try await lockedService.reconcileViaRuntimeBinding(binding, assignment: assignment) else {
+            Issue.record("A locked identity must not reconcile"); return
+        }
+        #expect(locked.recorded.isEmpty)
+        #expect((try? TowerOrigin("https://autopilot.example.invalid").url(path: "/api/owners/not-an-npub/pipelines/definitions/x/runs")) == nil)
+        // A binding whose owner is not this workspace's verified owner never reaches any owner space: zero requests.
+        let foreign = StubTransport { _ in (202, ["runId": "x", "status": "running"]) }
+        let foreignService = ChiefOfStaffService(
+            api: TowerAPI(client: TowerClient(origin: try TowerOrigin("https://tower.example"), transport: foreign,
+                                              signer: FixedKeySigner(publicKey: String(repeating: "11", count: 32)))),
+            workspace: wsId, ownerNpub: ownerNpub, appNpub: appNpub, viewerNpub: agentNpub)
+        let foreignBinding = ChiefOfStaffRuntimeBinding(autopilotOrigin: "https://autopilot.example.invalid", subscriptionId: subId,
+                                                        workspaceId: wsId, ownerNpub: otherMemberNpub, agentNpub: agentNpub)
+        guard case .failed = try await foreignService.reconcileViaRuntimeBinding(foreignBinding, assignment: assignment) else {
+            Issue.record("Foreign owner binding must be refused"); return
+        }
+        #expect(foreign.recorded.isEmpty)
+
         // Setup never serves another agent: zero requests.
         let otherAgent = sampleAssignment(rev: 3, assignedActorId: memberId, assignedNpub: memberNpub)
         let (mismatch, none) = try await outcome(200, [:], for: otherAgent)
@@ -636,6 +689,31 @@ import Testing
             return try await outcome(202, [:])
         }
         await #expect(throws: CancellationError.self) { _ = try await cancelled.value }
+    }
+
+    @Test func autopilotRunAllowlistAcceptsOnlySelfAndOwnerScopedRunPaths() throws {
+        let origin = try TowerOrigin("https://autopilot.example.invalid")
+        let accepted = [
+            "/api/pipelines/definitions/chief-of-staff-reconcile.v1/runs",
+            "/api/owners/\(ownerNpub)/pipelines/definitions/chief-of-staff-reconcile.v1/runs",
+        ]
+        for path in accepted {
+            #expect(try origin.url(path: path).absoluteString == "https://autopilot.example.invalid" + path)
+        }
+        let refused = [
+            "/api/owners/\(ownerNpub)/sessions",
+            "/api/owners/\(ownerNpub)/apps/x/actions",
+            "/api/owners/\(ownerNpub)/pipelines/definitions/../runs",
+            "/api/owners/\(ownerNpub)/pipelines/definitions/x/runs/extra",
+            "/api/owners/\(ownerNpub)/x/pipelines/definitions/x/runs",
+            "/api/owners/npub1notvalid/pipelines/definitions/x/runs",
+            "/api/owners/\(String(ownerNpub.dropLast()))/pipelines/definitions/x/runs",
+            "/api/pipelines/definitions/a%2Fb/runs",
+            "/api/pipelines/runs",
+        ]
+        for path in refused {
+            #expect((try? origin.url(path: path)) == nil, "\(path) must be refused")
+        }
     }
 
     @Test func setAssignmentUsesOnlyTheAgentsOwnBindingAndCASGuardsWrites() async throws {
@@ -790,6 +868,16 @@ import Testing
         let roundtripped = try #require(try JSONSerialization.jsonObject(with: reencoded) as? [String: Any])
         #expect(NSDictionary(dictionary: roundtripped).isEqual(to: original))
         #expect(try ChiefOfStaffAssignment.parse(try ChiefOfStaffEnvelope.decode(reencoded)) == parsed)
+    }
+}
+
+/// Signs with a fixed synthetic public key (placeholder signature) so tests can model another actor's signer.
+private struct FixedKeySigner: EventSigner {
+    let publicKey: String
+    func publicKeyHex() async throws -> String { publicKey }
+    func sign(_ t: NostrEventTemplate) async throws -> NostrEvent {
+        NostrEvent(id: String(repeating: "0", count: 64), pubkey: publicKey, created_at: t.createdAt, kind: t.kind,
+                   tags: t.tags, content: t.content, sig: String(repeating: "0", count: 128))
     }
 }
 

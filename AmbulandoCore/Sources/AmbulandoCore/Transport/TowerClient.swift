@@ -54,8 +54,13 @@ public struct TowerOrigin: Sendable, Hashable, Codable, CustomStringConvertible 
             && ["health", "agents"].contains(parts[5])
     }
 
+    /// `/api/pipelines/definitions/:id/runs` (resolved in the signer's own space) or the owner-space form
+    /// `/api/owners/:npub/pipelines/definitions/:id/runs` (resolved in that owner's space).
     private static func autopilotPipelineRunPath(_ path: String) -> Bool {
-        let parts = path.split(separator: "/").map(String.init)
+        var parts = path.split(separator: "/").map(String.init)
+        if parts.count == 7, parts[0] == "api", parts[1] == "owners", NostrKeys.isValidNpub(parts[2]) {
+            parts.removeSubrange(1...2)
+        }
         return parts.count == 5 && parts[0] == "api" && parts[1] == "pipelines"
             && parts[2] == "definitions" && parts[4] == "runs"
             && isSafePipelineDefinitionId(parts[3])

@@ -524,10 +524,14 @@ public struct ChiefOfStaffService: Sendable {
                 "idempotencyKey": Self.reconcileIdempotencyKey(assignment),
                 "input": input,
             ]
-            let autopilotClient = TowerClient(origin: origin, transport: api.client.transport, signer: api.client.signer)
+            // Route by the key that will actually sign this request, never by the viewer label.
+            guard let signer = api.client.signer,
+                  let signerNpub = NostrKeys.npub(publicKeyHex: try await signer.publicKeyHex())
+            else { return .failed(reason: "Unlock this identity to set up the Chief of Staff schedule.") }
+            let autopilotClient = TowerClient(origin: origin, transport: api.client.transport, signer: signer)
             reply = try await autopilotClient.exchange(
                 method: "POST",
-                path: "/api/pipelines/definitions/\(binding.reconcilePipelineId)/runs",
+                path: Self.reconcileRunPath(binding, signerNpub: signerNpub),
                 appNpub: nil,
                 jsonBody: try rawJSON(body)
             )
@@ -572,6 +576,13 @@ public struct ChiefOfStaffService: Sendable {
 
     private static func errorText(_ raw: Any?) -> String? {
         (raw as? String) ?? ((raw as? [String: Any])?["message"] as? String)
+    }
+
+    /// Unprefixed run routes resolve definitions in the signer's own Autopilot space. A delegated manager (not the
+    /// binding owner) therefore addresses the owner's space explicitly; the owner comes from the verified binding only.
+    static func reconcileRunPath(_ binding: ChiefOfStaffRuntimeBinding, signerNpub: String) -> String {
+        let run = "/pipelines/definitions/\(binding.reconcilePipelineId)/runs"
+        return signerNpub == binding.ownerNpub ? "/api" + run : "/api/owners/\(binding.ownerNpub)" + run
     }
 
     /// Stable per revision and agent so a retried save replays the same run instead of starting another.
