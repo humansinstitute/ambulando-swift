@@ -52,7 +52,9 @@ final class GoalsModel {
         localRevision = revision
         guard loaded else { return }
         if allAccessible {
-            goals = []; unreadable = []; loaded = false; space = nil
+            if let saved = await service.cachedWorkspace() {
+                space = saved.space; goals = saved.goals; unreadable = saved.unreadable
+            } else { goals = []; unreadable = []; loaded = false; space = nil }
             return
         }
         if let saved = await service.cached() {
@@ -75,7 +77,7 @@ final class GoalsModel {
 
     private func load() async {
         await reconcileLocalRemovals()
-        if !allAccessible, !loaded, let snapshot = await service.cached(), isCurrent(boundary) {
+        if !loaded, let snapshot = await (allAccessible ? service.cachedWorkspace() : service.cached()), isCurrent(boundary) {
             space = snapshot.space; goals = snapshot.goals; unreadable = snapshot.unreadable; loaded = true
             localRevision = await service.cacheRevision()
             note("cached")
@@ -85,7 +87,7 @@ final class GoalsModel {
         do {
             let snapshot = try await (allAccessible ? service.loadWorkspace() : service.load())
             guard isCurrent(boundary) else { note("dropped-not-current"); return }
-            space = snapshot.space; goals = snapshot.goals; unreadable = snapshot.unreadable; error = nil; loaded = true
+            space = snapshot.space; goals = snapshot.goals; unreadable = snapshot.unreadable; error = snapshot.warnings.first; loaded = true
             localRevision = await service.cacheRevision()
             note("loaded")
         } catch is CancellationError {

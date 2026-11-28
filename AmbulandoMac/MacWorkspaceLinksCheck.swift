@@ -4,7 +4,7 @@ import AmbulandoCore
 
 /// Deterministic authorized records for the isolated Test app; never used with a real account.
 enum MacWorkspaceLinksFixture {
-    static var enabled: Bool { ProcessInfo.processInfo.arguments.contains("-AmbulandoMacWorkspaceLinksCheck") }
+    static var enabled: Bool { ProcessInfo.processInfo.arguments.contains("-AmbulandoMacWorkspaceLinksCheck") || ProcessInfo.processInfo.arguments.contains("-AmbulandoMacInstantMentionCheck") }
     static let board = "f1c70000-0000-4000-8000-00000000bf01"
     static let sharedGoal = "f1c70000-0000-4000-8000-00000000bf02"
     static let version = "f1c70000-0000-4000-8000-00000000bf03"

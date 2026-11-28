@@ -110,23 +110,27 @@ extension WorkspaceSync {
         }
     }
 
-    /// Hydrate the active channel before mention lookup, including every page. Normal File ACLs apply.
+    /// Enrich local mention lookup from every channel File page. Normal File ACLs apply.
     public func refreshMentionFiles(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, channelId: String) async throws {
-        let sync = self
-        try await engine.perform("mention-files:\(workspace.id):\(channelId)", priority: .user) {
-            try await sync.identity.requireReader(npub: connection.signerNpub)
-            let api = sync.api(origin: try TowerOrigin(connection.origin))
-            let rows: [Data]
-            do { rows = try await api.client.list(path: TowerAPI.base(workspace.id) + "/channels/" + TowerAPI.uuid(channelId) + "/files", appNpub: workspace.appNpub, key: "files") }
-            catch TowerError.http(let status, _, _) where status == 403 || status == 404 {
-                try await sync.store.writer.upsertFiles(workspaceId: workspace.id, [], completeChannel: channelId)
-                throw TowerError.http(status: status, code: "channel_files_unavailable", stage: "File mentions")
+        let sync = self, cancellation = MentionFileCancellation()
+        try await withTaskCancellationHandler {
+            try await engine.perform("mention-files:\(workspace.id):\(channelId)", priority: .user) {
+                try await sync.identity.requireReader(npub: connection.signerNpub)
+                let api = sync.api(origin: try TowerOrigin(connection.origin))
+                let accessEpoch = try await sync.store.reader.state("local-content.epoch") ?? ""
+                let rows: [Data]
+                do { rows = try await api.client.list(path: TowerAPI.base(workspace.id) + "/channels/" + TowerAPI.uuid(channelId) + "/files", appNpub: workspace.appNpub, key: "files") }
+                catch TowerError.http(let status, _, _) where status == 403 || status == 404 {
+                    try await sync.store.writer.upsertFiles(workspaceId: workspace.id, [], completeChannel: channelId, expectedAccessEpoch: accessEpoch, cancelled: { cancellation.isCancelled })
+                    throw TowerError.http(status: status, code: "channel_files_unavailable", stage: "File mentions")
+                }
+                let files = try rows.map(FileRecord.init(raw:))
+                guard files.allSatisfy({ $0.workspaceId == workspace.id && $0.channelId == channelId }) else { throw TowerError.malformed("mention files") }
+                try Task.checkCancellation()
+                try await sync.identity.requireReader(npub: connection.signerNpub)
+                try await sync.store.writer.upsertFiles(workspaceId: workspace.id, files, completeChannel: channelId, expectedAccessEpoch: accessEpoch, cancelled: { cancellation.isCancelled })
             }
-            let files = try rows.map(FileRecord.init(raw:))
-            guard files.allSatisfy({ $0.workspaceId == workspace.id && $0.channelId == channelId }) else { throw TowerError.malformed("mention files") }
-            try Task.checkCancellation()
-            try await sync.store.writer.upsertFiles(workspaceId: workspace.id, files, completeChannel: channelId)
-        }
+        } onCancel: { cancellation.cancel() }
     }
 
     // MARK: Inbox
@@ -344,4 +348,12 @@ extension FileCache {
         let url = root.appendingPathComponent(workspaceId, isDirectory: true).appendingPathComponent("attachments", isDirectory: true).appendingPathComponent(objectId)
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
+}
+
+/// Caller cancellation is recorded synchronously, before the scheduler's asynchronous cancellation hop.
+private final class MentionFileCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var isCancelled: Bool { lock.withLock { cancelled } }
+    func cancel() { lock.withLock { cancelled = true } }
 }

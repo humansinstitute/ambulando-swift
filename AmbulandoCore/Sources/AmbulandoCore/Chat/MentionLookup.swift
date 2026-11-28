@@ -217,7 +217,9 @@ public enum MentionRanking {
                 if mention.type.isActor { return directory[mention.npub].map { MentionSuggestion(mention: $0, detail: $0.type.label, updatedAt: "") } }
                 return MentionSuggestion(mention: mention, detail: mention.type.label, updatedAt: "")
             }
-            out += people.prefix(2)
+            // Agents must not disappear behind two alphabetically earlier human directory entries.
+            out += people.filter { $0.mention.type == .agent }.prefix(2)
+            out += people.filter { $0.mention.type == .person }.prefix(2)
             let byKind = Dictionary(grouping: records, by: \.mention.type)
             let quota: [MentionType: Int] = [.doc: 3, .task: 2, .chat: 2, .channel: 2, .scope: 2]
             for type in order where !type.isActor {

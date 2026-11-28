@@ -26,7 +26,7 @@ struct GoalsView: View {
         .onDisappear { accessChanges.stop() }
         .task(id: model.selectedWorkspaceBoundary) {
             guard let goals else { return }
-            accessChanges.start(store: store, matches: { $0.table == .access }) { try await store.reader.state("local-content.epoch") }
+            accessChanges.start(store: store, matches: { $0.table == .access || ($0.workspaceId == workspace.id && [.files, .channels, .scopes].contains($0.table)) }) { try await store.reader.state("local-content.epoch") }
             await goals.refresh()
             // Agents can edit goals too; pick their changes up while this screen is open.
             while !Task.isCancelled {

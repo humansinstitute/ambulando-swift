@@ -175,6 +175,14 @@ final class MentionLookupTests: XCTestCase {
         XCTAssertTrue(literal.isEmpty, "% is matched literally")
     }
 
+    func testBareAtReservesAgentsIndependentlyOfAlphabeticallyEarlierPeople() {
+        let actors = [Mention(type: .person, npub: "ann", label: "Ann"),
+                      Mention(type: .person, npub: "bea", label: "Bea"), rick]
+        let rows = MentionRanking.merge(actors: actors.map { ($0, $0.npub) }, records: [], query: MentionQuery(""))
+        XCTAssertEqual(rows.map(\.mention.type), [.agent, .person, .person])
+        XCTAssertEqual(rows.first?.mention, rick)
+    }
+
     func testMergeRanksLabelsBeforeKindAndRecency() {
         let records = [MentionSuggestion(mention: Mention(type: .channel, npub: id(1), label: "rick"), detail: "Channel", updatedAt: "2"),
                        MentionSuggestion(mention: Mention(type: .doc, npub: id(2), label: "Notes for Rick"), detail: "Doc", updatedAt: "1"),

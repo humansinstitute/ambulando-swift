@@ -12,6 +12,8 @@ public struct GoalsSnapshot: Sendable, Equatable {
     public var space: GoalsSpaceState
     public var goals: [GoalDocument]
     public var unreadable: [UnreadableGoal]
+    /// Discovery completed only for the readable portions; never an empty-success substitute for an outage.
+    public var warnings: [String] = []
 }
 
 /// Goals for one workspace as one identity. Generic server authority selects SQL or retained legacy storage.
@@ -74,34 +76,76 @@ public struct GoalsService: Sendable {
 
     /// Combined read-only discovery across the active workspace. It never replaces the personal Goals cache.
     public func loadWorkspace() async throws -> GoalsSnapshot {
-        let epoch = try await cache?.epoch()
+        var epoch = try await cache?.epoch()
         let space = (try? await api.goalsSpace(workspaceId: workspaceId, appNpub: appNpub, viewer: viewer)) ?? .unsafe("Personal Goals setup could not be verified. Open personal Goals to retry.")
-        var goals: [GoalDocument] = [], unreadable: [UnreadableGoal] = []
-        var seen = Set<String>()
-        for scope in try await api.scopes(workspaceId: workspaceId, appNpub: appNpub) where scope.workspaceId == workspaceId && goalRecordAvailable(scope.raw) {
+        var goals: [GoalDocument] = [], unreadable: [UnreadableGoal] = [], warnings: [String] = []
+        var seen = Set<String>(), goalIds = Set<String>()
+        var scopeByChannel: [String: String] = [:]
+        var completed = 0
+        var firstFailure: (any Error)?
+        func failed(_ error: any Error) {
+            if firstFailure == nil { firstFailure = error }
+            warnings.append("Some workspace goals could not be refreshed. Readable goals are shown; retry to load the remaining channels.")
+        }
+        let scopes: [ScopeRecord]
+        do { scopes = try await api.scopes(workspaceId: workspaceId, appNpub: appNpub) }
+        catch {
+            if CachedContentFailure.invalidates(error), let cache { try? await cache.store.writer.invalidateLocalContent(workspace: workspaceId) }
+            throw error
+        }
+        for scope in scopes where scope.workspaceId == workspaceId && goalRecordAvailable(scope.raw) {
             try Task.checkCancellation()
             let channels: [ChannelRecord]
             do { channels = try await api.channels(workspaceId: workspaceId, scopeId: scope.id, appNpub: appNpub) }
-            catch TowerError.http(let status, _, _) where status == 403 || status == 404 { continue }
+            catch is CancellationError { throw CancellationError() }
+            catch TowerError.http(let status, _, _) where status == 403 || status == 404 || status == 410 {
+                if let cache { epoch = try await cache.store.writer.invalidateLocalContent(workspace: workspaceId, record: scope.id, expectedEpoch: epoch) }
+                continue
+            }
+            catch { failed(error); continue }
             for channel in channels where channel.workspaceId == workspaceId && channel.scopeId == scope.id && seen.insert(channel.id).inserted {
+                try Task.checkCancellation()
                 let raw = try JSONValue.parse(channel.raw)
                 guard goalRecordAvailable(raw) else { continue }
+                scopeByChannel[channel.id] = scope.id
                 do {
                     let owner = raw["metadata"]?["goals"]?["owner_npub"]?.stringValue ?? viewer
-                    if let (repository, current) = try await relational(channelId: channel.id, owner: owner) {
-                        goals += try current.documents(workspaceId: workspaceId, channelId: repository.channelId, owner: owner)
+                    if let (repository, current) = try await relational(channelId: channel.id, owner: owner, invalidateDenied: false) {
+                        for goal in try current.documents(workspaceId: workspaceId, channelId: repository.channelId, owner: owner) where goalIds.insert(goal.id).inserted { goals.append(goal) }
+                        completed += 1
                     } else {
-                        for file in try await api.goalFiles(workspaceId: workspaceId, appNpub: appNpub, channelId: channel.id) where goalRecordAvailable(file.raw) {
-                            do { goals.append(try await api.readGoal(workspaceId: workspaceId, appNpub: appNpub, file: file)) }
-                            catch let error as GoalError { unreadable.append(UnreadableGoal(fileId: file.id, name: file.displayName, reason: error.localizedDescription)) }
-                            catch TowerError.http(let status, _, _) where status == 403 || status == 404 { continue }
+                        let files = try await api.goalFiles(workspaceId: workspaceId, appNpub: appNpub, channelId: channel.id).filter { goalRecordAvailable($0.raw) }
+                        if files.isEmpty { completed += 1 }
+                        for file in files {
+                            do {
+                                let goal = try await api.readGoal(workspaceId: workspaceId, appNpub: appNpub, file: file)
+                                if goalIds.insert(goal.id).inserted { goals.append(goal) }
+                                completed += 1
+                            }
+                            catch is CancellationError { throw CancellationError() }
+                            catch let error as GoalError { unreadable.append(UnreadableGoal(fileId: file.id, name: file.displayName, reason: error.localizedDescription)); completed += 1 }
+                            catch TowerError.http(let status, _, _) where status == 403 || status == 404 || status == 410 {
+                                if let cache { epoch = try await cache.store.writer.invalidateLocalContent(workspace: workspaceId, record: file.id, expectedEpoch: epoch) }
+                                completed += 1
+                            }
+                            catch { failed(error) }
                         }
                     }
-                } catch TowerError.http(let status, _, _) where status == 403 || status == 404 { continue }
+                } catch is CancellationError { throw CancellationError() }
+                catch TowerError.http(let status, _, _) where status == 403 || status == 404 || status == 410 {
+                    if let cache { epoch = try await cache.store.writer.invalidateLocalContent(workspace: workspaceId, record: channel.id, expectedEpoch: epoch) }
+                }
+                catch { failed(error) }
             }
         }
+        try Task.checkCancellation()
+        // A total outage remains a failure, even if the personal home was readable earlier.
+        if completed == 0, let firstFailure { throw firstFailure }
         if let epoch, try await cache?.epoch() != epoch { throw CancellationError() }
-        return GoalsSnapshot(space: space, goals: goals.sorted(by: Self.order), unreadable: unreadable)
+        let snapshot = GoalsSnapshot(space: space, goals: goals.sorted(by: Self.order), unreadable: unreadable,
+            warnings: warnings.isEmpty ? [] : [warnings[0]])
+        await rememberWorkspace(snapshot, epoch: epoch, scopeByChannel: scopeByChannel)
+        return snapshot
     }
 
     /// Primary discussion references are independently ACL checked. They need not belong to this viewer's personal home.
@@ -220,7 +264,7 @@ extension WorkspaceSync {
 
 extension GoalsService {
     /// A cached authority stamp prevents an outage or a missing namespace from re-enabling the legacy writer.
-    private func relational(channelId: String, owner: String? = nil) async throws -> (GoalsRelationalRepository, GoalsRelationalRepository.Snapshot)? {
+    private func relational(channelId: String, owner: String? = nil, invalidateDenied: Bool = true) async throws -> (GoalsRelationalRepository, GoalsRelationalRepository.Snapshot)? {
         let authoritySlot = "goals-authority:" + channelId
         let prior = try await cache?.read(authoritySlot)
         guard let workspaceOwner else {
@@ -233,7 +277,7 @@ extension GoalsService {
         let snapshot: GoalsRelationalRepository.Snapshot?
         do { snapshot = try await repository.snapshot() }
         catch {
-            if case TowerError.http(let status, _, _) = error, status == 403 || status == 410, let cache {
+            if case TowerError.http(let status, _, _) = error, status == 403 || status == 410, invalidateDenied, let cache {
                 try? await cache.store.writer.invalidateLocalContent(workspace: workspaceId, record: channelId)
             }
             throw error

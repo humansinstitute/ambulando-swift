@@ -1,3 +1,12 @@
+# Workspace Goals and instant local mentions (Mac source build 155)
+
+Workspace Goals keeps readable goals visible when another channel fails, with an explicit partial warning and a
+separate encrypted read-only snapshot for relaunch/offline use. Home remains personal. Chat publishes cached
+matches before File/Goals enrichment; bare `@` includes cached agents as well as people. File discovery still reads
+every page, and late cancelled or revoked responses cannot restore removed files. See [workspace links](docs/workspace-links.md).
+Pushed source is separate from installation and live testing on Pete’s MacBook. Physical iPhone delivery remains a
+nightly parity gap; shared-source compile checks do not establish device delivery.
+
 # Personal Reminders (Mac source build 154)
 
 Message and conversation menus now offer **Remind me**, saving a Ready task assigned to you on your existing private Notes to Self board. **Reminders** above the sidebar channel list immediately opens your cached assigned New, Ready and In Progress tasks in the current workspace, with Note to Self first. Task assignment now has avatar-backed searchable typeahead. Saves retain the selected message and native source link, with durable same-device retries. See [Reminders](docs/reminders.md) for contracts and limits. Pushed source is separate from installation and live verification on Pete’s MacBook.

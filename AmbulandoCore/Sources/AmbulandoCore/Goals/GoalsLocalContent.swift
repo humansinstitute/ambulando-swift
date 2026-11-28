@@ -44,6 +44,42 @@ extension GoalsService {
             try? await cache.save(storage == .relational ? "goals-relational" : "goals", bytes, dependencies: [channel.id], expectedEpoch: epoch)
         }
     }
+    private struct SavedWorkspaceGoal: Codable { let id: String; let version: String; let channel: String }
+    private struct SavedWorkspace: Codable { let goals: [SavedWorkspaceGoal]; let warnings: [String] }
+
+    /// Read-only workspace discovery has its own index; it never narrows or overwrites the private Home index.
+    public func cachedWorkspace() async -> GoalsSnapshot? {
+        guard let cache, let bytes = try? await cache.read("workspace-goals"),
+              let saved = try? JSONDecoder().decode(SavedWorkspace.self, from: bytes) else { return nil }
+        guard let epoch = try? await cache.epoch() else { return nil }
+        var goals: [GoalDocument] = []
+        for row in saved.goals {
+            guard let bytes = try? await cache.read("workspace-goal:" + row.id + ":" + row.version),
+                  let document = try? JSONDecoder().decode(SavedDocument.self, from: bytes),
+                  let file = try? FileRecord(raw: document.file), file.id == row.id,
+                  file.workspaceId == workspaceId, file.channelId == row.channel, goalRecordAvailable(file.raw),
+                  let goal = try? Goal.parse(document.goal) else { continue }
+            goals.append(GoalDocument(file: file, versionId: row.version, goal: goal, storage: document.storage ?? .file))
+        }
+        guard (try? await cache.epoch()) == epoch else { return nil }
+        return GoalsSnapshot(space: .unsafe("Saved workspace goals are read-only until personal Goals access is verified."),
+            goals: goals.sorted(by: Self.order), unreadable: [], warnings: saved.warnings)
+    }
+
+    func rememberWorkspace(_ snapshot: GoalsSnapshot, epoch: String?, scopeByChannel: [String: String]) async {
+        guard let cache else { return }
+        for document in snapshot.goals {
+            if let bytes = try? JSONEncoder().encode(SavedDocument(file: document.file.raw, goal: document.goal.encode(), storage: document.storage)) {
+                let dependencies = [document.file.channelId, document.id] + ((document.file.scopeId ?? scopeByChannel[document.file.channelId]).map { [$0] } ?? [])
+                try? await cache.save("workspace-goal:" + document.id + ":" + document.versionId, bytes, dependencies: dependencies, expectedEpoch: epoch)
+            }
+        }
+        let saved = SavedWorkspace(goals: snapshot.goals.map { SavedWorkspaceGoal(id: $0.id, version: $0.versionId, channel: $0.file.channelId) }, warnings: snapshot.warnings)
+        if let bytes = try? JSONEncoder().encode(saved) {
+            try? await cache.save("workspace-goals", bytes, expectedEpoch: epoch)
+        }
+    }
+
     public func remember(_ document: GoalDocument) async {
         guard var snapshot = await cached(), case .ready(let channel, _) = snapshot.space, document.file.channelId == channel.id else { return }
         snapshot.goals = (snapshot.goals.filter { $0.id != document.id } + [document]).sorted(by: Self.order)

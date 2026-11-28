@@ -542,6 +542,13 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         #if os(macOS) && DEBUG
+        if let status = MacGoalMentionFixture.fileStatus.load(),
+           request.url?.path.hasSuffix("/channels/\(FixtureTower.generalChannel)/files") == true {
+            return (try JSONSerialization.data(withJSONObject: ["code": "unavailable"]), HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
+        }
+        if MacGoalMentionFixture.slowFiles.load() == true, request.url?.path.hasSuffix("/files") == true {
+            try await Task.sleep(for: .seconds(3))
+        }
         if MacRemindersFixture.slowTransport.load() == true { try await Task.sleep(for: .milliseconds(1500)) }
         #endif
         let delayedSecondDescriptor = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMultiWorkspaceCheck")
@@ -909,7 +916,8 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
             let row: [String: Any] = ["id": id, "workspace_id": w, "channel_id": c, "thread_id": threadId, "thread_source_message_id": source,
                                       "body": body, "client_request_id": requestId ?? NSNull(), "record_state": "active", "row_version": 1,
                                       "sender_npub": _actor, "created_by_actor_label": "You (sample identity)", "created_at": now, "updated_at": now,
-                                      "attachments": attachments, "metadata": object["metadata"] as? [String: Any] ?? [:]]
+                                      "attachments": attachments, "mentions": object["mentions"] ?? [],
+                                      "metadata": object["metadata"] as? [String: Any] ?? [:]]
             posted.append(row)
             if let requestId { requests[requestId] = row }
             emitLocked(workspace: w, channel: c, type: "message", id: id, rowVersion: 1)

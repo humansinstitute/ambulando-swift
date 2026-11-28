@@ -8,9 +8,10 @@ Home opens the existing personal Home screen. Goals opens a combined list of rea
 scope and channel of that workspace, using existing channel/File and generic relational Goals reads. Goal details
 retain their original record identity, revisions and server permissions. New goals still use the existing personal
 Goals setup. The combined list has separate model state and does not replace Home's personal list or its encrypted
-snapshot. The combined list requires an online refresh after relaunch; it does not claim a complete offline listing.
-Denied channels are omitted, unreadable goal content is disclosed, and network failures offer retry rather than a
-successful empty list. Workspace switches and access invalidation fence in-flight results.
+snapshot. The combined list restores a separate encrypted, read-only snapshot after relaunch and refreshes online.
+Saved discovery is never proof of current completeness or write permission. Denied channels are omitted and their
+cached content is invalidated. Unreadable content is disclosed. Partial channel failures show readable goals with a
+warning; root and total channel failures offer retry rather than a successful empty list. Workspace switches and access invalidation fence in-flight results.
 
 Reminders opens the existing personal Note to Self task board and reuses its actions and records. Loops is an
 explicit placeholder describing regular work delegated to agents; it does not configure or imply a scheduler.
@@ -18,7 +19,9 @@ Goals and Loops use workspace-bound navigation routes, so goal detail can return
 navigation restores within the same workspace.
 
 The chat `@` picker discovers synced native Files, including Excalidraw artefacts, with ordinary name lookup or the
-`file:`, `artefact:` and `whiteboard:` prefixes. It refreshes every page of the active channel's Files before lookup.
+`file:`, `artefact:` and `whiteboard:` prefixes. Cached directory and record matches appear first; the same cancellable lookup then refreshes every page
+of the active channel’s Files and enriches the list. Bare `@` reserves entries for agents and people independently.
+Late responses cannot repopulate Files after cancellation or an access epoch change.
 `goal:` remains the personal goal-name picker. File suggestions insert `@[Title](mention:file:<record UUID>)`;
 the body retains that record UUID through send and rendering, while only people/agents enter notification routing.
 Opening follows the existing authenticated File route and its permissions. Archived, deleted and revoked Files and

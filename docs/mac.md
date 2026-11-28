@@ -16,12 +16,17 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (154) |
+| Version | 0.1.0 (155) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
 | Data | `~/Library/Containers/studio.otherstuff.ambulando.mac/` (kept when the app is replaced or updated) |
 | Keychain | Login keychain, services `studio.otherstuff.ambulando.mac.identity-vault.v1`, `….session.v1` |
+
+Source build 155 preserves readable workspace Goals with explicit partial warnings and a separate encrypted read-only
+workspace cache. Cached chat matches publish before remote File/Goals enrichment; bare `@` reserves agent entries.
+See [workspace links](workspace-links.md). Source, local native fixtures and iPhone compile coverage remain separate
+from physical MacBook/iPhone installation and authenticated acceptance.
 
 Source build 154 opens [Reminders](reminders.md) immediately as a local assigned-task list in the current workspace and adds avatar-backed assignee typeahead. Installation and authenticated MacBook verification remain separate.
 

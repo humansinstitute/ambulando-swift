@@ -391,9 +391,17 @@ extension StoreWriter {
     // MARK: Files
 
     @discardableResult
-    public func upsertFiles(workspaceId: String, _ records: [FileRecord], completeChannel: String? = nil) async throws -> Int {
+    public func upsertFiles(workspaceId: String, _ records: [FileRecord], completeChannel: String? = nil,
+                            expectedAccessEpoch: String? = nil, cancelled: @Sendable () -> Bool = { false }) async throws -> Int {
         let rows = records.filter { $0.workspaceId == workspaceId }
         let changed: Int = try db.transaction {
+            try Task.checkCancellation()
+            guard !cancelled() else { throw CancellationError() }
+            if let expectedAccessEpoch {
+                let current = try db.prepare("SELECT value FROM app_state WHERE key = 'local-content.epoch'")
+                let saved = try current.step() ? current.text(0) ?? "" : ""
+                guard saved == expectedAccessEpoch else { throw CancellationError() }
+            }
             var changed = 0
             let s = try db.prepare("""
             INSERT INTO files(workspace_id, id, scope_id, channel_id, folder_id, storage_object_id, display_name, description, content_type,

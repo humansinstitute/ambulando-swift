@@ -65,8 +65,15 @@ extension StoreWriter {
         guard saved == epoch else { return } // A known removal overtook the verified read.
         try await setState(key, value)
     }
-    func invalidateLocalContent(workspace: String, record: String? = nil) throws {
-        try db.prepare("INSERT OR REPLACE INTO app_state(key,value) VALUES('local-content.epoch',?)").run([.text(UUID().uuidString)])
+    @discardableResult
+    func invalidateLocalContent(workspace: String, record: String? = nil, expectedEpoch: String? = nil) throws -> String {
+        if let expectedEpoch {
+            let current = try db.prepare("SELECT value FROM app_state WHERE key = 'local-content.epoch'")
+            let saved = try current.step() ? current.text(0) ?? "" : ""
+            guard saved == expectedEpoch else { throw CancellationError() }
+        }
+        let nextEpoch = UUID().uuidString
+        try db.prepare("INSERT OR REPLACE INTO app_state(key,value) VALUES('local-content.epoch',?)").run([.text(nextEpoch)])
         if let record {
             try db.prepare("DELETE FROM app_state WHERE key LIKE 'local-content.v1:%' AND json_valid(value) AND json_extract(value, '$.workspace') = ? AND EXISTS (SELECT 1 FROM json_each(app_state.value, '$.dependencies') WHERE value = ?)")
                 .run([.text(workspace), .text(record)])
@@ -74,5 +81,6 @@ extension StoreWriter {
             try db.prepare("DELETE FROM app_state WHERE key LIKE 'local-content.v1:%' AND json_valid(value) AND json_extract(value, '$.workspace') = ?")
                 .run([.text(workspace)])
         }
+        return nextEpoch
     }
 }

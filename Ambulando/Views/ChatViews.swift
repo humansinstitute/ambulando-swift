@@ -1016,6 +1016,9 @@ struct Composer: View {
     @State private var recordSuggestions: (query: MentionQuery, rows: [MentionSuggestion]) = (MentionQuery(""), [])
     /// What this person tagged most recently, for the bare `@` list.
     @State private var recentTags: [Mention] = []
+    @State private var mentionRevision = LiveQuery<String>(initial: "")
+    @State private var recordRevision = ""
+    @State private var recentRevision = ""
     @State private var goalMentionStatus: String?
     @State private var mentionBoundary: WorkspaceBoundary?
     /// The row of the mention list that Return or Tab picks (Up and Down move it).
@@ -1056,12 +1059,14 @@ struct Composer: View {
     /// The `@` lookahead as on the web: people and agents from the directory, and documents, tasks, conversations,
     /// channels and scopes from the local store, filtered by the name typed so far (a `doc:` style prefix narrows it).
     private var suggestions: [MentionSuggestion] {
-        guard let composer, composer.visibleText != dismissedAt, let typed = activeQuery else { return [] }
+        guard model.isUnlocked, model.connection?.id == target.connectionId,
+              model.selectedWorkspace?.id == target.workspaceId,
+              let composer, composer.visibleText != dismissedAt, let typed = activeQuery else { return [] }
         let query = MentionQuery(typed)
-        let records = editing == nil && recordSuggestions.query == query && mentionBoundary == model.selectedWorkspaceBoundary && model.isUnlocked ? recordSuggestions.rows : []
+        let records = editing == nil && recordSuggestions.query == query && mentionBoundary == model.selectedWorkspaceBoundary && recordRevision == mentionRevision.value ? recordSuggestions.rows : []
         let actors = editing == nil ? members.value : members.value.filter { NostrKeys.isValidNpub($0.member.npub) }
         return MentionRanking.merge(actors: actors.map { (Mention(member: $0.member), $0.member.npub) }, records: records, query: query,
-                                    recent: recentTags)
+                                    recent: recentRevision == mentionRevision.value && mentionBoundary == model.selectedWorkspaceBoundary ? recentTags : [])
     }
 
     /// The `@` being typed, none once a name from the list has been picked (the list closes and stays closed as typing goes on).
@@ -1075,47 +1080,64 @@ struct Composer: View {
     private func lookUpRecords(_ typed: String?) async {
         recordSuggestions = (MentionQuery(""), [])
         goalMentionStatus = nil
-        guard editing == nil, let typed, let store = model.store else { return }
+        recentTags = []
+        guard editing == nil, let typed, let store = model.store, model.isUnlocked,
+              model.connection?.id == target.connectionId, model.selectedWorkspace?.id == target.workspaceId else { return }
         let query = MentionQuery(typed), workspaceId = target.workspaceId
         let boundary = model.selectedWorkspaceBoundary
+        let epoch = (try? await store.reader.state("local-content.epoch")) ?? ""
+        func current() -> Bool {
+            !Task.isCancelled && model.isUnlocked && boundary == model.selectedWorkspaceBoundary
+                && model.connection?.id == target.connectionId && model.selectedWorkspace?.id == workspaceId
+        }
+        guard current() else { return }
         mentionBoundary = boundary
+        recordRevision = mentionRevision.value
+        recentRevision = mentionRevision.value
         recordSuggestions = (query, [])
         goalMentionStatus = query.isGoalOnly ? "Loading goals…" : nil
         if typed.isEmpty, let me = model.identity.npub, let rows = try? await store.reader.recentMentions(workspaceId: workspaceId, senderNpub: me) {
+            guard current() else { return }
             recentTags = rows
         }
-        // A short pause lets fast typing settle before the store is read; a newer keystroke cancels this one.
-        try? await Task.sleep(for: .milliseconds(60))
-        if query.allows(.file), !query.isGoalOnly, let sync = model.sync, let connection = model.connection,
-           connection.id == target.connectionId, model.selectedWorkspace?.id == workspaceId {
+        func localRows() async -> [MentionSuggestion]? {
+            guard let rows = try? await store.reader.mentionSuggestions(workspaceId: workspaceId, query: query, limit: query.limit),
+                  current(), ((try? await store.reader.state("local-content.epoch")) ?? "") == epoch else { return nil }
+            let navigation = model.navigation.value
+            return rows.map { row in
+                guard row.mention.type == .channel, let channel = navigation.channel(row.mention.id) else { return row }
+                return MentionSuggestion(mention: Mention(type: .channel, npub: row.mention.id, label: navigation.label(channel)), detail: row.detail, updatedAt: row.updatedAt)
+            }
+        }
+        // Publish the authorized local snapshot before any debounce or unrelated network work.
+        guard let cached = await localRows() else { return }
+        recordSuggestions = (query, cached)
+        do { try await Task.sleep(for: .milliseconds(60)) } catch { return }
+        guard current() else { return }
+        var fileWarning: String?
+        if query.allows(.file), !query.isGoalOnly, let sync = model.sync, let connection = model.connection {
             do { try await sync.refreshMentionFiles(connection, workspace, channelId: target.channelId) }
-            catch { goalMentionStatus = "Couldn’t refresh channel files. Saved matches are shown; type again to retry." }
+            catch is CancellationError { return }
+            catch { fileWarning = "Couldn’t refresh channel files. Saved matches are shown; type again to retry." }
         }
-        guard !Task.isCancelled, boundary == model.selectedWorkspaceBoundary, let rows = try? await store.reader.mentionSuggestions(workspaceId: workspaceId, query: query, limit: query.limit) else { return }
-        let navigation = model.navigation.value
-        // Channels carry the sidebar's name (direct messages are named after their participants), as the web labels them.
-        var labelled = rows.map { row -> MentionSuggestion in
-            guard row.mention.type == .channel, let channel = navigation.channel(row.mention.id) else { return row }
-            return MentionSuggestion(mention: Mention(type: .channel, npub: row.mention.id, label: navigation.label(channel)),
-                                     detail: row.detail, updatedAt: row.updatedAt)
-        }
+        guard current(), var labelled = await localRows() else { return }
+        // Cold and paginated File/whiteboard discoveries become visible without waiting for personal Goals.
+        recordSuggestions = (query, labelled)
+        goalMentionStatus = fileWarning
         if query.allows(.file) {
             do {
-                guard model.isUnlocked, let sync = model.sync, let connection = model.connection,
-                      connection.id == target.connectionId, model.selectedWorkspace?.id == workspaceId else {
-                    throw GoalError.invalid("Unlock this workspace to browse goals.")
-                }
-                let service = try sync.goals(connection, workspace)
-                let goals = try await service.mentionSuggestions(query: query)
+                guard let sync = model.sync, let connection = model.connection else { return }
+                let goals = try await sync.goals(connection, workspace).mentionSuggestions(query: query)
+                guard current(), ((try? await store.reader.state("local-content.epoch")) ?? "") == epoch else { return }
                 labelled += goals
-                guard !Task.isCancelled, boundary == model.selectedWorkspaceBoundary, model.isUnlocked else { return }
-                goalMentionStatus = query.isGoalOnly && goals.isEmpty ? "No matching personal goals." : nil
-            } catch {
-                guard !Task.isCancelled, boundary == model.selectedWorkspaceBoundary else { return }
+                goalMentionStatus = query.isGoalOnly && goals.isEmpty ? "No matching personal goals." : fileWarning
+            } catch is CancellationError { return }
+            catch {
+                guard current() else { return }
                 goalMentionStatus = "Couldn’t load personal goals. Type again to retry."
             }
         }
-        guard !Task.isCancelled, boundary == model.selectedWorkspaceBoundary else { return }
+        guard current(), ((try? await store.reader.state("local-content.epoch")) ?? "") == epoch else { return }
         recordSuggestions = (query, labelled)
     }
 
@@ -1297,7 +1319,12 @@ struct Composer: View {
             // After the draft is back: finished uploads land in it and interrupted ones can be retried.
             model.uploads?.attach(composerModel)
             let workspaceId = target.workspaceId
-            members.start(store: store, matches: { ($0.table == .members && $0.workspaceId == workspaceId) || $0.table == .profiles }) {
+            mentionRevision.start(store: store, matches: {
+                $0.table == .access || ($0.workspaceId == workspaceId && [.files, .docs, .tasks, .threads, .channels, .scopes].contains($0.table))
+            }) {
+                String(store.changes.revisions.value(of: [.access, .files, .docs, .tasks, .threads, .channels, .scopes]))
+            }
+            members.start(store: store, matches: { ([.members, .agents].contains($0.table) && $0.workspaceId == workspaceId) || $0.table == .profiles }) {
                 async let people = store.reader.people(workspaceId: workspaceId)
                 let members = try await store.reader.directoryMembers(workspaceId: workspaceId)
                 let directory = try await people
@@ -1350,7 +1377,7 @@ struct Composer: View {
             }
         }
         .onChange(of: activeQuery) { _, _ in highlighted = 0 }
-        .task(id: "\(model.selectedWorkspaceBoundary?.id ?? "")|\(model.isUnlocked)|\(activeQuery ?? "")") { await lookUpRecords(activeQuery) }
+        .task(id: "\(model.selectedWorkspaceBoundary?.id ?? "")|\(model.isUnlocked)|\(activeQuery ?? "")|\(mentionRevision.value)") { await lookUpRecords(activeQuery) }
         .onChange(of: photos) { _, items in
             guard !items.isEmpty else { return }
             photos = []
