@@ -383,7 +383,7 @@ final class ProfileStoreTests: XCTestCase {
         // Turn the fresh database back into a build-9 (schema 4) file: no profiles table, no sender index.
         do {
             let db = try SQLiteConnection(path: directory.appendingPathComponent(ProductionStorage.databaseFileName).path, readOnly: false)
-            try db.execute("DROP TABLE profiles; DROP INDEX messages_sender; PRAGMA user_version = 4;")
+            try db.execute("ALTER TABLE outbox DROP COLUMN artefact_context; DROP TABLE profiles; DROP INDEX messages_sender; PRAGMA user_version = 4;")
         }
         let store = try LocalStore(directory: directory)
         let version = try await store.writer.schemaVersion()

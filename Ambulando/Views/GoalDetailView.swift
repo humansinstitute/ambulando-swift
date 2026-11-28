@@ -17,7 +17,7 @@ struct GoalDetailView: View {
     @State private var pinning = false
     @State private var actionError: String?
 
-    private var goals: GoalsModel? { model.goalsModel(for: workspace) }
+    private var goals: GoalsModel? { model.goalsModel(for: workspace, allAccessible: true) }
     private var document: GoalDocument? { goals?.goal(fileId) }
 
     var body: some View {

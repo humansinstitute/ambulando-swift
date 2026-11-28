@@ -110,6 +110,25 @@ extension WorkspaceSync {
         }
     }
 
+    /// Hydrate the active channel before mention lookup, including every page. Normal File ACLs apply.
+    public func refreshMentionFiles(_ connection: ConnectionRecord, _ workspace: WorkspaceRecord, channelId: String) async throws {
+        let sync = self
+        try await engine.perform("mention-files:\(workspace.id):\(channelId)", priority: .user) {
+            try await sync.identity.requireReader(npub: connection.signerNpub)
+            let api = sync.api(origin: try TowerOrigin(connection.origin))
+            let rows: [Data]
+            do { rows = try await api.client.list(path: TowerAPI.base(workspace.id) + "/channels/" + TowerAPI.uuid(channelId) + "/files", appNpub: workspace.appNpub, key: "files") }
+            catch TowerError.http(let status, _, _) where status == 403 || status == 404 {
+                try await sync.store.writer.upsertFiles(workspaceId: workspace.id, [], completeChannel: channelId)
+                throw TowerError.http(status: status, code: "channel_files_unavailable", stage: "File mentions")
+            }
+            let files = try rows.map(FileRecord.init(raw:))
+            guard files.allSatisfy({ $0.workspaceId == workspace.id && $0.channelId == channelId }) else { throw TowerError.malformed("mention files") }
+            try Task.checkCancellation()
+            try await sync.store.writer.upsertFiles(workspaceId: workspace.id, files, completeChannel: channelId)
+        }
+    }
+
     // MARK: Inbox
 
     /// View states (unread and attention), then the few records they point at that are not stored yet.

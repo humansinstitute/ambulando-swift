@@ -45,7 +45,7 @@ extension GoalsService {
         }
     }
     public func remember(_ document: GoalDocument) async {
-        guard var snapshot = await cached() else { return }
+        guard var snapshot = await cached(), case .ready(let channel, _) = snapshot.space, document.file.channelId == channel.id else { return }
         snapshot.goals = (snapshot.goals.filter { $0.id != document.id } + [document]).sorted(by: Self.order)
         await remember(snapshot, storage: document.storage)
     }

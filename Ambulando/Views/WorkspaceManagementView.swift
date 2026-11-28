@@ -58,6 +58,9 @@ struct WorkspaceManagementView: View {
         if section == .groups {
             GroupManagementView(workspace: workspace, connection: connection)
                 .id("\(connection.id):\(workspace.id):groups")
+        } else if section == .chiefOfStaff {
+            ChiefOfStaffManagementView(workspace: workspace, connection: connection)
+                .id("\(connection.id):\(workspace.id):chiefOfStaff")
         } else {
             WorkspaceAdministrationPage(section: section, workspace: workspace, connection: connection, showScopes: $showScopes)
                 .id("\(connection.id):\(workspace.id):\(section.rawValue)")
@@ -66,7 +69,7 @@ struct WorkspaceManagementView: View {
 }
 
 enum WorkspaceManagementSection: String, CaseIterable, Identifiable {
-    case workspace, scopes, members, groups, permissions, apps
+    case workspace, scopes, members, groups, permissions, chiefOfStaff, apps
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -75,6 +78,7 @@ enum WorkspaceManagementSection: String, CaseIterable, Identifiable {
         case .members: "Members"
         case .groups: "Groups"
         case .permissions: "Permissions"
+        case .chiefOfStaff: "Chief of Staff"
         case .apps: "Apps & Integrations"
         }
     }
@@ -85,6 +89,7 @@ enum WorkspaceManagementSection: String, CaseIterable, Identifiable {
         case .members: "person.2"
         case .groups: "person.3"
         case .permissions: "lock.shield"
+        case .chiefOfStaff: "person.badge.shield.checkmark"
         case .apps: "app.connected.to.app.below.fill"
         }
     }
@@ -149,6 +154,7 @@ private struct WorkspaceAdministrationPage: View {
         case .members: membersContent
         case .groups: groupsContent
         case .permissions: permissionsContent
+        case .chiefOfStaff: EmptyView()
         case .apps: appsContent
         }
     }

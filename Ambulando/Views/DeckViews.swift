@@ -1327,6 +1327,9 @@ struct DeckThreadComposer: View {
     /// Mac: the modal's expand / restore state (the composer fills the window when expanded).
     var expanded: Binding<Bool>? = nil
     let onCreated: (ThreadFocus) -> Void
+    @State private var artefactOwner: MacThreadArtefacts?
+    @State private var promotionError: String?
+    @State private var promoting = false
     @State private var channelId: String?
     @State private var choosingChannel = false
     @State private var requestId: String?
@@ -1351,6 +1354,7 @@ struct DeckThreadComposer: View {
                 Image(systemName: "square.and.pencil").foregroundStyle(Amb.mutedForeground).accessibilityHidden(true)
                 Text("New thread").font(.amb(.headline)).foregroundStyle(Amb.foreground).accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 8)
+                if let artefactOwner { MacThreadArtefactsButton(state: artefactOwner).disabled(requestId != nil) }
                 if let expanded {
                     Button { expanded.wrappedValue.toggle() } label: {
                         Image(systemName: expanded.wrappedValue ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
@@ -1374,6 +1378,10 @@ struct DeckThreadComposer: View {
             .background(Amb.card)
             Divider()
             form
+        }
+        .onPreferenceChange(MacThreadArtefactOwnerKey.self) { artefactOwner = $0 }
+        .onPreferenceChange(MacThreadArtefactExpandedKey.self) { shown in
+            if shown { expanded?.wrappedValue = true }
         }
         .background(Amb.background)
         .accessibilityElement(children: .contain)
@@ -1410,17 +1418,25 @@ struct DeckThreadComposer: View {
             .accessibilityLabel("Channel")
             .accessibilityIdentifier("deck.compose.channel")
             if let channelId, !choosingChannel, let connection = model.connection {
+                let target = ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId)
+                #if os(macOS)
+                MacDraftArtefactComposer(target: target, workspace: workspace, store: store, requestId: requestId,
+                    pendingText: promotionError ?? pending.value?.lastError, onEnqueued: { requestId = $0 })
+                    .id(target)
+                if promotionError != nil {
+                    Button("Retry attaching selected artefacts") { Task { await finishCreatedThread() } }.disabled(promoting)
+                }
+                #else
                 Text("New conversation").font(.amb(.headline))
                 Text("Write the first message to start a thread.").foregroundStyle(Amb.mutedForeground)
                 Spacer(minLength: 0)
                 if requestId == nil {
-                    Composer(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: channelId),
-                             workspace: workspace, store: store, placeholder: "Start a new thread…", onEnqueued: { requestId = $0 })
-                        .id(channelId)
+                    Composer(target: target, workspace: workspace, store: store, placeholder: "Start a new thread…", onEnqueued: { requestId = $0 }).id(channelId)
                 } else {
                     Text(pending.value?.lastError ?? "Starting thread… Your message is saved on this device.")
                         .accessibilityIdentifier("deck.compose.pending")
                 }
+                #endif
             } else {
                 Text(channels.isEmpty ? "No channels in this context." : "Choose a channel here to start your thread.")
                 List(channels) { channel in
@@ -1461,15 +1477,37 @@ struct DeckThreadComposer: View {
                 try await store.reader.outboxItem(id: requestId)
             }
         }
-        .onChange(of: sent.value) { _, message in
-            guard let message, let threadId = message.threadId, openedRequestId != requestId else { return }
+        .task(id: sent.value?.id) { await finishCreatedThread() }
+    }
+    @MainActor private func finishCreatedThread() async {
+        guard let message = sent.value, let threadId = message.threadId,
+              openedRequestId != requestId, !promoting else { return }
+        promoting = true
+        defer { promoting = false }
+        do {
+            #if os(macOS)
+            if let connection = model.connection {
+                let target = ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: message.channelId, threadId: threadId)
+                if let context = try ArtefactChatContext.firstMessage(message, for: target) {
+                    guard let sync = model.sync, connection.id == artefactOwner?.draftTarget?.connectionId,
+                          model.selectedWorkspaceId == workspace.id else { throw TowerError.unsafePath }
+                    let transport = try sync.threadMembershipTransport(connection, workspace, threadId: threadId)
+                    let members = try context.open.map { try ThreadArtefactMember(kind: $0.kind, id: $0.recordID) }
+                    let saved = try await ThreadArtefactMembershipSync.migrate(members, transport: transport)
+                    artefactOwner?.observe(saved)
+                    artefactOwner?.handoff(to: target, transport: transport)
+                }
+            }
+            #endif
+            promotionError = nil
             openedRequestId = requestId
             onCreated(ThreadFocus(workspaceId: workspace.id, channelId: message.channelId, threadId: threadId))
             #if !os(macOS)
             close()
             #endif
-        }
+        } catch { promotionError = "Message sent. Could not confirm artefact attachments: \(error.localizedDescription). Retry attachments; your message will not be sent again." }
     }
+
 }
 
 /// "Agent working" on a Deck card until the lifecycle's lease (plus grace) passes on Tower's clock: re-evaluated at that
@@ -1491,3 +1529,38 @@ struct DeckWorkingLabel: View {
         }
     }
 }
+
+#if os(macOS)
+/// Each captured destination owns a separate local workspace; browsing never creates a thread.
+private struct MacDraftArtefactComposer: View {
+    let target: ChatTarget
+    let workspace: WorkspaceRecord
+    let store: LocalStore
+    let requestId: String?
+    let pendingText: String?
+    let onEnqueued: @MainActor @Sendable (String) -> Void
+    @State private var state: MacThreadArtefacts
+    init(target: ChatTarget, workspace: WorkspaceRecord, store: LocalStore, requestId: String?, pendingText: String?,
+         onEnqueued: @escaping @MainActor @Sendable (String) -> Void) {
+        self.target = target; self.workspace = workspace; self.store = store
+        self.requestId = requestId; self.pendingText = pendingText; self.onEnqueued = onEnqueued
+        _state = State(initialValue: MacThreadArtefacts(draftTarget: target))
+    }
+    var body: some View {
+        MacThreadArtefactLayout(state: state, target: target, workspace: workspace, store: store) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("New conversation").font(.amb(.headline))
+                Text("Select artefacts from the toolbar, or write your first message.").foregroundStyle(Amb.mutedForeground)
+                Spacer(minLength: 0)
+                if requestId == nil {
+                    Composer(target: target, workspace: workspace, store: store, placeholder: "Start a new thread…", onEnqueued: onEnqueued)
+                } else {
+                    Text(pendingText ?? "Starting thread… Your message is saved on this device.")
+                        .accessibilityIdentifier("deck.compose.pending")
+                }
+            }
+        }
+        .disabled(requestId != nil)
+    }
+}
+#endif

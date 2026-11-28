@@ -682,7 +682,7 @@ final class SurfaceTests: XCTestCase {
             let db = try SQLiteConnection(path: store.path, readOnly: false)
             for table in Schema.v4WorkspaceTables { try db.execute("DROP TABLE \(table)") }
             try db.execute("DROP TABLE profiles; DROP INDEX messages_sender;")   // schema 5 (build 10)
-            try db.execute("PRAGMA user_version = 3")
+            try db.execute("ALTER TABLE outbox DROP COLUMN artefact_context; PRAGMA user_version = 3")
         }
         let reopened = try LocalStore(directory: directory)
         let version = try await reopened.writer.schemaVersion()

@@ -1,5 +1,33 @@
 # Mac thread artefact workspace (source build 134)
 
+## Before the first message
+
+New thread exposes the same artefact browser immediately after choosing a channel.
+Choose an existing accessible Doc, whiteboard or HTML File, inspect it in the retained
+workspace, and use **Tag** to insert its canonical native reference at the message caret.
+Picker cancellation preserves text and selection. Removing a source excludes it from Send;
+local editor recovery remains available for explicit Save. Choosing another destination
+creates a separate local artefact workspace. Selection does not create or post a thread.
+
+Send uses the same save barrier and exact revision/digest checks as an established thread.
+The first-message outbox snapshot has an explicit `threadID: null`, tied to the captured
+workspace/channel; replies retain their required UUID. Pending Send locks the draft
+workspace, and retries reuse the same frozen request. After acknowledgement, the confirmed
+message snapshot supplies membership through the existing authorised compare-and-swap
+operation. The same tab state transfers to the new thread. Full rehosted-editor and
+historical-pin retention still require the native acceptance check.
+Attachment promotion failure offers a separate retry that never posts the message again.
+On reopening, root-message membership recovery runs only when membership was never
+initialised; an explicitly empty membership is authoritative.
+
+**Dispatch limitation:** first-message context needs Autopilot's separately reviewed
+root-message normalization support. Before that support is activated, its consumer requires
+a UUID thread ID and rejects the null-thread snapshot. The existing Tower message route
+forbids supplying `thread_id` with `create_thread`. Local metadata/outbox/UI checks do not
+establish activated first-message agent context. This Mac change contains no backend change
+or managed-service restart. Web/iPhone parity and real-account/device acceptance remain
+separate.
+
 Use **Browse artefacts** (+) in the conversation header, including when there are no tabs
 or the workspace is hidden. The + beside the workspace tabs opens the same native picker.
 Search titles and filter Documents, Whiteboards or HTML. The picker defaults to the actual

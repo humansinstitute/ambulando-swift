@@ -40,12 +40,16 @@ enum WorkRoute: Hashable {
     case webContent(workspaceId: String, source: WebContentSource)
     /// The personal Goals list, and one goal (a File in the owner's private Goals channel).
     case goals(workspaceId: String)
+    case workspaceGoals(workspaceId: String)
+    case loops(workspaceId: String)
     case goal(workspaceId: String, fileId: String)
+    /// Searchable living topic reference owned by the active workspace's Chief of Staff private cohort.
+    case chiefOfStaffTopics(workspaceId: String)
 
     var workspaceId: String {
         switch self {
         case .task(let w, _), .doc(let w, _), .file(let w, _), .thread(let w, _, _), .channel(let w, _), .threadById(let w, _), .canvas(let w, _),
-             .board(let w, _, _), .contextComponent(let w, _, _), .webContent(let w, _), .goals(let w), .goal(let w, _): w
+             .board(let w, _, _), .contextComponent(let w, _, _), .webContent(let w, _), .goals(let w), .workspaceGoals(let w), .loops(let w), .goal(let w, _), .chiefOfStaffTopics(let w): w
         }
     }
 }
@@ -95,7 +99,11 @@ final class AppModel {
     private(set) var identity: IdentityState = .none {
         didSet {
             guard identity != oldValue else { return }
-            if !isUnlocked || identity.npub != oldValue.npub { cancelPendingTowerSelection() }
+            if !isUnlocked || identity.npub != oldValue.npub {
+                cancelPendingTowerSelection()
+                chiefOfStaffModels.values.forEach { $0.clearDerivedState() }
+                chiefOfStaffModels = [:]
+            }
             clearFileNappletForContextLoss()
             wikiContextEpoch &+= 1
             // window.nostr follows the identity: locking cancels and refuses every request; removing it forgets sites.
@@ -208,6 +216,8 @@ final class AppModel {
     @ObservationIgnored let boards = BoardRegistry()
     /// Goals state per workspace boundary (see `GoalsModel`).
     @ObservationIgnored var goalModels: [String: GoalsModel] = [:]
+    /// Chief of Staff assignment and private cohort state per workspace boundary (see `ChiefOfStaffModel`).
+    @ObservationIgnored var chiefOfStaffModels: [String: ChiefOfStaffModel] = [:]
     /// Transient File napplet navigation gate. Never persisted; access/context loss always destroys the host.
     @ObservationIgnored var fileNappletNavigation: ((@escaping () -> Void) -> Bool)?
     @ObservationIgnored var fileNappletNavigationOwner: UUID?
@@ -862,6 +872,8 @@ final class AppModel {
             await persistWorkspacePreferences()
             boards.removeAll(deletingDraftsOf: connection.id)
             goalModels = [:]
+            chiefOfStaffModels.values.forEach { $0.clearDerivedState() }
+            chiefOfStaffModels = [:]
             clearWorkspaceContent()
             if let next = enabledWorkspaceEntries.first { await activateWorkspace(next) }
             else {
@@ -1431,7 +1443,7 @@ final class AppModel {
             case .doc(_, let id): channelId = try? await store.reader.doc(workspaceId: workspace, id: id)?.channelId
             case .file(_, let id): channelId = try? await store.reader.file(workspaceId: workspace, id: id)?.channelId
             case .threadById(_, let id): channelId = try? await store.reader.thread(workspaceId: workspace, id: id)?.channelId
-            case .canvas, .board, .contextComponent, .webContent, .goals, .goal: channelId = nil
+            case .canvas, .board, .contextComponent, .webContent, .goals, .workspaceGoals, .loops, .goal, .chiefOfStaffTopics: channelId = nil
             }
             guard let channelId, channelId != context.channelId,
                   let channel = try? await store.reader.channel(workspaceId: workspace, id: channelId), workspace == selectedWorkspaceId, boundary == selectedWorkspaceBoundary else { return }

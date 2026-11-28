@@ -606,6 +606,7 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
         if let handled = try genericNapplet.handle(request,actor:actorNpub) { return handled }
         if NappletTrustFixture.enabled, let handled = try trustNapplet.handle(request, actor: actorNpub) { return handled }
         #if os(macOS) && DEBUG
+        if let handled = MacWorkspaceLinksFixture.handle(request) { return handled }
         if let handled = MacThreadArtefactFixture.handle(request) { return handled }
         #endif
         // Surface routes first: their ownership is exact (board versions live under `/files/:f/versions/:v/object`).

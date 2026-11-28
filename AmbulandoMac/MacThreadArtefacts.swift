@@ -65,12 +65,36 @@ struct MacThreadArtefactLayout<Content: View>: View {
         }
         #endif
         .task(id: model.selectedWorkspaceBoundary?.id) {
-            guard let sync = model.sync, let connection = model.connection, let thread = target.threadId else { return }
+            guard let sync = model.sync, let connection = model.connection else { return }
+            if target.threadId == nil {
+                state.verifyDraft = { member in
+                    guard model.isUnlocked, model.connection?.id == target.connectionId,
+                          model.selectedWorkspaceId == target.workspaceId else { throw TowerError.unsafePath }
+                    return try await sync.threadArtefactLabel(connection, workspace, member: member, forAttachment: true)
+                }
+                return
+            }
+            guard let thread = target.threadId else { return }
             state.openFallback = { kind, id in inheritedOpen(kind: kind, id: id) }
             do { state.transport = try sync.threadMembershipTransport(connection, workspace, threadId: thread) }
             catch { state.failure = error.localizedDescription; return }
             threadQuery.start(store: store, matches: { $0.workspaceId == workspace.id && $0.table == .threads }) {
                 try await store.reader.thread(workspaceId: workspace.id, id: thread)
+            }
+            // Recover a confirmed first message even after the draft window/process closed.
+            // An initialized membership value (including empty) always wins over historical context.
+            if let transport = state.transport {
+                do {
+                    let row = try await transport.read()
+                    if try ThreadArtefactMembership.read(ThreadArtefactMembership.metadata(row)) == nil,
+                       let source = row.sourceMessageId {
+                        let message = try await sync.linkedChatMessage(connection, workspace, messageId: source, channelId: target.channelId)
+                        if let context = try ArtefactChatContext.firstMessage(message, for: target, sourceMessageID: source) {
+                            let members = try context.open.map { try ThreadArtefactMember(kind: $0.kind, id: $0.recordID) }
+                            state.observe(try await ThreadArtefactMembershipSync.migrate(members, transport: transport))
+                        }
+                    }
+                } catch { state.failure = "Could not recover first-message attachments: \(error.localizedDescription)" }
             }
             await state.refresh()
         }
@@ -116,6 +140,11 @@ struct MacThreadArtefactLayout<Content: View>: View {
                     .onChange(of: state.tabs.filter(\.open).map(\.id)) { _, _ in
                         if let id = state.selected { proxy.scrollTo(id, anchor: .center) }
                     }
+                }
+                if let tab = state.tabs.first(where: { $0.id == state.selected && $0.attached && $0.open }) {
+                    Button("Tag") { state.tag(tab) }
+                        .help("Insert a reference to this artefact in the message")
+                        .accessibilityIdentifier("thread.artefacts.tag")
                 }
                 Button { state.browsing = true } label: { Image(systemName: "plus").frame(width: 26, height: 28).contentShape(Rectangle()) }
                     .help("Open an existing Doc or artefact")

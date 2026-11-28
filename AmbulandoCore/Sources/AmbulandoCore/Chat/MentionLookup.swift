@@ -21,11 +21,13 @@ public struct MentionQuery: Sendable, Equatable {
     /// Only this kind (from a prefix); nil for every kind.
     public let only: MentionType?
     /// A web prefix for records this device does not store (`flow:`, `opportunity:`): nothing is offered.
+    public var isGoalOnly: Bool = false
     public let unavailable: Bool
 
     public init(_ raw: String) {
         let lower = raw.lowercased()
         for (prefix, type) in Self.prefixes where lower.hasPrefix(prefix) {
+            isGoalOnly = prefix == "goal:"
             only = type
             unavailable = type == nil
             text = String(raw.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
@@ -37,7 +39,7 @@ public struct MentionQuery: Sendable, Equatable {
     }
 
     static let prefixes: [(String, MentionType?)] = [
-        ("goal:", .file), ("doc:", .doc), ("task:", .task), ("channel:", .channel), ("chat:", .channel), ("thread:", .chat), ("scope:", .scope),
+        ("file:", .file), ("artefact:", .file), ("whiteboard:", .file), ("goal:", .file), ("doc:", .doc), ("task:", .task), ("channel:", .channel), ("chat:", .channel), ("thread:", .chat), ("scope:", .scope),
         ("agent:", .agent), ("person:", .person), ("flow:", nil), ("opportunity:", nil),
     ]
 
@@ -95,6 +97,17 @@ extension StoreReader {
         }
         try run(.doc, "SELECT id, title AS label, updated_at FROM docs WHERE workspace_id = ?1 AND archived = 0 AND \(listed)") { s in
             MentionSuggestion(mention: Mention(type: .doc, npub: s.text(0)!, label: Self.label(s.text(1))), detail: "Doc", updatedAt: s.text(2) ?? "")
+        }
+        if !query.isGoalOnly {
+            try run(.file, """
+                SELECT id, display_name AS label, updated_at FROM files
+                WHERE workspace_id = ?1 AND archived = 0 AND \(listed)
+                  AND coalesce(json_extract(raw, '$.access_removed'), 0) = 0
+                  AND coalesce(json_extract(raw, '$.record_state'), 'active') NOT IN ('deleted', 'archived', 'revoked', 'access_removed')
+                  AND json_extract(raw, '$.deleted_at') IS NULL AND json_extract(raw, '$.archived_at') IS NULL
+                """) { s in
+                MentionSuggestion(mention: Mention(type: .file, npub: s.text(0)!, label: Self.label(s.text(1))), detail: "File", updatedAt: s.text(2) ?? "")
+            }
         }
         try run(.task, "SELECT id, title AS label, updated_at FROM tasks WHERE workspace_id = ?1 AND state NOT IN ('archive', 'archived') AND \(listed)") { s in
             MentionSuggestion(mention: Mention(type: .task, npub: s.text(0)!, label: Self.label(s.text(1))), detail: "Task", updatedAt: s.text(2) ?? "")

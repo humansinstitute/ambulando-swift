@@ -51,7 +51,7 @@ struct ContextBar: View {
                         Text(nav.scope(context.scopeId)?.name ?? "All scopes")
                             .font(.amb(.subheadline).weight(.semibold)).foregroundStyle(Amb.foreground).lineLimit(1)
                         Text("|").font(.amb(.subheadline)).foregroundStyle(Amb.border).accessibilityHidden(true)
-                        Text(nav.channel(context.channelId).map { "#" + nav.label($0) } ?? (context.isHome ? "Everything" : "All channels"))
+                        Text(nav.channel(context.channelId).map { "#" + nav.label($0) } ?? (model.workspaceHomeSelected ? "Everything" : "All channels"))
                             .font(.amb(.subheadline)).foregroundStyle(Amb.mutedForeground).lineLimit(1)
                         Spacer(minLength: 0)
                         Image(systemName: "chevron.down").font(.amb(.caption).weight(.semibold)).foregroundStyle(Amb.mutedForeground)
@@ -219,13 +219,37 @@ struct SidebarContent: View {
         VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    Button { model.showReminders() } label: {
-                        Label("Reminders", systemImage: "bookmark").font(.amb(.subheadline).weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).padding(.horizontal, 10)
+                    if let cos = model.activeChiefOfStaffModel, cos.assignedAgentNpub != nil {
+                        let label = cos.assignedDisplayName ?? "Chief of Staff"
+                        HStack(spacing: 4) {
+                            Button { model.openChiefOfStaffDM() } label: {
+                                Label(label, systemImage: "person.badge.shield.checkmark")
+                                    .font(.amb(.subheadline).weight(.semibold))
+                                    .foregroundStyle(Amb.foreground)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                                    .padding(.horizontal, 10)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Message Chief of Staff \(label)")
+                            .accessibilityIdentifier("sidebar.chiefOfStaff.dm")
+
+                            if cos.viewerCanAccessCohort {
+                                Button { model.openChiefOfStaffTopics() } label: {
+                                    Image(systemName: "books.vertical")
+                                        .font(.amb(.caption).weight(.semibold))
+                                        .foregroundStyle(Amb.primary)
+                                        .frame(width: 32, height: 32)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .help("Chief of Staff Topics")
+                                .accessibilityLabel("Open Chief of Staff Topics")
+                                .accessibilityIdentifier("sidebar.chiefOfStaff.topics")
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .disabled(model.selectedWorkspace == nil)
-                    .accessibilityIdentifier("sidebar.reminders")
                     if model.enabledWorkspaceEntries.count > 1 {
                         StackedWorkspaceNavigation { entry, scope in
                             Task {
@@ -252,25 +276,25 @@ struct SidebarContent: View {
                         .accessibilityLabel("Expand \(entry.workspace.label)")
                         .accessibilityIdentifier("workspace.collapse.\(entry.workspace.label)")
                     } else {
-                        Button { model.chooseInSidebar(.home) } label: {
+                        Button { model.showWorkspaceHome() } label: {
                             HStack(spacing: 8) {
                                 WorkspaceAvatar(label: model.selectedWorkspace?.label ?? "A", size: 24)
-                                Text("Home").font(.amb(.subheadline).weight(context.isHome ? .bold : .semibold))
-                                    .foregroundStyle(context.isHome ? Amb.selectedForeground : Amb.foreground)
+                                Text("Home").font(.amb(.subheadline).weight(model.workspaceHomeSelected ? .bold : .semibold))
+                                    .foregroundStyle(model.workspaceHomeSelected ? Amb.selectedForeground : Amb.foreground)
                                 Spacer()
                             }
                             .padding(.horizontal, 10).padding(.vertical, 7)
-                            .background(context.isHome ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
+                            .background(model.workspaceHomeSelected ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusPanel))
                             .overlay(RoundedRectangle(cornerRadius: Amb.radiusPanel).stroke(Amb.border, lineWidth: 1))
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("All workspace activity")
-                        .accessibilityAddTraits(context.isHome ? .isSelected : [])
+                        .accessibilityLabel("Home")
+                        .accessibilityAddTraits(model.workspaceHomeSelected ? .isSelected : [])
                         .accessibilityIdentifier("sidebar.home")
                         .padding(.bottom, 4)
 
-                        // Personal Home -> Goals: goals belong to the person, not to a scope, so they sit with Home.
+                        // All accessible goals in this workspace, alongside Home.
                         Button { model.openGoals() } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: "target").frame(width: 24).foregroundStyle(Amb.primary)
@@ -281,8 +305,12 @@ struct SidebarContent: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .background(model.workspaceGoalsSelected ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+                        .accessibilityAddTraits(model.workspaceGoalsSelected ? .isSelected : [])
                         .accessibilityIdentifier("sidebar.goals")
                         .padding(.bottom, 8)
+
+                        WorkspacePeerLinks()
 
                         NavigationStatus(state: model.navigationState, compact: true)
 
@@ -373,6 +401,9 @@ struct SidebarContent: View {
             WorkspaceFooter()
         }
         .onAppear { model.loadMembership() }
+        .task(id: model.selectedWorkspaceBoundary?.id) {
+            await model.activeChiefOfStaffModel?.refresh(verifyAcl: false)
+        }
         .sheet(item: $sheet, onDismiss: openCreated) { sheet in
             switch sheet {
             case .newChannel(let scope): NewChannelSheet(scope: scope) { created = $0 }
@@ -635,5 +666,30 @@ struct NavigationStatus: View {
         .background(tone == .error ? Amb.destructiveBackground : tone == .warning ? Amb.warningBackground : Amb.muted,
                     in: RoundedRectangle(cornerRadius: Amb.radiusControl, style: .continuous))
         .padding(.bottom, compact ? 6 : 0)
+    }
+}
+
+
+struct WorkspacePeerLinks: View {
+    @Environment(AppModel.self) private var model
+    var body: some View {
+        Button { model.showReminders() } label: {
+            Label("Reminders", systemImage: "bookmark")
+                .font(.amb(.subheadline).weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).padding(.horizontal, 10)
+        }
+        .buttonStyle(.plain)
+        .background(model.remindersSelected ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+        .accessibilityAddTraits(model.remindersSelected ? .isSelected : [])
+        .accessibilityIdentifier("sidebar.reminders")
+        Button { model.openLoops() } label: {
+            Label("Loops", systemImage: "repeat")
+                .font(.amb(.subheadline).weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading).padding(.horizontal, 10)
+        }
+        .buttonStyle(.plain)
+        .background(model.loopsSelected ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+        .accessibilityAddTraits(model.loopsSelected ? .isSelected : [])
+        .accessibilityIdentifier("sidebar.loops")
     }
 }

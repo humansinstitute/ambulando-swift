@@ -207,14 +207,37 @@ private struct WorkspaceNavigationGroup: View {
             if !entry.collapsed {
                 Button { model.openWorkspace(entry, context: .home) } label: {
                     Label("Home", systemImage: "house")
-                        .font(.amb(.subheadline).weight(active && model.context.isHome ? .bold : .semibold))
+                        .font(.amb(.subheadline).weight(active && model.workspaceHomeSelected ? .bold : .semibold))
                         .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
                         .padding(.horizontal, 10)
-                        .background(active && model.context.isHome ? Amb.selectedFill : .clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+                        .background(active && model.workspaceHomeSelected ? Amb.selectedFill : .clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
                 }
                 .buttonStyle(.plain).foregroundStyle(Amb.foreground)
                 .accessibilityLabel("Home in \(entry.workspace.label)")
                 .accessibilityIdentifier("workspace.home.\(entry.workspace.label)")
+                ForEach(["Goals", "Reminders", "Loops"], id: \.self) { destination in
+                    let selected = active && (destination == "Goals" ? model.workspaceGoalsSelected : destination == "Reminders" ? model.remindersSelected : model.loopsSelected)
+                    Button {
+                        Task {
+                            await model.activateWorkspace(entry)
+                            guard entry.enabled, model.selectedWorkspaceBoundary == entry.boundary else { return }
+                            switch destination {
+                            case "Goals": model.openGoals()
+                            case "Reminders": model.showReminders()
+                            default: model.openLoops()
+                            }
+                        }
+                    } label: {
+                        Label(destination, systemImage: destination == "Goals" ? "target" : destination == "Reminders" ? "bookmark" : "repeat")
+                            .font(.amb(.subheadline).weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading).padding(.horizontal, 10)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(Amb.foreground)
+                    .background(selected ? Amb.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: Amb.radiusControl))
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityLabel("\(destination) in \(entry.workspace.label)")
+                    .accessibilityIdentifier("workspace.\(destination.lowercased()).\(entry.workspace.label)")
+                }
                 if !entry.navigation.loaded {
                     HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Loading saved navigation…").font(.caption) }.padding(8)
                 } else if entry.navigation.groups.isEmpty {

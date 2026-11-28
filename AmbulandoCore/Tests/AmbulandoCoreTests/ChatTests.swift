@@ -119,6 +119,38 @@ final class OutboxTests: XCTestCase {
         XCTAssertFalse(replies[0].isThreadRoot)
     }
 
+    func testFirstMessageArtefactContextSurvivesLostResponseWithoutDuplicateThread() async throws {
+        let h = try await ChatHarness.make()
+        defer { try? FileManager.default.removeItem(at: h.directory) }
+        let target = h.target()
+        let f = "44444444-4444-4444-8444-444444444444", v = "55555555-5555-4555-8555-555555555555"
+        let context = try ArtefactChatContext(workspaceID: target.workspaceId, channelID: target.channelId, threadID: nil,
+            visibleRecordID: f, open: [.init(kind: "file", recordID: f, revision: v, historical: true, digest: String(repeating: "a", count: 64))]).encoded(for: target)
+        h.tower.inject(.dropResponseAfterCommit)
+        let item = try await XCTUnwrapAsync(try await h.outbox.send(text: "First @[Board](mention:file:\(f))", mentions: [], target: target,
+            connection: h.connection, workspace: h.workspace, artefactContext: context))
+        try await waitFor { try await h.store.reader.outboxItem(id: item.id)?.state == .retrying }
+        XCTAssertEqual(h.tower.messageCount, 1, "First message committed before its response was lost")
+        await h.outbox.kick(h.connection, force: true)
+        try await waitFor { try await h.store.reader.outboxItem(id: item.id) == nil }
+        let posts = h.tower.recordedPosts
+        XCTAssertEqual(posts.count, 2)
+        XCTAssertEqual(posts[0].body, posts[1].body)
+        XCTAssertEqual(h.tower.messageCount, 1)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: posts[1].body) as? [String: Any])
+        XCTAssertEqual(object["create_thread"] as? Bool, true)
+        XCTAssertNil(object["thread_id"])
+        let snapshot = try XCTUnwrap((object["metadata"] as? [String: Any])?[ArtefactChatContext.metadataKey])
+        XCTAssertEqual(try ArtefactChatContext.validate(JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]), for: target), context)
+        let root = try await XCTUnwrapAsync(try await h.store.reader.sentMessage(workspaceId: target.workspaceId, clientRequestId: item.id))
+        let posted = h.target(thread: try XCTUnwrap(root.threadId))
+        let confirmed = try XCTUnwrap(ArtefactChatContext.firstMessage(root, for: posted))
+        XCTAssertEqual(confirmed.open.first?.recordID, f)
+        XCTAssertEqual(confirmed.open.first?.revision, v)
+        XCTAssertNil(try ArtefactChatContext.firstMessage(root, for: target), "Only a confirmed posted-thread destination may recover membership")
+        XCTAssertNil(try ArtefactChatContext.firstMessage(root, for: h.target(Fixtures.channel2, thread: posted.threadId)))
+    }
+
     func testOfflineRetryResendsFrozenBytesWithFreshNIP98() async throws {
         let h = try await ChatHarness.make()
         defer { try? FileManager.default.removeItem(at: h.directory) }

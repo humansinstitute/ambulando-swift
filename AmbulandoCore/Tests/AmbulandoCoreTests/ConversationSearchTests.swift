@@ -19,7 +19,7 @@ final class ConversationSearchTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let db = try SQLiteConnection(path: directory.appendingPathComponent("migration.sqlite").path, readOnly: false)
         try Schema.migrate(db)
-        try db.execute("DROP TRIGGER search_threads_ai; DROP TRIGGER search_threads_au; DROP TRIGGER search_threads_ad; DELETE FROM search_index WHERE kind = 'thread'; PRAGMA user_version = 10;")
+        try db.execute("ALTER TABLE outbox DROP COLUMN artefact_context; DROP TRIGGER search_threads_ai; DROP TRIGGER search_threads_au; DROP TRIGGER search_threads_ad; DELETE FROM search_index WHERE kind = 'thread'; PRAGMA user_version = 10;")
         let insert = try db.prepare("INSERT INTO threads(workspace_id,id,channel_id,title,archived,deleted,row_version,updated_at,raw) VALUES(?,?,?,?,0,0,1,'1',?)")
         try insert.run([.text("w"), .text("t"), .text("c"), .text("backfilled title"), .blob(Data("{}".utf8))])
         try Schema.migrate(db)
@@ -29,7 +29,7 @@ final class ConversationSearchTests: XCTestCase {
             _ = try statement.step()
             return Int(statement.int(0))
         }
-        XCTAssertEqual(try db.userVersion, 11)
+        XCTAssertEqual(try db.userVersion, Schema.version)
         XCTAssertEqual(try titleMatches("backfilled"), 1)
         try db.execute("UPDATE threads SET title = 'changed title' WHERE id = 't'")
         XCTAssertEqual(try titleMatches("backfilled"), 0)

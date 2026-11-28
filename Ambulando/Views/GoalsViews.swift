@@ -8,11 +8,12 @@ struct GoalsView: View {
     @Environment(AppModel.self) private var model
     let workspace: WorkspaceRecord
     let store: LocalStore
+    var allAccessible = false
     @State private var creating = false
     @State private var showArchived = false
     @State private var accessChanges = LiveQuery<String?>(initial: nil)
 
-    private var goals: GoalsModel? { model.goalsModel(for: workspace) }
+    private var goals: GoalsModel? { model.goalsModel(for: workspace, allAccessible: allAccessible) }
 
     var body: some View {
         Group {
@@ -36,17 +37,31 @@ struct GoalsView: View {
     }
 
     @ViewBuilder private func content(_ goals: GoalsModel) -> some View {
-        switch goals.space {
-        case nil:
-            if let error = goals.error { GoalsMessage(title: "Goals could not be loaded", text: error) { Task { await goals.refresh() } } }
-            else { ProgressView("Loading goals…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-        case .unsafe(let reason):
-            GoalsMessage(title: "Goals are not available", text: reason) { Task { await goals.refresh() } }
-        case .needsSetup(let scopes, let suggested, let agents):
-            GoalsSetupView(goals: goals, scopes: scopes, suggested: suggested, agents: agents)
-        case .ready:
+        if allAccessible, goals.loaded {
             list(goals)
+        } else if allAccessible, let error = goals.error {
+            GoalsMessage(title: "Goals could not be loaded", text: error) { Task { await goals.refresh() } }
+        } else if allAccessible {
+            ProgressView("Loading workspace goals…").frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            switch goals.space {
+            case nil:
+                if let error = goals.error { GoalsMessage(title: "Goals could not be loaded", text: error) { Task { await goals.refresh() } } }
+                else { ProgressView("Loading goals…").frame(maxWidth: .infinity, maxHeight: .infinity) }
+            case .unsafe(let reason):
+                GoalsMessage(title: "Goals are not available", text: reason) { Task { await goals.refresh() } }
+            case .needsSetup(let scopes, let suggested, let agents):
+                GoalsSetupView(goals: goals, scopes: scopes, suggested: suggested, agents: agents)
+            case .ready:
+                list(goals)
+            }
         }
+    }
+
+    private func newGoal(_ goals: GoalsModel) {
+        if allAccessible, goals.channel == nil {
+            model.push(.goals(workspaceId: workspace.id), in: model.mode)
+        } else { creating = true }
     }
 
     private func list(_ goals: GoalsModel) -> some View {
@@ -61,7 +76,7 @@ struct GoalsView: View {
                 } description: {
                     Text("A goal has a name, a few checkpoints and the chats, tasks and documents that move it forward.")
                 } actions: {
-                    Button("New goal") { creating = true }.buttonStyle(.borderedProminent)
+                    Button("New goal") { newGoal(goals) }.buttonStyle(.borderedProminent)
                 }.listRowBackground(Color.clear)
             }
             if !active.isEmpty { Section("Active") { ForEach(active) { GoalRow(document: $0) } } }
@@ -91,7 +106,7 @@ struct GoalsView: View {
         .refreshable { await goals.refresh() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button { creating = true } label: { Label("New goal", systemImage: "plus") }.accessibilityIdentifier("goals.new")
+                Button { newGoal(goals) } label: { Label("New goal", systemImage: "plus") }.accessibilityIdentifier("goals.new")
             }
         }
         .sheet(isPresented: $creating) {
@@ -440,5 +455,18 @@ struct DeckGoalsCard: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .task(id: model.selectedWorkspaceBoundary) { await goals?.refresh() }
         .accessibilityIdentifier("deck.goals")
+    }
+}
+
+
+struct LoopsView: View {
+    var body: some View {
+        ContentUnavailableView {
+            Label("Loops", systemImage: "repeat")
+        } description: {
+            Text("Regular work and loops we delegate to our agents.\n\nThis is a placeholder. No loops are scheduled or running from this page.")
+        }
+        .navigationTitle("Loops")
+        .accessibilityIdentifier("loops.placeholder")
     }
 }

@@ -43,6 +43,79 @@ enum MacThreadArtefactFixture {
 }
 
 extension MacThreadRegression {
+    static func draftArtefactsCheck(_ window: NSWindow, model: AppModel, workspace: WorkspaceRecord, store: LocalStore, connection: ConnectionRecord) async throws {
+        let f = MacThreadArtefactFixture.self
+        model.selectContext(WorkContext(scopeId: FixtureTower.scopeAmbulando, channelId: FixtureTower.generalChannel))
+        model.composingThread = true
+        try await waitFor(window, "thread.artefacts.browse", "draft artefact toolbar before first Send")
+        guard let state = MacThreadArtefacts.testingState else { throw Failure(description: "draft workspace mounted") }
+        try require(state.draftTarget?.threadId == nil && state.draftTarget != nil, "draft local target")
+        let target = ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: FixtureTower.generalChannel)
+        // Wait for the composer's asynchronous model/draft restoration, then use its real input path.
+        await settle()
+        try type(window, "Before suffix"); await settle()
+        let field = try textView(window)
+        try require(field.string == "Before suffix", "native typing reaches the restored draft model")
+        field.setSelectedRange(NSRange(location: 6, length: 0))
+        let before = try await store.reader.channelFeed(workspaceId: workspace.id, channelId: target.channelId, limit: 500).count
+        try press(window, "thread.artefacts.browse"); await settle()
+        guard let picker = window.attachedSheet else { throw Failure(description: "draft picker") }
+        try await waitFor(picker, "thread.artefacts.browser.row.\(f.board)", "draft authorised whiteboard")
+        try press(picker, "thread.artefacts.browser.cancel"); await settle()
+        try require(state.tabs.isEmpty && field.string == "Before suffix", "cancel preserves text and creates no selection")
+        state.open(kind: "file", id: f.board)
+        for _ in 0..<60 {
+            if let tab = state.tabs.first, let prepare = tab.prepare, (try? await prepare()) != nil { break }
+            await settle()
+        }
+        guard let tab = state.tabs.first, let prepare = tab.prepare else { throw Failure(description: "draft editor ready") }
+        try require(state.members.count == 1 && state.transport == nil, "draft membership remains local")
+        let member = try ThreadArtefactMember(kind: "file", id: f.board)
+        state.remove(member)
+        try require(state.members.isEmpty && !tab.attached, "draft removal excludes source without a posted thread")
+        let empty = try await state.prepare(target: target)
+        try require(empty == nil, "removed draft source is excluded from Send")
+        state.open(kind: "file", id: f.board); try await membershipIdle(state)
+        await state.saveRecovery(tab)
+        try require(tab.attached && state.members == [member], "explicit recovery Save resumes reselected draft source")
+        do {
+            _ = try await state.prepare(target: ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: "00000000-0000-4000-8000-000000000099"))
+            throw Failure(description: "foreign draft destination accepted")
+        } catch ArtefactChatContext.ContextError.unresolved {}
+        try await waitFor(window, "thread.artefacts.tag", "reattached draft Tag control")
+        try press(window, "thread.artefacts.tag"); await settle()
+        try require(field.string.contains("mention:file:\(f.board)") && field.string.hasPrefix("Before") && field.string.hasSuffix("suffix"), "canonical Tag keeps caret suffix and text")
+        let selectedContext = try await state.prepare(target: target)
+        let context = try JSONDecoder().decode(ArtefactChatContext.self, from: selectedContext ?? Data())
+        try require(context.threadID == nil && context.open.first?.recordID == f.board, "draft exact revision context")
+        let after = try await store.reader.channelFeed(workspaceId: workspace.id, channelId: target.channelId, limit: 500).count
+        try require(before == after, "browse select tag never posts an empty thread")
+        let original = tab.prepare
+        tab.prepare = { throw URLError(.notConnectedToInternet) }
+        let typed = field.string
+        try press(window, "composer.send"); await settle()
+        try require(field.string == typed && state.failure != nil, "save failure keeps first-message draft")
+        tab.prepare = original
+        try snapshot(window, model: model, name: "mac-draft-artefacts-before-send")
+        try press(window, "composer.send")
+        var root: MessageRecord?
+        for _ in 0..<80 {
+            let feed = try await store.reader.channelFeed(workspaceId: workspace.id, channelId: target.channelId, limit: 500)
+            root = feed.map(\.message).first { $0.body == typed }
+            if root != nil && !model.composingThread { break }
+            await settle()
+        }
+        guard let root, let thread = root.threadId else { throw Failure(description: "first message accepted") }
+        let postedTarget = ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: target.channelId, threadId: thread)
+        let frozen = try ArtefactChatContext.firstMessage(root, for: postedTarget)
+        try require(frozen?.open == context.open, "confirmed first message retains exact saved revision metadata")
+        guard let row = try await store.reader.thread(workspaceId: workspace.id, id: thread) else { throw Failure(description: "new thread") }
+        let members = try ThreadArtefactMembership.read(ThreadArtefactMembership.metadata(row))
+        try require(members?.first?.id == f.board, "acknowledged membership promoted with existing CAS")
+        try require(MacThreadArtefacts.testingState === state && state.tabs.first === tab, "new thread keeps same pinned editors")
+        _ = try await prepare()
+    }
+
     static func threadArtefactsCheck(_ window: NSWindow, model: AppModel) async throws {
         guard let workspace = model.selectedWorkspace, let store = model.store, let connection = model.connection,
               let fixture = model.fixture else { throw Failure(description: "fixture only") }
@@ -53,6 +126,11 @@ extension MacThreadRegression {
         fixture.tower.boards.seed(fileId: f.html, bytes: f.htmlBytes, canWrite: true, author: FixtureTower.ana)
         let files = try [f.board, f.html].map { try FileRecord(raw: JSONSerialization.data(withJSONObject: f.row($0))) }
         _ = try await store.writer.upsertFiles(workspaceId: workspace.id, files)
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacDraftArtefactsCheck") {
+            try await draftArtefactsCheck(window, model: model, workspace: workspace, store: store, connection: connection)
+            print("PASS: pre-send draft artefacts, native tagging, save barrier and first-message context")
+            return
+        }
         let focus = ThreadFocus(workspaceId: workspace.id, channelId: FixtureTower.generalChannel,
             threadId: FixtureTower.threadReview)
         let target = ChatTarget(connectionId: connection.id, workspaceId: workspace.id, channelId: FixtureTower.generalChannel, threadId: focus.threadId)

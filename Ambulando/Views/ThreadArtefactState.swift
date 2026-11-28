@@ -33,6 +33,29 @@ final class MacThreadArtefactTab: Identifiable {
 @MainActor @Observable
 final class MacThreadArtefacts: Equatable {
     nonisolated static func == (lhs: MacThreadArtefacts, rhs: MacThreadArtefacts) -> Bool { lhs === rhs }
+    /// Only a draft composer opts into local membership; established threads still require CAS.
+    private(set) var draftTarget: ChatTarget?
+    init(draftTarget: ChatTarget? = nil) { self.draftTarget = draftTarget }
+    #if os(macOS)
+    // Bounded, one-shot handoff keeps the same saved/pinned editors when the confirmed thread replaces its draft.
+    private static var confirmedDraft: (ChatTarget, MacThreadArtefacts)?
+    static func takeConfirmedDraft(for target: ChatTarget) -> MacThreadArtefacts? {
+        guard let (savedTarget, state) = confirmedDraft, savedTarget == target else { return nil }
+        confirmedDraft = nil
+        return state
+    }
+    func handoff(to target: ChatTarget, transport: ThreadArtefactMembershipSync.Transport) {
+        draftTarget = nil; verifyDraft = nil; self.transport = transport
+        Self.confirmedDraft = (target, self)
+    }
+    #endif
+    @ObservationIgnored var verifyDraft: ((ThreadArtefactMember) async throws -> String)?
+    struct TagRequest: Equatable { let nonce = UUID(); let token: String }
+    var tagRequest: TagRequest?
+    func tag(_ tab: MacThreadArtefactTab) {
+        guard tab.attached, tab.open, !busy else { return }
+        tagRequest = TagRequest(token: Mention(type: tab.kind == "doc" ? .doc : .file, npub: tab.id, label: tab.title).token)
+    }
     var tabs: [MacThreadArtefactTab] = []
     var selected: String?
     #if os(iOS) || AMBULANDO_PHONE_STATE_CHECK
@@ -87,6 +110,15 @@ final class MacThreadArtefacts: Equatable {
         catch { failure = "Could not refresh thread attachments: \(error.localizedDescription)" }
     }
     func remove(_ member: ThreadArtefactMember) {
+        if draftTarget != nil {
+            guard !busy else { return }
+            members.removeAll { $0 == member }
+            for tab in tabs where tab.kind == member.kind && tab.id == member.id {
+                tab.attached = false; tab.detach?()
+                if selected == tab.id { selected = nil; shown = false; expanded = false }
+            }
+            return
+        }
         guard !busy, membershipError == nil, let transport else { return }
         busy = true; membershipPending = true; failure = nil
         Task { @MainActor in
@@ -109,6 +141,29 @@ final class MacThreadArtefacts: Equatable {
     func open(kind: String, id: String) {
         guard !busy else { return }
         let kind = kind == "document" ? "doc" : kind
+        if draftTarget != nil {
+            guard let verifyDraft else { failure = "Getting ready to browse this channel. Retry shortly."; return }
+            busy = true; failure = nil
+            Task { @MainActor in
+                defer { busy = false }
+                do {
+                    let member = try ThreadArtefactMember(kind: kind, id: id)
+                    guard members.contains(member) || members.count < ThreadArtefactMembership.limit else { throw ThreadArtefactMembership.Error.limit }
+                    let title = try await verifyDraft(member)
+                    if !members.contains(member) { members.append(member) }
+                    labels[member] = title
+                    if let tab = tabs.first(where: { $0.kind == member.kind && $0.id == member.id }) {
+                        guard tab.attached else { tab.open = true; show(tab); failure = "Local recovery retained. Use Save to source and resume before Send."; return }
+                        tab.open = true; show(tab)
+                    } else {
+                        let tab = MacThreadArtefactTab(kind: member.kind, id: member.id)
+                        tab.title = title; tabs.append(tab); show(tab)
+                    }
+                    browsing = false
+                } catch { failure = error.localizedDescription }
+            }
+            return
+        }
         guard let transport else { failure = "Attachments are unavailable until this conversation is loaded."; return }
         guard membershipError == nil else { failure = membershipError; return }
         busy = true; membershipPending = true; failure = nil
@@ -138,7 +193,7 @@ final class MacThreadArtefacts: Equatable {
         }
     }
     func saveRecovery(_ tab: MacThreadArtefactTab) async {
-        guard !busy, !tab.attached, let transport else { return }
+        guard !busy, !tab.attached, transport != nil || draftTarget != nil else { return }
         busy = true; failure = nil
         defer { busy = false }
         do {
@@ -146,7 +201,7 @@ final class MacThreadArtefacts: Equatable {
             // This explicit user action may publish. Observing detach or re-add never calls it.
             if let save = tab.saveSource { try await save() }
             let reference = try await prepare()
-            let row = try await transport.read(); observe(row)
+            if let transport { let row = try await transport.read(); observe(row) }
             if let validate = tab.validate, !(await validate(reference)) { throw ArtefactChatContext.ContextError.unresolved }
             if members.contains(where: { $0.kind == tab.kind && $0.id == tab.id }), membershipError == nil {
                 tab.attached = true; tab.reattach?(); show(tab)
@@ -192,7 +247,9 @@ final class MacThreadArtefacts: Equatable {
     }
     func prepare(target: ChatTarget, holdForEnqueue: Bool = false) async throws -> Data? {
         guard !busy else { throw ArtefactChatContext.ContextError.unresolved }
-        guard let thread = target.threadId, membershipError == nil else { return nil }
+        guard draftTarget == nil || draftTarget == target else { throw ArtefactChatContext.ContextError.unresolved }
+        guard target.threadId != nil || draftTarget == target else { return nil }
+        guard membershipError == nil else { return nil }
         #if os(iOS) || AMBULANDO_PHONE_STATE_CHECK
         // Refresh canonical membership before touching sources. Cached tabs never reattach a removed record.
         if tabs.contains(where: { $0.open && $0.attached }), let transport {
@@ -237,7 +294,7 @@ final class MacThreadArtefacts: Equatable {
             if discussionExcluded && !shown { prepared = true; return nil }
             #endif
             let context = try ArtefactChatContext(workspaceID: target.workspaceId, channelID: target.channelId,
-                threadID: thread, visibleRecordID: selected ?? open[0].id, workspaceVisible: shown, open: refs).encoded(for: target)
+                threadID: target.threadId, visibleRecordID: selected ?? open[0].id, workspaceVisible: shown, open: refs).encoded(for: target)
             prepared = true
             return context
         } catch {

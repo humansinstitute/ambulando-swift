@@ -596,9 +596,10 @@ public final class SampleWorkTower: @unchecked Sendable {
         row["updated_at"] = now()
     }
 
-    /// Task tree relationships kept from the request (`metadata.parent_task_id`, `metadata.predecessor_task_ids`).
+    /// Preserve app provenance and unknown metadata while normalizing known task-tree fields.
     static func taskMetadata(_ o: [String: Any], assignee: String?) -> [String: Any] {
-        var metadata: [String: Any] = ["assigned_to_npub": (assignee as Any?) ?? NSNull()]
+        var metadata = (o["metadata"] as? [String: Any]) ?? [:]
+        metadata["assigned_to_npub"] = (assignee as Any?) ?? NSNull()
         if let m = o["metadata"] as? [String: Any] {
             if let parent = m["parent_task_id"] as? String { metadata["parent_task_id"] = parent.lowercased() }
             if let predecessors = m["predecessor_task_ids"] as? [String] { metadata["predecessor_task_ids"] = predecessors.map { $0.lowercased() } }

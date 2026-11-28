@@ -349,6 +349,9 @@ struct ThreadView: View {
         self.target = target
         self.workspace = workspace
         self.store = store
+        #if os(macOS)
+        _artefacts = State(initialValue: MacThreadArtefacts.takeConfirmedDraft(for: target) ?? MacThreadArtefacts())
+        #endif
         let saved = ReadingPositions.shared.anchor(for: target)
         _resumeAt = State(initialValue: saved)
         _atNewest = State(initialValue: saved == nil)
@@ -356,7 +359,7 @@ struct ThreadView: View {
     }
 
     #if os(macOS)
-    @State private var artefacts = MacThreadArtefacts()
+    @State private var artefacts: MacThreadArtefacts
     @Environment(\.macThreadArtefactsInParentHeader) private var artefactsInParentHeader
     var body: some View {
         MacThreadArtefactLayout(state: artefacts, target: target, workspace: workspace, store: store) { conversation(artefacts: artefacts) }
@@ -1077,13 +1080,18 @@ struct Composer: View {
         let boundary = model.selectedWorkspaceBoundary
         mentionBoundary = boundary
         recordSuggestions = (query, [])
-        goalMentionStatus = query.only == .file ? "Loading goals…" : nil
+        goalMentionStatus = query.isGoalOnly ? "Loading goals…" : nil
         if typed.isEmpty, let me = model.identity.npub, let rows = try? await store.reader.recentMentions(workspaceId: workspaceId, senderNpub: me) {
             recentTags = rows
         }
         // A short pause lets fast typing settle before the store is read; a newer keystroke cancels this one.
         try? await Task.sleep(for: .milliseconds(60))
-        guard !Task.isCancelled, let rows = try? await store.reader.mentionSuggestions(workspaceId: workspaceId, query: query, limit: query.limit) else { return }
+        if query.allows(.file), !query.isGoalOnly, let sync = model.sync, let connection = model.connection,
+           connection.id == target.connectionId, model.selectedWorkspace?.id == workspaceId {
+            do { try await sync.refreshMentionFiles(connection, workspace, channelId: target.channelId) }
+            catch { goalMentionStatus = "Couldn’t refresh channel files. Saved matches are shown; type again to retry." }
+        }
+        guard !Task.isCancelled, boundary == model.selectedWorkspaceBoundary, let rows = try? await store.reader.mentionSuggestions(workspaceId: workspaceId, query: query, limit: query.limit) else { return }
         let navigation = model.navigation.value
         // Channels carry the sidebar's name (direct messages are named after their participants), as the web labels them.
         var labelled = rows.map { row -> MentionSuggestion in
@@ -1101,7 +1109,7 @@ struct Composer: View {
                 let goals = try await service.mentionSuggestions(query: query)
                 labelled += goals
                 guard !Task.isCancelled, boundary == model.selectedWorkspaceBoundary, model.isUnlocked else { return }
-                goalMentionStatus = query.only == .file && goals.isEmpty ? "No matching personal goals." : nil
+                goalMentionStatus = query.isGoalOnly && goals.isEmpty ? "No matching personal goals." : nil
             } catch {
                 guard !Task.isCancelled, boundary == model.selectedWorkspaceBoundary else { return }
                 goalMentionStatus = "Couldn’t load personal goals. Type again to retry."
@@ -1299,6 +1307,12 @@ struct Composer: View {
             storedDraft.start(store: store, matches: { $0.table == .drafts && $0.workspaceId == workspaceId }) {
                 try await store.reader.draft(target)
             }
+        }
+        .onChange(of: artefacts?.tagRequest) { _, request in
+            guard editing == nil, let request else { return }
+            // Use the native insertion path: selection/caret, suffix and undo are preserved.
+            insertion = " " + request.token + " "
+            focused = true
         }
         .task(id: editing?.id) {
             #if os(macOS) || os(iOS)

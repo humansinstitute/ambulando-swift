@@ -178,7 +178,10 @@ struct WorkDestination: View {
                 #endif
             case .contextComponent(_, let scope, let component): ContextComponentView(scopeId: scope, componentId: component, workspace: workspace, store: store)
             case .goals: GoalsView(workspace: workspace, store: store)
+            case .workspaceGoals: GoalsView(workspace: workspace, store: store, allAccessible: true)
+            case .loops: LoopsView()
             case .goal(_, let fileId): GoalDetailView(fileId: fileId, workspace: workspace, store: store)
+            case .chiefOfStaffTopics: ChiefOfStaffTopicsView(workspace: workspace, store: store)
             case .webContent(_, let source):
                 #if os(macOS)
                 if source == .dailyMetrics || source == .workspaceReport {

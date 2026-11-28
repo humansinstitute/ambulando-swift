@@ -9,6 +9,7 @@ import Observation
 @Observable
 final class GoalsModel {
     let boundary: WorkspaceBoundary
+    let allAccessible: Bool
     @ObservationIgnored private let service: GoalsService
     @ObservationIgnored private let isCurrent: @MainActor (WorkspaceBoundary) -> Bool
 
@@ -24,7 +25,8 @@ final class GoalsModel {
     @ObservationIgnored private var localRevision: String?
     @ObservationIgnored private var inflight: Task<Void, Never>?
 
-    init(boundary: WorkspaceBoundary, service: GoalsService, isCurrent: @escaping @MainActor (WorkspaceBoundary) -> Bool) {
+    init(boundary: WorkspaceBoundary, service: GoalsService, allAccessible: Bool = false, isCurrent: @escaping @MainActor (WorkspaceBoundary) -> Bool) {
+        self.allAccessible = allAccessible
         self.boundary = boundary; self.service = service; self.isCurrent = isCurrent
     }
 
@@ -49,6 +51,10 @@ final class GoalsModel {
         guard revision != localRevision, isCurrent(boundary) else { return }
         localRevision = revision
         guard loaded else { return }
+        if allAccessible {
+            goals = []; unreadable = []; loaded = false; space = nil
+            return
+        }
         if let saved = await service.cached() {
             let keep = Set(saved.goals.map(\.id))
             goals.removeAll { !keep.contains($0.id) }
@@ -69,7 +75,7 @@ final class GoalsModel {
 
     private func load() async {
         await reconcileLocalRemovals()
-        if !loaded, let snapshot = await service.cached(), isCurrent(boundary) {
+        if !allAccessible, !loaded, let snapshot = await service.cached(), isCurrent(boundary) {
             space = snapshot.space; goals = snapshot.goals; unreadable = snapshot.unreadable; loaded = true
             localRevision = await service.cacheRevision()
             note("cached")
@@ -77,7 +83,7 @@ final class GoalsModel {
         loading = true
         defer { loading = false }
         do {
-            let snapshot = try await service.load()
+            let snapshot = try await (allAccessible ? service.loadWorkspace() : service.load())
             guard isCurrent(boundary) else { note("dropped-not-current"); return }
             space = snapshot.space; goals = snapshot.goals; unreadable = snapshot.unreadable; error = nil; loaded = true
             localRevision = await service.cacheRevision()
@@ -257,13 +263,14 @@ final class GoalsModel {
 
 extension AppModel {
     /// The Goals model of the selected workspace, created on first use. Nil without an open, connected workspace.
-    func goalsModel(for workspace: WorkspaceRecord) -> GoalsModel? {
+    func goalsModel(for workspace: WorkspaceRecord, allAccessible: Bool = false) -> GoalsModel? {
         guard isUnlocked, let sync, let connection, let boundary = selectedWorkspaceBoundary, workspace.id == selectedWorkspace?.id,
               workspace.appNpub == selectedWorkspace?.appNpub else { return nil }
-        if let existing = goalModels[boundary.id] { return existing }
+        let key = boundary.id + (allAccessible ? ":workspace" : "")
+        if let existing = goalModels[key] { return existing }
         guard let service = try? sync.goals(connection, workspace) else { return nil }
-        let model = GoalsModel(boundary: boundary, service: service, isCurrent: { [weak self] in self?.selectedWorkspaceBoundary == $0 })
-        goalModels[boundary.id] = model
+        let model = GoalsModel(boundary: boundary, service: service, allAccessible: allAccessible, isCurrent: { [weak self] in self?.selectedWorkspaceBoundary == $0 })
+        goalModels[key] = model
         return model
     }
 }
@@ -273,7 +280,29 @@ extension AppModel {
     func openGoals() {
         guard let workspace = selectedWorkspace?.id else { return }
         if fileNappletNavigation?({ self.openGoals() }) == true { return }
-        deckPath = [.goals(workspaceId: workspace)]
+        lockedView = nil
+        focusedThread = nil
+        selectContext(.home)
+        deckSurface = .home
+        deckPath = [.workspaceGoals(workspaceId: workspace)]
+        show(.deck)
+    }
+}
+
+
+extension AppModel {
+    var workspaceGoalsSelected: Bool { mode == .deck && deckPath.first == selectedWorkspace.map { .workspaceGoals(workspaceId: $0.id) } }
+    var loopsSelected: Bool { mode == .deck && deckPath.first == selectedWorkspace.map { .loops(workspaceId: $0.id) } }
+    var remindersSelected: Bool { mode == .tasks && context.channelId != nil && context.channelId == remindersBoardChannelId }
+
+    func openLoops() {
+        guard let workspace = selectedWorkspace?.id else { return }
+        if fileNappletNavigation?({ self.openLoops() }) == true { return }
+        lockedView = nil
+        focusedThread = nil
+        selectContext(.home)
+        deckSurface = .home
+        deckPath = [.loops(workspaceId: workspace)]
         show(.deck)
     }
 }

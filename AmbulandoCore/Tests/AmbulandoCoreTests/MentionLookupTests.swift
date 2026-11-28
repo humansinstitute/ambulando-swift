@@ -72,6 +72,34 @@ final class MentionLookupTests: XCTestCase {
         XCTAssertEqual(CommentMentions.actors(in: person.token).first?.requestObject["type"], "person")
     }
 
+    func testNativeFileDiscoveryAndRevocationKeepOriginalRecordIdentity() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LocalStore(directory: directory)
+        try await store.writer.upsertChannels(workspaceId: w, scopeId: Fixtures.scopeA,
+            [try ChannelRecord(raw: Fixtures.json(Fixtures.channel(Fixtures.channel1, scope: Fixtures.scopeA, name: "General")))], complete: false)
+        var row: [String: Any] = ["id": id(800), "workspace_id": w, "channel_id": Fixtures.channel1,
+            "display_name": "Ambulando Scratch", "content_type": "application/vnd.excalidraw+json", "row_version": 1,
+            "record_state": "active", "updated_at": "2026-11-28"]
+        try await store.writer.upsertFiles(workspaceId: w, [try FileRecord(raw: Fixtures.json(row))])
+        for typed in ["scratch", "file:Ambulando", "artefact:Scratch", "whiteboard:Scratch"] {
+            let results = try await store.reader.mentionSuggestions(workspaceId: w, query: MentionQuery(typed))
+            let file = try XCTUnwrap(results.first { $0.mention.type == .file })
+            XCTAssertEqual(file.mention.token, "@[Ambulando Scratch](mention:file:\(id(800)))")
+            let sent = MentionCodec.encode(text: "@Ambulando Scratch", selected: [file.mention])
+            XCTAssertEqual(sent.body, file.mention.token)
+            XCTAssertTrue(sent.mentions.isEmpty)
+        }
+        let foreign = try await store.reader.mentionSuggestions(workspaceId: "another-workspace", query: MentionQuery("Scratch"))
+        XCTAssertTrue(foreign.isEmpty)
+        let goals = try await store.reader.mentionSuggestions(workspaceId: w, query: MentionQuery("goal:Scratch"))
+        XCTAssertTrue(goals.isEmpty)
+        row["access_removed"] = true; row["row_version"] = 2
+        try await store.writer.upsertFiles(workspaceId: w, [try FileRecord(raw: Fixtures.json(row))])
+        let revoked = try await store.reader.mentionSuggestions(workspaceId: w, query: MentionQuery("Scratch"))
+        XCTAssertTrue(revoked.isEmpty)
+    }
+
     // MARK: Query
 
     func testQueryPrefixesAndRankingFollowTheWeb() {

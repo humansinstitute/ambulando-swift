@@ -62,21 +62,46 @@ public struct GoalsService: Sendable {
     }
 
     public func read(_ fileId: String) async throws -> GoalDocument {
-        if let (repository, current) = try await personalRelational() {
-            guard let document = try current.documents(workspaceId: workspaceId, channelId: repository.channelId, owner: viewer).first(where: { $0.id == fileId }) else {
-                if let cache { try? await cache.store.writer.invalidateLocalContent(workspace: workspaceId, record: fileId) }
-                throw TowerError.http(status: 404, code: "goal_not_found", stage: "Goals")
-            }
-            await remember(document); return document
-        }
         do {
-            let document = try await api.readGoal(workspaceId: workspaceId, appNpub: appNpub, fileId: fileId)
-            if (try await cache?.read("goals-authority:" + document.file.channelId)) != nil { throw CancellationError() }
-            await remember(document); return document
+            let document = try await resolveReference(fileId)
+            await remember(document)
+            return document
         } catch {
             if CachedContentFailure.invalidates(error), let cache { try? await cache.store.writer.invalidateLocalContent(workspace: workspaceId, record: fileId) }
             throw error
         }
+    }
+
+    /// Combined read-only discovery across the active workspace. It never replaces the personal Goals cache.
+    public func loadWorkspace() async throws -> GoalsSnapshot {
+        let epoch = try await cache?.epoch()
+        let space = (try? await api.goalsSpace(workspaceId: workspaceId, appNpub: appNpub, viewer: viewer)) ?? .unsafe("Personal Goals setup could not be verified. Open personal Goals to retry.")
+        var goals: [GoalDocument] = [], unreadable: [UnreadableGoal] = []
+        var seen = Set<String>()
+        for scope in try await api.scopes(workspaceId: workspaceId, appNpub: appNpub) where scope.workspaceId == workspaceId && goalRecordAvailable(scope.raw) {
+            try Task.checkCancellation()
+            let channels: [ChannelRecord]
+            do { channels = try await api.channels(workspaceId: workspaceId, scopeId: scope.id, appNpub: appNpub) }
+            catch TowerError.http(let status, _, _) where status == 403 || status == 404 { continue }
+            for channel in channels where channel.workspaceId == workspaceId && channel.scopeId == scope.id && seen.insert(channel.id).inserted {
+                let raw = try JSONValue.parse(channel.raw)
+                guard goalRecordAvailable(raw) else { continue }
+                do {
+                    let owner = raw["metadata"]?["goals"]?["owner_npub"]?.stringValue ?? viewer
+                    if let (repository, current) = try await relational(channelId: channel.id, owner: owner) {
+                        goals += try current.documents(workspaceId: workspaceId, channelId: repository.channelId, owner: owner)
+                    } else {
+                        for file in try await api.goalFiles(workspaceId: workspaceId, appNpub: appNpub, channelId: channel.id) where goalRecordAvailable(file.raw) {
+                            do { goals.append(try await api.readGoal(workspaceId: workspaceId, appNpub: appNpub, file: file)) }
+                            catch let error as GoalError { unreadable.append(UnreadableGoal(fileId: file.id, name: file.displayName, reason: error.localizedDescription)) }
+                            catch TowerError.http(let status, _, _) where status == 403 || status == 404 { continue }
+                        }
+                    }
+                } catch TowerError.http(let status, _, _) where status == 403 || status == 404 { continue }
+            }
+        }
+        if let epoch, try await cache?.epoch() != epoch { throw CancellationError() }
+        return GoalsSnapshot(space: space, goals: goals.sorted(by: Self.order), unreadable: unreadable)
     }
 
     /// Primary discussion references are independently ACL checked. They need not belong to this viewer's personal home.
@@ -128,8 +153,8 @@ public struct GoalsService: Sendable {
 
     private func performEdit(_ fileId: String, _ edits: [GoalEdit]) async throws -> GoalDocument {
         try await requireSigner()
-        if let (repository, current) = try await personalRelational() {
-            guard let head = try current.documents(workspaceId: workspaceId, channelId: repository.channelId, owner: viewer).first(where: { $0.id == fileId }) else {
+        if let (repository, current) = try await referenceRepository(fileId) {
+            guard let head = try current.documents(workspaceId: workspaceId, channelId: repository.channelId, owner: repository.owner).first(where: { $0.id == fileId }) else {
                 throw TowerError.http(status: 404, code: "goal_not_found", stage: "Goals")
             }
             let next = try GoalEdit.applyAll(edits, to: head.goal)
@@ -139,9 +164,10 @@ public struct GoalsService: Sendable {
             await remember(document); return document
         }
         let signer = viewer, identity = identity
-        let transport = api.goalTransport(workspaceId: workspaceId, appNpub: appNpub, requireSigner: {
+        var transport = api.goalTransport(workspaceId: workspaceId, appNpub: appNpub, requireSigner: {
             do { try await identity.requireSigner(npub: signer) } catch { throw BoardEditError.locked }
         })
+        transport.read = { try await self.resolveReference($0) }
         let document = try await GoalEditor.edit(transport, fileId: fileId, edits: edits)
         await remember(document); return document
     }
@@ -194,14 +220,14 @@ extension WorkspaceSync {
 
 extension GoalsService {
     /// A cached authority stamp prevents an outage or a missing namespace from re-enabling the legacy writer.
-    private func relational(channelId: String) async throws -> (GoalsRelationalRepository, GoalsRelationalRepository.Snapshot)? {
+    private func relational(channelId: String, owner: String? = nil) async throws -> (GoalsRelationalRepository, GoalsRelationalRepository.Snapshot)? {
         let authoritySlot = "goals-authority:" + channelId
         let prior = try await cache?.read(authoritySlot)
         guard let workspaceOwner else {
-            guard prior == nil, await cached()?.goals.contains(where: { $0.storage == .relational }) != true else { throw GoalsRelationalRows.invalid }
+            guard prior == nil, await cached()?.goals.contains(where: { $0.file.channelId == channelId && $0.storage == .relational }) != true else { throw GoalsRelationalRows.invalid }
             return nil
         }
-        var repository = GoalsRelationalRepository(api: api, workspaceId: workspaceId, workspaceOwner: workspaceOwner, appNpub: appNpub, channelId: channelId, owner: viewer)
+        var repository = GoalsRelationalRepository(api: api, workspaceId: workspaceId, workspaceOwner: workspaceOwner, appNpub: appNpub, channelId: channelId, owner: owner ?? viewer)
         repository.cache = cache
         repository.requireWriteSigner = { try await self.requireSigner() }
         let snapshot: GoalsRelationalRepository.Snapshot?
@@ -213,7 +239,7 @@ extension GoalsService {
             throw error
         }
         guard let current = snapshot else {
-            guard prior == nil, await cached()?.goals.contains(where: { $0.storage == .relational }) != true else {
+            guard prior == nil, await cached()?.goals.contains(where: { $0.file.channelId == channelId && $0.storage == .relational }) != true else {
                 throw GoalSaveFailed(message: "Goals storage is unavailable. Saved content is retained; reconnect before changing it.", retryable: true)
             }
             return nil
@@ -239,6 +265,14 @@ extension GoalsService {
             throw GoalError.invalid("Your private Goals channel could not be verified. Reconnect before changing goals.")
         }
         return try await relational(channelId: channel.id)
+    }
+
+    private func referenceRepository(_ id: String) async throws -> (GoalsRelationalRepository, GoalsRelationalRepository.Snapshot)? {
+        guard let workspaceOwner, var repository = try await GoalsRelationalRepository.resolve(api: api, workspaceId: workspaceId, workspaceOwner: workspaceOwner, appNpub: appNpub, id: id) else { return nil }
+        repository.cache = cache
+        repository.requireWriteSigner = { try await self.requireSigner() }
+        guard let snapshot = try await repository.snapshot() else { throw GoalsRelationalRows.invalid }
+        return (repository, snapshot)
     }
 
     private func verifyAddedReferences(before: Goal, after: Goal) async throws {

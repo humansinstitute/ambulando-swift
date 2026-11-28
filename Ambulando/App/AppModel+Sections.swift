@@ -133,7 +133,7 @@ extension AppModel {
     }
 
     var workspaceHomeSelected: Bool {
-        mode == .deck && deckSurface == .home && context == .home && focusedThread == nil
+        mode == .deck && deckSurface == .home && context == .home && deckPath.isEmpty && focusedThread == nil
     }
 
     /// Whether the Deck section (the dashboard, not Home) is showing.

@@ -47,6 +47,14 @@ struct WorkHarness {
 }
 
 final class WorkTests: XCTestCase {
+    func testSampleTaskMetadataPreservesAppProvenance() throws {
+        let provenance: [String: Any] = ["version": 1, "message_id": "reply-id", "channel_id": "source-channel"]
+        let mapped = SampleWorkTower.taskMetadata(["metadata": ["ambulando_reminder": provenance, "future_app_field": "retained"]], assignee: TestKeys.npub)
+        XCTAssertEqual((mapped["ambulando_reminder"] as? [String: Any])?["message_id"] as? String, "reply-id")
+        XCTAssertEqual(mapped["future_app_field"] as? String, "retained")
+        XCTAssertEqual(mapped["assigned_to_npub"] as? String, TestKeys.npub)
+    }
+
     func taskIntent(_ kind: WriteKind, _ task: String?, _ payload: [String: any Sendable]) -> WriteIntent { WriteIntent(kind: kind, targetId: task, payload: payload) }
 
     // MARK: Tasks

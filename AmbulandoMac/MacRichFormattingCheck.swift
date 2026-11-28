@@ -8,6 +8,10 @@ import AmbulandoCore
 extension MacThreadRegression {
     /// Checks the URL-handler/window boundary: pointer delivery is not reliable in a command-line fixture.
     static func chatLinkCheck(model: AppModel) async throws {
+        if ProcessInfo.processInfo.arguments.contains("-AmbulandoMacReminderIdentityCheck") {
+            guard let window = NSApp.windows.first(where: { find($0, "fixture.banner") != nil }) else { throw Failure(description: "Missing fixture window") }
+            try await reminderIdentityCheck(window, model: model); return
+        }
         let release = "https://github.com/humansinstitute/nostr-stack/releases/tag/nstack-setup-v0.1.0-rc.5"
         let prose = "The minimal **NStack + MinIO setup is already implemented and published in [rc.5](\(release))**, including automatic storage builds, admin claiming and persistent data."
         let attributed = InlineText.attributed(MarkdownBlocks.inline(prose))

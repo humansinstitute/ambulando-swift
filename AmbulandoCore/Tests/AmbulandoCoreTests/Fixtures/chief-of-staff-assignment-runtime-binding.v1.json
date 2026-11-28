@@ -1,0 +1,33 @@
+{
+  "encryption": {
+    "mode": "none"
+  },
+  "envelope_version": 1,
+  "payload": {
+    "app_npub": "npub12v07vp5px3gr6ferzvez0jr84j86djpu2dlf53xrck7mmjcluvms5dn8ru",
+    "assigned_actor_id": "22222222-2222-4222-8222-222222222222",
+    "assigned_display_name": "Coordinator",
+    "assigned_npub": "npub1f49ke5fkzqev4x7j46uajq92f4zan6kcpty5yvm5c3g6wf2dqanqn7qsy2",
+    "assignment_revision": 7,
+    "previous_assigned_npub": null,
+    "runtime_binding": {
+      "agent_npub": "npub1f49ke5fkzqev4x7j46uajq92f4zan6kcpty5yvm5c3g6wf2dqanqn7qsy2",
+      "autopilot_origin": "https://autopilot.example.invalid",
+      "future_option": {
+        "example": true
+      },
+      "ontology_pipeline_id": "chief-of-staff-ontology.v1",
+      "owner_npub": "npub1rwzv24nmzfjypx2a8m264ws9vht3uxp5vpypnluuzl67n4waq78suk0wul",
+      "reconcile_pipeline_id": "chief-of-staff-reconcile.v1",
+      "subscription_id": "44444444-4444-4444-8444-444444444444",
+      "workspace_id": "11111111-1111-4111-8111-111111111111"
+    },
+    "schema": "ambulando.chief_of_staff.assignment",
+    "schema_version": 1,
+    "updated_at": "2026-01-01T00:00:00.000Z",
+    "updated_by_actor_id": "33333333-3333-4333-8333-333333333333",
+    "updated_by_npub": "npub1rwzv24nmzfjypx2a8m264ws9vht3uxp5vpypnluuzl67n4waq78suk0wul",
+    "workspace_id": "11111111-1111-4111-8111-111111111111",
+    "workspace_owner_npub": "npub1rwzv24nmzfjypx2a8m264ws9vht3uxp5vpypnluuzl67n4waq78suk0wul"
+  }
+}

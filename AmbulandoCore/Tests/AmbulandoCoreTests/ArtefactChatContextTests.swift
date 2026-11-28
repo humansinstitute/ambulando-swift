@@ -16,6 +16,21 @@ import Testing
         #expect(try JSONDecoder().decode(ArtefactChatContext.self, from: data) == context)
         #expect(try ArtefactChatContext.validate(data, for: target) == data)
     }
+    @Test func firstMessageContextHasExplicitNullAndCannotBecomeReplyOrCrossDestination() throws {
+        let draft = ChatTarget(connectionId: "local", workspaceId: w, channelId: c)
+        let context = ArtefactChatContext(workspaceID: w, channelID: c, threadID: nil, visibleRecordID: f,
+            open: [.init(kind: "file", recordID: f, revision: v, historical: true, digest: String(repeating: "a", count: 64))])
+        let bytes = try context.encoded(for: draft)
+        let object = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
+        #expect(object["threadID"] is NSNull)
+        #expect(try ArtefactChatContext.validate(bytes, for: draft) == bytes)
+        #expect(throws: (any Error).self) { try ArtefactChatContext.validate(bytes, for: target) }
+        #expect(throws: (any Error).self) {
+            try ArtefactChatContext.validate(bytes, for: .init(connectionId: "local", workspaceId: w, channelId: t))
+        }
+        var missing = object; missing.removeValue(forKey: "threadID")
+        #expect(throws: (any Error).self) { try ArtefactChatContext.validate(JSONSerialization.data(withJSONObject: missing), for: draft) }
+    }
     @Test func rejectsMalformedForeignOversizedAndDuplicateContexts() throws {
         let context = ArtefactChatContext(workspaceID: w, channelID: c, threadID: t, visibleRecordID: f,
             open: [.init(kind: "file", recordID: f, revision: v, historical: true, digest: String(repeating: "a", count: 64))])

@@ -17,11 +17,11 @@ public struct ArtefactChatReference: Codable, Equatable, Sendable {
 public struct ArtefactChatContext: Codable, Equatable, Sendable {
     public let workspaceID: String
     public let channelID: String
-    public let threadID: String
+    public let threadID: String?
     public let workspaceVisible: Bool
     public let visibleRecordID: String
     public let open: [ArtefactChatReference]
-    public init(workspaceID: String, channelID: String, threadID: String, visibleRecordID: String, workspaceVisible: Bool = true, open: [ArtefactChatReference]) {
+    public init(workspaceID: String, channelID: String, threadID: String?, visibleRecordID: String, workspaceVisible: Bool = true, open: [ArtefactChatReference]) {
         self.schemaVersion = 1
         self.workspaceID = workspaceID; self.channelID = channelID; self.threadID = threadID
         self.visibleRecordID = visibleRecordID; self.workspaceVisible = workspaceVisible; self.open = open
@@ -35,7 +35,8 @@ public struct ArtefactChatContext: Codable, Equatable, Sendable {
     public func encoded(for target: ChatTarget) throws -> Data {
         guard schemaVersion == 1, workspaceID == target.workspaceId, channelID == target.channelId,
               threadID == target.threadId,
-              [workspaceID, channelID, threadID, visibleRecordID].allSatisfy({ UUID(uuidString: $0) != nil }),
+              (threadID == nil || UUID(uuidString: threadID!) != nil),
+              [workspaceID, channelID, visibleRecordID].allSatisfy({ UUID(uuidString: $0) != nil }),
               !open.isEmpty, open.count <= Self.maxReferences,
               Set(open.map { $0.recordID.lowercased() }).count == open.count,
               open.contains(where: { $0.recordID == visibleRecordID }),
@@ -47,7 +48,11 @@ public struct ArtefactChatContext: Codable, Equatable, Sendable {
                         && Int64(ref.revision).map { $0 > 0 && $0 <= 9_007_199_254_740_991 && String($0) == ref.revision } == true))
               }) else { throw ContextError.unresolved }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(self)
+        let encoded = try encoder.encode(self)
+        var object = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        // Explicit null matches the native Android schema for a first-message destination.
+        if threadID == nil { object["threadID"] = NSNull() }
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         guard data.count <= Self.maxBytes else { throw ContextError.unresolved }
         return data
     }
@@ -56,11 +61,23 @@ public struct ArtefactChatContext: Codable, Equatable, Sendable {
         guard data.count <= maxBytes,
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys).isSubset(of: ["schemaVersion", "workspaceID", "channelID", "threadID", "workspaceVisible", "visibleRecordID", "open"]),
+              object["threadID"] != nil,
               let refs = object["open"] as? [[String: Any]],
               refs.allSatisfy({ Set($0.keys).isSubset(of: ["kind", "recordID", "revision", "revisionKind", "historical", "digest"]) }) else { throw ContextError.unresolved }
         let context = try JSONDecoder().decode(Self.self, from: data)
         _ = try context.encoded(for: target)
         return data
+    }
+    /// A confirmed root's snapshot is descriptive recovery input; source access is checked again by membership CAS.
+    public static func firstMessage(_ message: MessageRecord, for target: ChatTarget, sourceMessageID: String? = nil) throws -> Self? {
+        guard target.threadId != nil, message.workspaceId == target.workspaceId, message.channelId == target.channelId,
+              message.threadId == target.threadId, (message.threadSourceId ?? sourceMessageID) == message.id, !message.deleted,
+              let raw = try JSONSerialization.jsonObject(with: message.raw) as? [String: Any],
+              let metadata = raw["metadata"] as? [String: Any], let value = metadata[metadataKey] else { return nil }
+        let data = try JSONSerialization.data(withJSONObject: value)
+        let draft = ChatTarget(connectionId: target.connectionId, workspaceId: target.workspaceId, channelId: target.channelId)
+        _ = try validate(data, for: draft)
+        return try JSONDecoder().decode(Self.self, from: data)
     }
     public enum ContextError: LocalizedError {
         case unresolved

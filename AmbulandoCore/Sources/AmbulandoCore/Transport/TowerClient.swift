@@ -54,9 +54,22 @@ public struct TowerOrigin: Sendable, Hashable, Codable, CustomStringConvertible 
             && ["health", "agents"].contains(parts[5])
     }
 
+    private static func autopilotPipelineRunPath(_ path: String) -> Bool {
+        let parts = path.split(separator: "/").map(String.init)
+        return parts.count == 5 && parts[0] == "api" && parts[1] == "pipelines"
+            && parts[2] == "definitions" && parts[4] == "runs"
+            && isSafePipelineDefinitionId(parts[3])
+    }
+
+    /// Autopilot definition IDs: 1–128 of `A-Z a-z 0-9 . _ -`, never a bare `.`/`..` path segment.
+    public static func isSafePipelineDefinitionId(_ id: String) -> Bool {
+        (1...128).contains(id.utf8.count) && id != "." && id != ".."
+            && id.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x41...0x5A).contains($0) || (0x61...0x7A).contains($0) || [0x2E, 0x5F, 0x2D].contains($0) }
+    }
+
     /// Absolute URL for an exact API path plus optional query items.
     public func url(path: String, query: [URLQueryItem] = []) throws -> URL {
-        guard path.hasPrefix("/api/v4/") || path == "/.well-known/nstack.json" || Self.autopilotAdministrationPaths.contains(path) || Self.autopilotSetupReadPath(path), !path.contains(".."), !path.contains("?"), !path.contains("#") else {
+        guard path.hasPrefix("/api/v4/") || path == "/.well-known/nstack.json" || Self.autopilotAdministrationPaths.contains(path) || Self.autopilotSetupReadPath(path) || Self.autopilotPipelineRunPath(path), !path.contains(".."), !path.contains("?"), !path.contains("#") else {
             throw TowerError.unsafePath
         }
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!

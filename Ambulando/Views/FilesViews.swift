@@ -157,7 +157,7 @@ struct FileDetailView: View {
 
     var body: some View {
         Group {
-            if renderArtefact, model.goalsModel(for: workspace)?.goal(fileId) != nil {
+            if renderArtefact, model.goalsModel(for: workspace, allAccessible: true)?.goal(fileId) != nil {
                 GoalDetailView(fileId: fileId, workspace: workspace, store: store)
             } else if renderArtefact, let file = snapshot.value.file, GoalFiles.isGoal(file) {
                 // A goal File (for example one an agent created, opened from a mention) opens as the goal, not its JSON.
@@ -169,13 +169,13 @@ struct FileDetailView: View {
         }
         .task {
             start()
-            if renderArtefact, let goals = model.goalsModel(for: workspace), goals.goal(fileId) == nil {
+            if renderArtefact, let goals = model.goalsModel(for: workspace, allAccessible: true), goals.goal(fileId) == nil {
                 let retainedFile = try? await store.reader.file(workspaceId: workspace.id, id: fileId)
                 // An already-loaded list may predate a newly mentioned SQL goal, which has no File row.
                 if retainedFile.map(GoalFiles.isGoal) ?? true { await goals.refresh() }
             }
             // A SQL-created goal has no File row. A generic File 404 must not tombstone its valid cached Goal UUID.
-            if renderArtefact, model.goalsModel(for: workspace)?.goal(fileId)?.storage == .relational { return }
+            if renderArtefact, model.goalsModel(for: workspace, allAccessible: true)?.goal(fileId)?.storage == .relational { return }
             if let sync = model.sync, let c = model.connection { await sync.refreshArtefactFile(c, workspace, fileId: fileId) }
         }
     }
