@@ -96,3 +96,53 @@ private struct ReminderRequest: Codable {
     let channel: String
     let body: Data
 }
+
+extension Reminders {
+    public static func isOpen(_ state: String) -> Bool { ["new", "ready", "in_progress"].contains(state) }
+
+    /// A delegated agent is not the human viewer. Native partitions are bound to the actual signer;
+    /// never substitute the workspace owner when that signer has no human member record.
+    public static func viewer(_ members: [MemberRecord], workspace: String, signer: String) -> MemberRecord? {
+        members.first { $0.workspaceId == workspace && $0.npub == signer && $0.kind == "human" }
+    }
+
+    public static func available(_ raw: Data) -> Bool {
+        guard let row = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else { return false }
+        return row["deleted_at"] as? String == nil && row["archived_at"] as? String == nil
+            && row["is_archived"] as? Bool != true
+            && !["deleted", "revoked", "access_removed", "archived"].contains(row["record_state"] as? String ?? "")
+    }
+
+    /// Existing Tower primary assignment and relational assignment projection. IDs are checked inside
+    /// the same task/workspace; labels and arbitrary metadata never establish assignment.
+    public static func isAssigned(_ task: TaskRecord, to viewer: MemberRecord) -> Bool {
+        guard task.workspaceId == viewer.workspaceId else { return false }
+        if task.assignedToNpub == viewer.npub { return true }
+        guard let row = try? JSONSerialization.jsonObject(with: task.raw) as? [String: Any],
+              let assignments = row["assignments"] as? [[String: Any]] else { return false }
+        return assignments.contains { assignment in
+            assignment["workspace_id"] as? String == task.workspaceId
+                && assignment["task_id"] as? String == task.id
+                && assignment["channel_id"] as? String == task.channelId
+                && (assignment["actor_npub"] as? String == viewer.npub || assignment["actor_id"] as? String == viewer.actorId)
+        }
+    }
+}
+
+extension StoreReader {
+    /// Read all authorized cached candidates before applying pending writes and assignment/state filters.
+    /// A general task-list limit would hide matches beyond its first 500 unrelated tasks.
+    public func reminderCandidates(workspaceId: String) throws -> [TaskRecord] {
+        let channels = try channels(workspaceId: workspaceId).filter { Reminders.available($0.raw) }
+        let scopes = Set(try scopes(workspaceId: workspaceId).filter { Reminders.available($0.raw) }.map(\.id))
+        let allowed = Set(channels.filter { scopes.contains($0.scopeId) }.map(\.id))
+        let query = try db.prepare("SELECT \(Self.taskColumns) FROM tasks WHERE workspace_id = ? ORDER BY updated_at DESC, id")
+        try query.bind([.text(workspaceId)])
+        var rows: [TaskRecord] = []
+        while try query.step() {
+            let task = Self.task(query, workspaceId: workspaceId)
+            if allowed.contains(task.channelId), Reminders.available(task.raw) { rows.append(task) }
+        }
+        return rows
+    }
+}

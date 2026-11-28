@@ -1,6 +1,6 @@
-# Personal Reminders (Mac source build 150)
+# Personal Reminders (Mac source build 154)
 
-Message and conversation menus now offer **Remind me**, saving a Ready task assigned to you on your existing private Notes to Self board. **Reminders** above the sidebar channel list opens that board. Saves retain the selected message and native source link, with durable same-device retries. See [Reminders](docs/reminders.md) for contracts and limits. Pushed source is separate from installation and live verification on Pete’s MacBook.
+Message and conversation menus now offer **Remind me**, saving a Ready task assigned to you on your existing private Notes to Self board. **Reminders** above the sidebar channel list immediately opens your cached assigned New, Ready and In Progress tasks in the current workspace, with Note to Self first. Task assignment now has avatar-backed searchable typeahead. Saves retain the selected message and native source link, with durable same-device retries. See [Reminders](docs/reminders.md) for contracts and limits. Pushed source is separate from installation and live verification on Pete’s MacBook.
 
 # Ambulando for iPhone and Mac (native)
 

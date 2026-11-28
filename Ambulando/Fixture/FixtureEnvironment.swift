@@ -541,6 +541,9 @@ final class FixtureTower: HTTPTransport, @unchecked Sendable {
     }
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        #if os(macOS) && DEBUG
+        if MacRemindersFixture.slowTransport.load() == true { try await Task.sleep(for: .milliseconds(1500)) }
+        #endif
         let delayedSecondDescriptor = ProcessInfo.processInfo.arguments.contains("-AmbulandoMacMultiWorkspaceCheck")
             && request.url?.host == "fixture-second.ambulando.invalid" && request.url?.path == "/.well-known/nstack.json"
         try await Task.sleep(for: .milliseconds(delayedSecondDescriptor ? 300 : 40))

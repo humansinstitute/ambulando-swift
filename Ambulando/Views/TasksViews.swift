@@ -116,11 +116,7 @@ struct TasksView: View {
         }
         .refreshable { model.openTasks(workspace, scopeId: scopeId, force: true) }
         .task(id: model.context) {
-            if let channel = model.remindersBoardChannelId, channel == context.channelId { board = true }
             start(); model.openTasks(workspace, scopeId: scopeId)
-        }
-        .onChange(of: model.remindersBoardRequests) { _, _ in
-            if let channel = model.remindersBoardChannelId, channel == context.channelId { board = true }
         }
         .onChange(of: model.identity) { _, state in if case .unlocked = state { model.openTasks(workspace, scopeId: scopeId) } }
     }
@@ -554,13 +550,7 @@ struct TaskDetailView: View {
                     }
                 } label: { chip(TaskPriority(rawValue: row.priority)?.label ?? row.priority, systemImage: "flag") }
                     .accessibilityIdentifier("task.priority")
-                Menu {
-                    Button("Unassigned") { assign(row, nil) }
-                    ForEach(snapshot.value.members) { member in Button(member.label) { assign(row, member.npub) } }
-                } label: {
-                    chip(row.assignee.map { displayName($0, snapshot.value.names, me: model.identity.npub) } ?? "Unassigned", systemImage: "person")
-                }
-                .accessibilityIdentifier("task.assignee")
+                TaskAssigneeControl(selected: row.assignee, members: snapshot.value.members, people: snapshot.value.people) { assign(row, $0) }
             }
         }
     }

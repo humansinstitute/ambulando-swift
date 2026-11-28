@@ -146,6 +146,7 @@ struct WorkDestination: View {
         if let workspace = model.selectedWorkspace, route.workspaceId == workspace.id, let store = model.store, let connection = model.connection {
             switch route {
             case .task(_, let id): TaskDetailView(taskId: id, workspace: workspace, store: store)
+                    .id("task:\(model.selectedWorkspaceBoundary?.id ?? ""):\(id)")
             case .doc(_, let id):
                 #if os(macOS)
                 MacDocumentSurface(docId: id, workspace: workspace, store: store)
@@ -180,6 +181,7 @@ struct WorkDestination: View {
             case .goals: GoalsView(workspace: workspace, store: store)
             case .workspaceGoals: GoalsView(workspace: workspace, store: store, allAccessible: true)
             case .loops: LoopsView()
+            case .reminders: RemindersView(workspace: workspace, store: store).id(model.selectedWorkspaceBoundary?.id)
             case .goal(_, let fileId): GoalDetailView(fileId: fileId, workspace: workspace, store: store)
             case .chiefOfStaffTopics: ChiefOfStaffTopicsView(workspace: workspace, store: store)
             case .webContent(_, let source):

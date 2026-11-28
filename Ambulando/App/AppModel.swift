@@ -42,6 +42,7 @@ enum WorkRoute: Hashable {
     case goals(workspaceId: String)
     case workspaceGoals(workspaceId: String)
     case loops(workspaceId: String)
+    case reminders(workspaceId: String)
     case goal(workspaceId: String, fileId: String)
     /// Searchable living topic reference owned by the active workspace's Chief of Staff private cohort.
     case chiefOfStaffTopics(workspaceId: String)
@@ -49,7 +50,7 @@ enum WorkRoute: Hashable {
     var workspaceId: String {
         switch self {
         case .task(let w, _), .doc(let w, _), .file(let w, _), .thread(let w, _, _), .channel(let w, _), .threadById(let w, _), .canvas(let w, _),
-             .board(let w, _, _), .contextComponent(let w, _, _), .webContent(let w, _), .goals(let w), .workspaceGoals(let w), .loops(let w), .goal(let w, _), .chiefOfStaffTopics(let w): w
+             .board(let w, _, _), .contextComponent(let w, _, _), .webContent(let w, _), .goals(let w), .workspaceGoals(let w), .loops(let w), .reminders(let w), .goal(let w, _), .chiefOfStaffTopics(let w): w
         }
     }
 }
@@ -1185,8 +1186,6 @@ final class AppModel {
     }
 
     var savingReminders: Set<String> = []
-    var remindersBoardChannelId: String?
-    var remindersBoardRequests = 0
 
     // MARK: Tasks, documents, files, inbox
 
@@ -1443,7 +1442,7 @@ final class AppModel {
             case .doc(_, let id): channelId = try? await store.reader.doc(workspaceId: workspace, id: id)?.channelId
             case .file(_, let id): channelId = try? await store.reader.file(workspaceId: workspace, id: id)?.channelId
             case .threadById(_, let id): channelId = try? await store.reader.thread(workspaceId: workspace, id: id)?.channelId
-            case .canvas, .board, .contextComponent, .webContent, .goals, .workspaceGoals, .loops, .goal, .chiefOfStaffTopics: channelId = nil
+            case .canvas, .board, .contextComponent, .webContent, .goals, .workspaceGoals, .loops, .reminders, .goal, .chiefOfStaffTopics: channelId = nil
             }
             guard let channelId, channelId != context.channelId,
                   let channel = try? await store.reader.channel(workspaceId: workspace, id: channelId), workspace == selectedWorkspaceId, boundary == selectedWorkspaceBoundary else { return }

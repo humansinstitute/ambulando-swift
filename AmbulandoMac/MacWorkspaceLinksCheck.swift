@@ -57,11 +57,11 @@ extension MacThreadRegression {
         let selfBoard = try await manager.createDirectMessage(connection, workspace, scopeId: FixtureTower.scopeDMs, participantNpub: connection.signerNpub)
         try press(window, "sidebar.reminders")
         for _ in 0..<30 {
-            if model.mode == .tasks && model.remindersBoardChannelId == selfBoard.id { break }
+            if model.remindersSelected { break }
             await settle()
         }
-        try require(model.mode == .tasks && model.remindersBoardChannelId == selfBoard.id,
-            "Reminders reuses existing Note to Self board; notice=\(String(describing: model.notice))")
+        try require(model.remindersSelected,
+            "Reminders opens local assigned list; notice=\(String(describing: model.notice))")
         model.openInChat(channelId: FixtureTower.generalChannel)
         try await waitFor(window, "chat.inbox.new", "conversation inbox")
         try press(window, "chat.inbox.new")

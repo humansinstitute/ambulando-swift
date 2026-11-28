@@ -16,12 +16,14 @@ the screens is shared:
 | | |
 | --- | --- |
 | Bundle identifier | `studio.otherstuff.ambulando.mac` (Debug builds: `studio.otherstuff.ambulando.mac.debug`) |
-| Version | 0.1.0 (153) |
+| Version | 0.1.0 (154) |
 | Minimum macOS | 15.0 |
 | CPU | Universal: Apple Silicon (arm64) and Intel (x86_64). Only Apple Silicon has been run. |
 | Sandbox | App Sandbox, outgoing network, user-selected files (read/write); hardened runtime |
 | Data | `~/Library/Containers/studio.otherstuff.ambulando.mac/` (kept when the app is replaced or updated) |
 | Keychain | Login keychain, services `studio.otherstuff.ambulando.mac.identity-vault.v1`, `….session.v1` |
+
+Source build 154 opens [Reminders](reminders.md) immediately as a local assigned-task list in the current workspace and adds avatar-backed assignee typeahead. Installation and authenticated MacBook verification remain separate.
 
 Source build 153 lets a delegated workspace manager (such as an agent with `workspace.manage`) start Chief of Staff schedule setup in the workspace owner's Autopilot space; see [Chief of Staff](chief-of-staff.md). Source build 152 adds workspace peer links for Home, all accessible Goals, existing Reminders and an honest Loops placeholder, plus native File/Excalidraw `@` discovery; see [workspace links](workspace-links.md). It also includes the pre-first-message artefact workspace described in [thread artefacts](mac-thread-artefacts.md). First-message agent snapshot consumption still requires downstream Autopilot activation; native source delivery does not establish that activation. Installation and authenticated MacBook verification remain separate.
 

@@ -128,25 +128,15 @@ struct GetItDoneSheet: View {
 
 extension AppModel {
     func showReminders() {
-        guard let sync, let connection, let workspace = selectedWorkspace else { notice = "Unlock and select a workspace to open Reminders."; return }
-        let boundary = selectedWorkspaceBoundary
-        Task { @MainActor in
-            do {
-                let board = try await sync.remindersBoard(connection, workspace)
-                guard boundary == selectedWorkspaceBoundary else { return }
-                if fileNappletNavigation?({ self.showReminders() }) == true { return }
-                focusedThread = nil
-                selectContext(WorkContext(scopeId: board.scopeId, channelId: board.id))
-                tasksPath = []
-                remindersBoardChannelId = board.id
-                remindersBoardRequests &+= 1
-                show(.tasks)
-                openTasks(workspace, scopeId: board.scopeId, force: true)
-            } catch {
-                guard boundary == selectedWorkspaceBoundary else { return }
-                notice = error.localizedDescription
-            }
+        guard let workspace = selectedWorkspace, selectedWorkspaceBoundary != nil else {
+            notice = "Select a workspace to open Reminders."; return
         }
+        if fileNappletNavigation?({ self.showReminders() }) == true { return }
+        lockedView = nil
+        focusedThread = nil
+        selectContext(.home)
+        tasksPath = [.reminders(workspaceId: workspace.id)]
+        show(.tasks)
     }
 }
 

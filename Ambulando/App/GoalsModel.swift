@@ -293,7 +293,7 @@ extension AppModel {
 extension AppModel {
     var workspaceGoalsSelected: Bool { mode == .deck && deckPath.first == selectedWorkspace.map { .workspaceGoals(workspaceId: $0.id) } }
     var loopsSelected: Bool { mode == .deck && deckPath.first == selectedWorkspace.map { .loops(workspaceId: $0.id) } }
-    var remindersSelected: Bool { mode == .tasks && context.channelId != nil && context.channelId == remindersBoardChannelId }
+    var remindersSelected: Bool { mode == .tasks && tasksPath.first == selectedWorkspace.map { .reminders(workspaceId: $0.id) } }
 
     func openLoops() {
         guard let workspace = selectedWorkspace?.id else { return }
